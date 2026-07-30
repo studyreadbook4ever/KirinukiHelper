@@ -42,7 +42,7 @@ dev = [
 audseg = "audseg.cli:main"
 
 [project.urls]
-Repository = "https://github.com/studyreadbook4ever/myChangGo/tree/main/AudSeg"
+Repository = "https://github.com/studyreadbook4ever/KirinukiHelper/tree/main/AudSeg"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/audseg"]

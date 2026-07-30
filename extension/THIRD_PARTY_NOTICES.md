@@ -28,9 +28,9 @@ obtained from the upstream repository. The full MPL 2.0 text is included as
 - Copyright © 2026 AudSeg contributors
 - License: MIT
 - Source in this repository: `AudSeg/`
-- Browser port: `src/editor/audseg.js`
+- Browser port: `src/editor/audseg.ts`
 
-The editor includes a JavaScript port of AudSeg's model-free audio-activity
+The editor includes a TypeScript port of AudSeg's model-free audio-activity
 segmentation algorithm. It runs entirely in the browser and creates timing
 regions without transcribing speech. The full MIT text is included in the
 Extension package as `licenses/AUDSEG-MIT.txt`.
@@ -66,6 +66,26 @@ upstream `v1.3.9` release. The copyright notice and full SIL Open Font License
 The extension bundles the official 8 ExtraBold WOFF2 from the pinned upstream
 commit. The official OFL text is included byte-for-byte as
 `licenses/PAPERLOGY-OFL-1.1.txt`.
+
+## Development-only TypeScript toolchain
+
+The following exact npm packages are used only to type-check, run, and compile
+the repository's TypeScript sources. They are not included in the Extension
+ZIP. Their exact registry artifacts and integrity values are pinned in
+`package-lock.json`, and their license metadata is checked fail-closed by
+`npm run license:check`.
+
+- TypeScript 5.9.3 — Apache License 2.0 —
+  https://github.com/microsoft/TypeScript
+- tsx 4.23.1 — MIT —
+  https://github.com/privatenumber/tsx
+- esbuild 0.28.1 and its platform packages — MIT —
+  https://github.com/evanw/esbuild
+- `@types/chrome` 0.2.2, `@types/node` 20.19.43 and their pinned type-only
+  dependencies — MIT —
+  https://github.com/DefinitelyTyped/DefinitelyTyped
+- fsevents 2.3.3 — MIT, optional development dependency on macOS —
+  https://github.com/fsevents/fsevents
 
 ## Runtime-downloaded local caption components
 
@@ -138,7 +158,7 @@ SOFTWARE.
 
 ## This extension's corresponding source
 
-The extension source, build scripts, exact dependency lockfile, and local
-patch-free bundling procedure are in the `KirinukiHelper` directory of:
+The extension source, TypeScript build scripts, exact dependency lockfile, and
+local patch-free bundling procedure are in:
 
-https://github.com/studyreadbook4ever/myChangGo
+https://github.com/studyreadbook4ever/KirinukiHelper

@@ -1,9 +1,8 @@
-export const SOURCE_PLATFORM_CHZZK = "CHZZK";
-export const SOURCE_PLATFORM_YOUTUBE = "YOUTUBE";
-
+// Generated from TypeScript sources. Do not edit directly.
+const SOURCE_PLATFORM_CHZZK = "CHZZK";
+const SOURCE_PLATFORM_YOUTUBE = "YOUTUBE";
 const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/u;
 const CHZZK_CHANNEL_ID_PATTERN = /^[a-f0-9]{32}$/iu;
-
 function parsedHttpsUrl(value) {
   let url;
   try {
@@ -11,30 +10,18 @@ function parsedHttpsUrl(value) {
   } catch {
     return null;
   }
-  if (
-    url.protocol !== "https:"
-    || url.username
-    || url.password
-  ) {
+  if (url.protocol !== "https:" || url.username || url.password) {
     return null;
   }
   return url;
 }
-
 function normalizedHostname(url) {
   return url.hostname.toLowerCase().replace(/\.$/u, "");
 }
-
 function isYouTubeHostname(hostname) {
-  return (
-    hostname === "youtube.com"
-    || hostname === "www.youtube.com"
-    || hostname === "m.youtube.com"
-    || hostname === "youtu.be"
-  );
+  return hostname === "youtube.com" || hostname === "www.youtube.com" || hostname === "m.youtube.com" || hostname === "youtu.be";
 }
-
-export function sourcePlatformFromUrl(value) {
+function sourcePlatformFromUrl(value) {
   const url = parsedHttpsUrl(value);
   if (!url) {
     return "";
@@ -48,13 +35,11 @@ export function sourcePlatformFromUrl(value) {
   }
   return "";
 }
-
-export function isSupportedSourceUrl(value) {
+function isSupportedSourceUrl(value) {
   const identifiers = inferSourceIdentifiers(value);
   if (identifiers.platform === SOURCE_PLATFORM_YOUTUBE) {
     return Boolean(
-      identifiers.contentType === "vod"
-      && identifiers.contentId
+      identifiers.contentType === "vod" && identifiers.contentId
     );
   }
   if (identifiers.platform !== SOURCE_PLATFORM_CHZZK) {
@@ -64,11 +49,9 @@ export function isSupportedSourceUrl(value) {
     return Boolean(identifiers.channelId);
   }
   return Boolean(
-    ["vod", "clip"].includes(identifiers.contentType)
-    && identifiers.contentId
+    ["vod", "clip"].includes(identifiers.contentType) && identifiers.contentId
   );
 }
-
 function sameSourceIdentity(left, right) {
   if (!left?.platform || !right?.platform || left.platform !== right.platform) {
     return false;
@@ -80,84 +63,50 @@ function sameSourceIdentity(left, right) {
   }
   if (left.contentId || right.contentId) {
     return Boolean(
-      left.contentId
-      && right.contentId
-      && left.contentId === right.contentId
+      left.contentId && right.contentId && left.contentId === right.contentId
     );
   }
   return Boolean(
-    left.channelId
-    && right.channelId
-    && left.channelId === right.channelId
-    && left.contentType === right.contentType
+    left.channelId && right.channelId && left.channelId === right.channelId && left.contentType === right.contentType
   );
 }
-
 function expectedSourceIdentifiers(expectedSource) {
-  const source = (
-    expectedSource
-    && typeof expectedSource === "object"
-    && !Array.isArray(expectedSource)
-  )
-    ? expectedSource
-    : {};
+  const source = expectedSource && typeof expectedSource === "object" && !Array.isArray(expectedSource) ? expectedSource : {};
   const inferred = inferSourceIdentifiers(
     source.canonicalUrl || source.url || ""
   );
-  const explicitPlatform = String(source.platform || "")
-    .trim()
-    .toUpperCase();
+  const explicitPlatform = String(source.platform || "").trim().toUpperCase();
   const platform = [
     SOURCE_PLATFORM_CHZZK,
     SOURCE_PLATFORM_YOUTUBE
-  ].includes(explicitPlatform)
-    ? explicitPlatform
-    : inferred.platform;
-  const explicitContentType = String(source.contentType || "")
-    .trim()
-    .toLowerCase();
+  ].includes(explicitPlatform) ? explicitPlatform : inferred.platform;
+  const explicitContentType = String(source.contentType || "").trim().toLowerCase();
   const hasExplicitContentType = Boolean(
     explicitContentType && explicitContentType !== "unknown"
   );
   const canUseInferredIdentity = Boolean(
-    (!explicitPlatform || explicitPlatform === inferred.platform)
-    && (
-      !hasExplicitContentType
-      || explicitContentType === inferred.contentType
-    )
+    (!explicitPlatform || explicitPlatform === inferred.platform) && (!hasExplicitContentType || explicitContentType === inferred.contentType)
   );
-  const contentType = hasExplicitContentType
-    ? explicitContentType
-    : inferred.contentType;
+  const contentType = hasExplicitContentType ? explicitContentType : inferred.contentType;
   return {
     platform,
     channelId: String(
-      source.channelId
-      || (canUseInferredIdentity ? inferred.channelId : "")
-      || ""
+      source.channelId || (canUseInferredIdentity ? inferred.channelId : "") || ""
     ).trim(),
     contentId: String(
-      (contentType === "live" ? "" : source.contentId)
-      || (canUseInferredIdentity ? inferred.contentId : "")
-      || ""
+      (contentType === "live" ? "" : source.contentId) || (canUseInferredIdentity ? inferred.contentId : "") || ""
     ).trim(),
     contentType
   };
 }
-
-export function selectSupportedSourceTab(tabs, {
+function selectSupportedSourceTab(tabs, {
   expectedSource = null
 } = {}) {
-  const candidates = (Array.isArray(tabs) ? tabs : [])
-    .filter((tab) => (
-      Number.isInteger(tab?.id)
-      && isSupportedSourceUrl(tab?.url)
-    ));
+  const candidates = (Array.isArray(tabs) ? tabs : []).filter((tab) => Number.isInteger(tab?.id) && isSupportedSourceUrl(tab?.url));
   const active = candidates.find((tab) => tab.active === true);
   if (active) {
     return active;
   }
-
   const expectedIdentity = expectedSourceIdentifiers(expectedSource);
   if (expectedIdentity.platform) {
     const matches = candidates.filter((tab) => sameSourceIdentity(
@@ -168,39 +117,25 @@ export function selectSupportedSourceTab(tabs, {
       return matches[0];
     }
   }
-
   return candidates.length === 1 ? candidates[0] : null;
 }
-
-export function sourceRefreshFailureAction({
+function sourceRefreshFailureAction({
   silent = false,
   hasCurrentContext = false,
   sourceUnavailable = false
 } = {}) {
-  return (
-    silent
-    && hasCurrentContext
-    && !sourceUnavailable
-  )
-    ? "retain"
-    : "clear";
+  return silent && hasCurrentContext && !sourceUnavailable ? "retain" : "clear";
 }
-
-export function canStartSourceRefresh({
+function canStartSourceRefresh({
   silent = false,
   foregroundRequestCount = 0
 } = {}) {
-  return !(
-    silent
-    && Math.max(0, Number(foregroundRequestCount) || 0) > 0
-  );
+  return !(silent && Math.max(0, Number(foregroundRequestCount) || 0) > 0);
 }
-
 function youtubeVideoId(value) {
   const candidate = String(value || "").trim();
   return YOUTUBE_VIDEO_ID_PATTERN.test(candidate) ? candidate : "";
 }
-
 function youtubeChannelIdFromUrls(values) {
   for (const value of values) {
     const url = parsedHttpsUrl(value);
@@ -219,7 +154,6 @@ function youtubeChannelIdFromUrls(values) {
   }
   return "";
 }
-
 function inferYouTubeIdentifiers(url, linkedUrls) {
   const hostname = normalizedHostname(url);
   const parts = url.pathname.split("/").filter(Boolean);
@@ -228,9 +162,7 @@ function inferYouTubeIdentifiers(url, linkedUrls) {
     contentId = youtubeVideoId(parts[0]);
   } else if (url.pathname === "/watch") {
     contentId = youtubeVideoId(url.searchParams.get("v"));
-  } else if (
-    ["shorts", "embed", "live"].includes(parts[0])
-  ) {
+  } else if (["shorts", "embed", "live"].includes(parts[0])) {
     contentId = youtubeVideoId(parts[1]);
   }
   return {
@@ -240,28 +172,21 @@ function inferYouTubeIdentifiers(url, linkedUrls) {
     contentType: contentId ? "vod" : "unknown"
   };
 }
-
 function inferChzzkIdentifiers(url, linkedUrls) {
   const parts = url.pathname.split("/").filter(Boolean);
-  const linkedChannelId = linkedUrls
-    .flatMap((value) => {
-      const linkedUrl = parsedHttpsUrl(value);
-      if (
-        !linkedUrl
-        || normalizedHostname(linkedUrl) !== "chzzk.naver.com"
-      ) {
-        return [];
-      }
-      return linkedUrl.pathname.split("/").filter(Boolean);
-    })
-    .find((part) => CHZZK_CHANNEL_ID_PATTERN.test(part));
+  const linkedChannelId = linkedUrls.flatMap((value) => {
+    const linkedUrl = parsedHttpsUrl(value);
+    if (!linkedUrl || normalizedHostname(linkedUrl) !== "chzzk.naver.com") {
+      return [];
+    }
+    return linkedUrl.pathname.split("/").filter(Boolean);
+  }).find((part) => CHZZK_CHANNEL_ID_PATTERN.test(part));
   const channelId = parts.find(
     (part) => CHZZK_CHANNEL_ID_PATTERN.test(part)
   ) || linkedChannelId || "";
   const videoIndex = parts.indexOf("video");
   const liveIndex = parts.indexOf("live");
   const clipsIndex = parts.indexOf("clips");
-
   if (videoIndex >= 0) {
     return {
       platform: SOURCE_PLATFORM_CHZZK,
@@ -282,23 +207,13 @@ function inferChzzkIdentifiers(url, linkedUrls) {
     platform: SOURCE_PLATFORM_CHZZK,
     channelId,
     contentId: "",
-    contentType: liveIndex >= 0
-      ? "live"
-      : channelId
-        ? "channel"
-        : "unknown"
+    contentType: liveIndex >= 0 ? "live" : channelId ? "channel" : "unknown"
   };
 }
-
-export function inferSourceIdentifiers(
-  value,
-  { linkedUrls = [] } = {}
-) {
+function inferSourceIdentifiers(value, { linkedUrls = [] } = {}) {
   const url = parsedHttpsUrl(value);
   const platform = sourcePlatformFromUrl(value);
-  const normalizedLinkedUrls = Array.isArray(linkedUrls)
-    ? linkedUrls
-    : [];
+  const normalizedLinkedUrls = Array.isArray(linkedUrls) ? linkedUrls : [];
   if (!url || !platform) {
     return {
       platform: "",
@@ -307,21 +222,15 @@ export function inferSourceIdentifiers(
       contentType: "unknown"
     };
   }
-  return platform === SOURCE_PLATFORM_YOUTUBE
-    ? inferYouTubeIdentifiers(url, normalizedLinkedUrls)
-    : inferChzzkIdentifiers(url, normalizedLinkedUrls);
+  return platform === SOURCE_PLATFORM_YOUTUBE ? inferYouTubeIdentifiers(url, normalizedLinkedUrls) : inferChzzkIdentifiers(url, normalizedLinkedUrls);
 }
-
-export function canonicalSourceUrl(value, identifiers = null) {
+function canonicalSourceUrl(value, identifiers = null) {
   const url = parsedHttpsUrl(value);
   const resolved = identifiers || inferSourceIdentifiers(value);
   if (!url || !resolved?.platform) {
     return "";
   }
-  if (
-    resolved.platform === SOURCE_PLATFORM_YOUTUBE
-    && resolved.contentId
-  ) {
+  if (resolved.platform === SOURCE_PLATFORM_YOUTUBE && resolved.contentId) {
     return `https://www.youtube.com/watch?v=${encodeURIComponent(resolved.contentId)}`;
   }
   if (resolved.platform === SOURCE_PLATFORM_CHZZK) {
@@ -339,28 +248,36 @@ export function canonicalSourceUrl(value, identifiers = null) {
   url.hash = "";
   return url.toString();
 }
-
-export function sourcePlatformLabel(platform) {
-  return platform === SOURCE_PLATFORM_YOUTUBE ? "YouTube" : "치지직";
+function sourcePlatformLabel(platform) {
+  return platform === SOURCE_PLATFORM_YOUTUBE ? "YouTube" : "\uCE58\uC9C0\uC9C1";
 }
-
-export function sourcePlayerStatusText(context) {
+function sourcePlayerStatusText(context) {
   const player = context?.player || {};
   if (!player.found) {
-    return "영상 플레이어 미검출";
+    return "\uC601\uC0C1 \uD50C\uB808\uC774\uC5B4 \uBBF8\uAC80\uCD9C";
   }
   if (player.adActive) {
-    return "YouTube 광고 재생 중 · 스탬프 일시 중지";
+    return "YouTube \uAD11\uACE0 \uC7AC\uC0DD \uC911 \xB7 \uC2A4\uD0EC\uD504 \uC77C\uC2DC \uC911\uC9C0";
   }
-  const parts = [player.paused ? "일시정지" : "재생 중"];
-  if (
-    context?.contentType === "live"
-    && Number.isFinite(player.liveEdgeOffsetSeconds)
-  ) {
-    parts.push(`라이브 지연 ${player.liveEdgeOffsetSeconds.toFixed(1)}초`);
+  const parts = [player.paused ? "\uC77C\uC2DC\uC815\uC9C0" : "\uC7AC\uC0DD \uC911"];
+  if (context?.contentType === "live" && Number.isFinite(player.liveEdgeOffsetSeconds)) {
+    parts.push(`\uB77C\uC774\uBE0C \uC9C0\uC5F0 ${player.liveEdgeOffsetSeconds.toFixed(1)}\uCD08`);
   }
   if (typeof context?.clipActive === "boolean") {
-    parts.push(`클립 ${context.clipActive ? "허용" : "미허용"}`);
+    parts.push(`\uD074\uB9BD ${context.clipActive ? "\uD5C8\uC6A9" : "\uBBF8\uD5C8\uC6A9"}`);
   }
-  return parts.join(" · ");
+  return parts.join(" \xB7 ");
 }
+export {
+  SOURCE_PLATFORM_CHZZK,
+  SOURCE_PLATFORM_YOUTUBE,
+  canStartSourceRefresh,
+  canonicalSourceUrl,
+  inferSourceIdentifiers,
+  isSupportedSourceUrl,
+  selectSupportedSourceTab,
+  sourcePlatformFromUrl,
+  sourcePlatformLabel,
+  sourcePlayerStatusText,
+  sourceRefreshFailureAction
+};

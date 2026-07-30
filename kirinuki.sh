@@ -21,14 +21,36 @@ if ! KIRINUKI_RESOLVED_NODE="$(command -v -- "$KIRINUKI_NODE_COMMAND" 2>/dev/nul
   exit 1
 fi
 
-if ! "$KIRINUKI_RESOLVED_NODE" -e '
-  const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
-  process.exit(major > 20 || (major === 20 && minor >= 9) ? 0 : 1);
-'; then
+KIRINUKI_NODE_VERSION="$("$KIRINUKI_RESOLVED_NODE" --version 2>/dev/null || true)"
+KIRINUKI_NODE_NUMBERS="${KIRINUKI_NODE_VERSION#v}"
+IFS=. read -r KIRINUKI_NODE_MAJOR KIRINUKI_NODE_MINOR _ \
+  <<< "$KIRINUKI_NODE_NUMBERS"
+if [[ ! "$KIRINUKI_NODE_MAJOR" =~ ^[0-9]+$ \
+  || ! "$KIRINUKI_NODE_MINOR" =~ ^[0-9]+$ \
+  || "$KIRINUKI_NODE_MAJOR" -lt 20 \
+  || ( "$KIRINUKI_NODE_MAJOR" -eq 20 && "$KIRINUKI_NODE_MINOR" -lt 9 ) ]]; then
   printf '%s\n' \
-    "현재 Node.js는 $("$KIRINUKI_RESOLVED_NODE" --version 2>/dev/null || printf '알 수 없음')입니다." \
+    "현재 Node.js는 ${KIRINUKI_NODE_VERSION:-알 수 없음}입니다." \
     "Kirinuki에는 Node.js 20.9 이상이 필요합니다." >&2
   exit 1
 fi
 
-exec "$KIRINUKI_RESOLVED_NODE" "$KIRINUKI_SCRIPT_DIR/scripts/linux-helper.mjs" "$@"
+KIRINUKI_TSX_CLI="$KIRINUKI_SCRIPT_DIR/node_modules/tsx/dist/cli.mjs"
+if [[ ! -f "$KIRINUKI_TSX_CLI" ]]; then
+  if ! KIRINUKI_RESOLVED_NPM="$(command -v -- npm 2>/dev/null)"; then
+    printf '%s\n' \
+      "TypeScript 실행 도구를 준비하려면 npm이 필요합니다." \
+      "Node.js와 npm을 설치한 뒤 ./setup.sh를 다시 실행하세요." >&2
+    exit 1
+  fi
+  printf '%s\n' "최초 실행용 고정 TypeScript 도구를 준비합니다."
+  (
+    cd -- "$KIRINUKI_SCRIPT_DIR"
+    "$KIRINUKI_RESOLVED_NPM" ci --ignore-scripts
+  )
+fi
+
+exec "$KIRINUKI_RESOLVED_NODE" \
+  "$KIRINUKI_TSX_CLI" \
+  "$KIRINUKI_SCRIPT_DIR/scripts/linux-helper.ts" \
+  "$@"

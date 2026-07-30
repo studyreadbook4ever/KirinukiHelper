@@ -1,3 +1,4 @@
+// Generated from TypeScript sources. Do not edit directly.
 import {
   STORAGE_KEY,
   WORKSPACE_META_KEY,
@@ -19,82 +20,77 @@ import {
   buildSavedEditorUrl,
   editorTabMatchesProject
 } from "./lib/session-recovery.js";
-
 const BINDINGS_KEY = "chzzkKirinukiSourceBindingsV1";
 const LEGACY_TRANSFORMERS_CACHE_NAME = "transformers-cache";
 const EDITOR_PROJECTS_STORE = "projects";
 const EDITOR_LOCAL_DRAFTS_STORE = "local-drafts";
 let workspaceOperationQueue = Promise.resolve();
-
+class WorkspaceConflictError extends Error {
+  workspaceMeta;
+  constructor(message, workspaceMeta) {
+    super(message);
+    this.name = "WorkspaceConflictError";
+    this.workspaceMeta = workspaceMeta;
+  }
+}
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 function queueWorkspaceOperation(operation) {
   const result = workspaceOperationQueue.then(operation, operation);
-  workspaceOperationQueue = result.catch(() => {});
+  workspaceOperationQueue = result.catch(() => {
+  });
   return result;
 }
-
 const enableActionSidePanel = async () => {
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   } catch (error) {
-    console.error("사이드패널 동작을 설정하지 못했습니다.", error);
+    console.error("\uC0AC\uC774\uB4DC\uD328\uB110 \uB3D9\uC791\uC744 \uC124\uC815\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.", error);
   }
 };
-
 async function purgeLegacyLocalAsrCache() {
   try {
     await caches.delete(LEGACY_TRANSFORMERS_CACHE_NAME);
   } catch (error) {
-    console.warn("이전 로컬 음성인식 모델 캐시를 정리하지 못했습니다.", error);
+    console.warn("\uC774\uC804 \uB85C\uCEEC \uC74C\uC131\uC778\uC2DD \uBAA8\uB378 \uCE90\uC2DC\uB97C \uC815\uB9AC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.", error);
   }
 }
-
 async function initializeExtensionRuntime() {
   await Promise.all([
     enableActionSidePanel(),
     purgeLegacyLocalAsrCache()
   ]);
 }
-
 async function readBindings() {
   const stored = await chrome.storage.session.get(BINDINGS_KEY);
-  return stored[BINDINGS_KEY] && typeof stored[BINDINGS_KEY] === "object"
-    ? stored[BINDINGS_KEY]
-    : {};
+  return stored[BINDINGS_KEY] && typeof stored[BINDINGS_KEY] === "object" ? stored[BINDINGS_KEY] : {};
 }
-
 async function writeBindings(bindings) {
   await chrome.storage.session.set({ [BINDINGS_KEY]: bindings });
 }
-
 async function readWorkspaceMeta() {
   const stored = await chrome.storage.local.get(WORKSPACE_META_KEY);
-  return normalizeWorkspaceMeta(stored[WORKSPACE_META_KEY]);
+  return normalizeWorkspaceMeta(
+    stored[WORKSPACE_META_KEY]
+  );
 }
-
 function workspaceConflict(message, workspaceMeta) {
-  const error = new Error(message);
-  error.name = "WorkspaceConflictError";
-  error.workspaceMeta = workspaceMeta;
-  return error;
+  return new WorkspaceConflictError(message, workspaceMeta);
 }
-
 async function assertWorkspaceVersion(message) {
   const workspaceMeta = await readWorkspaceMeta();
-  if (
-    message.expectedResetEpoch !== workspaceMeta.resetEpoch ||
-    message.expectedRevision !== workspaceMeta.revision
-  ) {
+  if (message.expectedResetEpoch !== workspaceMeta.resetEpoch || message.expectedRevision !== workspaceMeta.revision) {
     throw workspaceConflict(
-      "다른 창에서 프로젝트가 변경되었습니다. 최신 상태를 반영한 뒤 다시 시도해 주세요.",
+      "\uB2E4\uB978 \uCC3D\uC5D0\uC11C \uD504\uB85C\uC81D\uD2B8\uAC00 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uCD5C\uC2E0 \uC0C1\uD0DC\uB97C \uBC18\uC601\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574 \uC8FC\uC138\uC694.",
       workspaceMeta
     );
   }
   return workspaceMeta;
 }
-
 async function persistWorkspaceState(message) {
   if (!message.state || typeof message.state !== "object" || !message.writerId) {
-    throw new Error("저장할 프로젝트 정보가 올바르지 않습니다.");
+    throw new Error("\uC800\uC7A5\uD560 \uD504\uB85C\uC81D\uD2B8 \uC815\uBCF4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   }
   const currentMeta = await assertWorkspaceVersion(message);
   const workspaceMeta = {
@@ -108,24 +104,21 @@ async function persistWorkspaceState(message) {
   });
   return workspaceMeta;
 }
-
 async function bindProjectToSource(projectId, sourceTabId, captureState) {
   const bindings = await readBindings();
   bindings[projectId] = {
     projectId,
     sourceTabId,
     sourceIdentity: captureState?.source || null,
-    sourceSessionId: sourceSessionIdentity(captureState?.source),
-    boundAt: new Date().toISOString()
+    sourceSessionId: sourceSessionIdentity(captureState.source ?? void 0),
+    boundAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   await writeBindings(bindings);
 }
-
 async function sourceBinding(projectId) {
   const bindings = await readBindings();
   return bindings[projectId] || null;
 }
-
 async function sourceTabExists(binding) {
   if (!binding?.sourceTabId) {
     return false;
@@ -142,36 +135,20 @@ async function sourceTabExists(binding) {
       return false;
     }
     const tabPlatform = sourcePlatformFromUrl(tab.url);
-    if (
-      !tabPlatform
-      || response.context?.platform !== tabPlatform
-    ) {
+    if (!tabPlatform || response.context?.platform !== tabPlatform) {
       return false;
     }
-    const expectedSessionId = binding.sourceSessionId
-      || sourceSessionIdentity(binding.sourceIdentity);
+    const expectedSessionId = binding.sourceSessionId || sourceSessionIdentity(binding.sourceIdentity ?? void 0);
     const activeSessionId = sourceSessionIdentity(response.context);
     return Boolean(
-      (
-        binding.sourceIdentity
-        && sameSourceSession(binding.sourceIdentity, response.context)
-      )
-      || (
-        expectedSessionId
-        && activeSessionId
-        && expectedSessionId === activeSessionId
-      )
+      binding.sourceIdentity && sameSourceSession(binding.sourceIdentity, response.context) || expectedSessionId && activeSessionId && expectedSessionId === activeSessionId
     );
   } catch {
     return false;
   }
 }
-
 async function openExistingEditorDatabase() {
-  if (
-    typeof indexedDB === "undefined"
-    || typeof indexedDB.open !== "function"
-  ) {
+  if (typeof indexedDB === "undefined" || typeof indexedDB.open !== "function") {
     return null;
   }
   if (typeof indexedDB.databases === "function") {
@@ -181,8 +158,6 @@ async function openExistingEditorDatabase() {
         return null;
       }
     } catch {
-      // Opening with an aborted upgrade below is still safe when enumeration
-      // is unavailable or temporarily fails.
     }
   }
   return new Promise((resolve, reject) => {
@@ -197,12 +172,11 @@ async function openExistingEditorDatabase() {
         resolve(null);
         return;
       }
-      reject(request.error || new Error("저장된 편집 세션을 확인하지 못했습니다."));
+      reject(request.error || new Error("\uC800\uC7A5\uB41C \uD3B8\uC9D1 \uC138\uC158\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."));
     };
     request.onsuccess = () => resolve(request.result);
   });
 }
-
 async function readEditorRecoveryRecords() {
   const database = await openExistingEditorDatabase();
   if (!database) {
@@ -218,87 +192,76 @@ async function readEditorRecoveryRecords() {
     }
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(storeNames, "readonly");
-      const projectRequest = transaction
-        .objectStore(EDITOR_PROJECTS_STORE)
-        .getAll();
-      const draftRequest = storeNames.includes(EDITOR_LOCAL_DRAFTS_STORE)
-        ? transaction.objectStore(EDITOR_LOCAL_DRAFTS_STORE).getAll()
-        : null;
+      const projectRequest = transaction.objectStore(EDITOR_PROJECTS_STORE).getAll();
+      const draftRequest = storeNames.includes(EDITOR_LOCAL_DRAFTS_STORE) ? transaction.objectStore(EDITOR_LOCAL_DRAFTS_STORE).getAll() : null;
       transaction.oncomplete = () => resolve({
-        projects: Array.isArray(projectRequest.result)
-          ? projectRequest.result
-          : [],
-        drafts: Array.isArray(draftRequest?.result)
-          ? draftRequest.result
-          : []
+        projects: Array.isArray(projectRequest.result) ? projectRequest.result : [],
+        drafts: Array.isArray(draftRequest?.result) ? draftRequest.result : []
       });
       transaction.onerror = () => reject(
-        transaction.error || new Error("저장된 편집 세션을 읽지 못했습니다.")
+        transaction.error || new Error("\uC800\uC7A5\uB41C \uD3B8\uC9D1 \uC138\uC158\uC744 \uC77D\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.")
       );
       transaction.onabort = () => reject(
-        transaction.error || new Error("저장된 편집 세션 읽기가 중단되었습니다.")
+        transaction.error || new Error("\uC800\uC7A5\uB41C \uD3B8\uC9D1 \uC138\uC158 \uC77D\uAE30\uAC00 \uC911\uB2E8\uB418\uC5C8\uC2B5\uB2C8\uB2E4.")
       );
     });
   } finally {
     database.close();
   }
 }
-
 async function listRecoverySessions() {
   const { projects, drafts } = await readEditorRecoveryRecords();
   return buildRecoverySessionSummaries(projects, drafts);
 }
-
 async function focusProjectEditor(projectId, {
   editorUrl,
   openRecoveryDrafts = false
 }) {
   const editorRoot = chrome.runtime.getURL("editor.html");
   const tabs = await chrome.tabs.query({});
-  const existing = tabs.find((tab) => (
-    editorTabMatchesProject(tab.url, editorRoot, projectId)
-  ));
+  const existing = tabs.find((tab) => editorTabMatchesProject(tab.url || "", editorRoot, projectId));
   if (existing?.id) {
     await chrome.tabs.update(existing.id, { active: true });
-    if (Number.isInteger(existing.windowId)) {
+    if (typeof existing.windowId === "number") {
       await chrome.windows.update(existing.windowId, { focused: true });
     }
     if (openRecoveryDrafts) {
       await chrome.runtime.sendMessage({
         type: "KIRINUKI_OPEN_RECOVERY_DRAFTS",
         projectId
-      }).catch(() => {});
+      }).catch(() => {
+      });
     }
     return { tabId: existing.id, reused: true };
   }
   const created = await chrome.tabs.create({ url: editorUrl, active: true });
   return { tabId: created.id, reused: false };
 }
-
 async function openEditor(message) {
   const { projectId, sourceTabId, captureState } = message;
   if (!projectId || !Number.isInteger(sourceTabId) || !captureState) {
-    throw new Error("편집기 전달 정보가 올바르지 않습니다.");
+    throw new Error("\uD3B8\uC9D1\uAE30 \uC804\uB2EC \uC815\uBCF4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   }
+  const validSourceTabId = sourceTabId;
+  const sourceIdentity = captureState.source ?? null;
   await assertWorkspaceVersion(message);
-  if (!(await sourceTabExists({
-    sourceTabId,
-    sourceIdentity: captureState.source,
-    sourceSessionId: sourceSessionIdentity(captureState.source)
-  }))) {
-    throw new Error("저장 구간과 연결할 영상 탭의 원본이 다릅니다.");
+  if (!await sourceTabExists({
+    sourceTabId: validSourceTabId,
+    sourceIdentity,
+    sourceSessionId: sourceSessionIdentity(sourceIdentity ?? void 0)
+  })) {
+    throw new Error("\uC800\uC7A5 \uAD6C\uAC04\uACFC \uC5F0\uACB0\uD560 \uC601\uC0C1 \uD0ED\uC758 \uC6D0\uBCF8\uC774 \uB2E4\uB985\uB2C8\uB2E4.");
   }
   await Promise.all([
-    bindProjectToSource(projectId, sourceTabId, captureState),
+    bindProjectToSource(projectId, validSourceTabId, captureState),
     chrome.storage.local.set({
       [`${EDITOR_SEED_PREFIX}${projectId}`]: {
         projectId,
         captureState,
-        updatedAt: new Date().toISOString()
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
       }
     })
   ]);
-
   const editorUrl = chrome.runtime.getURL(`editor.html?project=${encodeURIComponent(projectId)}`);
   const opened = await focusProjectEditor(projectId, { editorUrl });
   if (opened.reused) {
@@ -306,16 +269,16 @@ async function openEditor(message) {
       type: "KIRINUKI_CAPTURE_SEED_UPDATED",
       projectId,
       captureState
-    }).catch(() => {});
+    }).catch(() => {
+    });
   }
   return opened.tabId;
 }
-
 async function openSavedEditor(message) {
   const projectId = String(message.projectId || "").trim();
   const { projects } = await readEditorRecoveryRecords();
   if (!projects.some((project) => String(project?.id || "") === projectId)) {
-    throw new Error("이 기기에서 다시 열 편집 프로젝트를 찾지 못했습니다.");
+    throw new Error("\uC774 \uAE30\uAE30\uC5D0\uC11C \uB2E4\uC2DC \uC5F4 \uD3B8\uC9D1 \uD504\uB85C\uC81D\uD2B8\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
   }
   const recoveryDrafts = message.recovery === "drafts";
   const editorRoot = chrome.runtime.getURL("editor.html");
@@ -328,30 +291,25 @@ async function openSavedEditor(message) {
   });
   return opened.tabId;
 }
-
 async function closeEditorTabs() {
   const editorRoot = chrome.runtime.getURL("editor.html");
   const tabs = await chrome.tabs.query({});
-  const editorTabIds = tabs
-    .filter((tab) => Number.isInteger(tab.id) && tab.url?.startsWith(editorRoot))
-    .map((tab) => tab.id);
+  const editorTabIds = tabs.filter((tab) => Number.isInteger(tab.id) && tab.url?.startsWith(editorRoot)).map((tab) => tab.id).filter((id) => typeof id === "number");
   if (editorTabIds.length > 0) {
     await chrome.tabs.remove(editorTabIds);
   }
 }
-
 async function deleteEditorDatabase() {
   await new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase(EDITOR_DATABASE_NAME);
     request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error || new Error("편집기 저장소를 삭제하지 못했습니다."));
-    request.onblocked = () => reject(new Error("열려 있는 편집기가 저장소 정리를 막고 있습니다."));
+    request.onerror = () => reject(request.error || new Error("\uD3B8\uC9D1\uAE30 \uC800\uC7A5\uC18C\uB97C \uC0AD\uC81C\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."));
+    request.onblocked = () => reject(new Error("\uC5F4\uB824 \uC788\uB294 \uD3B8\uC9D1\uAE30\uAC00 \uC800\uC7A5\uC18C \uC815\uB9AC\uB97C \uB9C9\uACE0 \uC788\uC2B5\uB2C8\uB2E4."));
   });
 }
-
 async function resetWorkspace(message) {
   if (!message.writerId) {
-    throw new Error("초기화 요청 정보가 올바르지 않습니다.");
+    throw new Error("\uCD08\uAE30\uD654 \uC694\uCCAD \uC815\uBCF4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   }
   const currentMeta = await readWorkspaceMeta();
   const workspaceMeta = {
@@ -360,7 +318,6 @@ async function resetWorkspace(message) {
     writerId: message.writerId
   };
   const state = createInitialState();
-
   await chrome.storage.local.set({
     [STORAGE_KEY]: state,
     [WORKSPACE_META_KEY]: workspaceMeta
@@ -369,7 +326,7 @@ async function resetWorkspace(message) {
   try {
     await writeBindings({});
   } catch (error) {
-    cleanupErrors.push(`영상 탭 연결: ${error.message}`);
+    cleanupErrors.push(`\uC601\uC0C1 \uD0ED \uC5F0\uACB0: ${errorMessage(error)}`);
   }
   try {
     const stored = await chrome.storage.local.get(null);
@@ -378,27 +335,29 @@ async function resetWorkspace(message) {
       await chrome.storage.local.remove(seedKeys);
     }
   } catch (error) {
-    cleanupErrors.push(`편집기 전달 데이터: ${error.message}`);
+    cleanupErrors.push(`\uD3B8\uC9D1\uAE30 \uC804\uB2EC \uB370\uC774\uD130: ${errorMessage(error)}`);
   }
   try {
     await closeEditorTabs();
   } catch (error) {
-    cleanupErrors.push(`열린 편집기 탭: ${error.message}`);
+    cleanupErrors.push(`\uC5F4\uB9B0 \uD3B8\uC9D1\uAE30 \uD0ED: ${errorMessage(error)}`);
   }
   try {
     await deleteEditorDatabase();
   } catch (error) {
-    cleanupErrors.push(`편집 프로젝트 저장소: ${error.message}`);
+    cleanupErrors.push(`\uD3B8\uC9D1 \uD504\uB85C\uC81D\uD2B8 \uC800\uC7A5\uC18C: ${errorMessage(error)}`);
   }
   await purgeLegacyLocalAsrCache();
-
   return { state, workspaceMeta, cleanupErrors };
 }
-
 async function runSourceAction(message) {
-  const binding = await sourceBinding(message.projectId);
-  if (!(await sourceTabExists(binding))) {
-    throw new Error("연결했던 영상 탭이 닫혔습니다. 원본 페이지에서 프로젝트를 다시 열어 주세요.");
+  const projectId = message.projectId;
+  if (!projectId) {
+    throw new Error("\uD3B8\uC9D1 \uD504\uB85C\uC81D\uD2B8 ID\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
+  }
+  const binding = await sourceBinding(projectId);
+  if (!binding || !await sourceTabExists(binding)) {
+    throw new Error("\uC5F0\uACB0\uD588\uB358 \uC601\uC0C1 \uD0ED\uC774 \uB2EB\uD614\uC2B5\uB2C8\uB2E4. \uC6D0\uBCF8 \uD398\uC774\uC9C0\uC5D0\uC11C \uD504\uB85C\uC81D\uD2B8\uB97C \uB2E4\uC2DC \uC5F4\uC5B4 \uC8FC\uC138\uC694.");
   }
   if (message.action === "seek-and-focus" && Number.isFinite(message.sourceSeconds)) {
     const response = await chrome.tabs.sendMessage(binding.sourceTabId, {
@@ -407,15 +366,14 @@ async function runSourceAction(message) {
       positionSeconds: message.sourceSeconds
     });
     if (!response?.ok) {
-      throw new Error(response?.error || "원본 플레이어 위치를 옮기지 못했습니다.");
+      throw new Error(response?.error || "\uC6D0\uBCF8 \uD50C\uB808\uC774\uC5B4 \uC704\uCE58\uB97C \uC62E\uAE30\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
     }
   }
   const tab = await chrome.tabs.update(binding.sourceTabId, { active: true });
-  if (Number.isInteger(tab.windowId)) {
+  if (tab && typeof tab.windowId === "number") {
     await chrome.windows.update(tab.windowId, { focused: true });
   }
 }
-
 chrome.runtime.onInstalled.addListener(() => {
   void initializeExtensionRuntime();
 });
@@ -423,80 +381,60 @@ chrome.runtime.onStartup.addListener(() => {
   void initializeExtensionRuntime();
 });
 void purgeLegacyLocalAsrCache();
-
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message.type !== "string") {
     return false;
   }
-
   if (message.type === "KIRINUKI_OPEN_EDITOR") {
-    void queueWorkspaceOperation(() => openEditor(message))
-      .then((editorTabId) => sendResponse({ ok: true, editorTabId }))
-      .catch((error) => sendResponse({
-        ok: false,
-        error: error.message,
-        workspaceMeta: error.workspaceMeta
-      }));
+    void queueWorkspaceOperation(() => openEditor(message)).then((editorTabId) => sendResponse({ ok: true, editorTabId })).catch((error) => sendResponse({
+      ok: false,
+      error: errorMessage(error),
+      workspaceMeta: error instanceof WorkspaceConflictError ? error.workspaceMeta : void 0
+    }));
     return true;
   }
-
   if (message.type === "KIRINUKI_LIST_RECOVERY_SESSIONS") {
-    void listRecoverySessions()
-      .then((sessions) => sendResponse({ ok: true, sessions }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    void listRecoverySessions().then((sessions) => sendResponse({ ok: true, sessions })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
     return true;
   }
-
   if (message.type === "KIRINUKI_OPEN_SAVED_EDITOR") {
-    void queueWorkspaceOperation(() => openSavedEditor(message))
-      .then((editorTabId) => sendResponse({ ok: true, editorTabId }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    void queueWorkspaceOperation(() => openSavedEditor(message)).then((editorTabId) => sendResponse({ ok: true, editorTabId })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
     return true;
   }
-
   if (message.type === "KIRINUKI_PERSIST_STATE") {
-    void queueWorkspaceOperation(() => persistWorkspaceState(message))
-      .then((workspaceMeta) => sendResponse({ ok: true, workspaceMeta }))
-      .catch((error) => sendResponse({
-        ok: false,
-        error: error.message,
-        workspaceMeta: error.workspaceMeta
-      }));
+    void queueWorkspaceOperation(() => persistWorkspaceState(message)).then((workspaceMeta) => sendResponse({ ok: true, workspaceMeta })).catch((error) => sendResponse({
+      ok: false,
+      error: errorMessage(error),
+      workspaceMeta: error instanceof WorkspaceConflictError ? error.workspaceMeta : void 0
+    }));
     return true;
   }
-
   if (message.type === "KIRINUKI_EDITOR_READY") {
-    void sourceBinding(message.projectId)
-      .then(async (binding) => sendResponse({
-        ok: true,
-        connected: await sourceTabExists(binding)
-      }))
-      .catch((error) => sendResponse({ ok: false, connected: false, error: error.message }));
+    void sourceBinding(String(message.projectId || "")).then(async (binding) => sendResponse({
+      ok: true,
+      connected: await sourceTabExists(binding)
+    })).catch((error) => sendResponse({
+      ok: false,
+      connected: false,
+      error: errorMessage(error)
+    }));
     return true;
   }
-
   if (message.type === "KIRINUKI_EDITOR_SOURCE_ACTION") {
-    void runSourceAction(message)
-      .then(() => sendResponse({ ok: true }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    void runSourceAction(message).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
     return true;
   }
-
   if (message.type === "KIRINUKI_RESET_BINDINGS") {
-    void queueWorkspaceOperation(() => resetWorkspace(message))
-      .then(({ state, workspaceMeta, cleanupErrors }) => sendResponse({
-        ok: true,
-        state,
-        workspaceMeta,
-        cleanupErrors
-      }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    void queueWorkspaceOperation(() => resetWorkspace(message)).then(({ state, workspaceMeta, cleanupErrors }) => sendResponse({
+      ok: true,
+      state,
+      workspaceMeta,
+      cleanupErrors
+    })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
     return true;
   }
-
   return false;
 });
-
 chrome.tabs.onRemoved.addListener((tabId) => {
   void queueWorkspaceOperation(async () => {
     const bindings = await readBindings();
@@ -512,8 +450,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       type: "KIRINUKI_SOURCE_BINDING_STATUS",
       projectId: binding.projectId,
       connected: false
-    }).catch(() => {})));
-  }).catch((error) => console.error("영상 탭 연결 정리 실패", error));
+    }).catch(() => {
+    })));
+  }).catch((error) => console.error("\uC601\uC0C1 \uD0ED \uC5F0\uACB0 \uC815\uB9AC \uC2E4\uD328", error));
 });
-
 void enableActionSidePanel();

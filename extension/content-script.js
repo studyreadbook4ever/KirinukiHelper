@@ -1,5 +1,7 @@
+// Generated from TypeScript sources. Do not edit directly.
+"use strict";
 (() => {
-  // extension/lib/source-platform.js
+  // src/lib/source-platform.ts
   var SOURCE_PLATFORM_CHZZK = "CHZZK";
   var SOURCE_PLATFORM_YOUTUBE = "YOUTUBE";
   var YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/u;
@@ -153,7 +155,7 @@
     return url.toString();
   }
 
-  // src/content-script.js
+  // src/content-script.ts
   if (!globalThis.__kirinukiSourceBridgeLoaded) {
     globalThis.__kirinukiSourceBridgeLoaded = true;
     let liveMetadataCache = null;
@@ -195,11 +197,12 @@
       return "";
     };
     const linkedUrls = () => [...document.querySelectorAll("a[href], link[href]")].map((element) => {
+      const href = element.getAttribute("href");
+      if (!href) {
+        return "";
+      }
       try {
-        return new URL(
-          element.getAttribute("href"),
-          location.href
-        ).toString();
+        return new URL(href, location.href).toString();
       } catch {
         return "";
       }
@@ -209,8 +212,12 @@
         "#owner #channel-name a[href], ytd-watch-metadata ytd-channel-name a[href], ytd-reel-video-renderer a[href*='/@']"
       )
     ].map((element) => {
+      const href = element.getAttribute("href");
+      if (!href) {
+        return "";
+      }
       try {
-        return new URL(element.getAttribute("href"), location.href).toString();
+        return new URL(href, location.href).toString();
       } catch {
         return "";
       }
@@ -408,10 +415,11 @@
         return player;
       }
       const elapsedAtLiveEdge = (capturedMilliseconds - openDateMilliseconds) / 1e3;
+      const playerPosition = player.positionSeconds;
       const liveEdgeOffset = Number.isFinite(player.liveEdgeOffsetSeconds) ? player.liveEdgeOffsetSeconds : 0;
       return {
         ...player,
-        rawMediaPositionSeconds: player.positionSeconds,
+        rawMediaPositionSeconds: playerPosition,
         positionSeconds: Math.max(
           0,
           elapsedAtLiveEdge - liveEdgeOffset
@@ -439,7 +447,9 @@
         "meta[property='og:url']",
         "meta[itemprop='url']"
       )) : null;
-      const youtubeMetadataFresh = platform !== SOURCE_PLATFORM_YOUTUBE || youtubeMetadataIdentifiers?.contentId && youtubeMetadataIdentifiers.contentId === identifiers.contentId;
+      const youtubeMetadataFresh = Boolean(
+        platform !== SOURCE_PLATFORM_YOUTUBE || youtubeMetadataIdentifiers?.contentId && youtubeMetadataIdentifiers.contentId === identifiers.contentId
+      );
       const pageTitle = cleanPageTitle(
         (youtubeMetadataFresh ? readMeta(
           "meta[property='og:title']",
@@ -540,16 +550,16 @@
       } else if (message.action === "pause") {
         video.pause();
       } else if (message.action === "seek") {
-        if (!Number.isFinite(message.positionSeconds) || message.positionSeconds < 0) {
+        if (!Number.isFinite(message.positionSeconds) || (message.positionSeconds ?? -1) < 0) {
           throw new Error("\uC774\uB3D9\uD560 \uC601\uC0C1 \uC2DC\uAC01\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
         }
         const identifiers = inferSourceIdentifiers(location.href);
         let target = message.positionSeconds;
         if (platform === SOURCE_PLATFORM_CHZZK && identifiers.contentType === "live") {
           const context = await getContext();
-          const normalizedPosition = context.player?.positionSeconds;
+          const normalizedPosition = context.player.positionSeconds;
           if (Number.isFinite(normalizedPosition)) {
-            target = video.currentTime + message.positionSeconds - normalizedPosition;
+            target = video.currentTime + target - normalizedPosition;
           }
         }
         if (video.seekable.length > 0) {
