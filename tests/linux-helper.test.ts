@@ -878,23 +878,23 @@ test("누락된 fresh Linux 의존성은 변경 없이 실행 가능한 설치 �
     path.join(os.tmpdir(), "kirinuki-missing-dependencies-")
   );
   t.after(() => rm(tempRoot, { recursive: true, force: true }));
-  const missingBrowser = path.join(tempRoot, "missing-chromium");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: "",
+    HOME: path.join(tempRoot, "home"),
+    XDG_CONFIG_HOME: path.join(tempRoot, "config"),
+    XDG_STATE_HOME: path.join(tempRoot, "state"),
+    XDG_DATA_HOME: path.join(tempRoot, "data")
+  };
+  delete env.KIRINUKI_BROWSER_BINARY;
+  delete env.KIRINUKI_NPM_BINARY;
+  delete env.KIRINUKI_EXTENSION_ROOT;
+  delete env.KIRINUKI_BROWSER_PROFILE_ROOT;
   const result = await runNode([
     "doctor",
     "--mode",
-    "audseg",
-    "--browser",
-    missingBrowser
-  ], {
-    env: {
-      ...process.env,
-      PATH: "",
-      HOME: path.join(tempRoot, "home"),
-      XDG_CONFIG_HOME: path.join(tempRoot, "config"),
-      XDG_STATE_HOME: path.join(tempRoot, "state"),
-      XDG_DATA_HOME: path.join(tempRoot, "data")
-    }
-  });
+    "audseg"
+  ], { env });
   assert.equal(result.code, 1);
   assert.match(result.stdout, /npm: 없음/u);
   assert.match(result.stdout, /Chromium 없음/u);
