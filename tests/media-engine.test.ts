@@ -19,9 +19,11 @@ import {
   createFileWriteTransaction,
   createImageAssetRenderCache,
   drawImageAsset,
+  exportProgressPercent,
   fallbackCaptionPlacementHints,
   fitSingleLineCaptionFontSize,
   imageAssetDrawRect,
+  LOCAL_MEDIA_BLOB_SOURCE_OPTIONS,
   MAX_ACTIVE_IMAGE_ASSET_RGBA_BYTES,
   normalizeMediaTimeline,
   singleLineCaptionText,
@@ -76,6 +78,25 @@ function placementFrame(
   }
   return data;
 }
+
+test("로컬 대용량 미디어는 Chromium stream reader를 피하고 제한된 캐시를 쓴다", () => {
+  assert.deepEqual(LOCAL_MEDIA_BLOB_SOURCE_OPTIONS, {
+    maxCacheSize: 16 * 1024 * 1024,
+    useStreamReader: false
+  });
+  assert.equal(Object.isFrozen(LOCAL_MEDIA_BLOB_SOURCE_OPTIONS), true);
+});
+
+test("내보내기 진행률은 실제 commit 전까지 99%를 넘지 않는다", () => {
+  assert.equal(exportProgressPercent(-1), 0);
+  assert.equal(exportProgressPercent(Number.NaN), 0);
+  assert.equal(exportProgressPercent(0), 0);
+  assert.equal(exportProgressPercent(0.5), 50);
+  assert.equal(exportProgressPercent(0.995), 99);
+  assert.equal(exportProgressPercent(0.999_999), 99);
+  assert.equal(exportProgressPercent(1), 100);
+  assert.equal(exportProgressPercent(2), 100);
+});
 
 test("로컬 대표 프레임 방해도는 복잡한 밴드를 피하고 평탄하면 bottom을 택한다", () => {
   const width = 32;
@@ -855,11 +876,12 @@ test("파일 스트림은 finalize 준비 전 close에서는 abort하고 성공 
 
 test("파일 commit 자체가 실패해도 원본 오류를 유지한 채 abort로 정리할 수 있다", async () => {
   const events: string[] = [];
+  const networkError = new DOMException("network error", "NetworkError");
   const file = {
     async write() {},
     async close() {
       events.push("close");
-      throw new Error("disk full");
+      throw networkError;
     },
     async abort() {
       events.push("abort");
@@ -870,7 +892,10 @@ test("파일 commit 자체가 실패해도 원본 오류를 유지한 채 abort�
   );
   const writer = transaction.writable.getWriter();
   transaction.prepareCommit();
-  await assert.rejects(writer.close(), /disk full/);
+  await assert.rejects(
+    writer.close(),
+    (error: unknown) => error === networkError
+  );
   await transaction.abort();
   assert.deepEqual(events, ["close", "abort"]);
 });

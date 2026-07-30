@@ -21,6 +21,9 @@ import { fileURLToPath } from "node:url";
 const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
 const DATABASE_NAME = "chzzk-kirinuki-studio";
 const PROJECT_STORE = "projects";
+const LOCAL_DRAFT_STORE = "local-drafts";
+const LOCAL_DRAFT_PROJECT_INDEX = "projectId";
+const LOCAL_DRAFT_SCHEMA = "chzzk-kirinuki-local-draft/v1";
 const SEED_PREFIX = "chzzkKirinukiEditorSeed:";
 const PROJECT_ID = "e2e-media-export";
 const PROJECT_NAME = "Media Export E2E";
@@ -143,6 +146,16 @@ interface ProjectRecord extends ExternalRecord {
   selectedImageAssetId?: string | null;
   audioRegions: AudioRegionRecord[];
 }
+type LocalDraftRecord = {
+  schema: typeof LOCAL_DRAFT_SCHEMA;
+  id: string;
+  projectId: string;
+  createdAt: string;
+  createdAtMs: number;
+  reason: "manual" | "auto" | "pre-restore";
+  restoredFromDraftId: string | null;
+  project: ProjectRecord;
+};
 type TransparentAssetFixture = {
   ok?: boolean;
   error?: unknown;
@@ -301,6 +314,27 @@ function isProjectRecord(value: unknown): value is ProjectRecord {
     )
     && Array.isArray(value.audioRegions)
     && value.audioRegions.every(isAudioRegionRecord)
+  );
+}
+
+function isLocalDraftRecord(value: unknown): value is LocalDraftRecord {
+  return (
+    isExternalRecord(value)
+    && value.schema === LOCAL_DRAFT_SCHEMA
+    && typeof value.id === "string"
+    && value.projectId === PROJECT_ID
+    && typeof value.createdAt === "string"
+    && typeof value.createdAtMs === "number"
+    && (
+      value.reason === "manual"
+      || value.reason === "auto"
+      || value.reason === "pre-restore"
+    )
+    && (
+      value.restoredFromDraftId === null
+      || typeof value.restoredFromDraftId === "string"
+    )
+    && isProjectRecord(value.project)
   );
 }
 
@@ -796,6 +830,43 @@ async function readStoredProject(): Promise<ProjectRecord | null> {
   return result.value;
 }
 
+async function readStoredLocalDrafts(): Promise<LocalDraftRecord[]> {
+  const result = await executeAsync<{ error?: unknown; values?: unknown }>(`
+    const [databaseName, storeName, indexName, projectId] = arguments;
+    const done = arguments[arguments.length - 1];
+    const open = indexedDB.open(databaseName);
+    open.onerror = () => done({ error: String(open.error || "IndexedDB open failed") });
+    open.onsuccess = () => {
+      const database = open.result;
+      const transaction = database.transaction(storeName, "readonly");
+      const request = transaction.objectStore(storeName).index(indexName).getAll(projectId);
+      request.onerror = () => {
+        database.close();
+        done({ error: String(request.error || "IndexedDB draft read failed") });
+      };
+      request.onsuccess = () => {
+        const values = request.result || [];
+        database.close();
+        done({ values });
+      };
+    };
+  `, [
+    DATABASE_NAME,
+    LOCAL_DRAFT_STORE,
+    LOCAL_DRAFT_PROJECT_INDEX,
+    PROJECT_ID
+  ]);
+  assert(!result?.error, `IndexedDB 임시저장 읽기 실패: ${result?.error}`);
+  assert(Array.isArray(result.values), "IndexedDB 임시저장 결과가 배열이 아닙니다.");
+  for (const value of result.values) {
+    assert(
+      isLocalDraftRecord(value),
+      `IndexedDB 임시저장 shape가 올바르지 않습니다: ${JSON.stringify(value)}`
+    );
+  }
+  return result.values;
+}
+
 async function seedTransparentImageAssetFixture() {
   const result = await executeAsync<TransparentAssetFixture>(`
     const [databaseName, projectStoreName, projectId, assetId, assetName] = arguments;
@@ -954,6 +1025,7 @@ async function installMemoryDirectoryPicker(
         savePickerCalls: [],
         anchorDownloads: [],
         getFileHandleCalls: [],
+        nextVideoCloseFailure: null,
         files: new Map()
       };
 
@@ -1069,6 +1141,27 @@ async function installMemoryDirectoryPicker(
               cancelHidden: cancelButton?.hidden ?? null,
               cancelDisabled: cancelButton?.disabled ?? null
             });
+            const closeFailure = (
+              /\.(mp4|webm)$/i.test(record.name)
+              && state.nextVideoCloseFailure
+            )
+              ? state.nextVideoCloseFailure
+              : null;
+            if (closeFailure) {
+              state.nextVideoCloseFailure = null;
+              // Model an ambiguous OS/filesystem close failure: the bytes are
+              // visible through getFile(), but commit did not return success.
+              // The application must preserve this potentially recoverable file.
+              record.bytes = bytes.slice();
+              record.closeCount += 1;
+              operations.push({
+                type: "close-error",
+                size: bytes.byteLength,
+                name: closeFailure.name,
+                message: closeFailure.message
+              });
+              throw new DOMException(closeFailure.message, closeFailure.name);
+            }
             record.bytes = bytes.slice();
             record.committed = true;
             record.closeCount += 1;
@@ -1215,6 +1308,27 @@ async function installMemoryDirectoryPicker(
       error: error instanceof Error ? error.stack || error.message : String(error)
     }));
   `, [preexistingFiles]);
+}
+
+async function armNextVideoCloseNetworkError() {
+  const result = await executeSync<{ ok?: boolean; error?: string }>(`
+    const state = globalThis.__kirinukiE2eDirectory;
+    if (!state) {
+      return { error: "memory directory state가 없습니다." };
+    }
+    if (state.nextVideoCloseFailure) {
+      return { error: "이미 close failure가 예약돼 있습니다." };
+    }
+    state.nextVideoCloseFailure = {
+      name: "NetworkError",
+      message: "network error"
+    };
+    return { ok: true };
+  `);
+  assert(
+    result?.ok && !result.error,
+    `영상 close NetworkError 주입 준비 실패: ${result?.error || "알 수 없는 오류"}`
+  );
 }
 
 async function captureMemoryDirectoryFiles() {
@@ -2324,8 +2438,8 @@ async function main() {
       finalizeUi.jobHidden === false &&
       finalizeUi.jobOpen === true &&
       /마무리/.test(finalizeUi.message) &&
-      finalizeUi.percent === "100%" &&
-      finalizeUi.progressWidth === "100%" &&
+      finalizeUi.percent === "99%" &&
+      finalizeUi.progressWidth === "99%" &&
       finalizeUi.cancelHidden === true &&
       finalizeUi.cancelDisabled === true,
     `영상 writable close 시 최종화 UI/취소 잠금 상태가 아닙니다: ${JSON.stringify(
@@ -2658,6 +2772,200 @@ async function main() {
     `fade in/out이 실제 PCM 가장자리→중앙 곡선에 반영되지 않았습니다: ${JSON.stringify(audioLevels)}`
   );
 
+  const projectBeforeCloseFailure = await readStoredProject();
+  assert(projectBeforeCloseFailure, "close failure 회귀 테스트 전 프로젝트가 없습니다.");
+  const projectBeforeCloseFailureText = JSON.stringify(projectBeforeCloseFailure);
+  const draftsBeforeCloseFailure = await readStoredLocalDrafts();
+  const draftIdsBeforeCloseFailure = new Set(
+    draftsBeforeCloseFailure.map((draft) => draft.id)
+  );
+  const progressCaptureReady = await executeSync<boolean>(`
+    globalThis.__kirinukiE2eJobProgressCapture?.observer?.disconnect();
+    const dialog = document.querySelector("#job-dialog");
+    const percent = document.querySelector("#job-percent");
+    const progress = document.querySelector("#job-progress");
+    const message = document.querySelector("#job-message");
+    if (!dialog || !percent || !progress || !message) {
+      return false;
+    }
+    const samples = [];
+    const capture = () => {
+      if (dialog.hidden) {
+        return;
+      }
+      const sample = {
+        percent: percent.textContent || "",
+        progressWidth: progress.style.width || "",
+        message: message.textContent || ""
+      };
+      const previous = samples.at(-1);
+      if (
+        !previous
+        || previous.percent !== sample.percent
+        || previous.progressWidth !== sample.progressWidth
+        || previous.message !== sample.message
+      ) {
+        samples.push(sample);
+      }
+    };
+    const observer = new MutationObserver(capture);
+    observer.observe(dialog, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+    globalThis.__kirinukiE2eJobProgressCapture = { observer, samples, capture };
+    return true;
+  `);
+  assert(progressCaptureReady, "close failure 진행률 감시기를 설치하지 못했습니다.");
+
+  await armNextVideoCloseNetworkError();
+  const closeFailureStartedAt = Date.now();
+  await clickElement("#export-video");
+  const closeFailureUi = await waitUntil(async () => {
+    const state = await executeSync<{
+      jobHidden: boolean;
+      exportDisabled: boolean;
+      toast: string;
+    }>(`
+      return {
+        jobHidden: Boolean(document.querySelector("#job-dialog")?.hidden),
+        exportDisabled: Boolean(document.querySelector("#export-video")?.disabled),
+        toast: document.querySelector("#toast")?.textContent || ""
+      };
+    `);
+    return (
+      state.jobHidden
+      && !state.exportDisabled
+      && /영상 파일 마무리 실패/.test(state.toast)
+    )
+      ? state
+      : false;
+  }, "영상 writable close NetworkError 처리 완료", { timeout: 120_000 });
+
+  const closeFailureProgress = await executeSync<Array<{
+    percent: string;
+    progressWidth: string;
+    message: string;
+  }>>(`
+    const captureState = globalThis.__kirinukiE2eJobProgressCapture;
+    captureState?.observer?.takeRecords();
+    captureState?.capture?.();
+    captureState?.observer?.disconnect();
+    return captureState?.samples || [];
+  `);
+  assert(
+    closeFailureProgress.length > 0
+      && closeFailureProgress.some((sample) => (
+        sample.percent === "99%"
+        && sample.progressWidth === "99%"
+        && /마무리/.test(sample.message)
+      ))
+      && closeFailureProgress.every((sample) => (
+        sample.percent !== "100%" && sample.progressWidth !== "100%"
+      )),
+    `close 성공 전 UI가 99% 마무리 상태를 지키지 않았습니다: ${
+      JSON.stringify(closeFailureProgress)
+    }`
+  );
+
+  const failureDirectory = await captureMemoryDirectoryFiles();
+  assert(
+    !failureDirectory?.error,
+    `close failure memory directory 회수 실패: ${
+      failureDirectory?.error || "알 수 없는 오류"
+    }`
+  );
+  const outputExtension = videoFile.name.split(".").at(-1);
+  const failedVideoName = `${PROJECT_NAME} (3).${outputExtension}`;
+  const failedVideoFile = failureDirectory.files.find(
+    (file) => file.name === failedVideoName
+  );
+  assert(
+    failedVideoFile
+      && failedVideoFile.size > 10_000
+      && failedVideoFile.committed === false
+      && failedVideoFile.createWritableCalls.length === 1
+      && failedVideoFile.closeCount === 1
+      && failedVideoFile.abortCount === 0
+      && failedVideoFile.transactions.length === 1
+      && failedVideoFile.transactions[0].at(-1)?.type === "close-error",
+    `close 결과가 불명확한 비어 있지 않은 영상을 보존하지 않았습니다: ${JSON.stringify(
+      failureDirectory.files.map((file) => ({
+        name: file.name,
+        size: file.size,
+        committed: file.committed,
+        closeCount: file.closeCount,
+        abortCount: file.abortCount,
+        operations: file.transactions[0]
+      }))
+    )}`
+  );
+  const failedCloseSnapshot = failedVideoFile.closeUiSnapshots[0];
+  assert(
+    failedVideoFile.closeUiSnapshots.length === 1
+      && failedCloseSnapshot.jobHidden === false
+      && failedCloseSnapshot.jobOpen === true
+      && /마무리/.test(failedCloseSnapshot.message)
+      && failedCloseSnapshot.percent === "99%"
+      && failedCloseSnapshot.progressWidth === "99%"
+      && failedCloseSnapshot.cancelHidden === true
+      && failedCloseSnapshot.cancelDisabled === true,
+    `close NetworkError 발생 시 UI snapshot이 올바르지 않습니다: ${
+      JSON.stringify(failedVideoFile.closeUiSnapshots)
+    }`
+  );
+  assert(
+    !failureDirectory.files.some((file) => (
+      file.name === `${PROJECT_NAME} (3).kirinuki.json`
+      || file.name === `${PROJECT_NAME} (3).ko.srt`
+    )),
+    "영상 close 실패 뒤 성공으로 오인해 sidecar를 저장했습니다."
+  );
+  for (const fileBeforeFailure of memoryDirectory.files) {
+    const fileAfterFailure = failureDirectory.files.find(
+      (file) => file.name === fileBeforeFailure.name
+    );
+    assert(
+      fileAfterFailure
+        && fileAfterFailure.base64 === fileBeforeFailure.base64
+        && fileAfterFailure.committed === fileBeforeFailure.committed,
+      `close failure 처리 중 기존 파일이 바뀌었습니다: ${fileBeforeFailure.name}`
+    );
+  }
+  assert(
+    /영상 파일 마무리 실패: NetworkError: network error/.test(closeFailureUi.toast)
+      && closeFailureUi.toast.includes(failedVideoName)
+      && closeFailureUi.toast.includes("복구 가능성을 위해 지우지 않았습니다")
+      && closeFailureUi.toast.includes("내보내기 직전 임시저장에 보존"),
+    `close NetworkError 진단 안내가 불충분합니다: ${closeFailureUi.toast}`
+  );
+
+  const projectAfterCloseFailure = await readStoredProject();
+  assert(
+    projectAfterCloseFailure
+      && JSON.stringify(projectAfterCloseFailure) === projectBeforeCloseFailureText,
+    "영상 close 실패 뒤 내보내기 직전 프로젝트가 IndexedDB에 보존되지 않았습니다."
+  );
+  const draftsAfterCloseFailure = await readStoredLocalDrafts();
+  const closeFailureSafetyDraft = draftsAfterCloseFailure.find((draft) => (
+    !draftIdsBeforeCloseFailure.has(draft.id)
+    && draft.reason === "manual"
+    && draft.createdAtMs >= closeFailureStartedAt - 1_000
+    && JSON.stringify(draft.project) === projectBeforeCloseFailureText
+  ));
+  assert(
+    closeFailureSafetyDraft,
+    `영상 close 실패 전 안전 임시저장이 남지 않았습니다: ${JSON.stringify(
+      draftsAfterCloseFailure.map((draft) => ({
+        id: draft.id,
+        reason: draft.reason,
+        createdAtMs: draft.createdAtMs
+      }))
+    )}`
+  );
+
   const browserLogs = await webdriver<BrowserLogEntry[]>(
     "POST",
     `/session/${sessionId}/log`,
@@ -2771,6 +3079,14 @@ async function main() {
       firstTone,
       secondTone,
       audioLevels
+    },
+    closeFailureRegression: {
+      toast: closeFailureUi.toast,
+      failedVideoName,
+      failedVideoSize: failedVideoFile.size,
+      failedVideoCommitted: failedVideoFile.committed,
+      progress: closeFailureProgress,
+      safetyDraftId: closeFailureSafetyDraft.id
     },
     encoderEnvironment: {
       productProfileAvailable,

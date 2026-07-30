@@ -32317,11 +32317,23 @@ function throwIfAborted(signal) {
     throw new DOMException("\uC791\uC5C5\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.", "AbortError");
   }
 }
+var LOCAL_MEDIA_BLOB_SOURCE_OPTIONS = Object.freeze({
+  maxCacheSize: 16 * 1024 * 1024,
+  // Chromium can retain one file descriptor per blob.stream() reader after
+  // random seeks. Long editing sessions then exhaust the renderer descriptor
+  // limit and surface a misleading local "NetworkError". Mediabunny provides
+  // this stable slice().arrayBuffer() path specifically for that browser bug.
+  useStreamReader: false
+});
 function createInput(file) {
   return new Input({
     formats: ALL_FORMATS,
-    source: new BlobSource(file, { maxCacheSize: 16 * 1024 * 1024 })
+    source: new BlobSource(file, LOCAL_MEDIA_BLOB_SOURCE_OPTIONS)
   });
+}
+function exportProgressPercent(progress) {
+  const value = Math.max(0, Math.min(1, Number(progress) || 0));
+  return value >= 1 ? 100 : Math.min(99, Math.floor(value * 100));
 }
 function humanBytes(value) {
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -35886,6 +35898,14 @@ function errorMessage(error) {
 }
 function errorName(error) {
   return error instanceof Error ? error.name : "";
+}
+function errorDetails(error) {
+  const name = errorName(error);
+  const message = errorMessage(error);
+  if (!name || name === "Error" || message === name) {
+    return message;
+  }
+  return `${name}: ${message}`;
 }
 function isRecord2(value) {
   return typeof value === "object" && value !== null;
@@ -40585,8 +40605,9 @@ function showJob(title, message, progress = 0, {
 }
 function updateJob(progress, message) {
   const value = Math.max(0, Math.min(1, Number(progress) || 0));
-  elements.job_progress.style.width = `${Math.round(value * 100)}%`;
-  elements.job_percent.textContent = `${Math.round(value * 100)}%`;
+  const percent = exportProgressPercent(value);
+  elements.job_percent.textContent = `${percent}%`;
+  elements.job_progress.style.width = `${percent}%`;
   if (message) {
     elements.job_message.textContent = message;
   }
@@ -40647,12 +40668,22 @@ async function writeBlobToFileHandle(fileHandle, blob) {
 }
 async function saveSidecarsToDirectory(directoryHandle, sidecars) {
   for (const { blob, name } of sidecars) {
+    let fileHandle = null;
     try {
-      const fileHandle = await directoryHandle.getFileHandle(name, { create: true });
+      fileHandle = await directoryHandle.getFileHandle(name, { create: true });
       await writeBlobToFileHandle(fileHandle, blob);
     } catch (error) {
-      await directoryHandle.removeEntry(name).catch(() => {
-      });
+      let removeConfirmedEmptyEntry = false;
+      if (fileHandle) {
+        try {
+          removeConfirmedEmptyEntry = (await fileHandle.getFile()).size === 0;
+        } catch {
+        }
+      }
+      if (removeConfirmedEmptyEntry) {
+        await directoryHandle.removeEntry(name).catch(() => {
+        });
+      }
       throw error;
     }
   }
@@ -40685,6 +40716,45 @@ async function chooseUniqueExportBaseName(directoryHandle, requestedBaseName, ex
   }
   throw new Error("\uAC19\uC740 \uC774\uB984\uC758 \uB0B4\uBCF4\uB0B4\uAE30\uAC00 \uB108\uBB34 \uB9CE\uC2B5\uB2C8\uB2E4. \uD504\uB85C\uC81D\uD2B8\uBA85\uC744 \uBC14\uAFD4 \uC8FC\uC138\uC694.");
 }
+function sameLocalFileSnapshot(left, right) {
+  return left.name === right.name && left.size === right.size && left.lastModified === right.lastModified;
+}
+async function cleanUpFailedVideoEntry(directoryHandle, fileHandle, name) {
+  try {
+    const file = await fileHandle.getFile();
+    if (file.size > 0) {
+      return {
+        removed: false,
+        preserved: true,
+        size: file.size,
+        inspectionFailed: false
+      };
+    }
+  } catch {
+    return {
+      removed: false,
+      preserved: true,
+      size: null,
+      inspectionFailed: true
+    };
+  }
+  try {
+    await directoryHandle.removeEntry(name);
+    return {
+      removed: true,
+      preserved: false,
+      size: 0,
+      inspectionFailed: false
+    };
+  } catch {
+    return {
+      removed: false,
+      preserved: false,
+      size: 0,
+      inspectionFailed: false
+    };
+  }
+}
 async function exportVideo() {
   if (!mediaFile) {
     showToast("\uBA3C\uC800 \uC6D0\uBCF8 \uC601\uC0C1\uC744 \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.", "error");
@@ -40708,6 +40778,69 @@ async function exportVideo() {
   }
   lockProjectMutations();
   try {
+    let safetyDraftSaved = false;
+    const saveSafetyDraft = async () => {
+      try {
+        await queueLocalDraftOperation(async () => {
+          await saveCurrentLocalDraft("manual");
+          await flushSave();
+          await waitForProjectSaves();
+        });
+        safetyDraftSaved = true;
+        return true;
+      } catch (error) {
+        showToast(
+          `\uB0B4\uBCF4\uB0B4\uAE30 \uC804 \uC548\uC804 \uBC31\uC5C5\uC5D0 \uC2E4\uD328\uD574 \uC791\uC5C5\uC744 \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4: ${errorDetails(error)}`,
+          "error",
+          0
+        );
+        return false;
+      }
+    };
+    let directoryHandle = null;
+    if (typeof window.showDirectoryPicker === "function") {
+      try {
+        directoryHandle = await window.showDirectoryPicker({
+          id: "chzzk-kirinuki-export",
+          mode: "readwrite"
+        });
+      } catch (error) {
+        if (errorName(error) === "AbortError") {
+          return;
+        }
+        showToast(
+          `\uC800\uC7A5 \uD3F4\uB354\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorDetails(error)}`,
+          "error",
+          0
+        );
+        return;
+      }
+    }
+    if (directoryHandle && !await saveSafetyDraft()) {
+      return;
+    }
+    let exportMediaFile = mediaFile;
+    if (mediaHandle) {
+      try {
+        const refreshedFile = await mediaHandle.getFile();
+        if (!sameLocalFileSnapshot(mediaFile, refreshedFile)) {
+          showToast(
+            "\uC6D0\uBCF8 \uD30C\uC77C\uC774 \uC5F0\uACB0 \uD6C4 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC798\uBABB\uB41C \uAD6C\uAC04\uC744 \uB0B4\uBCF4\uB0B4\uC9C0 \uC54A\uB3C4\uB85D \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4. \u2018\uC6D0\uBCF8 \uC5F0\uACB0\u2019\uC5D0\uC11C \uD604\uC7AC \uD30C\uC77C\uC744 \uB2E4\uC2DC \uD655\uC778\uD574 \uC8FC\uC138\uC694.",
+            "error",
+            0
+          );
+          return;
+        }
+        exportMediaFile = refreshedFile;
+      } catch (error) {
+        showToast(
+          `\uC6D0\uBCF8 \uD30C\uC77C\uC744 \uB0B4\uBCF4\uB0B4\uAE30 \uC9C1\uC804\uC5D0 \uB2E4\uC2DC \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorDetails(error)}. \u2018\uC6D0\uBCF8 \uC5F0\uACB0\u2019\uC5D0\uC11C \uD30C\uC77C \uAD8C\uD55C\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.`,
+          "error",
+          0
+        );
+        return;
+      }
+    }
     if (document.fonts?.load) {
       try {
         const family = String(
@@ -40725,35 +40858,32 @@ async function exportVideo() {
     const exportProject = cloneProject(project);
     let profile;
     try {
-      profile = await getPreferredOutputProfile(mediaFile, exportProject);
+      profile = await getPreferredOutputProfile(exportMediaFile, exportProject);
     } catch (error) {
       showToast(`\uC774 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uC601\uC0C1 \uC778\uCF54\uB354\uB97C \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
       return;
     }
     let baseName = sanitizeFileName(exportProject.name);
     let videoName = `${baseName}.${profile.extension}`;
-    let directoryHandle = null;
     let handle = null;
     let directoryVideoCreated = false;
-    if (typeof window.showDirectoryPicker === "function") {
+    if (directoryHandle) {
       try {
-        directoryHandle = await window.showDirectoryPicker({
-          id: "chzzk-kirinuki-export",
-          mode: "readwrite"
-        });
         baseName = await chooseUniqueExportBaseName(
           directoryHandle,
           baseName,
           profile.extension
         );
         videoName = `${baseName}.${profile.extension}`;
-        handle = await directoryHandle.getFileHandle(videoName, { create: true });
-        directoryVideoCreated = true;
       } catch (error) {
         if (errorName(error) === "AbortError") {
           return;
         }
-        showToast(`\uC800\uC7A5 \uD3F4\uB354\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
+        showToast(
+          `\uC800\uC7A5 \uD3F4\uB354\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorDetails(error)}`,
+          "error",
+          0
+        );
         return;
       }
     } else if (typeof window.showSaveFilePicker === "function") {
@@ -40774,11 +40904,28 @@ async function exportVideo() {
         return;
       }
     }
+    if (!safetyDraftSaved && !await saveSafetyDraft()) {
+      return;
+    }
+    if (directoryHandle) {
+      try {
+        handle = await directoryHandle.getFileHandle(videoName, { create: true });
+        directoryVideoCreated = true;
+      } catch (error) {
+        showToast(
+          `\uC601\uC0C1 \uCD9C\uB825 \uD30C\uC77C\uC744 \uB9CC\uB4E4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorDetails(error)}`,
+          "error",
+          0
+        );
+        return;
+      }
+    }
     const sidecars = createSidecars(baseName, exportProject);
     const controller = new AbortController();
     activeJobController = controller;
     elements.export_video.disabled = true;
     let renderCompleted = false;
+    const exportState = { stage: "render" };
     try {
       showJob(
         "\uCEF7\uACFC \uC790\uB9C9\uC744 \uC601\uC0C1\uC73C\uB85C \uB9CC\uB4DC\uB294 \uC911",
@@ -40786,19 +40933,21 @@ async function exportVideo() {
         0,
         { cancelable: true }
       );
-      const result = await renderProjectVideo(mediaFile, exportProject, {
+      const result = await renderProjectVideo(exportMediaFile, exportProject, {
         fileHandle: handle,
         signal: controller.signal,
         resolveImageAsset: (source) => loadImageAssetBlob(exportProject.id, source.value),
         onProgress: (progress, stage) => {
           const label = stage === "finalize" ? "\uD30C\uC77C\uC744 \uB9C8\uBB34\uB9AC\uD558\uB294 \uC911 \xB7 \uC774 \uB2E8\uACC4\uB294 \uCDE8\uC18C\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4" : "\uCEF7 \uC5F0\uACB0\uACFC \uC790\uB9C9 \uD569\uC131 \uC911";
           if (stage === "finalize") {
+            exportState.stage = "finalize";
             setJobCancelable(false);
           }
           updateJob(progress, label);
         }
       });
       renderCompleted = true;
+      exportState.stage = "sidecars";
       if (result.blob) {
         triggerDownload(result.blob, `${baseName}.${result.extension}`);
       }
@@ -40814,21 +40963,27 @@ async function exportVideo() {
         6e3
       );
     } catch (error) {
+      let preservedOutput = false;
+      let preservedOutputInspectionFailed = false;
       let cleanupFailed = false;
-      if (directoryHandle && directoryVideoCreated && !renderCompleted) {
-        try {
-          await directoryHandle.removeEntry(videoName);
-          directoryVideoCreated = false;
-        } catch {
-          cleanupFailed = true;
-        }
+      if (directoryHandle && handle && directoryVideoCreated && !renderCompleted) {
+        const cleanup = await cleanUpFailedVideoEntry(
+          directoryHandle,
+          handle,
+          videoName
+        );
+        directoryVideoCreated = !cleanup.removed;
+        preservedOutput = cleanup.preserved;
+        preservedOutputInspectionFailed = cleanup.inspectionFailed;
+        cleanupFailed = !cleanup.removed && !cleanup.preserved;
       }
       hideJob();
       const canceled = errorName(error) === "AbortError";
-      const message = errorMessage(error);
-      const cleanupMessage = cleanupFailed ? " \uC0DD\uC131\uB41C \uBE48 \uC601\uC0C1 \uD30C\uC77C\uC740 \uC9C0\uC6B0\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." : "";
+      const message = errorDetails(error);
+      const cleanupMessage = cleanupFailed ? " \uC0DD\uC131\uB41C \uBE48 \uC601\uC0C1 \uD30C\uC77C\uC740 \uC9C0\uC6B0\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." : preservedOutputInspectionFailed ? ` \uC624\uB958 \uB4A4 \uC0C1\uD0DC\uB97C \uD655\uC815\uD560 \uC218 \uC5C6\uB294 ${videoName} \uD30C\uC77C\uC740 \uC548\uC804\uC744 \uC704\uD574 \uC9C0\uC6B0\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.` : preservedOutput ? ` \uC624\uB958 \uC804\uC5D0 \uAE30\uB85D\uB41C ${videoName} \uD30C\uC77C\uC740 \uBCF5\uAD6C \uAC00\uB2A5\uC131\uC744 \uC704\uD574 \uC9C0\uC6B0\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.` : "";
+      const failurePrefix = exportState.stage === "finalize" ? "\uC601\uC0C1 \uD30C\uC77C \uB9C8\uBB34\uB9AC \uC2E4\uD328" : "\uC601\uC0C1 \uB0B4\uBCF4\uB0B4\uAE30 \uC2E4\uD328";
       showToast(
-        canceled ? `\uC601\uC0C1 \uB0B4\uBCF4\uB0B4\uAE30\uB97C \uCDE8\uC18C\uD588\uC2B5\uB2C8\uB2E4.${cleanupMessage}` : renderCompleted ? `\uC601\uC0C1\uC740 \uC800\uC7A5\uD588\uC9C0\uB9CC \uD504\uB85C\uC81D\uD2B8\xB7SRT \uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4: ${message}` : `\uC601\uC0C1 \uB0B4\uBCF4\uB0B4\uAE30 \uC2E4\uD328: ${message}${cleanupMessage}`,
+        canceled ? `\uC601\uC0C1 \uB0B4\uBCF4\uB0B4\uAE30\uB97C \uCDE8\uC18C\uD588\uC2B5\uB2C8\uB2E4.${cleanupMessage}` : renderCompleted ? `\uC601\uC0C1\uC740 \uC800\uC7A5\uD588\uC9C0\uB9CC \uD504\uB85C\uC81D\uD2B8\xB7SRT \uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4: ${message}` : `${failurePrefix}: ${message}.${cleanupMessage} \uD604\uC7AC \uD3B8\uC9D1\uC740 \uB0B4\uBCF4\uB0B4\uAE30 \uC9C1\uC804 \uC784\uC2DC\uC800\uC7A5\uC5D0 \uBCF4\uC874\uB3FC \uC788\uC2B5\uB2C8\uB2E4.`,
         canceled && !cleanupFailed ? "info" : "error",
         0
       );
@@ -40853,8 +41008,18 @@ async function exportVideoWithLock() {
     }
     return await navigator.locks.request(
       EXPORT_LOCK_NAME,
-      { mode: "exclusive" },
-      () => exportVideo()
+      { mode: "exclusive", ifAvailable: true },
+      (lock) => {
+        if (!lock) {
+          showToast(
+            "\uB2E4\uB978 \uD3B8\uC9D1\uAE30 \uD0ED\uC5D0\uC11C \uC774\uBBF8 \uC601\uC0C1\uC744 \uB0B4\uBCF4\uB0B4\uACE0 \uC788\uC2B5\uB2C8\uB2E4. \uADF8 \uC791\uC5C5\uC774 \uB05D\uB09C \uB4A4 \uB2E4\uC2DC \uB20C\uB7EC \uC8FC\uC138\uC694.",
+            "error",
+            0
+          );
+          return;
+        }
+        return exportVideo();
+      }
     );
   } finally {
     exportRequestPending = false;

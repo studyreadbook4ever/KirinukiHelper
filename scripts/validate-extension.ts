@@ -88,7 +88,7 @@ const read = (relativePath: string) => (
 const manifest = JSON.parse(await read("manifest.json")) as ExtensionManifest;
 assert(manifest.manifest_version === 3, "manifest_version은 3이어야 합니다.");
 assert(manifest.side_panel?.default_path === "sidepanel.html", "사이드패널 진입점이 없습니다.");
-assert(manifest.version === "2.5.0", "통합 편집기 manifest 버전이 2.5.0이 아닙니다.");
+assert(manifest.version === "2.5.1", "통합 편집기 manifest 버전이 2.5.1이 아닙니다.");
 assert(manifest.host_permissions?.includes("https://chzzk.naver.com/*"), "치지직 host permission이 없습니다.");
 assert(manifest.host_permissions?.includes("https://api.chzzk.naver.com/*"), "치지직 라이브 상태 메타데이터 permission이 없습니다.");
 assert(manifest.host_permissions?.includes("https://youtube.com/*"), "YouTube 루트 영상 permission이 없습니다.");
@@ -396,6 +396,34 @@ for (const id of [
   assert(editorHtml.includes(`id="${id}"`), `통합 편집기 UI 요소가 없습니다: #${id}`);
 }
 assert(editorScript.includes("renderProjectVideo"), "편집기 번들에 영상 렌더 경로가 없습니다.");
+assert(
+  editorScript.includes("LOCAL_MEDIA_BLOB_SOURCE_OPTIONS")
+    && editorScript.includes("useStreamReader: false"),
+  "Chromium 대용량 로컬 파일의 descriptor 누수를 피하는 안정 경로가 없습니다."
+);
+assert(
+  editorScript.includes("Math.min(99, Math.floor(value * 100))"),
+  "파일 commit 완료 전 진행률을 99%로 제한하지 않습니다."
+);
+const exportFunctionOffset = editorScript.indexOf("async function exportVideo()");
+const exportPickerOffset = editorScript.indexOf(
+  "window.showDirectoryPicker",
+  exportFunctionOffset
+);
+const exportProfileOffset = editorScript.indexOf(
+  "getPreferredOutputProfile(",
+  exportFunctionOffset
+);
+assert(
+  exportFunctionOffset >= 0
+    && exportPickerOffset > exportFunctionOffset
+    && exportProfileOffset > exportPickerOffset,
+  "대용량 원본 probe 전에 저장 폴더 picker를 열어 transient user activation을 보존하지 않습니다."
+);
+assert(
+  editorScript.includes('{ mode: "exclusive", ifAvailable: true }'),
+  "다른 탭의 장시간 내보내기 lock을 기다리며 picker user activation을 잃을 수 있습니다."
+);
 assert(editorScript.includes("extractClipPcm16k"), "편집기 번들에 선택 구간 음성 추출 경로가 없습니다.");
 assert(editorScript.includes("requestCaptionAgent"), "편집기 번들에 로컬 Whisper companion 요청 경로가 없습니다.");
 assert(editorScript.includes("whisper-tiny"), "편집기 번들에 로컬 Whisper 기본 모델이 없습니다.");

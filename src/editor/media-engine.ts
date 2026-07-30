@@ -95,11 +95,27 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+export const LOCAL_MEDIA_BLOB_SOURCE_OPTIONS = Object.freeze({
+  maxCacheSize: 16 * 1024 * 1024,
+  // Chromium can retain one file descriptor per blob.stream() reader after
+  // random seeks. Long editing sessions then exhaust the renderer descriptor
+  // limit and surface a misleading local "NetworkError". Mediabunny provides
+  // this stable slice().arrayBuffer() path specifically for that browser bug.
+  useStreamReader: false
+});
+
 function createInput(file: File): Input {
   return new Input({
     formats: ALL_FORMATS,
-    source: new BlobSource(file, { maxCacheSize: 16 * 1024 * 1024 })
+    source: new BlobSource(file, LOCAL_MEDIA_BLOB_SOURCE_OPTIONS)
   });
+}
+
+export function exportProgressPercent(progress: unknown): number {
+  const value = Math.max(0, Math.min(1, Number(progress) || 0));
+  return value >= 1
+    ? 100
+    : Math.min(99, Math.floor(value * 100));
 }
 
 function humanBytes(value: unknown): string {

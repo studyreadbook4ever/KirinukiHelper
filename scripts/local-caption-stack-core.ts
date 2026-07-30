@@ -213,8 +213,15 @@ function bounded(
 
 function requiredAbsolutePath(value: unknown, label: string): string {
   const raw = String(value || "");
-  if (!raw || !path.isAbsolute(raw)) {
-    throw new TypeError(`${label} 경로가 절대 경로가 아닙니다.`);
+  if (
+    !raw
+    || raw.trim() !== raw
+    || /[\0\r\n]/u.test(raw)
+    || !path.isAbsolute(raw)
+  ) {
+    throw new TypeError(
+      `${label} 경로는 앞뒤 공백이나 줄바꿈이 없는 절대 경로여야 합니다.`
+    );
   }
   return path.normalize(raw);
 }
@@ -328,13 +335,19 @@ export function resolveStackPaths({
   const runtimeBase = env.XDG_RUNTIME_DIR
     ? requiredAbsolutePath(env.XDG_RUNTIME_DIR, "XDG_RUNTIME_DIR")
     : path.join(stateBase, "run");
+  const extensionRoot = env.KIRINUKI_EXTENSION_ROOT === undefined
+    ? path.join(resolvedRepo, "extension")
+    : requiredAbsolutePath(
+      env.KIRINUKI_EXTENSION_ROOT,
+      "KIRINUKI_EXTENSION_ROOT"
+    );
   const dataRoot = path.join(dataBase, "kirinuki-caption-stack");
   const configRoot = path.join(configBase, "kirinuki-caption-stack");
   const stateRoot = path.join(stateBase, "kirinuki-caption-stack");
   const runtimeRoot = path.join(runtimeBase, "kirinuki-caption-stack");
   return Object.freeze({
     repoRoot: resolvedRepo,
-    extensionRoot: path.join(resolvedRepo, "extension"),
+    extensionRoot,
     dataRoot,
     configRoot,
     stateRoot,

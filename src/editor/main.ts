@@ -66,6 +66,7 @@ import {
 import { STORAGE_KEY } from "../lib/core.js";
 import {
   extractClipPcm16k,
+  exportProgressPercent,
   fitSingleLineCaptionFontSize,
   getPreferredOutputProfile,
   inspectMediaFile,
@@ -290,6 +291,15 @@ function errorMessage(error: unknown): string {
 
 function errorName(error: unknown): string {
   return error instanceof Error ? error.name : "";
+}
+
+function errorDetails(error: unknown): string {
+  const name = errorName(error);
+  const message = errorMessage(error);
+  if (!name || name === "Error" || message === name) {
+    return message;
+  }
+  return `${name}: ${message}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -5733,8 +5743,9 @@ function showJob(
 
 function updateJob(progress: number, message?: string) {
   const value = Math.max(0, Math.min(1, Number(progress) || 0));
-  elements.job_progress.style.width = `${Math.round(value * 100)}%`;
-  elements.job_percent.textContent = `${Math.round(value * 100)}%`;
+  const percent = exportProgressPercent(value);
+  elements.job_percent.textContent = `${percent}%`;
+  elements.job_progress.style.width = `${percent}%`;
   if (message) {
     elements.job_message.textContent = message;
   }
@@ -5810,11 +5821,22 @@ async function saveSidecarsToDirectory(
   sidecars: ExportSidecar[]
 ) {
   for (const { blob, name } of sidecars) {
+    let fileHandle: FileSystemFileHandle | null = null;
     try {
-      const fileHandle = await directoryHandle.getFileHandle(name, { create: true });
+      fileHandle = await directoryHandle.getFileHandle(name, { create: true });
       await writeBlobToFileHandle(fileHandle, blob);
     } catch (error) {
-      await directoryHandle.removeEntry(name).catch(() => {});
+      let removeConfirmedEmptyEntry = false;
+      if (fileHandle) {
+        try {
+          removeConfirmedEmptyEntry = (await fileHandle.getFile()).size === 0;
+        } catch {
+          // An ambiguous close may already have committed the sidecar. Preserve it.
+        }
+      }
+      if (removeConfirmedEmptyEntry) {
+        await directoryHandle.removeEntry(name).catch(() => {});
+      }
       throw error;
     }
   }
@@ -5859,6 +5881,55 @@ async function chooseUniqueExportBaseName(
   throw new Error("같은 이름의 내보내기가 너무 많습니다. 프로젝트명을 바꿔 주세요.");
 }
 
+function sameLocalFileSnapshot(left: File, right: File) {
+  return (
+    left.name === right.name
+    && left.size === right.size
+    && left.lastModified === right.lastModified
+  );
+}
+
+async function cleanUpFailedVideoEntry(
+  directoryHandle: FileSystemDirectoryHandle,
+  fileHandle: FileSystemFileHandle,
+  name: string
+) {
+  try {
+    const file = await fileHandle.getFile();
+    if (file.size > 0) {
+      return {
+        removed: false,
+        preserved: true,
+        size: file.size,
+        inspectionFailed: false
+      };
+    }
+  } catch {
+    return {
+      removed: false,
+      preserved: true,
+      size: null,
+      inspectionFailed: true
+    };
+  }
+  try {
+    await directoryHandle.removeEntry(name);
+    return {
+      removed: true,
+      preserved: false,
+      size: 0,
+      inspectionFailed: false
+    };
+  } catch {
+    return {
+      removed: false,
+      preserved: false,
+      size: 0,
+      inspectionFailed: false
+    };
+  }
+}
+
 async function exportVideo() {
   if (!mediaFile) {
     showToast("먼저 원본 영상을 연결해 주세요.", "error");
@@ -5883,6 +5954,74 @@ async function exportVideo() {
 
   lockProjectMutations();
   try {
+    let safetyDraftSaved = false;
+    const saveSafetyDraft = async () => {
+      try {
+        await queueLocalDraftOperation(async () => {
+          await saveCurrentLocalDraft("manual");
+          await flushSave();
+          await waitForProjectSaves();
+        });
+        safetyDraftSaved = true;
+        return true;
+      } catch (error: unknown) {
+        showToast(
+          `내보내기 전 안전 백업에 실패해 작업을 중단했습니다: ${errorDetails(error)}`,
+          "error",
+          0
+        );
+        return false;
+      }
+    };
+
+    let directoryHandle: FileSystemDirectoryHandle | null = null;
+    if (typeof window.showDirectoryPicker === "function") {
+      try {
+        // This must be the first awaited browser API after the click. Large
+        // media probes can outlive Chromium's transient user activation.
+        directoryHandle = await window.showDirectoryPicker({
+          id: "chzzk-kirinuki-export",
+          mode: "readwrite"
+        });
+      } catch (error: unknown) {
+        if (errorName(error) === "AbortError") {
+          return;
+        }
+        showToast(
+          `저장 폴더를 열지 못했습니다: ${errorDetails(error)}`,
+          "error",
+          0
+        );
+        return;
+      }
+    }
+    if (directoryHandle && !await saveSafetyDraft()) {
+      return;
+    }
+
+    let exportMediaFile = mediaFile;
+    if (mediaHandle) {
+      try {
+        const refreshedFile = await mediaHandle.getFile();
+        if (!sameLocalFileSnapshot(mediaFile, refreshedFile)) {
+          showToast(
+            "원본 파일이 연결 후 변경되었습니다. 잘못된 구간을 내보내지 않도록 중단했습니다. ‘원본 연결’에서 현재 파일을 다시 확인해 주세요.",
+            "error",
+            0
+          );
+          return;
+        }
+        exportMediaFile = refreshedFile;
+      } catch (error: unknown) {
+        showToast(
+          `원본 파일을 내보내기 직전에 다시 확인하지 못했습니다: ${errorDetails(error)}. ‘원본 연결’에서 파일 권한을 확인해 주세요.`,
+          "error",
+          0
+        );
+        return;
+      }
+    }
+
     if (document.fonts?.load) {
       try {
         const family = String(
@@ -5900,7 +6039,7 @@ async function exportVideo() {
     const exportProject = cloneProject(project);
     let profile;
     try {
-      profile = await getPreferredOutputProfile(mediaFile, exportProject);
+      profile = await getPreferredOutputProfile(exportMediaFile, exportProject);
     } catch (error: unknown) {
       showToast(`이 브라우저에서 영상 인코더를 준비하지 못했습니다: ${errorMessage(error)}`, "error", 0);
       return;
@@ -5908,28 +6047,25 @@ async function exportVideo() {
 
     let baseName = sanitizeFileName(exportProject.name);
     let videoName = `${baseName}.${profile.extension}`;
-    let directoryHandle: FileSystemDirectoryHandle | null = null;
     let handle: FileSystemFileHandle | null = null;
     let directoryVideoCreated = false;
-    if (typeof window.showDirectoryPicker === "function") {
+    if (directoryHandle) {
       try {
-        directoryHandle = await window.showDirectoryPicker({
-          id: "chzzk-kirinuki-export",
-          mode: "readwrite"
-        });
         baseName = await chooseUniqueExportBaseName(
           directoryHandle,
           baseName,
           profile.extension
         );
         videoName = `${baseName}.${profile.extension}`;
-        handle = await directoryHandle.getFileHandle(videoName, { create: true });
-        directoryVideoCreated = true;
       } catch (error: unknown) {
         if (errorName(error) === "AbortError") {
           return;
         }
-        showToast(`저장 폴더를 열지 못했습니다: ${errorMessage(error)}`, "error", 0);
+        showToast(
+          `저장 폴더를 확인하지 못했습니다: ${errorDetails(error)}`,
+          "error",
+          0
+        );
         return;
       }
     } else if (typeof window.showSaveFilePicker === "function") {
@@ -5951,11 +6087,32 @@ async function exportVideo() {
       }
     }
 
+    if (!safetyDraftSaved && !await saveSafetyDraft()) {
+      return;
+    }
+
+    if (directoryHandle) {
+      try {
+        handle = await directoryHandle.getFileHandle(videoName, { create: true });
+        directoryVideoCreated = true;
+      } catch (error: unknown) {
+        showToast(
+          `영상 출력 파일을 만들지 못했습니다: ${errorDetails(error)}`,
+          "error",
+          0
+        );
+        return;
+      }
+    }
+
     const sidecars = createSidecars(baseName, exportProject);
     const controller = new AbortController();
     activeJobController = controller;
     elements.export_video.disabled = true;
     let renderCompleted = false;
+    const exportState: {
+      stage: "render" | "finalize" | "sidecars";
+    } = { stage: "render" };
     try {
       showJob(
         "컷과 자막을 영상으로 만드는 중",
@@ -5963,7 +6120,7 @@ async function exportVideo() {
         0,
         { cancelable: true }
       );
-      const result = await renderProjectVideo(mediaFile, exportProject, {
+      const result = await renderProjectVideo(exportMediaFile, exportProject, {
         fileHandle: handle,
         signal: controller.signal,
         resolveImageAsset: (source) => loadImageAssetBlob(exportProject.id, source.value),
@@ -5972,12 +6129,14 @@ async function exportVideo() {
             ? "파일을 마무리하는 중 · 이 단계는 취소할 수 없습니다"
             : "컷 연결과 자막 합성 중";
           if (stage === "finalize") {
+            exportState.stage = "finalize";
             setJobCancelable(false);
           }
           updateJob(progress, label);
         }
       });
       renderCompleted = true;
+      exportState.stage = "sidecars";
       if (result.blob) {
         triggerDownload(result.blob, `${baseName}.${result.extension}`);
       }
@@ -5993,27 +6152,44 @@ async function exportVideo() {
         6000
       );
     } catch (error: unknown) {
+      let preservedOutput = false;
+      let preservedOutputInspectionFailed = false;
       let cleanupFailed = false;
-      if (directoryHandle && directoryVideoCreated && !renderCompleted) {
-        try {
-          await directoryHandle.removeEntry(videoName);
-          directoryVideoCreated = false;
-        } catch {
-          cleanupFailed = true;
-        }
+      if (
+        directoryHandle
+        && handle
+        && directoryVideoCreated
+        && !renderCompleted
+      ) {
+        const cleanup = await cleanUpFailedVideoEntry(
+          directoryHandle,
+          handle,
+          videoName
+        );
+        directoryVideoCreated = !cleanup.removed;
+        preservedOutput = cleanup.preserved;
+        preservedOutputInspectionFailed = cleanup.inspectionFailed;
+        cleanupFailed = !cleanup.removed && !cleanup.preserved;
       }
       hideJob();
       const canceled = errorName(error) === "AbortError";
-      const message = errorMessage(error);
+      const message = errorDetails(error);
       const cleanupMessage = cleanupFailed
         ? " 생성된 빈 영상 파일은 지우지 못했습니다."
-        : "";
+        : preservedOutputInspectionFailed
+          ? ` 오류 뒤 상태를 확정할 수 없는 ${videoName} 파일은 안전을 위해 지우지 않았습니다.`
+          : preservedOutput
+            ? ` 오류 전에 기록된 ${videoName} 파일은 복구 가능성을 위해 지우지 않았습니다.`
+            : "";
+      const failurePrefix = exportState.stage === "finalize"
+        ? "영상 파일 마무리 실패"
+        : "영상 내보내기 실패";
       showToast(
         canceled
           ? `영상 내보내기를 취소했습니다.${cleanupMessage}`
           : renderCompleted
             ? `영상은 저장했지만 프로젝트·SRT 저장에 실패했습니다: ${message}`
-            : `영상 내보내기 실패: ${message}${cleanupMessage}`,
+            : `${failurePrefix}: ${message}.${cleanupMessage} 현재 편집은 내보내기 직전 임시저장에 보존돼 있습니다.`,
         canceled && !cleanupFailed ? "info" : "error",
         0
       );
@@ -6039,8 +6215,18 @@ async function exportVideoWithLock() {
     }
     return await navigator.locks.request(
       EXPORT_LOCK_NAME,
-      { mode: "exclusive" },
-      () => exportVideo()
+      { mode: "exclusive", ifAvailable: true },
+      (lock) => {
+        if (!lock) {
+          showToast(
+            "다른 편집기 탭에서 이미 영상을 내보내고 있습니다. 그 작업이 끝난 뒤 다시 눌러 주세요.",
+            "error",
+            0
+          );
+          return;
+        }
+        return exportVideo();
+      }
     );
   } finally {
     exportRequestPending = false;

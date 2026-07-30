@@ -9,11 +9,16 @@ import {
 import {
   access,
   chmod,
+  link,
+  lstat,
   mkdir,
+  readdir,
   readFile,
+  readlink,
   rename,
   rm,
   stat,
+  unlink,
   writeFile
 } from "node:fs/promises";
 import os from "node:os";
@@ -83,9 +88,13 @@ export interface LinuxHelperPaths {
   configRoot: string;
   stateRoot: string;
   settingsPath: string;
+  extensionRoot: string;
   browserProfileRoot: string;
   browserLogPath: string;
   captionLogPath: string;
+  userLauncherPath: string;
+  desktopEntryPath: string;
+  legacyDesktopEntryPath: string;
 }
 
 interface LinuxHelperSettings {
@@ -151,11 +160,37 @@ interface LinuxEnvironmentReport {
   extension: {
     root: string;
     built: boolean;
+    overridden: boolean;
+    matchesRepositoryBuild: boolean;
   };
+  browserProfile: {
+    root: string;
+    overridden: boolean;
+  };
+  entrypoints: UserEntrypointReport;
   mode: CaptionMode;
   nativeTools: Record<string, boolean>;
   caption: CaptionStatusResult;
   ready: boolean;
+}
+
+export interface UserEntrypointState {
+  path: string;
+  installed: boolean;
+  current: boolean;
+  actualTarget: string | null;
+}
+
+export interface UserEntrypointReport {
+  launcher: UserEntrypointState;
+  desktop: UserEntrypointState;
+  legacyDesktop: {
+    path: string;
+    present: boolean;
+    recognized: boolean;
+    actualTarget: string | null;
+  };
+  current: boolean;
 }
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -381,10 +416,12 @@ export function validateSourceUrl(value: unknown): string {
 
 export function resolveLinuxHelperPaths({
   env = process.env,
-  homeDir = os.homedir()
+  homeDir = os.homedir(),
+  packageDir = packageRoot
 }: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
+  packageDir?: string;
 } = {}): Readonly<LinuxHelperPaths> {
   const absoluteHome = path.resolve(homeDir);
   const configBase = env.XDG_CONFIG_HOME
@@ -393,16 +430,62 @@ export function resolveLinuxHelperPaths({
   const stateBase = env.XDG_STATE_HOME
     ? path.resolve(env.XDG_STATE_HOME)
     : path.join(absoluteHome, ".local", "state");
+  const dataBase = env.XDG_DATA_HOME
+    ? path.resolve(env.XDG_DATA_HOME)
+    : path.join(absoluteHome, ".local", "share");
   const configRoot = path.join(configBase, "kirinuki-studio");
   const stateRoot = path.join(stateBase, "kirinuki-studio");
+  const extensionRoot = explicitAbsolutePath(
+    env.KIRINUKI_EXTENSION_ROOT,
+    "KIRINUKI_EXTENSION_ROOT",
+    path.join(path.resolve(packageDir), "extension")
+  );
+  const browserProfileRoot = explicitAbsolutePath(
+    env.KIRINUKI_BROWSER_PROFILE_ROOT,
+    "KIRINUKI_BROWSER_PROFILE_ROOT",
+    path.join(configRoot, "chromium-profile")
+  );
   return Object.freeze({
     configRoot,
     stateRoot,
     settingsPath: path.join(configRoot, "helper.json"),
-    browserProfileRoot: path.join(configRoot, "chromium-profile"),
+    extensionRoot,
+    browserProfileRoot,
     browserLogPath: path.join(stateRoot, "browser.log"),
-    captionLogPath: path.join(stateRoot, "caption-stack.log")
+    captionLogPath: path.join(stateRoot, "caption-stack.log"),
+    userLauncherPath: path.join(absoluteHome, ".local", "bin", "kirinuki"),
+    desktopEntryPath: path.join(
+      dataBase,
+      "applications",
+      "kirinuki-helper.desktop"
+    ),
+    legacyDesktopEntryPath: path.join(
+      dataBase,
+      "applications",
+      "chromium-kirinuki.desktop"
+    )
   });
+}
+
+function explicitAbsolutePath(
+  value: string | undefined,
+  name: string,
+  fallback: string
+): string {
+  if (value === undefined) {
+    return path.resolve(fallback);
+  }
+  if (
+    !value
+    || value.trim() !== value
+    || /[\0\r\n]/u.test(value)
+    || !path.isAbsolute(value)
+  ) {
+    throw new TypeError(
+      `${name}은 앞뒤 공백이나 줄바꿈이 없는 절대경로여야 합니다.`
+    );
+  }
+  return path.normalize(value);
 }
 
 function executableAt(candidate: string): string | null {
@@ -622,6 +705,757 @@ async function writeSettings(
   }
 }
 
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function desktopExecQuote(value: string): string {
+  return `"${value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\"", "\\\"")
+    .replaceAll("`", "\\`")
+    .replaceAll("$", "\\$")}"`;
+}
+
+function entrypointMetadata(
+  paths: LinuxHelperPaths,
+  root = packageRoot
+) {
+  return Object.freeze({
+    packageRoot: path.resolve(root),
+    extensionRoot: path.resolve(paths.extensionRoot),
+    browserProfileRoot: path.resolve(paths.browserProfileRoot)
+  });
+}
+
+type EntrypointMetadata = ReturnType<typeof entrypointMetadata>;
+
+function renderUserLauncher(metadata: EntrypointMetadata): string {
+  return [
+    "#!/usr/bin/env sh",
+    "set -eu",
+    `# kirinuki-helper-config=${JSON.stringify(metadata)}`,
+    `export KIRINUKI_EXTENSION_ROOT=${shellSingleQuote(metadata.extensionRoot)}`,
+    `export KIRINUKI_BROWSER_PROFILE_ROOT=${shellSingleQuote(metadata.browserProfileRoot)}`,
+    "if [ \"$#\" -eq 0 ]; then",
+    "  set -- open",
+    "fi",
+    `exec ${shellSingleQuote(path.join(metadata.packageRoot, "kirinuki.sh"))} "$@"`,
+    ""
+  ].join("\n");
+}
+
+export function userLauncherContent(
+  paths: LinuxHelperPaths,
+  root = packageRoot
+): string {
+  return renderUserLauncher(entrypointMetadata(paths, root));
+}
+
+function renderDesktopEntry(
+  paths: LinuxHelperPaths,
+  {
+    marker,
+    terminal
+  }: {
+    marker: boolean;
+    terminal: boolean;
+  }
+): string {
+  return [
+    "[Desktop Entry]",
+    "Type=Application",
+    "Version=1.0",
+    "Name=KirinukiHelper",
+    "Comment=치지직·YouTube 키리누키 편집 도우미",
+    `Exec=${desktopExecQuote(paths.userLauncherPath)}`,
+    ...(marker ? [`X-KirinukiHelper-Managed=${HELPER_SCHEMA}`] : []),
+    `Terminal=${terminal ? "true" : "false"}`,
+    "Categories=AudioVideo;Video;",
+    "StartupNotify=true",
+    ""
+  ].join("\n");
+}
+
+export function desktopEntryContent(paths: LinuxHelperPaths): string {
+  return renderDesktopEntry(paths, {
+    marker: true,
+    terminal: false
+  });
+}
+
+function legacyManagedDesktopContent(paths: LinuxHelperPaths): string {
+  return renderDesktopEntry(paths, {
+    marker: false,
+    terminal: true
+  });
+}
+
+function legacyUserLauncherContent(paths: LinuxHelperPaths): string {
+  const legacyLauncher = path.join(
+    path.dirname(paths.userLauncherPath),
+    "chromium-kirinuki"
+  );
+  return [
+    "#!/bin/sh",
+    "",
+    "set -eu",
+    "",
+    `LAUNCHER="${legacyLauncher}"`,
+    "",
+    "if [ ! -x \"$LAUNCHER\" ]; then",
+    "  printf '%s\\n' \"치지직 키리누키 전용 Chromium 실행기를 찾지 못했습니다: $LAUNCHER\" >&2",
+    "  exit 1",
+    "fi",
+    "",
+    "exec \"$LAUNCHER\" \"$@\"",
+    ""
+  ].join("\n");
+}
+
+function parseEntrypointTarget(content: string): string | null {
+  const marker = /^# kirinuki-helper-config=(\{.+\})$/mu.exec(content);
+  if (marker?.[1]) {
+    try {
+      const parsed = JSON.parse(marker[1]) as {
+        packageRoot?: unknown;
+      };
+      if (typeof parsed.packageRoot === "string") {
+        return parsed.packageRoot;
+      }
+    } catch {
+      return null;
+    }
+  }
+  const execMatch = /^\s*exec\s+(?:"([^"]+)"|'([^']+)'|(\S+))/mu.exec(
+    content
+  );
+  if (execMatch) {
+    return execMatch[1] || execMatch[2] || execMatch[3] || null;
+  }
+  const desktopMatch = /^Exec=(?:"((?:\\.|[^"])*)"|(\S+))(?:\s+.*)?$/mu.exec(
+    content
+  );
+  return desktopMatch?.[1] || desktopMatch?.[2] || null;
+}
+
+function parseManagedLauncher(
+  content: string
+): EntrypointMetadata | null {
+  const marker = /^# kirinuki-helper-config=(\{.+\})$/mu.exec(content);
+  if (!marker?.[1]) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(marker[1]) as Record<string, unknown>;
+    const keys = Object.keys(parsed).sort();
+    if (
+      keys.join(",") !== [
+        "browserProfileRoot",
+        "extensionRoot",
+        "packageRoot"
+      ].sort().join(",")
+    ) {
+      return null;
+    }
+    for (const key of keys) {
+      const value = parsed[key];
+      if (
+        typeof value !== "string"
+        || !path.isAbsolute(value)
+        || value.trim() !== value
+        || /[\0\r\n]/u.test(value)
+      ) {
+        return null;
+      }
+    }
+    const metadata = Object.freeze({
+      packageRoot: path.normalize(String(parsed.packageRoot)),
+      extensionRoot: path.normalize(String(parsed.extensionRoot)),
+      browserProfileRoot: path.normalize(String(parsed.browserProfileRoot))
+    });
+    return content === renderUserLauncher(metadata)
+      ? metadata
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isManagedDesktop(
+  content: string,
+  paths: LinuxHelperPaths
+): boolean {
+  return (
+    /^X-KirinukiHelper-Managed=chzzk-kirinuki-linux-helper\/v1$/mu.test(
+      content
+    )
+    && /^\[Desktop Entry\]$/mu.test(content)
+    && /^Type=Application$/mu.test(content)
+    && /^Name=KirinukiHelper$/mu.test(content)
+    && content
+      .split("\n")
+      .includes(`Exec=${desktopExecQuote(paths.userLauncherPath)}`)
+    && !/^MimeType=/mu.test(content)
+  );
+}
+
+function recognizedLegacyDesktop(content: string): boolean {
+  return (
+    /^\[Desktop Entry\]$/mu.test(content)
+    && /^Name=Chromium - 치지직 키리누키$/mu.test(content)
+    && /^GenericName=CHZZK Kirinuki Browser$/mu.test(content)
+    && /^Exec=\S*\/\.local\/bin\/chromium-kirinuki(?:\s+%U)?$/mu.test(
+      content
+    )
+    && /^MimeType=(?=[^\n]*x-scheme-handler\/http;)(?=[^\n]*x-scheme-handler\/https;)(?=[^\n]*text\/html;)[^\n]+$/mu.test(
+      content
+    )
+  );
+}
+
+async function inspectLegacyDesktop(
+  filePath: string
+): Promise<UserEntrypointReport["legacyDesktop"]> {
+  let fileInfo;
+  try {
+    fileInfo = await lstat(filePath);
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") {
+      return {
+        path: filePath,
+        present: false,
+        recognized: false,
+        actualTarget: null
+      };
+    }
+    return {
+      path: filePath,
+      present: true,
+      recognized: false,
+      actualTarget: `검사 실패: ${errnoCode(error) || "알 수 없는 오류"}`
+    };
+  }
+  if (!fileInfo.isFile()) {
+    return {
+      path: filePath,
+      present: true,
+      recognized: false,
+      actualTarget: fileInfo.isSymbolicLink()
+        ? `symlink → ${await readlink(filePath).catch(() => "?")}`
+        : "일반 파일 아님"
+    };
+  }
+  try {
+    const content = await readFile(filePath, "utf8");
+    return {
+      path: filePath,
+      present: true,
+      recognized: recognizedLegacyDesktop(content),
+      actualTarget: parseEntrypointTarget(content)
+    };
+  } catch (error) {
+    return {
+      path: filePath,
+      present: true,
+      recognized: false,
+      actualTarget: `읽기 실패: ${errnoCode(error) || "알 수 없는 오류"}`
+    };
+  }
+}
+
+async function inspectEntrypointFile(
+  filePath: string,
+  expectedContent: string,
+  {
+    executable = false
+  }: {
+    executable?: boolean;
+  } = {}
+): Promise<UserEntrypointState> {
+  let fileInfo;
+  try {
+    fileInfo = await lstat(filePath);
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") {
+      return {
+        path: filePath,
+        installed: false,
+        current: false,
+        actualTarget: null
+      };
+    }
+    return {
+      path: filePath,
+      installed: true,
+      current: false,
+      actualTarget: `검사 실패: ${errnoCode(error) || "알 수 없는 오류"}`
+    };
+  }
+  if (!fileInfo.isFile()) {
+    return {
+      path: filePath,
+      installed: true,
+      current: false,
+      actualTarget: fileInfo.isSymbolicLink()
+        ? `symlink → ${await readlink(filePath).catch(() => "?")}`
+        : "일반 파일 아님"
+    };
+  }
+  try {
+    const content = await readFile(filePath, "utf8");
+    const modeReady = !executable || Boolean(fileInfo.mode & 0o111);
+    return {
+      path: filePath,
+      installed: fileInfo.isFile(),
+      current: fileInfo.isFile()
+        && modeReady
+        && content === expectedContent,
+      actualTarget: parseEntrypointTarget(content)
+    };
+  } catch (error) {
+    return {
+      path: filePath,
+      installed: true,
+      current: false,
+      actualTarget: `읽기 실패: ${errnoCode(error) || "알 수 없는 오류"}`
+    };
+  }
+}
+
+export async function inspectUserEntrypoints(
+  paths: LinuxHelperPaths,
+  root = packageRoot
+): Promise<UserEntrypointReport> {
+  const [launcher, desktop, legacyDesktop] = await Promise.all([
+    inspectEntrypointFile(
+      paths.userLauncherPath,
+      userLauncherContent(paths, root),
+      { executable: true }
+    ),
+    inspectEntrypointFile(
+      paths.desktopEntryPath,
+      desktopEntryContent(paths)
+    ),
+    inspectLegacyDesktop(paths.legacyDesktopEntryPath)
+  ]);
+  return {
+    launcher,
+    desktop,
+    legacyDesktop,
+    current: (
+      launcher.current
+      && desktop.current
+      && !legacyDesktop.recognized
+      && !legacyDesktop.actualTarget?.startsWith("검사 실패:")
+      && !legacyDesktop.actualTarget?.startsWith("읽기 실패:")
+    )
+  };
+}
+
+type EntrypointInstallDisposition =
+  | "missing"
+  | "current"
+  | "managed"
+  | "legacy"
+  | "blocked";
+
+interface EntrypointInstallPlan {
+  destination: string;
+  content: string;
+  mode: number;
+  disposition: EntrypointInstallDisposition;
+  reason: string;
+  snapshot: {
+    dev: number;
+    ino: number;
+    size: number;
+    mtimeMs: number;
+  } | null;
+}
+
+function errnoCode(error: unknown): string {
+  return String((error as NodeJS.ErrnoException)?.code || "");
+}
+
+async function classifyEntrypointInstall({
+  destination,
+  content,
+  mode,
+  kind,
+  paths
+}: {
+  destination: string;
+  content: string;
+  mode: number;
+  kind: "launcher" | "desktop" | "legacy-mime-desktop";
+  paths: LinuxHelperPaths;
+}): Promise<EntrypointInstallPlan> {
+  let fileInfo;
+  try {
+    fileInfo = await lstat(destination);
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") {
+      return {
+        destination,
+        content,
+        mode,
+        disposition: "missing",
+        reason: "설치 대상 없음",
+        snapshot: null
+      };
+    }
+    throw new Error(
+      `사용자 진입점 상태를 읽지 못했습니다: ${destination}`,
+      { cause: error }
+    );
+  }
+  const snapshot = {
+    dev: fileInfo.dev,
+    ino: fileInfo.ino,
+    size: fileInfo.size,
+    mtimeMs: fileInfo.mtimeMs
+  };
+  if (!fileInfo.isFile()) {
+    return {
+      destination,
+      content,
+      mode,
+      disposition: "blocked",
+      reason: fileInfo.isSymbolicLink()
+        ? `심볼릭 링크 → ${await readlink(destination).catch(() => "?")}`
+        : "일반 파일이 아님",
+      snapshot
+    };
+  }
+  if (fileInfo.size > 256 * 1024) {
+    return {
+      destination,
+      content,
+      mode,
+      disposition: "blocked",
+      reason: "Kirinuki 진입점으로 보기에는 파일이 지나치게 큼",
+      snapshot
+    };
+  }
+  let existing: string;
+  try {
+    existing = await readFile(destination, "utf8");
+  } catch (error) {
+    throw new Error(
+      `기존 사용자 진입점을 안전하게 읽지 못해 설치를 중단했습니다: ${destination}`,
+      { cause: error }
+    );
+  }
+  if (
+    kind !== "legacy-mime-desktop"
+    && existing === content
+  ) {
+    const modeCurrent = (fileInfo.mode & 0o777) === mode;
+    return {
+      destination,
+      content,
+      mode,
+      disposition: modeCurrent ? "current" : "managed",
+      reason: modeCurrent
+        ? "현재 KirinukiHelper 생성물"
+        : "현재 KirinukiHelper 생성물이지만 권한 복구 필요",
+      snapshot
+    };
+  }
+  if (kind === "legacy-mime-desktop") {
+    const recognized = recognizedLegacyDesktop(existing);
+    return {
+      destination,
+      content,
+      mode,
+      disposition: recognized ? "legacy" : "blocked",
+      reason: recognized
+        ? "정확히 인식된 과거 Kirinuki MIME desktop"
+        : "은퇴 대상 legacy MIME desktop 서명과 다름",
+      snapshot
+    };
+  }
+  const managed = kind === "launcher"
+    ? Boolean(parseManagedLauncher(existing))
+    : isManagedDesktop(existing, paths);
+  if (managed) {
+    return {
+      destination,
+      content,
+      mode,
+      disposition: "managed",
+      reason: "이전 KirinukiHelper marker 생성물",
+      snapshot
+    };
+  }
+  const legacy = kind === "launcher"
+    ? existing === legacyUserLauncherContent(paths)
+    : existing === legacyManagedDesktopContent(paths);
+  return {
+    destination,
+    content,
+    mode,
+    disposition: legacy ? "legacy" : "blocked",
+    reason: legacy
+      ? "정확히 인식된 과거 Kirinuki 진입점"
+      : "KirinukiHelper 소유 marker가 없는 기존 사용자 파일",
+    snapshot
+  };
+}
+
+async function assertPlanStillMatches(
+  plan: EntrypointInstallPlan
+): Promise<void> {
+  if (!plan.snapshot) {
+    return;
+  }
+  const current = await lstat(plan.destination).catch(() => null);
+  if (
+    !current
+    || !current.isFile()
+    || current.dev !== plan.snapshot.dev
+    || current.ino !== plan.snapshot.ino
+    || current.size !== plan.snapshot.size
+    || current.mtimeMs !== plan.snapshot.mtimeMs
+  ) {
+    throw new Error(
+      `설치 도중 사용자 진입점이 바뀌어 중단했습니다: ${plan.destination}`
+    );
+  }
+}
+
+async function pathEntryExists(candidate: string): Promise<boolean> {
+  try {
+    await lstat(candidate);
+    return true;
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function reserveBackupPath(
+  source: string,
+  label: "backup" | "retired"
+): Promise<string> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const candidate = (
+      `${source}.${label}-${Date.now()}-${process.pid}-${attempt}`
+    );
+    try {
+      await link(source, candidate);
+      return candidate;
+    } catch (error) {
+      if (errnoCode(error) === "EEXIST") {
+        continue;
+      }
+      throw new Error(
+        `기존 Kirinuki 진입점의 복구본을 만들지 못했습니다: ${source}`,
+        { cause: error }
+      );
+    }
+  }
+  throw new Error(
+    `기존 Kirinuki 진입점의 고유 복구본 이름을 만들지 못했습니다: ${source}`
+  );
+}
+
+async function backupAndDetach(
+  plan: EntrypointInstallPlan,
+  label: "backup" | "retired" = "backup"
+): Promise<string> {
+  await assertPlanStillMatches(plan);
+  const backup = await reserveBackupPath(plan.destination, label);
+  try {
+    const [sourceInfo, backupInfo] = await Promise.all([
+      lstat(plan.destination),
+      lstat(backup)
+    ]);
+    if (
+      !plan.snapshot
+      || sourceInfo.dev !== plan.snapshot.dev
+      || sourceInfo.ino !== plan.snapshot.ino
+      || backupInfo.dev !== sourceInfo.dev
+      || backupInfo.ino !== sourceInfo.ino
+    ) {
+      throw new Error(
+        `복구본 생성 중 사용자 진입점이 바뀌었습니다: ${plan.destination}`
+      );
+    }
+    await unlink(plan.destination);
+  } catch (error) {
+    await unlink(backup).catch(() => {});
+    throw new Error(
+      `기존 Kirinuki 진입점을 안전하게 분리하지 못했습니다: ${plan.destination}`,
+      { cause: error }
+    );
+  }
+  return backup;
+}
+
+async function atomicCreateFile(
+  destination: string,
+  content: string,
+  mode: number
+): Promise<void> {
+  await mkdir(path.dirname(destination), {
+    recursive: true,
+    mode: 0o700
+  });
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const temporary = (
+      `${destination}.${process.pid}.${Date.now()}.${attempt}.tmp`
+    );
+    try {
+      await writeFile(temporary, content, {
+        encoding: "utf8",
+        mode,
+        flag: "wx"
+      });
+      await chmod(temporary, mode);
+      await link(temporary, destination);
+      return;
+    } catch (error) {
+      if (
+        errnoCode(error) === "EEXIST"
+        && !await pathEntryExists(destination)
+      ) {
+        continue;
+      }
+      throw new Error(
+        `사용자 진입점을 기존 파일 위에 덮어쓰지 않고 설치하지 못했습니다: ${destination}`,
+        { cause: error }
+      );
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {});
+    }
+  }
+  throw new Error(`사용자 진입점 임시 파일을 만들지 못했습니다: ${destination}`);
+}
+
+async function applyEntrypointInstallPlan(
+  plan: EntrypointInstallPlan
+): Promise<string | null> {
+  if (plan.disposition === "current") {
+    await assertPlanStillMatches(plan);
+    return null;
+  }
+  let backup: string | null = null;
+  if (
+    plan.disposition === "managed"
+    || plan.disposition === "legacy"
+  ) {
+    backup = await backupAndDetach(plan);
+  }
+  try {
+    await atomicCreateFile(plan.destination, plan.content, plan.mode);
+  } catch (error) {
+    if (backup && !await pathEntryExists(plan.destination)) {
+      await link(backup, plan.destination).catch(() => {});
+    }
+    throw error;
+  }
+  return backup;
+}
+
+export async function installUserEntrypoints(
+  paths: LinuxHelperPaths,
+  root = packageRoot
+): Promise<{
+  retiredLegacyPath: string | null;
+  replacedEntrypointBackups: string[];
+}> {
+  const plans = await Promise.all([
+    classifyEntrypointInstall({
+      destination: paths.userLauncherPath,
+      content: userLauncherContent(paths, root),
+      mode: 0o755,
+      kind: "launcher",
+      paths
+    }),
+    classifyEntrypointInstall({
+      destination: paths.desktopEntryPath,
+      content: desktopEntryContent(paths),
+      mode: 0o644,
+      kind: "desktop",
+      paths
+    })
+  ]);
+  const legacy = await inspectLegacyDesktop(
+    paths.legacyDesktopEntryPath
+  );
+  if (
+    legacy.present
+    && (
+      legacy.actualTarget?.startsWith("검사 실패:")
+      || legacy.actualTarget?.startsWith("읽기 실패:")
+    )
+  ) {
+    throw new Error(
+      `레거시 Kirinuki 앱 메뉴를 안전하게 검사하지 못해 설치를 중단했습니다: ${legacy.path} · ${legacy.actualTarget}`
+    );
+  }
+  const legacyPlan = legacy.recognized
+    ? await classifyEntrypointInstall({
+      destination: paths.legacyDesktopEntryPath,
+      content: "",
+      mode: 0o644,
+      kind: "legacy-mime-desktop",
+      paths
+    })
+    : null;
+  if (legacyPlan && legacyPlan.disposition !== "legacy") {
+    throw new Error(
+      `설치 도중 레거시 Kirinuki 앱 메뉴가 바뀌어 중단했습니다: ${legacyPlan.destination}`
+    );
+  }
+  const blocked = plans.filter((plan) => plan.disposition === "blocked");
+  if (blocked.length > 0) {
+    throw new Error(
+      "기존 사용자 파일을 KirinukiHelper가 소유한 것으로 확인할 수 없어 설치를 중단했습니다.\n"
+      + blocked
+        .map((plan) => `${plan.destination}: ${plan.reason}`)
+        .join("\n")
+      + "\n파일을 보존했으며, 사용자가 직접 경로를 확인해야 합니다."
+    );
+  }
+  const replacedEntrypointBackups: string[] = [];
+  for (const plan of plans) {
+    const backup = await applyEntrypointInstallPlan(plan);
+    if (backup) {
+      replacedEntrypointBackups.push(backup);
+    }
+  }
+  if (!legacyPlan) {
+    return { retiredLegacyPath: null, replacedEntrypointBackups };
+  }
+  const retiredLegacyPath = await backupAndDetach(
+    legacyPlan,
+    "retired"
+  );
+  return { retiredLegacyPath, replacedEntrypointBackups };
+}
+
+export function desktopDatabaseRefreshCommand(
+  paths: LinuxHelperPaths,
+  env: NodeJS.ProcessEnv = process.env
+): { file: string; args: string[] } | null {
+  const file = resolveExecutable(
+    null,
+    ["update-desktop-database"],
+    env
+  );
+  return file
+    ? {
+      file,
+      args: [path.dirname(paths.desktopEntryPath)]
+    }
+    : null;
+}
+
 export async function restoreLauncherPermissions(
   root = packageRoot
 ): Promise<void> {
@@ -656,19 +1490,86 @@ function nativeTools(
   );
 }
 
-function buildReadyFiles(root = packageRoot): string[] {
+function buildReadyFiles(
+  extensionRoot = path.join(packageRoot, "extension")
+): string[] {
   return [
-    path.join(root, "extension", "manifest.json"),
-    path.join(root, "extension", "editor", "editor.js"),
-    path.join(root, "extension", "editor", "audseg-worker.js"),
-    path.join(root, "extension", "content-script.js")
+    path.join(extensionRoot, "manifest.json"),
+    path.join(extensionRoot, "editor", "editor.js"),
+    path.join(extensionRoot, "editor", "audseg-worker.js"),
+    path.join(extensionRoot, "content-script.js")
   ];
 }
 
-async function inspectBuild(root = packageRoot) {
-  const files = buildReadyFiles(root);
+async function inspectBuild(
+  extensionRoot = path.join(packageRoot, "extension")
+) {
+  const files = buildReadyFiles(extensionRoot);
   const ready = (await Promise.all(files.map(exists))).every(Boolean);
   return { ready, files };
+}
+
+async function relativeFileList(
+  root: string,
+  relativeRoot = ""
+): Promise<string[]> {
+  const directory = path.join(root, relativeRoot);
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries.sort((left, right) => (
+    left.name.localeCompare(right.name)
+  ))) {
+    const relativePath = path.join(relativeRoot, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await relativeFileList(root, relativePath));
+      continue;
+    }
+    if (!entry.isFile()) {
+      throw new Error(
+        `Extension 빌드에는 일반 파일과 폴더만 허용됩니다: ${relativePath}`
+      );
+    }
+    files.push(relativePath);
+  }
+  return files;
+}
+
+export async function extensionTreesMatch(
+  referenceRoot: string,
+  selectedRoot: string
+): Promise<boolean> {
+  const reference = path.resolve(referenceRoot);
+  const selected = path.resolve(selectedRoot);
+  if (reference === selected) {
+    return true;
+  }
+  try {
+    const [referenceFiles, selectedFiles] = await Promise.all([
+      relativeFileList(reference),
+      relativeFileList(selected)
+    ]);
+    if (
+      referenceFiles.length !== selectedFiles.length
+      || referenceFiles.some((
+        relativePath,
+        index
+      ) => relativePath !== selectedFiles[index])
+    ) {
+      return false;
+    }
+    for (const relativePath of referenceFiles) {
+      const [referenceBytes, selectedBytes] = await Promise.all([
+        readFile(path.join(reference, relativePath)),
+        readFile(path.join(selected, relativePath))
+      ]);
+      if (!referenceBytes.equals(selectedBytes)) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function readCaptionStatus(
@@ -704,17 +1605,28 @@ export async function inspectLinuxEnvironment({
   browser = null,
   env = process.env,
   platform = process.platform,
-  root = packageRoot
+  root = packageRoot,
+  paths = resolveLinuxHelperPaths({
+    env,
+    homeDir: env.HOME || os.homedir(),
+    packageDir: root
+  })
 }: {
   mode?: CaptionMode;
   browser?: string | null;
   env?: NodeJS.ProcessEnv;
   platform?: string;
   root?: string;
+  paths?: LinuxHelperPaths;
 } = {}): Promise<LinuxEnvironmentReport> {
   const selectedMode = requiredChoice(mode, MODES, "mode");
   const browserReport = inspectBrowser({ requested: browser, env });
-  const build = await inspectBuild(root);
+  const build = await inspectBuild(paths.extensionRoot);
+  const matchesRepositoryBuild = await extensionTreesMatch(
+    path.join(root, "extension"),
+    paths.extensionRoot
+  );
+  const entrypoints = await inspectUserEntrypoints(paths, root);
   const tools = selectedMode === "whisper"
     ? nativeTools(env)
     : {};
@@ -744,9 +1656,16 @@ export async function inspectLinuxEnvironment({
     },
     browser: browserReport,
     extension: {
-      root: path.join(root, "extension"),
-      built: build.ready
+      root: paths.extensionRoot,
+      built: build.ready,
+      overridden: Boolean(env.KIRINUKI_EXTENSION_ROOT),
+      matchesRepositoryBuild
     },
+    browserProfile: {
+      root: paths.browserProfileRoot,
+      overridden: Boolean(env.KIRINUKI_BROWSER_PROFILE_ROOT)
+    },
+    entrypoints,
     mode: selectedMode,
     nativeTools: Object.fromEntries(
       Object.entries(tools).map(([name, value]) => [name, Boolean(value)])
@@ -760,6 +1679,8 @@ export async function inspectLinuxEnvironment({
     && report.npm.available
     && report.browser.supported
     && report.extension.built
+    && report.extension.matchesRepositoryBuild
+    && report.entrypoints.current
     && (
       selectedMode !== "whisper"
       || (
@@ -818,7 +1739,47 @@ function printDoctor(
   line(
     stdout,
     `Extension 빌드: ${report.extension.built ? "준비됨" : "setup 필요"}`
+    + ` · ${report.extension.root}`
+    + (report.extension.overridden ? " · 환경 override" : "")
+    + (
+      report.extension.matchesRepositoryBuild
+        ? " · 현재 repository 빌드와 일치"
+        : " · 현재 repository 빌드와 불일치"
+    )
   );
+  line(
+    stdout,
+    `브라우저 profile: ${report.browserProfile.root}`
+    + (report.browserProfile.overridden ? " · 환경 override" : "")
+  );
+  line(
+    stdout,
+    `kirinuki 명령: ${
+      report.entrypoints.launcher.current
+        ? "현재 저장소와 일치"
+        : report.entrypoints.launcher.installed
+          ? `stale (${report.entrypoints.launcher.actualTarget || "대상 판독 불가"})`
+          : "미설치"
+    } · ${report.entrypoints.launcher.path}`
+  );
+  line(
+    stdout,
+    `앱 메뉴: ${
+      report.entrypoints.desktop.current
+        ? "현재 명령과 일치"
+        : report.entrypoints.desktop.installed
+          ? `stale (${report.entrypoints.desktop.actualTarget || "대상 판독 불가"})`
+          : "미설치"
+    } · ${report.entrypoints.desktop.path}`
+  );
+  if (report.entrypoints.legacyDesktop.present) {
+    line(
+      stdout,
+      report.entrypoints.legacyDesktop.recognized
+        ? "레거시 앱 메뉴: HTTP/HTTPS/text-html 기본 앱을 가로채는 이전 Kirinuki 항목이 활성 상태 · setup으로 안전하게 은퇴 필요"
+        : `레거시 이름의 앱 메뉴: 서명이 다르거나 검사 불가하여 자동 변경하지 않음 · ${report.entrypoints.legacyDesktop.path} · ${report.entrypoints.legacyDesktop.actualTarget || "대상 판독 불가"}`
+    );
+  }
   line(stdout, `자막 방식: ${report.mode}`);
   if (report.mode === "whisper") {
     line(
@@ -994,6 +1955,35 @@ async function setupCommand(
       context.stdout,
       `  브라우저 프로필: ${context.paths.browserProfileRoot}`
     );
+    line(
+      context.stdout,
+      `  Extension 경로: ${context.paths.extensionRoot}`
+    );
+    line(
+      context.stdout,
+      `  사용자 명령 설치: ${context.paths.userLauncherPath}`
+    );
+    line(
+      context.stdout,
+      `  앱 메뉴 설치: ${context.paths.desktopEntryPath}`
+    );
+    const entrypoints = await inspectUserEntrypoints(context.paths);
+    if (entrypoints.legacyDesktop.recognized) {
+      line(
+        context.stdout,
+        `  인식된 레거시 MIME 앱 메뉴를 복구 가능한 이름으로 은퇴: ${entrypoints.legacyDesktop.path}`
+      );
+      const refresh = desktopDatabaseRefreshCommand(
+        context.paths,
+        context.env
+      );
+      line(
+        context.stdout,
+        refresh
+          ? `  사용자 desktop MIME 캐시 갱신: ${describeCommand(refresh.file, refresh.args)}`
+          : "  update-desktop-database가 없어 앱 메뉴 파일만 안전하게 은퇴(기본 브라우저 연결은 변경하지 않음)"
+      );
+    }
     return;
   }
 
@@ -1050,15 +2040,65 @@ async function setupCommand(
     });
     line(context.stdout, "foreground Whisper 재설정·복원 완료");
   }
+  const selectedBuild = await inspectBuild(context.paths.extensionRoot);
+  if (!selectedBuild.ready) {
+    throw new Error(
+      `선택한 Extension 경로에 완성된 빌드가 없습니다: ${context.paths.extensionRoot}\n`
+      + "KIRINUKI_EXTENSION_ROOT를 지정했다면 최신 빌드를 그 절대경로에 준비한 뒤 setup을 다시 실행하세요."
+    );
+  }
+  if (!await extensionTreesMatch(
+    path.join(packageRoot, "extension"),
+    context.paths.extensionRoot
+  )) {
+    throw new Error(
+      `선택한 Extension 경로가 현재 repository 빌드와 다릅니다: ${context.paths.extensionRoot}\n`
+      + "편집 profile을 지키기 위해 경로를 자동 교체하지 않습니다. 최신 extension 빌드를 해당 절대경로에 정확히 배치한 뒤 setup을 다시 실행하세요."
+    );
+  }
   await writeSettings(context.paths, {
     mode,
     browser: browserReport.binary
   });
   await restoreLauncherPermissions();
+  const installedEntrypoints = await installUserEntrypoints(context.paths);
   line(context.stdout, "Kirinuki 설정 완료");
   line(
     context.stdout,
-    `영상 열기: ./kirinuki.sh open "${DEFAULT_SOURCE_URL}"`
+    `사용자 명령 설치 완료: ${context.paths.userLauncherPath}`
+  );
+  line(
+    context.stdout,
+    `앱 메뉴 설치 완료: ${context.paths.desktopEntryPath}`
+  );
+  for (const backup of installedEntrypoints.replacedEntrypointBackups) {
+    line(context.stdout, `이전 Kirinuki 진입점 복구본: ${backup}`);
+  }
+  if (installedEntrypoints.retiredLegacyPath) {
+    line(
+      context.stdout,
+      `레거시 MIME 앱 메뉴 은퇴 완료: ${installedEntrypoints.retiredLegacyPath}`
+    );
+    const refresh = desktopDatabaseRefreshCommand(
+      context.paths,
+      context.env
+    );
+    if (refresh) {
+      await runStreaming(refresh.file, refresh.args, {
+        cwd: packageRoot,
+        env: withoutSecrets(context.env)
+      });
+      line(context.stdout, "사용자 desktop MIME 캐시 갱신 완료");
+    } else {
+      line(
+        context.stdout,
+        "update-desktop-database가 없어 파일만 은퇴했습니다. 기본 브라우저 연결은 변경하지 않았으며, 앱 메뉴 캐시는 다음 로그인 때 갱신될 수 있습니다."
+      );
+    }
+  }
+  line(
+    context.stdout,
+    `영상 열기: kirinuki open "${DEFAULT_SOURCE_URL}"`
   );
   if (mode === "whisper") {
     line(
@@ -1318,10 +2358,54 @@ async function openCommand(
       `Chromium ${MINIMUM_BROWSER_VERSION} 이상이 필요합니다. 현재: ${browser.version || "알 수 없음"}`
     );
   }
-  const build = await inspectBuild();
+  const entrypoints = await inspectUserEntrypoints(context.paths);
+  const staleEntrypoints = [
+    entrypoints.launcher,
+    entrypoints.desktop
+  ].filter((entry) => entry.installed && !entry.current);
+  if (staleEntrypoints.length > 0) {
+    throw new Error(
+      "사용자 진입점이 현재 저장소·Extension·profile 경로와 다릅니다.\n"
+      + staleEntrypoints
+        .map((entry) => (
+          `${entry.path} → ${entry.actualTarget || "대상 판독 불가"}`
+        ))
+        .join("\n")
+      + "\n현재 ./kirinuki.sh setup을 다시 실행해 원자적으로 갱신하세요."
+    );
+  }
+  if (entrypoints.legacyDesktop.recognized) {
+    throw new Error(
+      "HTTP/HTTPS/text-html 기본 앱을 가로채는 인식된 레거시 Kirinuki 앱 메뉴가 남아 있습니다.\n"
+      + `${entrypoints.legacyDesktop.path}\n`
+      + "현재 ./kirinuki.sh setup을 실행해 복구 가능한 이름으로 은퇴시키세요."
+    );
+  }
+  if (
+    entrypoints.legacyDesktop.present
+    && (
+      entrypoints.legacyDesktop.actualTarget?.startsWith("검사 실패:")
+      || entrypoints.legacyDesktop.actualTarget?.startsWith("읽기 실패:")
+    )
+  ) {
+    throw new Error(
+      `레거시 Kirinuki 앱 메뉴를 안전하게 검사하지 못했습니다: ${entrypoints.legacyDesktop.path} · ${entrypoints.legacyDesktop.actualTarget}`
+    );
+  }
+  const build = await inspectBuild(context.paths.extensionRoot);
   if (!build.ready) {
     throw new Error(
-      "Extension 빌드가 준비되지 않았습니다. ./kirinuki.sh setup을 먼저 실행하세요."
+      `Extension 빌드가 준비되지 않았습니다: ${context.paths.extensionRoot}\n`
+      + "./kirinuki.sh setup을 먼저 실행하세요."
+    );
+  }
+  if (!await extensionTreesMatch(
+    path.join(packageRoot, "extension"),
+    context.paths.extensionRoot
+  )) {
+    throw new Error(
+      `선택한 Extension 경로가 현재 repository 빌드와 다릅니다: ${context.paths.extensionRoot}\n`
+      + "오래된 엔진을 조용히 실행하지 않습니다. 최신 extension 빌드를 정확히 배치하고 ./kirinuki.sh setup을 다시 실행하세요."
     );
   }
   if (mode === "whisper") {
@@ -1329,7 +2413,7 @@ async function openCommand(
   }
   const sourceUrl = options.url || DEFAULT_SOURCE_URL;
   const args = browserLaunchArgs({
-    extensionRoot: path.join(packageRoot, "extension"),
+    extensionRoot: context.paths.extensionRoot,
     profileRoot: context.paths.browserProfileRoot,
     sourceUrl
   });
@@ -1368,7 +2452,8 @@ async function doctorCommand(
     mode,
     browser: browser.binary || options.browser || settings?.browser,
     env: context.env,
-    platform: context.platform
+    platform: context.platform,
+    paths: context.paths
   });
   if (options.json) {
     line(context.stdout, JSON.stringify(report, null, 2));
@@ -1407,12 +2492,17 @@ async function statusCommand(
     schema: HELPER_SCHEMA,
     configured: Boolean(settings),
     mode,
-    extensionRoot: path.join(packageRoot, "extension"),
+    extensionRoot: context.paths.extensionRoot,
+    extensionMatchesRepositoryBuild: await extensionTreesMatch(
+      path.join(packageRoot, "extension"),
+      context.paths.extensionRoot
+    ),
     browserProfile: {
       path: context.paths.browserProfileRoot,
       created: profileInfo,
       running: "not-claimed"
     },
+    entrypoints: await inspectUserEntrypoints(context.paths),
     caption
   };
   if (options.json) {
@@ -1430,6 +2520,43 @@ async function statusCommand(
     context.stdout,
     `전용 브라우저 프로필: ${profileInfo ? "생성됨" : "아직 없음"} · ${context.paths.browserProfileRoot}`
   );
+  line(
+    context.stdout,
+    `Extension: ${context.paths.extensionRoot}`
+    + (
+      value.extensionMatchesRepositoryBuild
+        ? " · 현재 repository 빌드와 일치"
+        : " · 현재 repository 빌드와 불일치"
+    )
+  );
+  line(
+    context.stdout,
+    `kirinuki 명령: ${
+      value.entrypoints.launcher.current
+        ? "현재 버전"
+        : value.entrypoints.launcher.installed
+          ? `stale → ${value.entrypoints.launcher.actualTarget || "대상 판독 불가"}`
+          : "미설치"
+    } · ${value.entrypoints.launcher.path}`
+  );
+  line(
+    context.stdout,
+    `앱 메뉴: ${
+      value.entrypoints.desktop.current
+        ? "현재 버전"
+        : value.entrypoints.desktop.installed
+          ? `stale → ${value.entrypoints.desktop.actualTarget || "대상 판독 불가"}`
+          : "미설치"
+    } · ${value.entrypoints.desktop.path}`
+  );
+  if (value.entrypoints.legacyDesktop.present) {
+    line(
+      context.stdout,
+      value.entrypoints.legacyDesktop.recognized
+        ? `레거시 MIME 앱 메뉴: 활성 · ${value.entrypoints.legacyDesktop.path} · setup 필요`
+        : `레거시 이름의 앱 메뉴: 서명이 다르거나 검사 불가하여 자동 변경하지 않음 · ${value.entrypoints.legacyDesktop.path} · ${value.entrypoints.legacyDesktop.actualTarget || "대상 판독 불가"}`
+    );
+  }
   line(
     context.stdout,
     "브라우저 실행 여부는 추측하지 않습니다. 창은 사용자가 정상적으로 닫습니다."
@@ -1510,6 +2637,17 @@ Kirinuki Linux 원클릭 도우미
   start   open과 동일하며 기존 사용자에게 익숙한 별칭
   status  저장된 방식과 브라우저 profile, 선택적 Whisper 서비스 상태 표시
   stop    Whisper companion만 안전하게 중지; Chromium은 강제 종료하지 않음
+
+설치 결과:
+  setup은 ~/.local/bin/kirinuki 명령과 앱 메뉴 항목을 현재 저장소에 맞게
+  원자적으로 설치·갱신합니다. bare kirinuki와 앱 메뉴는 즉시 open을 실행하고,
+  kirinuki status처럼 명시한 인자는 그대로 전달합니다.
+  unrelated 파일·symlink·읽기 불가 경로는 덮어쓰지 않고 setup이 실패합니다.
+
+고급 경로 보존:
+  KIRINUKI_EXTENSION_ROOT와 KIRINUKI_BROWSER_PROFILE_ROOT에 앞뒤 공백 없는
+  절대경로를 지정한 채 setup하면 해당 Extension identity와 편집 profile을
+  명시적으로 유지합니다. doctor/status는 stale 진입점과 실제 경로를 표시합니다.
 
 자막 방식:
   audseg   기본값. 모델·서버 없이 빈 자막 타이밍 생성
@@ -1615,7 +2753,7 @@ function defaultContext(
   if (!overrides.paths) {
     context.paths = resolveLinuxHelperPaths({
       env: context.env,
-      homeDir: os.homedir()
+      homeDir: context.env.HOME || os.homedir()
     });
   }
   return context;
