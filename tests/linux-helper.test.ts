@@ -873,15 +873,26 @@ test("일반 Google Chrome 자동 로드는 fail-closed이고 저장된 Chrome�
   assert.equal(replacement.binary, chromium);
 });
 
-test("누락된 fresh Linux 의존성은 변경 없이 실행 가능한 설치 안내로 실패한다", async () => {
+test("누락된 fresh Linux 의존성은 변경 없이 실행 가능한 설치 안내로 실패한다", async (t) => {
+  const tempRoot = await mkdtemp(
+    path.join(os.tmpdir(), "kirinuki-missing-dependencies-")
+  );
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const missingBrowser = path.join(tempRoot, "missing-chromium");
   const result = await runNode([
     "doctor",
     "--mode",
-    "audseg"
+    "audseg",
+    "--browser",
+    missingBrowser
   ], {
     env: {
       ...process.env,
-      PATH: ""
+      PATH: "",
+      HOME: path.join(tempRoot, "home"),
+      XDG_CONFIG_HOME: path.join(tempRoot, "config"),
+      XDG_STATE_HOME: path.join(tempRoot, "state"),
+      XDG_DATA_HOME: path.join(tempRoot, "data")
     }
   });
   assert.equal(result.code, 1);
