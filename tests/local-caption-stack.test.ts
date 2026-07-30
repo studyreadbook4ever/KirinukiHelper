@@ -64,6 +64,30 @@ function fixturePaths() {
   });
 }
 
+test("Extension Origin 경로 override는 절대경로만 명시적으로 사용한다", () => {
+  const overridden = resolveStackPaths({
+    env: {
+      KIRINUKI_EXTENSION_ROOT: "/srv/kirinuki runtime/extension"
+    },
+    homeDir: "/tmp/kirinuki-test/home",
+    repoRoot: "/opt/kirinuki"
+  });
+  assert.equal(
+    overridden.extensionRoot,
+    "/srv/kirinuki runtime/extension"
+  );
+  for (const value of ["", "relative/extension", " /opt/extension", "/opt/x\nx"]) {
+    assert.throws(
+      () => resolveStackPaths({
+        env: { KIRINUKI_EXTENSION_ROOT: value },
+        homeDir: "/tmp/kirinuki-test/home",
+        repoRoot: "/opt/kirinuki"
+      }),
+      /절대 경로/u
+    );
+  }
+});
+
 test("CLI의 Node 최소 버전은 package 계약인 20.9.0을 정확히 지킨다", () => {
   assert.equal(supportedNodeVersion("20.8.9"), false);
   assert.equal(supportedNodeVersion("20.9.0"), true);

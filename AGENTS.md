@@ -43,8 +43,26 @@ AudSeg만 쓸 때는 caption stack 설치·실행이 필요 없다.
 - `setup.sh`는 `kirinuki.sh setup`의 얇고 안정적인 첫 진입점이다.
 - `kirinuki.sh`는 Bash preflight 뒤 Node 내장 모듈만 쓰는
   `scripts/linux-helper.ts`에 인자를 그대로 전달한다.
-- 인자 없는 TTY 실행은 한글 메뉴를 열고, 비대화형 실행은 입력을 기다리며
-  멈추지 않고 명령 사용법을 보여 준다.
+- 성공한 `setup`은 `~/.local/bin/kirinuki` 래퍼와 XDG 앱 메뉴 항목을
+  원자적으로 설치·갱신한다. 앱 메뉴는 `http`, `https`, `text/html` MIME
+  기본 앱을 등록하거나 가로채지 않는다. 과거 도우미의 이름·GenericName·
+  launcher·세 MIME 서명이 모두 일치하는 `chromium-kirinuki.desktop`만
+  복구 가능한 `.retired-*` 이름으로 옮기며, 동명인 다른 파일은 건드리지
+  않는다. `update-desktop-database`가 있으면 사용자 applications 디렉터리만
+  argv 배열로 갱신한다. 일반 기본 브라우저 association을 추측하거나 바꾸지
+  않는다.
+- 인자 없는 사용자 래퍼와 앱 메뉴는 `open`으로 전달해 최신 엔진을 즉시
+  실행한다. 명시한 인자는 그대로 전달한다. 저장소의 `./kirinuki.sh`만
+  인자 없는 실행에서 한글 메뉴를 유지한다.
+- 설치 대상의 일반 파일은 현재 생성물, 구조까지 검증된 managed marker,
+  정확히 알려진 구 Kirinuki 내용일 때만 교체한다. 구 내용은 `.backup-*`으로
+  보존한다. unrelated 파일·심볼릭 링크·특수 파일·읽기 불가 경로는 두
+  진입점을 모두 수정하기 전에 fail-closed한다.
+- 사용자 래퍼는 현재 저장소와 선택된 Extension·browser profile 절대경로를
+  함께 고정한다. `doctor/status`는 누락·권한 이상·다른 체크아웃을 가리키는
+  stale 래퍼와 앱 메뉴를 조용히 정상으로 취급하지 않고 실제 대상을 표시한다.
+- 저장소의 `./kirinuki.sh`를 인자 없이 TTY에서 실행하면 한글 메뉴를 열고,
+  비대화형 실행은 입력을 기다리며 멈추지 않고 명령 사용법을 보여 준다.
 - 시스템 패키지를 대신 설치하거나 `sudo`, `su`, `curl | sh`, 원격 설치
   스크립트를 실행하지 않는다. 빠진 도구와 대표 배포판별 설치 힌트만
   표시한다.
@@ -52,8 +70,13 @@ AudSeg만 쓸 때는 caption stack 설치·실행이 필요 없다.
 - Whisper 선택만 기존 `local-caption-stack.ts`의
   `doctor/setup/start/status/stop` 계약을 사용한다.
 - 브라우저 실행은 고정된 XDG 사용자 전용 프로필, 현재 저장소의 정확한
-  `extension` 절대 경로와 인자 배열을 사용한다. `eval`, 문자열 셸 실행과
-  원격 디버깅 포트를 사용하지 않는다.
+  `extension` 절대 경로와 인자 배열을 사용한다. 기존 Extension identity를
+  명시적으로 이어야 할 때만 `KIRINUKI_EXTENSION_ROOT`와
+  `KIRINUKI_BROWSER_PROFILE_ROOT`의 검증된 절대경로를 사용한다. 상대경로·
+  빈 값·앞뒤 공백·줄바꿈은 fail-closed한다. 같은 Extension override를
+  Whisper Origin 계산에도 사용한다. 외부 Extension은 현재 repository
+  빌드와 전체 파일 목록·바이트가 같을 때만 실행하며 자동 덮어쓰지 않는다.
+  `eval`, 문자열 셸 실행과 원격 디버깅 포트를 사용하지 않는다.
 - 자동 브라우저 후보는 unpacked Extension 명령행 로드를 지원하는 Chromium
   과 `chromium-browser`뿐이다. 일반 Google Chrome은 자동 지원으로 오인하지
   않고 `chrome://extensions` 수동 로드를 안내한다.
@@ -274,6 +297,13 @@ AudSeg:
 - 프로젝트별 최근 5개
 - 복구 직전 현재본 자동 저장
 - 영상과 함께 프로젝트 JSON·SRT 보관
+- 내보내기 직전 현재본과 복구 초안을 강제로 저장하고, 저장 실패 시 렌더를
+  시작하지 않는다.
+- 대용량 로컬 원본의 `BlobSource`는 Chromium descriptor 누수를 피하도록
+  `useStreamReader: false`를 유지한다.
+- 영상 파일 커밋 전 진행률은 최대 99%이며 실제 커밋 뒤에만 100%다.
+- 실패 정리는 확실히 빈 파일에만 적용한다. 기록된 바이트가 있거나 커밋
+  여부가 모호한 산출물을 복구 불가능하게 삭제하지 않는다.
 
 빈 AudSeg cue는 타임라인과 프로젝트에는 보존할 수 있지만 SRT에 가짜 문구로 출력하면 안 된다. 내보내기 전에 모든 빈 cue가 의도적인지 검수한다.
 
