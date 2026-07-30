@@ -1,23 +1,17 @@
-export const SCHEMA_VERSION = "chzzk-kirinuki-edit-brief/v2";
-export const CODEX_JOB_SCHEMA_VERSION = "chzzk-kirinuki-codex-job/v2";
-export const STORAGE_KEY = "chzzkKirinukiProjectV1";
-export const WORKSPACE_META_KEY = "chzzkKirinukiWorkspaceMetaV1";
-
-export function normalizeWorkspaceMeta(raw) {
+// Generated from TypeScript sources. Do not edit directly.
+const SCHEMA_VERSION = "chzzk-kirinuki-edit-brief/v2";
+const CODEX_JOB_SCHEMA_VERSION = "chzzk-kirinuki-codex-job/v2";
+const STORAGE_KEY = "chzzkKirinukiProjectV1";
+const WORKSPACE_META_KEY = "chzzkKirinukiWorkspaceMetaV1";
+function normalizeWorkspaceMeta(raw) {
   return {
-    resetEpoch: typeof raw?.resetEpoch === "string" && raw.resetEpoch
-      ? raw.resetEpoch
-      : "initial",
-    revision: Number.isSafeInteger(raw?.revision) && raw.revision >= 0
-      ? raw.revision
-      : 0,
+    resetEpoch: typeof raw?.resetEpoch === "string" && raw.resetEpoch ? raw.resetEpoch : "initial",
+    revision: typeof raw?.revision === "number" && Number.isSafeInteger(raw.revision) && raw.revision >= 0 ? raw.revision : 0,
     writerId: typeof raw?.writerId === "string" ? raw.writerId : ""
   };
 }
-
-const nowIso = () => new Date().toISOString();
-
-export function createInitialState() {
+const nowIso = () => (/* @__PURE__ */ new Date()).toISOString();
+function createInitialState() {
   return {
     schemaVersion: 1,
     editorProjectId: "",
@@ -50,101 +44,87 @@ export function createInitialState() {
     updatedAt: nowIso()
   };
 }
-
-export function normalizeState(raw) {
+function normalizeState(raw) {
   const initial = createInitialState();
   if (!raw || typeof raw !== "object") {
     return initial;
   }
-
+  const candidate = raw;
   return {
     ...initial,
-    ...raw,
-    source: { ...initial.source, ...(raw.source ?? {}) },
-    draft: { ...initial.draft, ...(raw.draft ?? {}) },
-    segments: Array.isArray(raw.segments) ? raw.segments : []
+    ...candidate,
+    source: { ...initial.source, ...candidate.source ?? {} },
+    draft: { ...initial.draft, ...candidate.draft ?? {} },
+    segments: Array.isArray(candidate.segments) ? candidate.segments : []
   };
 }
-
-export function parseTimestamp(value) {
+function parseTimestamp(value) {
   if (typeof value === "number") {
     return Number.isFinite(value) && value >= 0 ? value : null;
   }
-
   const input = String(value ?? "").trim();
   if (!input) {
     return null;
   }
-
   if (/^\d+(?:\.\d+)?$/.test(input)) {
-    const seconds = Number(input);
-    return Number.isFinite(seconds) ? seconds : null;
+    const seconds2 = Number(input);
+    return Number.isFinite(seconds2) ? seconds2 : null;
   }
-
   const parts = input.split(":");
   if (parts.length < 2 || parts.length > 3 || parts.some((part) => !/^\d+(?:\.\d+)?$/.test(part))) {
     return null;
   }
-
   const numbers = parts.map(Number);
   if (numbers.some((part) => !Number.isFinite(part) || part < 0)) {
     return null;
   }
-
   if (parts.length === 2) {
-    const [minutes, seconds] = numbers;
-    if (seconds >= 60) {
+    const [minutes2, seconds2] = numbers;
+    if (seconds2 === void 0 || minutes2 === void 0 || seconds2 >= 60) {
       return null;
     }
-    return minutes * 60 + seconds;
+    return minutes2 * 60 + seconds2;
   }
-
   const [hours, minutes, seconds] = numbers;
-  if (minutes >= 60 || seconds >= 60) {
+  if (hours === void 0 || minutes === void 0 || seconds === void 0 || minutes >= 60 || seconds >= 60) {
     return null;
   }
   return hours * 3600 + minutes * 60 + seconds;
 }
-
-export function formatTimestamp(value, { precision = 0 } = {}) {
+function formatTimestamp(value, { precision = 0 } = {}) {
   const parsed = parseTimestamp(value);
   if (parsed === null) {
     return "--:--:--";
   }
-
   const factor = 10 ** precision;
   const rounded = Math.round(parsed * factor) / factor;
   const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
+  const minutes = Math.floor(rounded % 3600 / 60);
   const seconds = rounded - hours * 3600 - minutes * 60;
   const wholeSeconds = Math.floor(seconds);
   const fraction = precision > 0 ? `.${String(Math.round((seconds - wholeSeconds) * factor)).padStart(precision, "0")}` : "";
-
   return [
     String(hours).padStart(2, "0"),
     String(minutes).padStart(2, "0"),
     `${String(wholeSeconds).padStart(2, "0")}${fraction}`
   ].join(":");
 }
-
-export function validateSegmentInput({ startText, endText, description }) {
+function validateSegmentInput({ startText, endText, description }) {
   const startSeconds = parseTimestamp(startText);
   const endSeconds = parseTimestamp(endText);
   const note = String(description ?? "").trim();
-
   if (startSeconds === null) {
-    return { ok: false, message: "시작 시각을 HH:MM:SS 또는 초 단위로 입력해 주세요." };
+    return { ok: false, message: "\uC2DC\uC791 \uC2DC\uAC01\uC744 HH:MM:SS \uB610\uB294 \uCD08 \uB2E8\uC704\uB85C \uC785\uB825\uD574 \uC8FC\uC138\uC694." };
   }
   if (endSeconds === null) {
-    return { ok: false, message: "끝 시각을 HH:MM:SS 또는 초 단위로 입력해 주세요." };
+    return { ok: false, message: "\uB05D \uC2DC\uAC01\uC744 HH:MM:SS \uB610\uB294 \uCD08 \uB2E8\uC704\uB85C \uC785\uB825\uD574 \uC8FC\uC138\uC694." };
   }
   if (endSeconds <= startSeconds) {
-    return { ok: false, message: "끝 시각은 시작 시각보다 뒤여야 합니다." };
+    return { ok: false, message: "\uB05D \uC2DC\uAC01\uC740 \uC2DC\uC791 \uC2DC\uAC01\uBCF4\uB2E4 \uB4A4\uC5EC\uC57C \uD569\uB2C8\uB2E4." };
   }
   return { ok: true, startSeconds, endSeconds, description: note };
 }
-
-export function createSegment({
+function createSegment({
   id = crypto.randomUUID(),
   startText,
   endText,
@@ -157,7 +137,6 @@ export function createSegment({
   if (!validation.ok) {
     throw new Error(validation.message);
   }
-
   return {
     id,
     startSeconds: validation.startSeconds,
@@ -169,58 +148,40 @@ export function createSegment({
     updatedAt: createdAt
   };
 }
-
-export function safeInline(value, fallback = "미확인") {
+function safeInline(value, fallback = "\uBBF8\uD655\uC778") {
   const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
   return normalized || fallback;
 }
-
-export function markdownQuote(value) {
+function markdownQuote(value) {
   const text = String(value ?? "").trim();
   if (!text) {
-    return "> (입력 없음)";
+    return "> (\uC785\uB825 \uC5C6\uC74C)";
   }
   return text.split(/\r?\n/).map((line) => `> ${line || " "}`).join("\n");
 }
-
-export function sanitizeFileName(value, fallback = "chzzk-kirinuki-edit-brief") {
-  const cleaned = String(value ?? "")
-    .normalize("NFKC")
-    .replace(/[\\/:*?"<>|\u0000-\u001F]/g, "-")
-    .replace(/\s+/g, " ")
-    .replace(/-+/g, "-")
-    .trim()
-    .replace(/^[.\s-]+|[.\s-]+$/g, "")
-    .slice(0, 80);
+function sanitizeFileName(value, fallback = "chzzk-kirinuki-edit-brief") {
+  const cleaned = String(value ?? "").normalize("NFKC").replace(/[\\/:*?"<>|\u0000-\u001F]/g, "-").replace(/\s+/g, " ").replace(/-+/g, "-").trim().replace(/^[.\s-]+|[.\s-]+$/g, "").slice(0, 80);
   return cleaned || fallback;
 }
-
-export function normalizeCreatorIdentity(value) {
-  return String(value ?? "")
-    .normalize("NFKC")
-    .toLocaleLowerCase("ko-KR")
-    .replace(/^@+/, "")
-    .replace(/\s+/g, " ")
-    .trim();
+function normalizeCreatorIdentity(value) {
+  return String(value ?? "").normalize("NFKC").toLocaleLowerCase("ko-KR").replace(/^@+/, "").replace(/\s+/g, " ").trim();
 }
-
-export function resolveCreatorPolicies({ streamerName = "", additionalNames = [] } = {}, policyIndex = {}) {
-  const names = [streamerName, ...(Array.isArray(additionalNames) ? additionalNames : [])]
-    .map(normalizeCreatorIdentity)
-    .filter(Boolean);
+function resolveCreatorPolicies({
+  streamerName = "",
+  additionalNames = []
+} = {}, policyIndex = {}) {
+  const names = [streamerName, ...Array.isArray(additionalNames) ? additionalNames : []].map(normalizeCreatorIdentity).filter(Boolean);
   const uniqueNames = [...new Set(names)];
   const policies = Array.isArray(policyIndex?.policies) ? policyIndex.policies : [];
-
   return policies.flatMap((policy) => {
     const artists = Array.isArray(policy.artists) ? policy.artists : [];
-    const aliases = [policy.group, ...(Array.isArray(policy.aliases) ? policy.aliases : [])].filter(Boolean);
+    const aliases = [policy.group, ...Array.isArray(policy.aliases) ? policy.aliases : []].filter(Boolean);
     const artistMatch = artists.find((artist) => uniqueNames.includes(normalizeCreatorIdentity(artist)));
     const groupMatch = aliases.find((alias) => uniqueNames.includes(normalizeCreatorIdentity(alias)));
     const matchedValue = artistMatch || groupMatch;
     if (!matchedValue) {
       return [];
     }
-
     return [{
       id: policy.id,
       group: policy.group,
@@ -236,58 +197,59 @@ export function resolveCreatorPolicies({ streamerName = "", additionalNames = []
     }];
   });
 }
-
-export function compileCreatorPolicyMarkdown({
+function compileCreatorPolicyMarkdown({
   basePolicyMarkdown = "",
   resolvedPolicies = []
 } = {}) {
   const base = String(basePolicyMarkdown ?? "").trim();
   const matches = Array.isArray(resolvedPolicies) ? resolvedPolicies : [];
-  const resolutionSection = matches.length === 0
-    ? [
-      "# 현재 작업 대상 자동 정책 매칭",
-      "",
-      "- 결과: `NO_REGISTERED_POLICY_MATCH`",
-      "- 방송인 이름과 등록 인덱스가 정확히 일치하지 않았다. 기본 규정을 적용하고 공식 정책을 별도로 확인한다."
-    ].join("\n")
-    : [
-      "# 현재 작업 대상 자동 정책 매칭",
-      "",
-      "> 이 섹션은 정책 본문을 복제하지 않고 방송인과 공식 정책 원문의 위치만 연결한다. 작업 시점에 공식 URL을 다시 열어 최신 본문을 확인해야 한다.",
-      "",
-      ...matches.flatMap((policy, index) => {
-        return [
-          `## 매칭 ${index + 1}: ${safeInline(policy.matchedBy?.value)} → ${safeInline(policy.group)}`,
-          "",
-          `- Match type: \`EXACT_${safeInline(policy.matchedBy?.type).toUpperCase()}\``,
-          `- Policy ID: \`${safeInline(policy.id)}\``,
-          `- Official policy source: ${safeInline(policy.sourceUrl)}`,
-          `- Last access status: \`${safeInline(policy.status)}\``,
-          `- Last checked at: ${safeInline(policy.checkedAt)}`,
-          "- Runtime rule: 작업을 시작할 때 공식 링크를 다시 열고 최신 원문을 기준으로 핵심 조항을 추출한다.",
-          "- Redistribution: `LINK_ONLY` — 정책 본문이나 과거 확인본은 Extension 및 작업폴더에 복제하지 않는다."
-        ];
-      })
-    ].join("\n");
-
+  const resolutionSection = matches.length === 0 ? [
+    "# \uD604\uC7AC \uC791\uC5C5 \uB300\uC0C1 \uC790\uB3D9 \uC815\uCC45 \uB9E4\uCE6D",
+    "",
+    "- \uACB0\uACFC: `NO_REGISTERED_POLICY_MATCH`",
+    "- \uBC29\uC1A1\uC778 \uC774\uB984\uACFC \uB4F1\uB85D \uC778\uB371\uC2A4\uAC00 \uC815\uD655\uD788 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC558\uB2E4. \uAE30\uBCF8 \uADDC\uC815\uC744 \uC801\uC6A9\uD558\uACE0 \uACF5\uC2DD \uC815\uCC45\uC744 \uBCC4\uB3C4\uB85C \uD655\uC778\uD55C\uB2E4."
+  ].join("\n") : [
+    "# \uD604\uC7AC \uC791\uC5C5 \uB300\uC0C1 \uC790\uB3D9 \uC815\uCC45 \uB9E4\uCE6D",
+    "",
+    "> \uC774 \uC139\uC158\uC740 \uC815\uCC45 \uBCF8\uBB38\uC744 \uBCF5\uC81C\uD558\uC9C0 \uC54A\uACE0 \uBC29\uC1A1\uC778\uACFC \uACF5\uC2DD \uC815\uCC45 \uC6D0\uBB38\uC758 \uC704\uCE58\uB9CC \uC5F0\uACB0\uD55C\uB2E4. \uC791\uC5C5 \uC2DC\uC810\uC5D0 \uACF5\uC2DD URL\uC744 \uB2E4\uC2DC \uC5F4\uC5B4 \uCD5C\uC2E0 \uBCF8\uBB38\uC744 \uD655\uC778\uD574\uC57C \uD55C\uB2E4.",
+    "",
+    ...matches.flatMap((policy, index) => {
+      return [
+        `## \uB9E4\uCE6D ${index + 1}: ${safeInline(policy.matchedBy?.value)} \u2192 ${safeInline(policy.group)}`,
+        "",
+        `- Match type: \`EXACT_${safeInline(policy.matchedBy?.type).toUpperCase()}\``,
+        `- Policy ID: \`${safeInline(policy.id)}\``,
+        `- Official policy source: ${safeInline(policy.sourceUrl)}`,
+        `- Last access status: \`${safeInline(policy.status)}\``,
+        `- Last checked at: ${safeInline(policy.checkedAt)}`,
+        "- Runtime rule: \uC791\uC5C5\uC744 \uC2DC\uC791\uD560 \uB54C \uACF5\uC2DD \uB9C1\uD06C\uB97C \uB2E4\uC2DC \uC5F4\uACE0 \uCD5C\uC2E0 \uC6D0\uBB38\uC744 \uAE30\uC900\uC73C\uB85C \uD575\uC2EC \uC870\uD56D\uC744 \uCD94\uCD9C\uD55C\uB2E4.",
+        "- Redistribution: `LINK_ONLY` \u2014 \uC815\uCC45 \uBCF8\uBB38\uC774\uB098 \uACFC\uAC70 \uD655\uC778\uBCF8\uC740 Extension \uBC0F \uC791\uC5C5\uD3F4\uB354\uC5D0 \uBCF5\uC81C\uD558\uC9C0 \uC54A\uB294\uB2E4."
+      ];
+    })
+  ].join("\n");
   return [resolutionSection, base].filter(Boolean).join("\n\n---\n\n");
 }
-
 const captureDetails = (capture) => {
   if (!capture || typeof capture !== "object") {
-    return "직접 입력";
+    return "\uC9C1\uC811 \uC785\uB825";
   }
-  const items = [safeInline(capture.method, "직접 입력")];
+  const items = [safeInline(capture.method, "\uC9C1\uC811 \uC785\uB825")];
   if (capture.observedAt) {
-    items.push(`관측 ${capture.observedAt}`);
+    items.push(`\uAD00\uCE21 ${capture.observedAt}`);
   }
   if (Number.isFinite(capture.liveEdgeOffsetSeconds)) {
-    items.push(`라이브 엣지 대비 약 ${capture.liveEdgeOffsetSeconds.toFixed(1)}초 지연`);
+    items.push(`\uB77C\uC774\uBE0C \uC5E3\uC9C0 \uB300\uBE44 \uC57D ${capture.liveEdgeOffsetSeconds.toFixed(1)}\uCD08 \uC9C0\uC5F0`);
   }
-  return items.join(" · ");
+  return items.join(" \xB7 ");
 };
-
-const buildMachineMetadata = ({ projectName, source, globalInstruction, segments, resolvedCreatorPolicies = [], generatedAt }) => ({
+const buildMachineMetadata = ({
+  projectName,
+  source,
+  globalInstruction,
+  segments,
+  resolvedCreatorPolicies = [],
+  generatedAt
+}) => ({
   schema: SCHEMA_VERSION,
   generatedAt,
   projectName: projectName || null,
@@ -333,8 +295,7 @@ const buildMachineMetadata = ({ projectName, source, globalInstruction, segments
     endCapture: segment.endCapture ?? null
   }))
 });
-
-export function generateEditPrompt({
+function generateEditPrompt({
   projectName = "",
   source = {},
   globalInstruction = "",
@@ -345,9 +306,8 @@ export function generateEditPrompt({
   generatedAt = nowIso()
 }) {
   if (!Array.isArray(segments) || segments.length === 0) {
-    throw new Error("프롬프트를 만들려면 구간을 하나 이상 저장해야 합니다.");
+    throw new Error("\uD504\uB86C\uD504\uD2B8\uB97C \uB9CC\uB4E4\uB824\uBA74 \uAD6C\uAC04\uC744 \uD558\uB098 \uC774\uC0C1 \uC800\uC7A5\uD574\uC57C \uD569\uB2C8\uB2E4.");
   }
-
   const orderedSegments = [...segments];
   const metadata = buildMachineMetadata({
     projectName,
@@ -360,116 +320,109 @@ export function generateEditPrompt({
   const segmentSections = orderedSegments.map((segment, index) => {
     const duration = Math.max(0, segment.endSeconds - segment.startSeconds);
     return [
-      `### 구간 ${index + 1}`,
+      `### \uAD6C\uAC04 ${index + 1}`,
       "",
-      `- 확정 시작 시각: \`${formatTimestamp(segment.startSeconds, { precision: 3 })}\``,
-      `- 확정 종료 시각: \`${formatTimestamp(segment.endSeconds, { precision: 3 })}\``,
-      `- 선택 범위 길이: 약 ${duration.toFixed(3)}초`,
-      "- 경계 권한: `USER` — 자동으로 확장·축소·병합하지 않음",
-      `- 시작값 출처: ${captureDetails(segment.startCapture)}`,
-      `- 끝값 출처: ${captureDetails(segment.endCapture)}`,
-      "- 사용자 메모:",
+      `- \uD655\uC815 \uC2DC\uC791 \uC2DC\uAC01: \`${formatTimestamp(segment.startSeconds, { precision: 3 })}\``,
+      `- \uD655\uC815 \uC885\uB8CC \uC2DC\uAC01: \`${formatTimestamp(segment.endSeconds, { precision: 3 })}\``,
+      `- \uC120\uD0DD \uBC94\uC704 \uAE38\uC774: \uC57D ${duration.toFixed(3)}\uCD08`,
+      "- \uACBD\uACC4 \uAD8C\uD55C: `USER` \u2014 \uC790\uB3D9\uC73C\uB85C \uD655\uC7A5\xB7\uCD95\uC18C\xB7\uBCD1\uD569\uD558\uC9C0 \uC54A\uC74C",
+      `- \uC2DC\uC791\uAC12 \uCD9C\uCC98: ${captureDetails(segment.startCapture)}`,
+      `- \uB05D\uAC12 \uCD9C\uCC98: ${captureDetails(segment.endCapture)}`,
+      "- \uC0AC\uC6A9\uC790 \uBA54\uBAA8:",
       "",
       markdownQuote(segment.description)
     ].join("\n");
   }).join("\n\n");
-
-  const editingGuide = String(editingGuideMarkdown ?? "").trim() || "(내장 편집 지침을 불러오지 못했습니다. 사용자에게 확인한 뒤 진행하세요.)";
-  const creatorPolicy = String(creatorPolicyMarkdown ?? "").trim() || "(방송인별 정책이 등록되지 않았습니다. 공개 또는 게시 전에 반드시 권리와 규정을 확인하세요.)";
+  const editingGuide = String(editingGuideMarkdown ?? "").trim() || "(\uB0B4\uC7A5 \uD3B8\uC9D1 \uC9C0\uCE68\uC744 \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uD655\uC778\uD55C \uB4A4 \uC9C4\uD589\uD558\uC138\uC694.)";
+  const creatorPolicy = String(creatorPolicyMarkdown ?? "").trim() || "(\uBC29\uC1A1\uC778\uBCC4 \uC815\uCC45\uC774 \uB4F1\uB85D\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uACF5\uAC1C \uB610\uB294 \uAC8C\uC2DC \uC804\uC5D0 \uBC18\uB4DC\uC2DC \uAD8C\uB9AC\uC640 \uADDC\uC815\uC744 \uD655\uC778\uD558\uC138\uC694.)";
   const sourcePlatform = safeInline(source.platform, "CHZZK");
   const sourcePlatformUpper = sourcePlatform.toUpperCase();
-  const sourceDescription = sourcePlatformUpper === "YOUTUBE"
-    ? "YouTube VOD"
-    : "치지직 방송·다시보기";
-  const platformSpecificMetadata = sourcePlatformUpper === "CHZZK"
-    ? [
-      `- 방송 시작 시각(CHZZK): ${safeInline(source.broadcastStartedAt)}`,
-      `- 치지직 클립 설정: ${typeof source.clipActive === "boolean" ? (source.clipActive ? "허용" : "미허용") : "미확인"}`
-    ].join("\n")
-    : `- 게시·방송 시작 시각: ${safeInline(source.broadcastStartedAt)}`;
+  const sourceDescription = sourcePlatformUpper === "YOUTUBE" ? "YouTube VOD" : "\uCE58\uC9C0\uC9C1 \uBC29\uC1A1\xB7\uB2E4\uC2DC\uBCF4\uAE30";
+  const platformSpecificMetadata = sourcePlatformUpper === "CHZZK" ? [
+    `- \uBC29\uC1A1 \uC2DC\uC791 \uC2DC\uAC01(CHZZK): ${safeInline(source.broadcastStartedAt)}`,
+    `- \uCE58\uC9C0\uC9C1 \uD074\uB9BD \uC124\uC815: ${typeof source.clipActive === "boolean" ? source.clipActive ? "\uD5C8\uC6A9" : "\uBBF8\uD5C8\uC6A9" : "\uBBF8\uD655\uC778"}`
+  ].join("\n") : `- \uAC8C\uC2DC\xB7\uBC29\uC1A1 \uC2DC\uC791 \uC2DC\uAC01: ${safeInline(source.broadcastStartedAt)}`;
+  return `# Codex \uC601\uC0C1 \uC804\uCC98\uB9AC \uC791\uC5C5 \uC694\uCCAD\uC11C
 
-  return `# Codex 영상 전처리 작업 요청서
+> \uC2A4\uD0A4\uB9C8: \`${SCHEMA_VERSION}\`
+> \uC0DD\uC131 \uC2DC\uAC01: ${generatedAt}
+> \uC774 \uBB38\uC11C\uB294 \uD0A4\uB9AC\uB204\uD0A4 \uC2A4\uD29C\uB514\uC624 Extension\uC774 \uB3D9\uC77C\uD55C \uADDC\uACA9\uC73C\uB85C \uC0DD\uC131\uD588\uC2B5\uB2C8\uB2E4.
 
-> 스키마: \`${SCHEMA_VERSION}\`
-> 생성 시각: ${generatedAt}
-> 이 문서는 키리누키 스튜디오 Extension이 동일한 규격으로 생성했습니다.
+## 1. \uC2E4\uD589 \uBAA9\uD45C
 
-## 1. 실행 목표
+\uD568\uAED8 \uC81C\uACF5\uB41C ${sourceDescription} \uB85C\uCEEC \uC6D0\uBCF8 \uD30C\uC77C\uC744 \uC2E4\uC81C\uB85C \uBD84\uC11D\uD558\uACE0 \uD3B8\uC9D1\uD558\uC5EC, \uC544\uB798 \uC0AC\uC6A9\uC790\uAC00 \uD655\uC815\uD55C \uAD6C\uAC04\uB4E4\uC744 \uADF8\uB300\uB85C \uC5F0\uACB0\uD55C \uD55C\uAD6D\uC5B4 \uC790\uB9C9 \uD3EC\uD568 \uAC80\uC218\uC6A9 \uC601\uC0C1\uC744 \uC0DD\uC131\uD558\uC138\uC694. \uC124\uBA85\uB9CC \uB2F5\uD558\uC9C0 \uB9D0\uACE0, \uAC00\uB2A5\uD55C \uB85C\uCEEC \uBBF8\uB514\uC5B4 \uB3C4\uAD6C\uB97C \uC0AC\uC6A9\uD574 \uACB0\uACFC \uD30C\uC77C\uC744 \uB9CC\uB4DC\uC138\uC694.
 
-함께 제공된 ${sourceDescription} 로컬 원본 파일을 실제로 분석하고 편집하여, 아래 사용자가 확정한 구간들을 그대로 연결한 한국어 자막 포함 검수용 영상을 생성하세요. 설명만 답하지 말고, 가능한 로컬 미디어 도구를 사용해 결과 파일을 만드세요.
+\uAC01 \uC2DC\uC791\xB7\uC885\uB8CC \uD0C0\uC784\uC2A4\uD0EC\uD504\uB294 \uC0AC\uC6A9\uC790\uAC00 \uC120\uD0DD\uD55C **\uAD8C\uC704 \uC788\uB294 \uCD5C\uC885 \uCEF7 \uACBD\uACC4**\uC785\uB2C8\uB2E4. AI\uB098 \uD6C4\uC18D \uC5D0\uC774\uC804\uD2B8\uB294 \uC774\uB97C \uC790\uB3D9\uC73C\uB85C \uD655\uC7A5\xB7\uCD95\uC18C\xB7\uBCD1\uD569\xB7\uC7AC\uC815\uB82C\uD558\uC9C0 \uB9C8\uC138\uC694. \uC74C\uC131 \uC778\uC2DD\uC5D0 \uBB38\uB9E5\uC774 \uD544\uC694\uD558\uBA74 \uACBD\uACC4 \uBC16 \uB370\uC774\uD130\uB97C \uC784\uC2DC \uBD84\uC11D\uD560 \uC218 \uC788\uC9C0\uB9CC \uACB0\uACFC \uC601\uC0C1\uACFC \uC790\uB9C9 cue\uB294 \uBC18\uB4DC\uC2DC \uC120\uD0DD \uBC94\uC704 \uC548\uC73C\uB85C \uC81C\uD55C\uD558\uC138\uC694. \uACBD\uACC4\uAC00 \uC5B4\uC0C9\uD574 \uBCF4\uC5EC\uB3C4 \uC870\uC6A9\uD788 \uACE0\uCE58\uC9C0 \uB9D0\uACE0 \uAC80\uC218 \uBA54\uBAA8\uC5D0 \uC81C\uC548\uB9CC \uB0A8\uAE30\uC138\uC694.
 
-각 시작·종료 타임스탬프는 사용자가 선택한 **권위 있는 최종 컷 경계**입니다. AI나 후속 에이전트는 이를 자동으로 확장·축소·병합·재정렬하지 마세요. 음성 인식에 문맥이 필요하면 경계 밖 데이터를 임시 분석할 수 있지만 결과 영상과 자막 cue는 반드시 선택 범위 안으로 제한하세요. 경계가 어색해 보여도 조용히 고치지 말고 검수 메모에 제안만 남기세요.
+**\uD3B8\uC9D1\uC744 \uC2DC\uC791\uD558\uAE30 \uC804\uC5D0 \uC815\uCC45 \uD504\uB9AC\uD50C\uB77C\uC774\uD2B8\uB97C \uBA3C\uC800 \uC218\uD589\uD558\uC138\uC694.** \uBC29\uC1A1\uC778\uBCC4 \uCD5C\uC2E0 \uACF5\uC2DD \uC815\uCC45\uC740 Extension \uAE30\uBCF8 \uADDC\uC815\uBCF4\uB2E4 \uC6B0\uC120\uD569\uB2C8\uB2E4. \uB2E4\uB9CC \uC218\uC775 \uAD00\uB828 \uC870\uD56D\uACFC \uC74C\uC6D0\uC740 \uC815\uCC45\uC774 \uD5C8\uC6A9\uD558\uB294 \uAC83\uCC98\uB7FC \uBCF4\uC5EC\uB3C4 \uC0AC\uB78C\uC774 \uBC18\uB4DC\uC2DC \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD558\uBA70, \uC81C3\uC790\uAC00 \uB4F1\uC7A5\uD558\uBA74 \uADF8 \uC81C3\uC790\uC758 \uC815\uCC45\uC744 \uBAA8\uB450 \uAD50\uCC28\uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4. \uB9C1\uD06C \uBCF8\uBB38\uC744 \uC77D\uC9C0 \uBABB\uD55C \uACBD\uC6B0 \uC870\uD56D\uC744 \uCD94\uC815\uD558\uC9C0 \uB9D0\uACE0 **SOURCE_UNREADABLE**\uB85C \uAE30\uB85D\uD558\uC138\uC694.
 
-**편집을 시작하기 전에 정책 프리플라이트를 먼저 수행하세요.** 방송인별 최신 공식 정책은 Extension 기본 규정보다 우선합니다. 다만 수익 관련 조항과 음원은 정책이 허용하는 것처럼 보여도 사람이 반드시 다시 확인해야 하며, 제3자가 등장하면 그 제3자의 정책을 모두 교차확인해야 합니다. 링크 본문을 읽지 못한 경우 조항을 추정하지 말고 **SOURCE_UNREADABLE**로 기록하세요.
+## 2. \uD504\uB85C\uC81D\uD2B8\uC640 \uC6D0\uBCF8
 
-## 2. 프로젝트와 원본
-
-- 프로젝트명: ${safeInline(projectName, "미지정")}
-- 플랫폼: ${sourcePlatform}
-- 방송인/채널명: ${safeInline(source.streamerName)}
-- 방송 제목: ${safeInline(source.broadcastTitle)}
+- \uD504\uB85C\uC81D\uD2B8\uBA85: ${safeInline(projectName, "\uBBF8\uC9C0\uC815")}
+- \uD50C\uB7AB\uD3FC: ${sourcePlatform}
+- \uBC29\uC1A1\uC778/\uCC44\uB110\uBA85: ${safeInline(source.streamerName)}
+- \uBC29\uC1A1 \uC81C\uBAA9: ${safeInline(source.broadcastTitle)}
 ${platformSpecificMetadata}
-- 카테고리: ${safeInline(source.category)}
-- 콘텐츠 유형: ${safeInline(source.contentType)}
-- 채널 ID: ${safeInline(source.channelId)}
-- 콘텐츠 ID: ${safeInline(source.contentId)}
-- 원본 URL: ${safeInline(source.canonicalUrl || source.url)}
-- Extension 관측 시각: ${safeInline(source.observedAt)}
+- \uCE74\uD14C\uACE0\uB9AC: ${safeInline(source.category)}
+- \uCF58\uD150\uCE20 \uC720\uD615: ${safeInline(source.contentType)}
+- \uCC44\uB110 ID: ${safeInline(source.channelId)}
+- \uCF58\uD150\uCE20 ID: ${safeInline(source.contentId)}
+- \uC6D0\uBCF8 URL: ${safeInline(source.canonicalUrl || source.url)}
+- Extension \uAD00\uCE21 \uC2DC\uAC01: ${safeInline(source.observedAt)}
 
-## 3. 방송 전체에 적용할 사용자 지시
+## 3. \uBC29\uC1A1 \uC804\uCCB4\uC5D0 \uC801\uC6A9\uD560 \uC0AC\uC6A9\uC790 \uC9C0\uC2DC
 
-${markdownQuote(globalInstruction || "별도 지시 없음. 아래 구간별 편집 의도와 내장 지침을 우선 적용할 것.")}
+${markdownQuote(globalInstruction || "\uBCC4\uB3C4 \uC9C0\uC2DC \uC5C6\uC74C. \uC544\uB798 \uAD6C\uAC04\uBCC4 \uD3B8\uC9D1 \uC758\uB3C4\uC640 \uB0B4\uC7A5 \uC9C0\uCE68\uC744 \uC6B0\uC120 \uC801\uC6A9\uD560 \uAC83.")}
 
-## 4. 사용자가 확정한 컷 구간
+## 4. \uC0AC\uC6A9\uC790\uAC00 \uD655\uC815\uD55C \uCEF7 \uAD6C\uAC04
 
 ${segmentSections}
 
-## 5. 편집 수행 순서
+## 5. \uD3B8\uC9D1 \uC218\uD589 \uC21C\uC11C
 
-1. 이 문서와 방송인 정책 자료의 모든 링크·근거를 점검하고 policy-check.md를 먼저 만드세요. 접근할 수 없는 링크는 검증된 것으로 취급하지 마세요.
-2. 영상에 등장하는 방송인, 게스트, 합방 참여자, 음성 통화 참여자와 식별 가능한 제3자를 목록화하고 각자의 정책을 교차확인하세요.
-3. 수익 관련 상태와 음원 상태는 반드시 PENDING으로 시작하고, 사람의 명시적 확인 없이는 승인하지 마세요.
-4. 입력 영상의 실제 재생시간, 프레임레이트, 오디오 트랙을 확인하세요.
-5. 각 사용자 선택 범위의 음성을 전사하세요. 인식용 문맥을 추가로 읽더라도 선택 범위 밖의 음성과 영상은 결과에 포함하지 마세요.
-6. 시작·종료 시각을 입력값 그대로 보존하세요. 경계 변경이 더 좋아 보여도 자동 반영하지 말고 \`review-notes.md\`에 선택적 제안으로만 남기세요.
-7. 겹치거나 같은 사건에 속한 선택도 자동 병합하거나 삭제하지 마세요. 각 사용자 선택을 정확히 한 번씩 유지하세요.
-8. 별도 지시가 없으면 사용자가 저장한 순서대로 연결하세요.
-9. 원문의 의미와 말투를 보존한 한국어 자막 초안을 만들고, 읽기 좋은 호흡으로 나누되 모든 cue를 해당 선택 범위 안으로 제한하세요. 들리지 않는 내용을 추측하지 마세요.
-10. 정책상 비공개 검수본 제작이 가능한 범위에서 영상을 렌더링하고 아래 필수 산출물을 함께 남기세요.
+1. \uC774 \uBB38\uC11C\uC640 \uBC29\uC1A1\uC778 \uC815\uCC45 \uC790\uB8CC\uC758 \uBAA8\uB4E0 \uB9C1\uD06C\xB7\uADFC\uAC70\uB97C \uC810\uAC80\uD558\uACE0 policy-check.md\uB97C \uBA3C\uC800 \uB9CC\uB4DC\uC138\uC694. \uC811\uADFC\uD560 \uC218 \uC5C6\uB294 \uB9C1\uD06C\uB294 \uAC80\uC99D\uB41C \uAC83\uC73C\uB85C \uCDE8\uAE09\uD558\uC9C0 \uB9C8\uC138\uC694.
+2. \uC601\uC0C1\uC5D0 \uB4F1\uC7A5\uD558\uB294 \uBC29\uC1A1\uC778, \uAC8C\uC2A4\uD2B8, \uD569\uBC29 \uCC38\uC5EC\uC790, \uC74C\uC131 \uD1B5\uD654 \uCC38\uC5EC\uC790\uC640 \uC2DD\uBCC4 \uAC00\uB2A5\uD55C \uC81C3\uC790\uB97C \uBAA9\uB85D\uD654\uD558\uACE0 \uAC01\uC790\uC758 \uC815\uCC45\uC744 \uAD50\uCC28\uD655\uC778\uD558\uC138\uC694.
+3. \uC218\uC775 \uAD00\uB828 \uC0C1\uD0DC\uC640 \uC74C\uC6D0 \uC0C1\uD0DC\uB294 \uBC18\uB4DC\uC2DC PENDING\uC73C\uB85C \uC2DC\uC791\uD558\uACE0, \uC0AC\uB78C\uC758 \uBA85\uC2DC\uC801 \uD655\uC778 \uC5C6\uC774\uB294 \uC2B9\uC778\uD558\uC9C0 \uB9C8\uC138\uC694.
+4. \uC785\uB825 \uC601\uC0C1\uC758 \uC2E4\uC81C \uC7AC\uC0DD\uC2DC\uAC04, \uD504\uB808\uC784\uB808\uC774\uD2B8, \uC624\uB514\uC624 \uD2B8\uB799\uC744 \uD655\uC778\uD558\uC138\uC694.
+5. \uAC01 \uC0AC\uC6A9\uC790 \uC120\uD0DD \uBC94\uC704\uC758 \uC74C\uC131\uC744 \uC804\uC0AC\uD558\uC138\uC694. \uC778\uC2DD\uC6A9 \uBB38\uB9E5\uC744 \uCD94\uAC00\uB85C \uC77D\uB354\uB77C\uB3C4 \uC120\uD0DD \uBC94\uC704 \uBC16\uC758 \uC74C\uC131\uACFC \uC601\uC0C1\uC740 \uACB0\uACFC\uC5D0 \uD3EC\uD568\uD558\uC9C0 \uB9C8\uC138\uC694.
+6. \uC2DC\uC791\xB7\uC885\uB8CC \uC2DC\uAC01\uC744 \uC785\uB825\uAC12 \uADF8\uB300\uB85C \uBCF4\uC874\uD558\uC138\uC694. \uACBD\uACC4 \uBCC0\uACBD\uC774 \uB354 \uC88B\uC544 \uBCF4\uC5EC\uB3C4 \uC790\uB3D9 \uBC18\uC601\uD558\uC9C0 \uB9D0\uACE0 \`review-notes.md\`\uC5D0 \uC120\uD0DD\uC801 \uC81C\uC548\uC73C\uB85C\uB9CC \uB0A8\uAE30\uC138\uC694.
+7. \uACB9\uCE58\uAC70\uB098 \uAC19\uC740 \uC0AC\uAC74\uC5D0 \uC18D\uD55C \uC120\uD0DD\uB3C4 \uC790\uB3D9 \uBCD1\uD569\uD558\uAC70\uB098 \uC0AD\uC81C\uD558\uC9C0 \uB9C8\uC138\uC694. \uAC01 \uC0AC\uC6A9\uC790 \uC120\uD0DD\uC744 \uC815\uD655\uD788 \uD55C \uBC88\uC529 \uC720\uC9C0\uD558\uC138\uC694.
+8. \uBCC4\uB3C4 \uC9C0\uC2DC\uAC00 \uC5C6\uC73C\uBA74 \uC0AC\uC6A9\uC790\uAC00 \uC800\uC7A5\uD55C \uC21C\uC11C\uB300\uB85C \uC5F0\uACB0\uD558\uC138\uC694.
+9. \uC6D0\uBB38\uC758 \uC758\uBBF8\uC640 \uB9D0\uD22C\uB97C \uBCF4\uC874\uD55C \uD55C\uAD6D\uC5B4 \uC790\uB9C9 \uCD08\uC548\uC744 \uB9CC\uB4E4\uACE0, \uC77D\uAE30 \uC88B\uC740 \uD638\uD761\uC73C\uB85C \uB098\uB204\uB418 \uBAA8\uB4E0 cue\uB97C \uD574\uB2F9 \uC120\uD0DD \uBC94\uC704 \uC548\uC73C\uB85C \uC81C\uD55C\uD558\uC138\uC694. \uB4E4\uB9AC\uC9C0 \uC54A\uB294 \uB0B4\uC6A9\uC744 \uCD94\uCE21\uD558\uC9C0 \uB9C8\uC138\uC694.
+10. \uC815\uCC45\uC0C1 \uBE44\uACF5\uAC1C \uAC80\uC218\uBCF8 \uC81C\uC791\uC774 \uAC00\uB2A5\uD55C \uBC94\uC704\uC5D0\uC11C \uC601\uC0C1\uC744 \uB80C\uB354\uB9C1\uD558\uACE0 \uC544\uB798 \uD544\uC218 \uC0B0\uCD9C\uBB3C\uC744 \uD568\uAED8 \uB0A8\uAE30\uC138\uC694.
 
-## 6. 필수 산출물
+## 6. \uD544\uC218 \uC0B0\uCD9C\uBB3C
 
-- **policy-check.md**: 출연자·제3자·음원·수익·플랫폼별 정책 근거와 사람 검수 게이트
-- \`edited-preview.mp4\`: 선택 구간을 연결하고 한국어 자막을 입힌 검수용 영상
-- \`edit-plan.json\`: 사용자가 확정한 원본 기준 컷 시작/끝, 순서, 권한과 처리 상태
-- \`subtitles.ko.srt\`: 최종 영상 기준 한국어 자막
-- \`review-notes.md\`: 불확실한 발화, 선택적 경계 개선 제안, 사람이 확인할 항목
+- **policy-check.md**: \uCD9C\uC5F0\uC790\xB7\uC81C3\uC790\xB7\uC74C\uC6D0\xB7\uC218\uC775\xB7\uD50C\uB7AB\uD3FC\uBCC4 \uC815\uCC45 \uADFC\uAC70\uC640 \uC0AC\uB78C \uAC80\uC218 \uAC8C\uC774\uD2B8
+- \`edited-preview.mp4\`: \uC120\uD0DD \uAD6C\uAC04\uC744 \uC5F0\uACB0\uD558\uACE0 \uD55C\uAD6D\uC5B4 \uC790\uB9C9\uC744 \uC785\uD78C \uAC80\uC218\uC6A9 \uC601\uC0C1
+- \`edit-plan.json\`: \uC0AC\uC6A9\uC790\uAC00 \uD655\uC815\uD55C \uC6D0\uBCF8 \uAE30\uC900 \uCEF7 \uC2DC\uC791/\uB05D, \uC21C\uC11C, \uAD8C\uD55C\uACFC \uCC98\uB9AC \uC0C1\uD0DC
+- \`subtitles.ko.srt\`: \uCD5C\uC885 \uC601\uC0C1 \uAE30\uC900 \uD55C\uAD6D\uC5B4 \uC790\uB9C9
+- \`review-notes.md\`: \uBD88\uD655\uC2E4\uD55C \uBC1C\uD654, \uC120\uD0DD\uC801 \uACBD\uACC4 \uAC1C\uC120 \uC81C\uC548, \uC0AC\uB78C\uC774 \uD655\uC778\uD560 \uD56D\uBAA9
 
-자동으로 업로드하거나 게시하지 마세요. 결과는 반드시 사람이 검수할 수 있는 상태로 끝내세요.
+\uC790\uB3D9\uC73C\uB85C \uC5C5\uB85C\uB4DC\uD558\uAC70\uB098 \uAC8C\uC2DC\uD558\uC9C0 \uB9C8\uC138\uC694. \uACB0\uACFC\uB294 \uBC18\uB4DC\uC2DC \uC0AC\uB78C\uC774 \uAC80\uC218\uD560 \uC218 \uC788\uB294 \uC0C1\uD0DC\uB85C \uB05D\uB0B4\uC138\uC694.
 
-## 7. Extension 내장 편집 지침
+## 7. Extension \uB0B4\uC7A5 \uD3B8\uC9D1 \uC9C0\uCE68
 
 ${editingGuide}
 
-## 8. 방송인·아티스트 정책 자료와 기본 규정
+## 8. \uBC29\uC1A1\uC778\xB7\uC544\uD2F0\uC2A4\uD2B8 \uC815\uCC45 \uC790\uB8CC\uC640 \uAE30\uBCF8 \uADDC\uC815
 
 ${creatorPolicy}
 
-## 9. 기계 판독용 원본 메타데이터
+## 9. \uAE30\uACC4 \uD310\uB3C5\uC6A9 \uC6D0\uBCF8 \uBA54\uD0C0\uB370\uC774\uD130
 
-아래 JSON은 사용자 입력과 확정 컷의 원본값입니다. 자연어 섹션과 충돌할 경우 \`authority: "USER"\`인 수치 값을 보존하고 \`review-notes.md\`에 충돌을 기록하세요.
+\uC544\uB798 JSON\uC740 \uC0AC\uC6A9\uC790 \uC785\uB825\uACFC \uD655\uC815 \uCEF7\uC758 \uC6D0\uBCF8\uAC12\uC785\uB2C8\uB2E4. \uC790\uC5F0\uC5B4 \uC139\uC158\uACFC \uCDA9\uB3CC\uD560 \uACBD\uC6B0 \`authority: "USER"\`\uC778 \uC218\uCE58 \uAC12\uC744 \uBCF4\uC874\uD558\uACE0 \`review-notes.md\`\uC5D0 \uCDA9\uB3CC\uC744 \uAE30\uB85D\uD558\uC138\uC694.
 
 \`\`\`json
 ${JSON.stringify(metadata, null, 2)}
 \`\`\`
 
-## 10. 완료 조건
+## 10. \uC644\uB8CC \uC870\uAC74
 
-필수 산출물 다섯 개가 실제로 생성되고, 각 사용자 확정 구간이 원래 경계와 순서대로 정확히 한 번 포함되었으며, 자막과 영상 싱크를 확인한 뒤 작업을 완료로 보고하세요. 수익·음원 사람 검수가 PENDING이거나 제3자 정책이 미확인이라면 비공개 검수본까지만 완료하고 공개 가능하다고 표현하지 마세요.
+\uD544\uC218 \uC0B0\uCD9C\uBB3C \uB2E4\uC12F \uAC1C\uAC00 \uC2E4\uC81C\uB85C \uC0DD\uC131\uB418\uACE0, \uAC01 \uC0AC\uC6A9\uC790 \uD655\uC815 \uAD6C\uAC04\uC774 \uC6D0\uB798 \uACBD\uACC4\uC640 \uC21C\uC11C\uB300\uB85C \uC815\uD655\uD788 \uD55C \uBC88 \uD3EC\uD568\uB418\uC5C8\uC73C\uBA70, \uC790\uB9C9\uACFC \uC601\uC0C1 \uC2F1\uD06C\uB97C \uD655\uC778\uD55C \uB4A4 \uC791\uC5C5\uC744 \uC644\uB8CC\uB85C \uBCF4\uACE0\uD558\uC138\uC694. \uC218\uC775\xB7\uC74C\uC6D0 \uC0AC\uB78C \uAC80\uC218\uAC00 PENDING\uC774\uAC70\uB098 \uC81C3\uC790 \uC815\uCC45\uC774 \uBBF8\uD655\uC778\uC774\uB77C\uBA74 \uBE44\uACF5\uAC1C \uAC80\uC218\uBCF8\uAE4C\uC9C0\uB9CC \uC644\uB8CC\uD558\uACE0 \uACF5\uAC1C \uAC00\uB2A5\uD558\uB2E4\uACE0 \uD45C\uD604\uD558\uC9C0 \uB9C8\uC138\uC694.
 `;
 }
-
-export function buildCodexJobManifest({
+function buildCodexJobManifest({
   projectName = "",
   source = {},
   globalInstruction = "",
@@ -478,9 +431,8 @@ export function buildCodexJobManifest({
   generatedAt = nowIso()
 } = {}) {
   if (!Array.isArray(segments) || segments.length === 0) {
-    throw new Error("Codex 작업 폴더를 만들려면 구간을 하나 이상 저장해야 합니다.");
+    throw new Error("Codex \uC791\uC5C5 \uD3F4\uB354\uB97C \uB9CC\uB4E4\uB824\uBA74 \uAD6C\uAC04\uC744 \uD558\uB098 \uC774\uC0C1 \uC800\uC7A5\uD574\uC57C \uD569\uB2C8\uB2E4.");
   }
-
   const metadata = buildMachineMetadata({
     projectName,
     source,
@@ -530,49 +482,45 @@ export function buildCodexJobManifest({
     }
   };
 }
-
-export function generateCodexStartHere({
+function generateCodexStartHere({
   projectName = "",
   source = {},
   generatedAt = nowIso()
 } = {}) {
-  const title = safeInline(projectName, "이름 없는 키리누키 작업");
+  const title = safeInline(projectName, "\uC774\uB984 \uC5C6\uB294 \uD0A4\uB9AC\uB204\uD0A4 \uC791\uC5C5");
   const streamer = safeInline(source.streamerName);
   const platform = safeInline(source.platform, "CHZZK").toUpperCase();
-  const sourceExample = platform === "YOUTUBE"
-    ? "본인이 소유하거나 사용 허가를 받은 YouTube 원본"
-    : "치지직 공식 다시보기 등 적법하게 준비한 원본";
-  const command = "이 폴더의 AGENTS.md, START_HERE.md, edit-brief.md, creator-policy.md, creator-policy-index.json과 job-manifest.json을 읽고 작업을 끝까지 실행해줘. 공식 정책 링크의 최신 원문을 먼저 확인해 정책 프리플라이트를 수행하고, 수익·음원·제3자 확인이 필요한 부분은 policy-check.md에 보류 상태로 남긴 뒤 비공개 검수용 영상까지만 만들어줘. 원본 영상은 변경하지 마.";
+  const sourceExample = platform === "YOUTUBE" ? "\uBCF8\uC778\uC774 \uC18C\uC720\uD558\uAC70\uB098 \uC0AC\uC6A9 \uD5C8\uAC00\uB97C \uBC1B\uC740 YouTube \uC6D0\uBCF8" : "\uCE58\uC9C0\uC9C1 \uACF5\uC2DD \uB2E4\uC2DC\uBCF4\uAE30 \uB4F1 \uC801\uBC95\uD558\uAC8C \uC900\uBE44\uD55C \uC6D0\uBCF8";
+  const command = "\uC774 \uD3F4\uB354\uC758 AGENTS.md, START_HERE.md, edit-brief.md, creator-policy.md, creator-policy-index.json\uACFC job-manifest.json\uC744 \uC77D\uACE0 \uC791\uC5C5\uC744 \uB05D\uAE4C\uC9C0 \uC2E4\uD589\uD574\uC918. \uACF5\uC2DD \uC815\uCC45 \uB9C1\uD06C\uC758 \uCD5C\uC2E0 \uC6D0\uBB38\uC744 \uBA3C\uC800 \uD655\uC778\uD574 \uC815\uCC45 \uD504\uB9AC\uD50C\uB77C\uC774\uD2B8\uB97C \uC218\uD589\uD558\uACE0, \uC218\uC775\xB7\uC74C\uC6D0\xB7\uC81C3\uC790 \uD655\uC778\uC774 \uD544\uC694\uD55C \uBD80\uBD84\uC740 policy-check.md\uC5D0 \uBCF4\uB958 \uC0C1\uD0DC\uB85C \uB0A8\uAE34 \uB4A4 \uBE44\uACF5\uAC1C \uAC80\uC218\uC6A9 \uC601\uC0C1\uAE4C\uC9C0\uB9CC \uB9CC\uB4E4\uC5B4\uC918. \uC6D0\uBCF8 \uC601\uC0C1\uC740 \uBCC0\uACBD\uD558\uC9C0 \uB9C8.";
+  return `# Codex \uC791\uC5C5 \uC2DC\uC791 \uC548\uB0B4
 
-  return `# Codex 작업 시작 안내
+> \uD504\uB85C\uC81D\uD2B8: ${title}
+> \uBC29\uC1A1\uC778/\uCC44\uB110: ${streamer}
+> \uC791\uC5C5 \uD3F4\uB354 \uC0DD\uC131 \uC2DC\uAC01: ${generatedAt}
 
-> 프로젝트: ${title}
-> 방송인/채널: ${streamer}
-> 작업 폴더 생성 시각: ${generatedAt}
+\uC774 \uD3F4\uB354\uB294 \uCF54\uB529\uC744 \uBAB0\uB77C\uB3C4 Codex\uC5D0 \uADF8\uB300\uB85C \uC5F4\uC5B4 \uC791\uC5C5\uD560 \uC218 \uC788\uB294 \uD0A4\uB9AC\uB204\uD0A4 \uC804\uCC98\uB9AC \uD328\uD0A4\uC9C0\uC785\uB2C8\uB2E4. Extension\uC740 \uC601\uC0C1\uC744 \uD3EC\uD568\uD558\uC9C0 \uC54A\uC73C\uBA70 \uACF5\uAC1C\xB7\uC5C5\uB85C\uB4DC\xB7\uC218\uC775\uD654\uB3C4 \uC218\uD589\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.
 
-이 폴더는 코딩을 몰라도 Codex에 그대로 열어 작업할 수 있는 키리누키 전처리 패키지입니다. Extension은 영상을 포함하지 않으며 공개·업로드·수익화도 수행하지 않습니다.
+## 1. \uD480\uC601\uC0C1 \uB123\uAE30
 
-## 1. 풀영상 넣기
+${sourceExample} \uD480\uC601\uC0C1 \uD30C\uC77C **\uD558\uB098\uB9CC** \uC774 \uD3F4\uB354\uC758 \uCD5C\uC0C1\uC704\uC5D0 \uB123\uC73C\uC138\uC694. \uC9C0\uC6D0 \uB300\uC0C1\uC740 MP4, MKV, MOV, WEBM, M4V\uC785\uB2C8\uB2E4. \uC6D0\uBCF8 \uC601\uC0C1\uC740 \uC774\uB984\uC744 \uBC14\uAFB8\uC9C0 \uC54A\uC544\uB3C4 \uB429\uB2C8\uB2E4.
 
-${sourceExample} 풀영상 파일 **하나만** 이 폴더의 최상위에 넣으세요. 지원 대상은 MP4, MKV, MOV, WEBM, M4V입니다. 원본 영상은 이름을 바꾸지 않아도 됩니다.
+## 2. Codex\uC5D0\uC11C \uD3F4\uB354 \uC5F4\uAE30
 
-## 2. Codex에서 폴더 열기
+Codex \uC571\uC774\uB098 Codex\uAC00 \uC5F0\uACB0\uB41C \uAC1C\uBC1C \uD658\uACBD\uC5D0\uC11C \uC774 \uD3F4\uB354\uB97C \uD504\uB85C\uC81D\uD2B8\uB85C \uC5EC\uC138\uC694. **AGENTS.md**\uAC00 \uC791\uC5C5 \uADDC\uCE59\uC744, **edit-brief.md**\uAC00 \uAD6C\uAC04\uACFC \uC790\uC5F0\uC5B4 \uD3B8\uC9D1 \uC758\uB3C4\uB97C, **creator-policy-index.json**\uC774 \uBC29\uC1A1\uC778\uACFC \uACF5\uC2DD \uC815\uCC45 \uB9C1\uD06C\uC758 \uAD00\uACC4\uB97C \uC81C\uACF5\uD569\uB2C8\uB2E4. \uC815\uCC45 \uBCF8\uBB38\uC740 \uC7AC\uBC30\uD3EC\uD558\uC9C0 \uC54A\uC73C\uBBC0\uB85C \uC791\uC5C5 \uC2DC\uC810\uC5D0 \uACF5\uC2DD \uB9C1\uD06C\uB97C \uC9C1\uC811 \uD655\uC778\uD558\uC138\uC694.
 
-Codex 앱이나 Codex가 연결된 개발 환경에서 이 폴더를 프로젝트로 여세요. **AGENTS.md**가 작업 규칙을, **edit-brief.md**가 구간과 자연어 편집 의도를, **creator-policy-index.json**이 방송인과 공식 정책 링크의 관계를 제공합니다. 정책 본문은 재배포하지 않으므로 작업 시점에 공식 링크를 직접 확인하세요.
-
-## 3. 아래 한 문장 전송하기
+## 3. \uC544\uB798 \uD55C \uBB38\uC7A5 \uC804\uC1A1\uD558\uAE30
 
     ${command}
 
-## 사람이 반드시 확인할 것
+## \uC0AC\uB78C\uC774 \uBC18\uB4DC\uC2DC \uD655\uC778\uD560 \uAC83
 
-- 수익·상업 이용 상태는 사람이 승인하기 전까지 **HUMAN_REVENUE_REVIEW: PENDING**입니다.
-- 음원·가창·게임 음악은 사람이 승인하기 전까지 **HUMAN_MUSIC_REVIEW: PENDING**입니다.
-- 제3자가 등장하면 그 사람과 소속 그룹의 정책이 모두 교차확인되어야 합니다.
-- 네이버 카페 링크의 본문을 읽지 못하면 허용으로 추정하지 않고 **SOURCE_UNREADABLE**로 남깁니다.
-- 결과물은 비공개 검수본입니다. 게시·업로드·수익화는 별도 사람 검수 뒤에만 진행하세요.
+- \uC218\uC775\xB7\uC0C1\uC5C5 \uC774\uC6A9 \uC0C1\uD0DC\uB294 \uC0AC\uB78C\uC774 \uC2B9\uC778\uD558\uAE30 \uC804\uAE4C\uC9C0 **HUMAN_REVENUE_REVIEW: PENDING**\uC785\uB2C8\uB2E4.
+- \uC74C\uC6D0\xB7\uAC00\uCC3D\xB7\uAC8C\uC784 \uC74C\uC545\uC740 \uC0AC\uB78C\uC774 \uC2B9\uC778\uD558\uAE30 \uC804\uAE4C\uC9C0 **HUMAN_MUSIC_REVIEW: PENDING**\uC785\uB2C8\uB2E4.
+- \uC81C3\uC790\uAC00 \uB4F1\uC7A5\uD558\uBA74 \uADF8 \uC0AC\uB78C\uACFC \uC18C\uC18D \uADF8\uB8F9\uC758 \uC815\uCC45\uC774 \uBAA8\uB450 \uAD50\uCC28\uD655\uC778\uB418\uC5B4\uC57C \uD569\uB2C8\uB2E4.
+- \uB124\uC774\uBC84 \uCE74\uD398 \uB9C1\uD06C\uC758 \uBCF8\uBB38\uC744 \uC77D\uC9C0 \uBABB\uD558\uBA74 \uD5C8\uC6A9\uC73C\uB85C \uCD94\uC815\uD558\uC9C0 \uC54A\uACE0 **SOURCE_UNREADABLE**\uB85C \uB0A8\uAE41\uB2C8\uB2E4.
+- \uACB0\uACFC\uBB3C\uC740 \uBE44\uACF5\uAC1C \uAC80\uC218\uBCF8\uC785\uB2C8\uB2E4. \uAC8C\uC2DC\xB7\uC5C5\uB85C\uB4DC\xB7\uC218\uC775\uD654\uB294 \uBCC4\uB3C4 \uC0AC\uB78C \uAC80\uC218 \uB4A4\uC5D0\uB9CC \uC9C4\uD589\uD558\uC138\uC694.
 
-## 완료 시 생기는 파일
+## \uC644\uB8CC \uC2DC \uC0DD\uAE30\uB294 \uD30C\uC77C
 
 - **policy-check.md**
 - **edited-preview.mp4**
@@ -581,3 +529,25 @@ Codex 앱이나 Codex가 연결된 개발 환경에서 이 폴더를 프로젝�
 - **review-notes.md**
 `;
 }
+export {
+  CODEX_JOB_SCHEMA_VERSION,
+  SCHEMA_VERSION,
+  STORAGE_KEY,
+  WORKSPACE_META_KEY,
+  buildCodexJobManifest,
+  compileCreatorPolicyMarkdown,
+  createInitialState,
+  createSegment,
+  formatTimestamp,
+  generateCodexStartHere,
+  generateEditPrompt,
+  markdownQuote,
+  normalizeCreatorIdentity,
+  normalizeState,
+  normalizeWorkspaceMeta,
+  parseTimestamp,
+  resolveCreatorPolicies,
+  safeInline,
+  sanitizeFileName,
+  validateSegmentInput
+};

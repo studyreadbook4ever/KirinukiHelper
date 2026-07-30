@@ -42,14 +42,14 @@ AudSeg만 쓸 때는 caption stack 설치·실행이 필요 없다.
 
 - `setup.sh`는 `kirinuki.sh setup`의 얇고 안정적인 첫 진입점이다.
 - `kirinuki.sh`는 Bash preflight 뒤 Node 내장 모듈만 쓰는
-  `scripts/linux-helper.mjs`에 인자를 그대로 전달한다.
+  `scripts/linux-helper.ts`에 인자를 그대로 전달한다.
 - 인자 없는 TTY 실행은 한글 메뉴를 열고, 비대화형 실행은 입력을 기다리며
   멈추지 않고 명령 사용법을 보여 준다.
 - 시스템 패키지를 대신 설치하거나 `sudo`, `su`, `curl | sh`, 원격 설치
   스크립트를 실행하지 않는다. 빠진 도구와 대표 배포판별 설치 힌트만
   표시한다.
 - AudSeg 선택은 companion을 설치·조회·시작하지 않는다.
-- Whisper 선택만 기존 `local-caption-stack.mjs`의
+- Whisper 선택만 기존 `local-caption-stack.ts`의
   `doctor/setup/start/status/stop` 계약을 사용한다.
 - 브라우저 실행은 고정된 XDG 사용자 전용 프로필, 현재 저장소의 정확한
   `extension` 절대 경로와 인자 배열을 사용한다. `eval`, 문자열 셸 실행과
@@ -75,7 +75,7 @@ AudSeg만 쓸 때는 caption stack 설치·실행이 필요 없다.
 - `--dry-run`은 설치·브라우저·서비스 상태를 바꾸지 않고 예정된 동작만
   검증 가능하게 출력한다.
 - 셸과 Node helper의 구문, URL 검증, 비대화형 동작, XDG 경로, dry-run과
-  자막 방식 분기는 `tests/linux-helper.test.js`에서 회귀 검사한다.
+  자막 방식 분기는 `tests/linux-helper.test.ts`에서 회귀 검사한다.
 
 ## 절대 불변조건
 
@@ -139,10 +139,10 @@ AudSeg 흐름:
 → 편집기에서 사람 전사
 ```
 
-AudSeg는 저장소 루트의 독립 Python 패키지 `AudSeg/` 0.1.0 철학과 알고리즘을 브라우저 JavaScript로 충실히 옮긴 것이다.
+AudSeg는 저장소 루트의 독립 Python 패키지 `AudSeg/` 0.1.0 철학과 알고리즘을 브라우저 TypeScript로 충실히 옮긴 것이다.
 
 - 기준 구현: `AudSeg/src/audseg/`
-- 브라우저 구현: `src/editor/audseg.js`
+- 브라우저 구현: `src/editor/audseg.ts`
 - 라이선스: MIT
 - 런타임: 브라우저 JavaScript, Python·companion 불필요
 - 입력: 16kHz mono PCM
@@ -371,21 +371,22 @@ AudSeg 기준 구현은 MIT 라이선스다.
 
 ## 파일 지도
 
-- `src/editor/audseg.js`: 브라우저 AudSeg DSP와 timing cue 변환
-- `src/editor/caption-agent.js`: 두 방식 설정, Whisper session/client, 체크포인트
-- `src/editor/main.js`: 방식별 실행 분기, 컷별 저장·재개
-- `src/caption-agent/protocol.js`: Whisper companion 요청·응답 계약
-- `src/caption-agent/caption-quality-harness.js`: Whisper 초벌 품질 계약
-- `src/caption-agent/editorial-context.js`: bounded 편집 문맥과 지문
-- `scripts/local-caption-stack.mjs`: setup/start/status/stop
-- `scripts/local-caption-stack-core.mjs`: artifact·프로필·service 생성
+- `src/editor/audseg.ts`: 브라우저 AudSeg DSP와 timing cue 변환
+- `src/editor/caption-agent.ts`: 두 방식 설정, Whisper session/client, 체크포인트
+- `src/editor/main.ts`: 방식별 실행 분기, 컷별 저장·재개
+- `src/caption-agent/protocol.ts`: Whisper companion 요청·응답 계약
+- `src/caption-agent/caption-quality-harness.ts`: Whisper 초벌 품질 계약
+- `src/caption-agent/editorial-context.ts`: bounded 편집 문맥과 지문
+- `scripts/local-caption-stack.ts`: setup/start/status/stop
+- `scripts/local-caption-stack-core.ts`: artifact·프로필·service 생성
+- `src/lib/editor-core.ts`: 프로젝트·cue 모델의 작성 소스
+- `src/lib/session-recovery.ts`: CURRENT와 최근 복구본의 작성 소스
 - `extension/editor.html`: 두 방식 선택과 정직한 설명
-- `extension/lib/editor-core.js`: 프로젝트·cue 모델
-- `extension/lib/session-recovery.js`: CURRENT와 최근 복구본
+- `extension/**/*.js`: `npm run build`가 TypeScript에서 만든 브라우저 배포물
 - `extension/THIRD_PARTY_NOTICES.md`: Extension 고지
-- `tests/audseg.test.js`: DSP 결정성·경계·4초 상한
-- `tests/caption-agent-client.test.js`: loopback client·session·재개
-- `tests/local-caption-stack.test.js`: 설치·runtime·보안
+- `tests/audseg.test.ts`: DSP 결정성·경계·4초 상한
+- `tests/caption-agent-client.test.ts`: loopback client·session·재개
+- `tests/local-caption-stack.test.ts`: 설치·runtime·보안
 
 파일명이 바뀌면 이 지도를 같은 변경에서 갱신한다.
 
@@ -409,11 +410,11 @@ AudSeg 기준 구현은 MIT 라이선스다.
 
 - `npm run dev:editor`는 개발 전용 `extension/dev-reload.json`을 만들며, 일반 편집기는 URL에 `dev=1`이 없으면 marker를 읽지 않는다.
 - CSS만 바뀌면 stylesheet만 교체하고 File 객체·영상 연결·재생 위치·CURRENT를 유지한다.
-- 편집기 JavaScript·Worker를 다시 열기 전에는 진행 중인 작업, 같은 프로젝트 중복 탭과 저장되지 않은 원본 파일 핸들을 검사한다.
+- 편집기 TypeScript 번들·Worker를 다시 열기 전에는 진행 중인 작업, 같은 프로젝트 중복 탭과 저장되지 않은 원본 파일 핸들을 검사한다.
 - 현재 입력을 확정하고 모든 선행 project write를 기다린 뒤 CURRENT를 다시 읽어 fingerprint가 같을 때만 `project=<id>&session=resume&dev=1`로 재로드한다.
 - 저장 확인 중 새 capture seed가 도착하면 재로드하지 않고 잠금을 풀어 그 seed를 먼저 반영한다.
 - 핫 리로드 때문에 최근 5개 사용자 임시저장을 새로 만들거나 밀어내지 않는다.
-- JavaScript 재로드는 CURRENT만 보존한다. undo/redo, 타임라인 범위·확대 같은 탭 메모리를 보존한다고 표현하지 않는다.
+- TypeScript 번들 재로드는 CURRENT만 보존한다. undo/redo, 타임라인 범위·확대 같은 탭 메모리를 보존한다고 표현하지 않는다.
 - content script와 manifest/service worker 변경은 좌표 작업 중인 원본 탭이나 Extension을 자동 재로드하지 않는다.
 - editor·sidepanel·service worker가 함께 import하는 공용 모듈은 혼합 runtime을 막도록 Extension 변경으로 분류한다.
 - 개발 runner·validator·패키저는 같은 OS 커널 mutex를 원자적으로 점유한다. 강제 종료 후 stale 파일 삭제 경쟁으로 상호 배제를 구현하지 않는다.
@@ -428,7 +429,12 @@ npm run check
 git diff --check
 ```
 
-`npm run check`에는 fail-closed third-party 라이선스 인벤토리 검사가 포함된다. 현재 허용 목록은 runtime `mediabunny@1.51.0`(MPL-2.0), build-only `esbuild@0.25.6`(MIT)와 그 고정 transitive type/platform 패키지, AudSeg(MIT), 두 OFL-1.1 글꼴이다. 새 패키지·버전·라이선스·바이너리 에셋을 추가하려면 원문과 배포 의무를 먼저 검토하고 고지·allowlist·검사를 같은 변경에서 명시적으로 갱신한다.
+`npm run check`에는 fail-closed third-party 라이선스 인벤토리 검사가 포함된다. 현재 허용 목록은 runtime `mediabunny@1.51.0`(MPL-2.0), build-only `typescript@5.9.3`(Apache-2.0), `tsx@4.23.1`·`esbuild@0.28.1`·타입 패키지(MIT)와 그 고정 transitive/platform 패키지, AudSeg(MIT), 두 OFL-1.1 글꼴이다. TypeScript 도구는 Extension ZIP에 포함하지 않는다. 새 패키지·버전·라이선스·바이너리 에셋을 추가하려면 원문과 배포 의무를 먼저 검토하고 고지·allowlist·검사를 같은 변경에서 명시적으로 갱신한다.
+
+`npm run migration:check`는 작성 JavaScript뿐 아니라 명시적 `any`와
+`@ts-ignore`·`@ts-nocheck`·`@ts-expect-error`의 재유입도 TypeScript AST와
+원문 기준으로 차단한다. 정상적인 표준 API·문장 안의 `any` 문자열은 막지
+않는다.
 
 KirinukiHelper가 직접 작성한 코드는 `LICENSE`의 MIT 조건으로 공개한다. 이것은
 Mediabunny(MPL-2.0), Pretendard·Paperlogy(OFL-1.1)와 별도 다운로드되는
@@ -446,7 +452,7 @@ npm run check:full
 caption stack 변경 시:
 
 ```bash
-node --test tests/local-caption-stack.test.js
+node --import tsx --test tests/local-caption-stack.test.ts
 npm run caption-stack:doctor -- --json
 npm run caption-stack:setup -- --dry-run
 ```
@@ -454,7 +460,7 @@ npm run caption-stack:setup -- --dry-run
 AudSeg 변경 시:
 
 ```bash
-node --test tests/audseg.test.js
+node --import tsx --test tests/audseg.test.ts
 uv run --project AudSeg --extra dev pytest -q AudSeg/tests
 uv run --project AudSeg --extra dev ruff check AudSeg
 uv run --project AudSeg --extra dev ruff format --check AudSeg
@@ -474,7 +480,7 @@ uv run --project AudSeg --extra dev ruff format --check AudSeg
 - [ ] AudSeg 결과가 실제 빈 텍스트이고 모두 검수 대상임
 - [ ] AudSeg cue가 clip 범위 안이고 최대 4초임
 - [ ] 음악·효과음 감지 가능성이 UI와 문서에 명시됨
-- [ ] Python 기준 구현과 JavaScript 포트의 핵심 fixture가 일치함
+- [ ] Python 기준 구현과 TypeScript 포트의 핵심 fixture가 일치함
 - [ ] 자동 자막 기본 위치와 문장부호 계약이 결정적임
 - [ ] 사람 cue와 human-edited cue가 재실행 후 보존됨
 - [ ] Whisper 활성 컷 0/16/17 경계와 AudSeg 17개 이상 실행이 오디오 추출 전에 올바르게 분기함

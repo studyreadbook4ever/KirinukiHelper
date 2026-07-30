@@ -6,6 +6,9 @@
 
 현재 미디어 입력은 사용 권한이 있는 로컬 원본 파일입니다. Extension은 지원 영상 탭의 메타데이터·현재 시각·재생 위치 제어를 연결하지만 치지직이나 YouTube 영상을 다운로드하거나 접근 제한을 우회하지 않습니다. 원본 전체와 최종 렌더는 이 기기에 남습니다. 자막 초벌은 **로컬 Whisper**와 **AudSeg** 중 하나를 고릅니다. Whisper는 이 기기의 loopback companion에서 한국어 글과 타이밍을 만들고, AudSeg는 브라우저 안에서 모델 없이 소리 활동을 찾아 사람이 채울 빈 타이밍만 만듭니다. 두 방식 모두 인터넷 자막 서비스나 API 키를 사용하지 않습니다.
 
+이 프로젝트는 NAVER·치지직·YouTube·Google의 공식 제품이나 제휴 제품이
+아닙니다. 각 서비스명과 상표의 권리는 해당 권리자에게 있습니다.
+
 ## Linux 빠른 설치
 
 다른 Linux PC에서 저장소를 내려받은 뒤 `KirinukiHelper` 폴더에서 다음 하나를
@@ -326,9 +329,18 @@ Node.js 20.9 이상에서 편집기 번들, Extension 정적 검증과 단위 �
 npm run dev:editor
 ```
 
-runner가 준비된 뒤 현재 편집기 URL의 쿼리에 `dev=1`을 붙여 한 번만 새로고침합니다(기존 `?project=…`가 있으면 `&dev=1`). CSS 변경은 영상 연결·재생 위치를 유지한 채 stylesheet만 교체합니다. 편집기 JavaScript·AudSeg Worker 변경은 입력 중인 값을 먼저 반영하고 CURRENT를 IndexedDB에 저장한 뒤 다시 읽은 지문까지 같을 때만 `session=resume`으로 같은 프로젝트를 다시 엽니다. AI·내보내기·드래그·복구 작업 중이거나 같은 프로젝트 탭이 둘 이상이거나 재시작용 원본 파일 핸들이 없으면 자동 재로드를 보류합니다. 원본 페이지 bridge와 manifest/service worker 변경은 좌표 작업을 보호하기 위해 원본 탭이나 Extension 전체를 자동 재로드하지 않고 안내만 표시합니다. 편집기·사이드패널·service worker가 함께 읽는 공용 모듈 변경도 혼합 버전 실행을 막기 위해 Extension 변경으로 분류해 자동 전체 재로드 없이 안내합니다.
+runner가 준비된 뒤 현재 편집기 URL의 쿼리에 `dev=1`을 붙여 한 번만 새로고침합니다(기존 `?project=…`가 있으면 `&dev=1`). CSS 변경은 영상 연결·재생 위치를 유지한 채 stylesheet만 교체합니다. 편집기 TypeScript 번들·AudSeg Worker 변경은 입력 중인 값을 먼저 반영하고 CURRENT를 IndexedDB에 저장한 뒤 다시 읽은 지문까지 같을 때만 `session=resume`으로 같은 프로젝트를 다시 엽니다. AI·내보내기·드래그·복구 작업 중이거나 같은 프로젝트 탭이 둘 이상이거나 재시작용 원본 파일 핸들이 없으면 자동 재로드를 보류합니다. 원본 페이지 bridge와 manifest/service worker 변경은 좌표 작업을 보호하기 위해 원본 탭이나 Extension 전체를 자동 재로드하지 않고 안내만 표시합니다. 편집기·사이드패널·service worker가 함께 읽는 공용 모듈 변경도 혼합 버전 실행을 막기 위해 Extension 변경으로 분류해 자동 전체 재로드 없이 안내합니다.
 
-이 개발용 JavaScript 재로드가 보존하는 범위는 저장된 **CURRENT 프로젝트**입니다. 실행 취소·다시 실행 스택, 선택한 타임라인 범위와 확대 상태 같은 탭 메모리는 초기화됩니다. 일반 사용자가 자막 글·색·크기·위치를 직접 고칠 때는 이 runner나 페이지 새로고침이 필요하지 않으며, 입력 즉시 미리보기·타임라인에 반영되고 IndexedDB 저장이 시작됩니다. 릴리스 검사·패키징 전에는 runner를 종료해야 합니다. runner·validator·패키저는 같은 OS 커널 mutex를 원자적으로 점유하므로 동시에 실행되지 않으며, 프로세스가 강제 종료돼도 mutex는 운영체제가 해제합니다. `npm run package`는 전체 `check:full` 시작부터 ZIP·체크섬 완료까지 그 mutex를 계속 보유합니다. 핫 리로드 브라우저 smoke는 실제 unpacked Extension이 아니라 임시 복사본의 marker만 조작합니다. `.dev-editor.lock`은 현재 소유자 진단용 메타데이터라 종료 뒤 남을 수 있지만 Git·배포 ZIP에서는 제외됩니다. 비정상 종료로 남은 stale reload marker와 구형 임시 lock은 validator가 mutex를 점유한 상태에서 정리합니다.
+이 개발용 TypeScript 번들 재로드가 보존하는 범위는 저장된 **CURRENT 프로젝트**입니다. 실행 취소·다시 실행 스택, 선택한 타임라인 범위와 확대 상태 같은 탭 메모리는 초기화됩니다. 일반 사용자가 자막 글·색·크기·위치를 직접 고칠 때는 이 runner나 페이지 새로고침이 필요하지 않으며, 입력 즉시 미리보기·타임라인에 반영되고 IndexedDB 저장이 시작됩니다. 릴리스 검사·패키징 전에는 runner를 종료해야 합니다. runner·validator·패키저는 같은 OS 커널 mutex를 원자적으로 점유하므로 동시에 실행되지 않으며, 프로세스가 강제 종료돼도 mutex는 운영체제가 해제합니다. `npm run package`는 전체 `check:full` 시작부터 ZIP·체크섬 완료까지 그 mutex를 계속 보유합니다. 핫 리로드 브라우저 smoke는 실제 unpacked Extension이 아니라 임시 복사본의 marker만 조작합니다. `.dev-editor.lock`은 현재 소유자 진단용 메타데이터라 종료 뒤 남을 수 있지만 Git·배포 ZIP에서는 제외됩니다. 비정상 종료로 남은 stale reload marker와 구형 임시 lock은 validator가 mutex를 점유한 상태에서 정리합니다.
+
+작성 소스·테스트·개발 도구는 모두 TypeScript입니다. `npm run build`가
+Chrome이 직접 읽는 JavaScript 10개만 `extension/` 아래에 만들며 각 파일 첫
+줄에 생성물 표시를 넣습니다. Extension ZIP에는 TypeScript compiler,
+`node_modules`, `.ts`·`.tsx`, source map, `tsconfig.json`을 넣지 않습니다.
+`npm run typecheck`는 엄격 모드로 작성 소스를 검사하고
+`npm run migration:check`는 작성 JavaScript, 명시적 `any`, 타입 오류 억제
+지시문의 재유입과 배포물 경계를 TypeScript AST 기준으로 fail-closed로
+막습니다.
 
 ```bash
 npm run check

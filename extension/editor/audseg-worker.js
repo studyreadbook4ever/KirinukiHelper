@@ -1,4 +1,6 @@
-// src/editor/audseg.js
+// Generated from TypeScript sources. Do not edit directly.
+
+// src/editor/audseg.ts
 var AUDSEG_ENGINE_ID = "audseg";
 var AUDSEG_ENGINE_VERSION = "0.1.0";
 var AUDSEG_SAMPLE_RATE_HZ = 16e3;
@@ -214,7 +216,7 @@ function rawRegions(levels, totalSamples, sampleRateHz, detector, startThreshold
       lastActiveEnd = Math.max(lastActiveEnd ?? frame.endSample, frame.endSample);
       continue;
     }
-    if (frame.endSample - lastActiveEnd >= releaseSamples) {
+    if (lastActiveEnd !== null && frame.endSample - lastActiveEnd >= releaseSamples) {
       regions.push({
         startSample: activeStart,
         endSample: Math.min(lastActiveEnd, totalSamples),
@@ -524,7 +526,10 @@ function segmentAudSegPcm(samples, {
   };
 }
 
-// src/editor/audseg-worker.js
+// src/editor/audseg-worker.ts
+function errorDetails(error) {
+  return error instanceof Error ? { name: error.name, message: error.message } : { name: "Error", message: String(error) };
+}
 self.addEventListener("message", (event) => {
   const requestId = String(event.data?.requestId || "");
   if (!requestId) {
@@ -536,12 +541,13 @@ self.addEventListener("message", (event) => {
     });
     self.postMessage({ requestId, ok: true, result });
   } catch (error) {
+    const details = errorDetails(error);
     self.postMessage({
       requestId,
       ok: false,
       error: {
-        name: String(error?.name || "Error").slice(0, 80),
-        message: String(error?.message || "AudSeg \uBD84\uC11D\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.").slice(0, 1e3)
+        name: String(details.name || "Error").slice(0, 80),
+        message: String(details.message || "AudSeg \uBD84\uC11D\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.").slice(0, 1e3)
       }
     });
   }

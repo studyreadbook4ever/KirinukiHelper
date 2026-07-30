@@ -19,7 +19,6 @@ dist/
 *.ogg
 *.pcm
 *.srt
-*.ts
 *.wav
 *.webm
 *.kirinuki.json
@@ -28,5 +27,7 @@ extension/dev-reload.json
 extension/dev-reload.json.*.tmp
 .dev-editor.lock
 .dev-editor.lock.*.tmp
+*.tsbuildinfo
+/AudSeg/uv.lock
 *.py[cod]
 .DS_Store

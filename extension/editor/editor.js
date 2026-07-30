@@ -1,4 +1,6 @@
-// extension/lib/caption-style.js
+// Generated from TypeScript sources. Do not edit directly.
+
+// src/lib/caption-style.ts
 var deepFreeze = (value) => {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) {
     return value;
@@ -189,12 +191,12 @@ function captionSpeakerColor(speakerId) {
   }
   const numberedSpeaker = normalized.match(/^(?:speaker|화자)[\s_-]?(\d+)$/u);
   if (numberedSpeaker) {
-    const ordinal = Math.max(1, Number.parseInt(numberedSpeaker[1], 10));
+    const ordinal = Math.max(1, Number.parseInt(numberedSpeaker[1] ?? "1", 10));
     return SPEAKER_COLORS[(ordinal - 1) % SPEAKER_COLORS.length];
   }
   let hash = 2166136261;
   for (const character of normalized) {
-    hash ^= character.codePointAt(0);
+    hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 16777619);
   }
   return SPEAKER_COLORS[(hash >>> 0) % SPEAKER_COLORS.length];
@@ -234,7 +236,7 @@ function captionSpeakerColorAssignments(speakerIds, existingAssignments = {}) {
   return assignments;
 }
 
-// extension/lib/editor-core.js
+// src/lib/editor-core.ts
 var EDITOR_SCHEMA = "chzzk-kirinuki-editor/v3";
 var EDITOR_SEED_PREFIX = "chzzkKirinukiEditorSeed:";
 var EDITOR_DATABASE_NAME = "chzzk-kirinuki-studio";
@@ -264,24 +266,40 @@ var AUTOMATIC_CAPTION_POSITION = Object.freeze({
   y: 0.84,
   placement: "bottom"
 });
+function recordOrEmpty(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function hasTimelineRange(entry) {
+  return entry.range !== null;
+}
 var nowIso = () => (/* @__PURE__ */ new Date()).toISOString();
 var makeId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 var finiteNumber = (value, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+function normalizedCaptionStyleDefaults(presetId) {
+  const defaults = captionStyleDefaults(
+    normalizeCaptionStylePresetId(presetId)
+  );
+  return {
+    ...defaults,
+    align: defaults.align === "left" || defaults.align === "right" ? defaults.align : "center"
+  };
+}
 var secondsToMilliseconds = (seconds) => Math.max(0, Math.round(finiteNumber(seconds) * 1e3));
 var clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 function normalizeAiWarning(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
-  const code = String(value.code || "").trim().slice(0, 128);
-  const cueIndex = Number(value.cueIndex);
+  const source = value;
+  const code = String(source.code || "").trim().slice(0, 128);
+  const cueIndex = Number(source.cueIndex);
   if (!code || !Number.isInteger(cueIndex) || cueIndex < 0) {
     return null;
   }
-  const clipId = String(value.clipId || "").trim().slice(0, 256);
+  const clipId = String(source.clipId || "").trim().slice(0, 256);
   return {
     ...clipId ? { clipId } : {},
     code,
@@ -489,21 +507,22 @@ function normalizeMediaAsset(raw) {
   if (!raw || typeof raw !== "object") {
     return null;
   }
-  const durationMs = Math.max(0, Math.round(finiteNumber(raw.durationMs)));
-  const mediaOriginMs = Math.max(0, Math.round(finiteNumber(raw.mediaOriginMs)));
-  const providedEndMs = Number(raw.mediaEndTimestampMs);
+  const source = raw;
+  const durationMs = Math.max(0, Math.round(finiteNumber(source.durationMs)));
+  const mediaOriginMs = Math.max(0, Math.round(finiteNumber(source.mediaOriginMs)));
+  const providedEndMs = Number(source.mediaEndTimestampMs);
   const mediaEndTimestampMs = Number.isFinite(providedEndMs) && providedEndMs >= mediaOriginMs ? Math.round(providedEndMs) : mediaOriginMs + durationMs;
-  const frameRate = Number(raw.frameRate);
+  const frameRate = Number(source.frameRate);
   return {
-    ...raw,
+    ...source,
     durationMs,
     mediaOriginMs,
     mediaEndTimestampMs,
     frameRate: Number.isFinite(frameRate) && frameRate > 0 ? frameRate : null,
-    hasVideo: Boolean(raw.hasVideo),
-    hasAudio: Boolean(raw.hasAudio),
-    videoDecodable: raw.videoDecodable == null ? null : Boolean(raw.videoDecodable),
-    audioDecodable: raw.audioDecodable == null ? null : Boolean(raw.audioDecodable)
+    hasVideo: Boolean(source.hasVideo),
+    hasAudio: Boolean(source.hasAudio),
+    videoDecodable: source.videoDecodable == null ? null : Boolean(source.videoDecodable),
+    audioDecodable: source.audioDecodable == null ? null : Boolean(source.audioDecodable)
   };
 }
 function sourceSessionIdentity(source = {}) {
@@ -532,7 +551,7 @@ function captureProjectId(captureState = {}) {
   const base = sourceIdentity || captureState.projectName || "untitled";
   let hash = 2166136261;
   for (const character of String(base)) {
-    hash ^= character.codePointAt(0);
+    hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 16777619);
   }
   return `project-${(hash >>> 0).toString(36)}`;
@@ -560,7 +579,7 @@ function segmentToClip(segment, index) {
   );
   return {
     id: `clip-${segment.id || index + 1}`,
-    selectionId: segment.id || `selection-${index + 1}`,
+    selectionId: String(segment.id || `selection-${index + 1}`),
     authority: "USER",
     sourceStartMs,
     sourceEndMs,
@@ -602,9 +621,10 @@ function normalizeSuppressedSelection(raw) {
   if (!raw || typeof raw !== "object") {
     return null;
   }
-  const selectionId = String(raw.selectionId || "").trim();
-  const requestedStartMs = Number(raw.selectionStartMs);
-  const requestedEndMs = Number(raw.selectionEndMs);
+  const source = raw;
+  const selectionId = String(source.selectionId || "").trim();
+  const requestedStartMs = Number(source.selectionStartMs);
+  const requestedEndMs = Number(source.selectionEndMs);
   if (!selectionId || !Number.isFinite(requestedStartMs) || !Number.isFinite(requestedEndMs)) {
     return null;
   }
@@ -614,12 +634,12 @@ function normalizeSuppressedSelection(raw) {
     return null;
   }
   return {
-    ...raw,
+    ...source,
     selectionId,
     selectionStartMs,
     selectionEndMs,
-    createdAt: raw.createdAt || nowIso(),
-    updatedAt: raw.updatedAt || raw.createdAt || nowIso()
+    createdAt: source.createdAt || nowIso(),
+    updatedAt: source.updatedAt || source.createdAt || nowIso()
   };
 }
 function createEditorProjectFromCapture(captureState = {}, {
@@ -647,7 +667,7 @@ function createEditorProjectFromCapture(captureState = {}, {
     selectedCueId: null,
     selectedAudioRegionId: null,
     playheadMs: 0,
-    subtitleDefaults: captionStyleDefaults(
+    subtitleDefaults: normalizedCaptionStyleDefaults(
       DEFAULT_CAPTION_STYLE_PRESET_ID
     ),
     ai: {
@@ -671,14 +691,14 @@ function createEditorProjectFromCapture(captureState = {}, {
   };
 }
 function normalizeEditorProject(raw) {
-  if (!raw || !ACCEPTED_EDITOR_SCHEMAS.has(raw.schema)) {
+  if (!raw || typeof raw.schema !== "string" || !ACCEPTED_EDITOR_SCHEMAS.has(raw.schema)) {
     return null;
   }
   const migratingLegacyProject = raw.schema === LEGACY_EDITOR_SCHEMA_V1;
   const clips = reflowClips(Array.isArray(raw.clips) ? raw.clips : []);
   const defaults = createEditorProjectFromCapture({}, {
-    id: raw.id || makeId("project"),
-    createdAt: raw.createdAt || nowIso()
+    id: String(raw.id || makeId("project")),
+    createdAt: String(raw.createdAt || nowIso())
   });
   const clipIds = new Set(clips.map((clip) => clip.id));
   const clipSelectionIds = new Set(clips.map((clip) => clip.selectionId));
@@ -692,8 +712,8 @@ function normalizeEditorProject(raw) {
   const suppressedSelections = [...suppressedBySelectionId.values()];
   const rawSubtitles = (Array.isArray(raw.subtitles) ? raw.subtitles : []).filter((cue) => cue && clipIds.has(cue.clipId));
   const subtitleColor = normalizeHexColor(
-    raw.subtitleDefaults?.color,
-    defaults.subtitleDefaults.color
+    recordOrEmpty(raw.subtitleDefaults).color,
+    String(defaults.subtitleDefaults.color || DEFAULT_SUBTITLE_COLOR)
   );
   const requestedLaneCount = clamp(
     Math.max(
@@ -732,8 +752,8 @@ function normalizeEditorProject(raw) {
     );
     return normalized ? [normalized] : [];
   });
-  const rawSubtitleDefaults = raw.subtitleDefaults || {};
-  const cleanDefaults = captionStyleDefaults(
+  const rawSubtitleDefaults = recordOrEmpty(raw.subtitleDefaults);
+  const cleanDefaults = normalizedCaptionStyleDefaults(
     DEFAULT_CAPTION_STYLE_PRESET_ID
   );
   const hasKnownStylePreset = Object.hasOwn(
@@ -742,7 +762,8 @@ function normalizeEditorProject(raw) {
   );
   const appearsToUseMeasuredCleanStyle = (!rawSubtitleDefaults.fontFamily || rawSubtitleDefaults.fontFamily === "Pretendard") && (!Number.isFinite(Number(rawSubtitleDefaults.fontScale)) || Number(rawSubtitleDefaults.fontScale) === cleanDefaults.fontScale) && (!rawSubtitleDefaults.outlineColor || normalizeHexColor(rawSubtitleDefaults.outlineColor) === cleanDefaults.outlineColor) && (!Number.isFinite(Number(rawSubtitleDefaults.outlineWidth)) || Number(rawSubtitleDefaults.outlineWidth) === cleanDefaults.outlineWidth) && (!rawSubtitleDefaults.backgroundColor || rawSubtitleDefaults.backgroundColor === "transparent");
   const stylePresetId = hasKnownStylePreset ? normalizeCaptionStylePresetId(rawSubtitleDefaults.stylePresetId) : appearsToUseMeasuredCleanStyle ? DEFAULT_CAPTION_STYLE_PRESET_ID : LEGACY_CAPTION_STYLE_PRESET_ID;
-  const selectedStyleDefaults = captionStyleDefaults(stylePresetId);
+  const selectedStyleDefaults = normalizedCaptionStyleDefaults(stylePresetId);
+  const subtitleAlign = rawSubtitleDefaults.align === "left" || rawSubtitleDefaults.align === "right" ? rawSubtitleDefaults.align : "center";
   const subtitleDefaults = {
     ...selectedStyleDefaults,
     ...rawSubtitleDefaults,
@@ -815,9 +836,20 @@ function normalizeEditorProject(raw) {
       ),
       0,
       1
-    )
+    ),
+    x: clamp(
+      finiteNumber(rawSubtitleDefaults.x, selectedStyleDefaults.x),
+      0.05,
+      0.95
+    ),
+    y: clamp(
+      finiteNumber(rawSubtitleDefaults.y, selectedStyleDefaults.y),
+      0.05,
+      0.95
+    ),
+    align: subtitleAlign
   };
-  const rawAi = raw.ai || {};
+  const rawAi = recordOrEmpty(raw.ai);
   const legacyBrowserWhisperMetadata = rawAi.provider === "transformers.js";
   const ai = {
     ...defaults.ai,
@@ -829,6 +861,23 @@ function normalizeEditorProject(raw) {
       progress: 0,
       error: null
     } : {},
+    provider: String(
+      legacyBrowserWhisperMetadata ? defaults.ai.provider : rawAi.provider || defaults.ai.provider
+    ),
+    model: String(
+      legacyBrowserWhisperMetadata ? defaults.ai.model : rawAi.model || defaults.ai.model
+    ),
+    status: String(
+      legacyBrowserWhisperMetadata ? "idle" : rawAi.status || defaults.ai.status
+    ),
+    progress: clamp(
+      finiteNumber(
+        legacyBrowserWhisperMetadata ? 0 : rawAi.progress,
+        defaults.ai.progress
+      ),
+      0,
+      1
+    ),
     warnings: normalizeAiWarnings(rawAi.warnings),
     speakerColors: normalizeAiSpeakerColors(rawAi.speakerColors),
     captionCheckpoints: normalizeAiCaptionCheckpoints(
@@ -836,18 +885,26 @@ function normalizeEditorProject(raw) {
       clips
     )
   };
+  const rawHistory = recordOrEmpty(raw.history);
+  const rawSource = recordOrEmpty(raw.source);
+  const rawBroadcastSession = recordOrEmpty(
+    raw.broadcastSession
+  );
   return {
     ...defaults,
     ...raw,
     schema: EDITOR_SCHEMA,
-    source: { ...defaults.source, ...raw.source || {} },
-    broadcastSession: { ...defaults.broadcastSession, ...raw.broadcastSession || {} },
+    source: { ...defaults.source, ...rawSource },
+    broadcastSession: {
+      ...defaults.broadcastSession,
+      ...rawBroadcastSession
+    },
     mediaAsset: normalizeMediaAsset(raw.mediaAsset),
     subtitleDefaults,
     ai,
     history: {
-      undo: Array.isArray(raw.history?.undo) ? raw.history.undo : [],
-      redo: Array.isArray(raw.history?.redo) ? raw.history.redo : []
+      undo: Array.isArray(rawHistory.undo) ? rawHistory.undo : [],
+      redo: Array.isArray(rawHistory.redo) ? rawHistory.redo : []
     },
     clips,
     suppressedSelections,
@@ -856,8 +913,8 @@ function normalizeEditorProject(raw) {
     recentSubtitleColors: normalizeRecentSubtitleColors(raw.recentSubtitleColors),
     audioRegions,
     imageAssets,
-    selectedImageAssetId: imageAssets.some((asset) => asset.id === raw.selectedImageAssetId) ? raw.selectedImageAssetId : null,
-    selectedAudioRegionId: audioRegions.some((region) => region.id === raw.selectedAudioRegionId) ? raw.selectedAudioRegionId : null
+    selectedImageAssetId: imageAssets.some((asset) => asset.id === raw.selectedImageAssetId) && typeof raw.selectedImageAssetId === "string" ? raw.selectedImageAssetId : null,
+    selectedAudioRegionId: audioRegions.some((region) => region.id === raw.selectedAudioRegionId) && typeof raw.selectedAudioRegionId === "string" ? raw.selectedAudioRegionId : null
   };
 }
 function applyCaptionStylePreset(project2, presetId) {
@@ -869,7 +926,7 @@ function applyCaptionStylePreset(project2, presetId) {
     ...project2,
     subtitleDefaults: {
       ...project2.subtitleDefaults || {},
-      ...captionStyleDefaults(normalizedPresetId)
+      ...normalizedCaptionStyleDefaults(normalizedPresetId)
     },
     updatedAt: nowIso()
   };
@@ -1061,10 +1118,10 @@ function mergeCaptureIntoEditorProject(project2, captureState = {}) {
   const source = { ...normalized.source, ...captureState.source || {} };
   const incomingSession = createBroadcastSession(source);
   const previouslySelectedClip = normalized.clips.find((clip) => clip.id === normalized.selectedClipId);
-  const nextSelectedClipId = nextClipIds.has(normalized.selectedClipId) ? normalized.selectedClipId : nextClips.find((clip) => clip.selectionId === previouslySelectedClip?.selectionId)?.id || nextClips[0]?.id || null;
+  const nextSelectedClipId = typeof normalized.selectedClipId === "string" && nextClipIds.has(normalized.selectedClipId) ? normalized.selectedClipId : nextClips.find((clip) => clip.selectionId === previouslySelectedClip?.selectionId)?.id || nextClips[0]?.id || null;
   return {
     ...normalized,
-    name: captureState.projectName || normalized.name,
+    name: String(captureState.projectName || normalized.name),
     source,
     broadcastSession: {
       ...normalized.broadcastSession,
@@ -1132,23 +1189,24 @@ function normalizeSubtitleCue(cue, clip, laneCount = MAX_SUBTITLE_LANES) {
     startOffsetMs + MIN_CUE_DURATION_MS,
     duration
   );
-  const remotePlacement = String(cue.remoteMeta?.placement || "").trim().toLowerCase();
+  const rawRemoteMeta = recordOrEmpty(cue.remoteMeta);
+  const remotePlacement = String(rawRemoteMeta.placement || "").trim().toLowerCase();
   const origin = cue.origin === "ai" ? "ai" : "human";
   const humanEdited = Boolean(cue.humanEdited);
   const automaticAiCue = origin === "ai" && !humanEdited;
   const remoteMeta = cue.remoteMeta && typeof cue.remoteMeta === "object" ? {
-    speakerId: String(cue.remoteMeta.speakerId || "unknown").replace(/\s+/gu, " ").trim().slice(0, 80) || "unknown",
-    reviewRequired: Boolean(cue.remoteMeta.reviewRequired),
+    speakerId: String(rawRemoteMeta.speakerId || "unknown").replace(/\s+/gu, " ").trim().slice(0, 80) || "unknown",
+    reviewRequired: Boolean(rawRemoteMeta.reviewRequired),
     placement: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.placement : ["top", "center", "bottom"].includes(remotePlacement) ? remotePlacement : AUTOMATIC_CAPTION_POSITION.placement,
-    ...cue.remoteMeta.qualityStatus != null || Array.isArray(cue.remoteMeta.qualityCodes) ? {
-      qualityStatus: cue.remoteMeta.qualityStatus === "review-required" ? "review-required" : "accepted",
+    ...rawRemoteMeta.qualityStatus != null || Array.isArray(rawRemoteMeta.qualityCodes) ? {
+      qualityStatus: rawRemoteMeta.qualityStatus === "review-required" ? "review-required" : "accepted",
       qualityCodes: [...new Set(
-        (Array.isArray(cue.remoteMeta.qualityCodes) ? cue.remoteMeta.qualityCodes : []).map((code) => String(code || "").trim().slice(0, 128)).filter(Boolean)
+        (Array.isArray(rawRemoteMeta.qualityCodes) ? rawRemoteMeta.qualityCodes : []).map((code) => String(code || "").trim().slice(0, 128)).filter(Boolean)
       )].slice(0, 32)
     } : {}
   } : null;
   return {
-    id: cue.id || makeId("cue"),
+    id: String(cue.id || makeId("cue")),
     clipId: clip.id,
     startOffsetMs,
     endOffsetMs,
@@ -1163,7 +1221,7 @@ function normalizeSubtitleCue(cue, clip, laneCount = MAX_SUBTITLE_LANES) {
     y: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.y : clamp(finiteNumber(cue.y, AUTOMATIC_CAPTION_POSITION.y), 0.05, 0.95),
     origin,
     humanEdited,
-    confidence: Number.isFinite(cue.confidence) ? cue.confidence : null,
+    confidence: typeof cue.confidence === "number" && Number.isFinite(cue.confidence) ? cue.confidence : null,
     ...remoteMeta ? { remoteMeta } : {},
     createdAt: cue.createdAt || nowIso(),
     updatedAt: cue.updatedAt || cue.createdAt || nowIso()
@@ -1255,7 +1313,10 @@ function normalizeImageAsset(asset, clip) {
     duration
   );
   const requestedSource = asset.source ?? (asset.dataUrl ? { kind: "data-url", value: asset.dataUrl } : null) ?? (asset.blobKey ? { kind: "blob-key", value: asset.blobKey } : null);
-  const source = normalizeImageAssetSource(requestedSource, asset.mimeType);
+  const source = normalizeImageAssetSource(
+    requestedSource,
+    String(asset.mimeType || "")
+  );
   const mimeType = source?.kind === "data-url" ? imageMimeTypeFromDataUrl(source.value) : normalizeImageMimeType(asset.mimeType);
   if (!source || !mimeType) {
     return null;
@@ -1263,7 +1324,7 @@ function normalizeImageAsset(asset, clip) {
   const naturalWidth = Math.round(finiteNumber(asset.naturalWidth));
   const naturalHeight = Math.round(finiteNumber(asset.naturalHeight));
   return {
-    id: asset.id || makeId("asset"),
+    id: String(asset.id || makeId("asset")),
     clipId: clip.id,
     startOffsetMs,
     endOffsetMs,
@@ -1347,7 +1408,7 @@ function updateImageAsset(project2, assetId, patch = {}) {
   return {
     ...project2,
     imageAssets,
-    selectedImageAssetId: assetId,
+    selectedImageAssetId: next.id,
     updatedAt: nowIso()
   };
 }
@@ -1373,7 +1434,7 @@ function normalizeAudioRegion(region, clip) {
   );
   const maximumFadeMs = Math.max(0, endOffsetMs - startOffsetMs);
   return {
-    id: region.id || makeId("audio"),
+    id: String(region.id || makeId("audio")),
     clipId: clip.id,
     startOffsetMs,
     endOffsetMs,
@@ -1438,7 +1499,7 @@ function updateAudioRegion(project2, regionId, patch = {}) {
   return {
     ...project2,
     audioRegions,
-    selectedAudioRegionId: regionId,
+    selectedAudioRegionId: next.id,
     updatedAt: nowIso()
   };
 }
@@ -1518,18 +1579,24 @@ function timelineSnapCandidates(project2, {
     }
     return kind === "playhead" ? 2 : 3;
   };
-  const add = ({ timeMs, kind, edge, itemId = null, label }) => {
+  const add = ({
+    timeMs,
+    kind,
+    edge,
+    itemId = null,
+    label
+  }) => {
     const normalizedTimeMs = Math.round(finiteNumber(timeMs, -1));
     if (normalizedTimeMs < clipStartMs || normalizedTimeMs > clipEndMs) {
       return;
     }
     candidates.push({
       timeMs: normalizedTimeMs,
-      kind,
-      edge,
-      itemId,
-      label,
-      priority: priorityFor(kind)
+      kind: String(kind || ""),
+      edge: String(edge || ""),
+      itemId: itemId == null ? null : String(itemId),
+      label: String(label || ""),
+      priority: priorityFor(String(kind || ""))
     });
   };
   add({
@@ -1640,7 +1707,7 @@ function matchImageAssetToSubtitleCue(project2, assetId, cueId) {
 }
 function cuesAtTimeline(project2, timelineMs) {
   const target = Math.round(finiteNumber(timelineMs));
-  return (project2?.subtitles || []).map((cue) => ({ cue, range: cueTimelineRange(project2, cue) })).filter(({ range }) => range && target >= range.startMs && target < range.endMs).sort((a, b) => a.cue.lane - b.cue.lane || a.range.startMs - b.range.startMs || a.cue.id.localeCompare(b.cue.id)).map(({ cue }) => cue);
+  return (project2?.subtitles || []).map((cue) => ({ cue, range: cueTimelineRange(project2, cue) })).filter(hasTimelineRange).filter(({ range }) => target >= range.startMs && target < range.endMs).sort((a, b) => a.cue.lane - b.cue.lane || a.range.startMs - b.range.startMs || a.cue.id.localeCompare(b.cue.id)).map(({ cue }) => cue);
 }
 function imageAssetsAtTimeline(project2, timelineMs) {
   const target = Math.round(finiteNumber(timelineMs));
@@ -1650,7 +1717,7 @@ function imageAssetsAtTimeline(project2, timelineMs) {
   });
 }
 function findSubtitleOverlaps(project2) {
-  const cues = (project2?.subtitles || []).map((cue) => ({ cue, range: cueTimelineRange(project2, cue) })).filter(({ range }) => range).sort((a, b) => a.range.startMs - b.range.startMs);
+  const cues = (project2?.subtitles || []).map((cue) => ({ cue, range: cueTimelineRange(project2, cue) })).filter(hasTimelineRange).sort((a, b) => a.range.startMs - b.range.startMs);
   const overlaps = [];
   for (let leftIndex = 0; leftIndex < cues.length; leftIndex += 1) {
     const left = cues[leftIndex];
@@ -1676,7 +1743,7 @@ function audioRegionAtTimeline(project2, timelineMs) {
   return (project2?.audioRegions || []).map((region) => ({ region, range: audioRegionTimelineRange(project2, region) })).find(({ range }) => range && target >= range.startMs && target < range.endMs)?.region || null;
 }
 function findAudioRegionOverlaps(project2) {
-  const regions = (project2?.audioRegions || []).map((region) => ({ region, range: audioRegionTimelineRange(project2, region) })).filter(({ range }) => range).sort((a, b) => a.range.startMs - b.range.startMs);
+  const regions = (project2?.audioRegions || []).map((region) => ({ region, range: audioRegionTimelineRange(project2, region) })).filter(hasTimelineRange).sort((a, b) => a.range.startMs - b.range.startMs);
   const overlaps = [];
   for (let leftIndex = 0; leftIndex < regions.length; leftIndex += 1) {
     const left = regions[leftIndex];
@@ -1723,7 +1790,12 @@ function updateSubtitleCue(project2, cueId, patch = {}, { markHuman = true } = {
   }, clip, project2.subtitleLaneCount ?? MIN_SUBTITLE_LANES);
   const subtitles = [...project2.subtitles];
   subtitles[index] = next;
-  return { ...project2, subtitles, selectedCueId: cueId, updatedAt: nowIso() };
+  return {
+    ...project2,
+    subtitles,
+    selectedCueId: next.id,
+    updatedAt: nowIso()
+  };
 }
 function deleteSubtitleCue(project2, cueId) {
   return {
@@ -1797,10 +1869,10 @@ function replaceAiSubtitleDraft(project2, clipId, drafts = []) {
     const speakerId = String(candidate.remoteMeta?.speakerId || "").trim();
     const preferredLane = speakerLanes.get(speakerId);
     const candidateLanes = [
-      ...Number.isInteger(preferredLane) ? [preferredLane] : [],
+      ...typeof preferredLane === "number" && Number.isInteger(preferredLane) ? [preferredLane] : [],
       ...Array.from({ length: subtitleLaneCount }, (_, lane2) => lane2)
     ].filter((lane2, index, lanes) => lanes.indexOf(lane2) === index);
-    let lane = candidateLanes.find((candidateLane) => !laneCues[candidateLane].some((cue) => overlaps(cue, candidate)));
+    let lane = candidateLanes.find((candidateLane) => !(laneCues[candidateLane] ?? []).some((cue) => overlaps(cue, candidate)));
     if (lane === void 0 && subtitleLaneCount < MAX_SUBTITLE_LANES) {
       lane = subtitleLaneCount;
       subtitleLaneCount += 1;
@@ -1831,7 +1903,10 @@ function replaceAiSubtitleDraft(project2, clipId, drafts = []) {
   };
 }
 function replaceAiBlankTimingDraft(project2, clipId, drafts = []) {
-  const rangeSignature = (cue) => (Array.isArray(cue?.remoteMeta?.qualityCodes) ? cue.remoteMeta.qualityCodes : []).find((code) => /^AUDSEG_RANGE_\d+_\d+$/u.test(code)) || null;
+  const rangeSignature = (cue) => {
+    const remoteMeta = recordOrEmpty(cue.remoteMeta);
+    return (Array.isArray(remoteMeta.qualityCodes) ? remoteMeta.qualityCodes : []).find((code) => /^AUDSEG_RANGE_\d+_\d+$/u.test(String(code))) || null;
+  };
   const protectedRangeSignatures = new Set(
     project2.subtitles.filter((cue) => cue.clipId === clipId && cue.origin === "ai" && cue.humanEdited && cue.remoteMeta?.qualityCodes?.includes("AUDSEG_BLANK_TIMING")).map(rangeSignature).filter(Boolean)
   );
@@ -2144,7 +2219,7 @@ function rippleDeleteTimelineRange(project2, {
     projectDurationMs({ clips })
   );
   const projectWithClips = { ...project2, clips };
-  const selectedClipId = clips.some((clip) => clip.id === project2.selectedClipId) ? project2.selectedClipId : mapTimelineToSource(projectWithClips, playheadMs)?.clipId || clips[0]?.id || null;
+  const selectedClipId = typeof project2.selectedClipId === "string" && clips.some((clip) => clip.id === project2.selectedClipId) ? project2.selectedClipId : mapTimelineToSource(projectWithClips, playheadMs)?.clipId || clips[0]?.id || null;
   const survivingSelectionIds = new Set(clips.map((clip) => clip.selectionId));
   const suppressedBySelectionId = /* @__PURE__ */ new Map();
   for (const entry of project2.suppressedSelections || []) {
@@ -2292,7 +2367,7 @@ function applyMediaAlignmentOffset(project2, alignmentOffsetMs) {
   };
 }
 function serializeSrt(project2) {
-  const cues = (project2?.subtitles || []).map((cue) => ({ cue, range: cueTimelineRange(project2, cue) })).filter(({ cue, range }) => range && cue.text.trim()).sort((a, b) => a.range.startMs - b.range.startMs);
+  const cues = (project2?.subtitles || []).map((cue) => ({ cue, range: cueTimelineRange(project2, cue) })).filter(hasTimelineRange).filter(({ cue }) => cue.text.trim()).sort((a, b) => a.range.startMs - b.range.startMs);
   const formatSrtTime = (milliseconds) => {
     const value = Math.max(0, Math.round(milliseconds));
     const hours = Math.floor(value / 36e5);
@@ -2309,7 +2384,7 @@ function serializeSrt(project2) {
   ].join("\n")).join("\n");
 }
 
-// extension/lib/core.js
+// src/lib/core.ts
 var STORAGE_KEY = "chzzkKirinukiProjectV1";
 
 // node_modules/mediabunny/dist/modules/src/misc.js
@@ -2782,7 +2857,7 @@ var uint8ArraysAreEqual = (a, b) => {
   return true;
 };
 var polyfillSymbolDispose = () => {
-  Symbol.dispose ??= Symbol("Symbol.dispose");
+  Symbol.dispose ??= /* @__PURE__ */ Symbol("Symbol.dispose");
 };
 var isNumber = (x) => {
   return typeof x === "number" && !Number.isNaN(x);
@@ -18122,7 +18197,7 @@ var __addDisposableResource = function(env, value, async) {
   }
   return value;
 };
-var __disposeResources = /* @__PURE__ */ function(SuppressedError2) {
+var __disposeResources = /* @__PURE__ */ (function(SuppressedError2) {
   return function(env) {
     function fail(e) {
       env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -18149,7 +18224,7 @@ var __disposeResources = /* @__PURE__ */ function(SuppressedError2) {
     }
     return next();
   };
-}(typeof SuppressedError === "function" ? SuppressedError : function(error, suppressed, message) {
+})(typeof SuppressedError === "function" ? SuppressedError : function(error, suppressed, message) {
   var e = new Error(message);
   return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
 });
@@ -19805,7 +19880,7 @@ var __addDisposableResource2 = function(env, value, async) {
   }
   return value;
 };
-var __disposeResources2 = /* @__PURE__ */ function(SuppressedError2) {
+var __disposeResources2 = /* @__PURE__ */ (function(SuppressedError2) {
   return function(env) {
     function fail(e) {
       env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -19832,7 +19907,7 @@ var __disposeResources2 = /* @__PURE__ */ function(SuppressedError2) {
     }
     return next();
   };
-}(typeof SuppressedError === "function" ? SuppressedError : function(error, suppressed, message) {
+})(typeof SuppressedError === "function" ? SuppressedError : function(error, suppressed, message) {
   var e = new Error(message);
   return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
 });
@@ -31831,13 +31906,13 @@ var Output = class extends EventEmitter {
    * prefer the `'target'` event for those cases.
    */
   get target() {
-    const errorMessage = "Output.target cannot be used when using PathedTarget with an async callback. Use the 'target' event instead.";
+    const errorMessage2 = "Output.target cannot be used when using PathedTarget with an async callback. Use the 'target' event instead.";
     if (this._rootTargetPromise) {
-      throw new TypeError(errorMessage);
+      throw new TypeError(errorMessage2);
     }
     const rootTargetResult = this._getRootTarget();
     if (rootTargetResult instanceof Promise) {
-      throw new TypeError(errorMessage);
+      throw new TypeError(errorMessage2);
     }
     return rootTargetResult;
   }
@@ -32214,13 +32289,13 @@ var Output = class extends EventEmitter {
 };
 
 // node_modules/mediabunny/dist/modules/src/index.js
-var MEDIABUNNY_LOADED_SYMBOL = Symbol.for("mediabunny loaded");
+var MEDIABUNNY_LOADED_SYMBOL = /* @__PURE__ */ Symbol.for("mediabunny loaded");
 if (globalThis[MEDIABUNNY_LOADED_SYMBOL]) {
   Logging._error("[WARNING]\nMediabunny was loaded twice. This will likely cause Mediabunny not to work correctly. Check if multiple dependencies are importing different versions of Mediabunny, or if something is being bundled incorrectly.");
 }
 globalThis[MEDIABUNNY_LOADED_SYMBOL] = true;
 
-// src/editor/media-engine.js
+// src/editor/media-engine.ts
 var PCM_SAMPLE_RATE = 16e3;
 var OUTPUT_AUDIO_CHANNELS = 2;
 var OUTPUT_AUDIO_SAMPLE_RATE = 48e3;
@@ -32274,7 +32349,9 @@ function normalizeMediaTimeline(firstTimestampSeconds, endTimestampSeconds) {
   };
 }
 async function readMediaTimeline(input, tracks) {
-  const filteredTracks = tracks.filter(Boolean);
+  const filteredTracks = tracks.filter(
+    (track) => Boolean(track)
+  );
   if (filteredTracks.length === 0) {
     return normalizeMediaTimeline(0, 0);
   }
@@ -32284,7 +32361,7 @@ async function readMediaTimeline(input, tracks) {
   if (!Number.isFinite(endTimestamp) || endTimestamp <= originSeconds) {
     endTimestamp = await input.computeDuration(filteredTracks);
   }
-  return normalizeMediaTimeline(originSeconds, endTimestamp);
+  return normalizeMediaTimeline(originSeconds, endTimestamp ?? originSeconds);
 }
 function validateRenderClips(project2, mediaDurationMs) {
   const durationMs = Number(mediaDurationMs);
@@ -32529,7 +32606,9 @@ function clampSamplePosition(value, length) {
 }
 function activeCuesAt(project2, outputSeconds) {
   const outputMs = outputSeconds * 1e3;
-  return project2.subtitles.map((cue) => ({ cue, range: cueTimelineRange(project2, cue) })).filter(({ cue, range }) => range && cue.text.trim() && outputMs >= range.startMs && outputMs < range.endMs).sort((a, b) => (Number(a.cue.lane) || 0) - (Number(b.cue.lane) || 0) || a.range.startMs - b.range.startMs || String(a.cue.id).localeCompare(String(b.cue.id))).map(({ cue }) => cue);
+  return project2.subtitles.map((cue) => ({ cue, range: cueTimelineRange(project2, cue) })).filter((entry) => Boolean(
+    entry.range && entry.cue.text.trim() && outputMs >= entry.range.startMs && outputMs < entry.range.endMs
+  )).sort((a, b) => (Number(a.cue.lane) || 0) - (Number(b.cue.lane) || 0) || a.range.startMs - b.range.startMs || String(a.cue.id).localeCompare(String(b.cue.id))).map(({ cue }) => cue);
 }
 function activeImageAssetsAt(project2, outputSeconds) {
   return imageAssetsAtTimeline(project2, Number(outputSeconds) * 1e3);
@@ -32719,7 +32798,7 @@ function createImageAssetRenderCache(project2, {
     return activeAssets.map((asset) => ({
       asset,
       image: decoded.get(asset.id)?.image
-    })).filter(({ image }) => Boolean(image));
+    })).filter((entry) => Boolean(entry.image));
   };
   return {
     prepareAt,
@@ -33112,7 +33191,7 @@ function buildAudioAutomation(project2) {
         Math.max(0, (range.endMs - range.startMs) / 1e3)
       )
     };
-  }).filter(Boolean).sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
+  }).filter((segment) => Boolean(segment)).sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
 }
 function audioAutomationGainAt(automation, outputSeconds) {
   const time = Number(outputSeconds);
@@ -33191,10 +33270,11 @@ async function renderProjectVideo(file, project2, {
       frameRate,
       videoBitrate
     } = settings;
-    imageAssetCache = createImageAssetRenderCache(project2, {
+    const activeImageAssetCache = createImageAssetRenderCache(project2, {
       resolveImageAsset,
       signal
     });
+    imageAssetCache = activeImageAssetCache;
     const outputCodecs = await chooseOutputCodecs(settings);
     let target;
     if (fileHandle) {
@@ -33214,6 +33294,9 @@ async function renderProjectVideo(file, project2, {
     output.addVideoTrack(videoSource, { frameRate });
     let audioSource = null;
     if (audioTrack) {
+      if (!outputCodecs.audioCodec) {
+        throw new Error("\uC74C\uC131 \uD2B8\uB799\uC5D0 \uC0AC\uC6A9\uD560 \uCD9C\uB825 \uCF54\uB371\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      }
       audioSource = new AudioSampleSource({
         codec: outputCodecs.audioCodec,
         bitrate: OUTPUT_AUDIO_BITRATE,
@@ -33251,11 +33334,11 @@ async function renderProjectVideo(file, project2, {
           return;
         }
         const { firstFrameIndex, endFrameIndex } = cfrFrameRange(clip, frameRate);
-        const sourceTimestamps = function* generateSourceTimestamps() {
+        const sourceTimestamps = (function* generateSourceTimestamps() {
           for (let frameIndex2 = firstFrameIndex; frameIndex2 < endFrameIndex; frameIndex2 += 1) {
             yield timeline.originSeconds + clip.sourceStartMs / 1e3 + frameIndex2 / frameRate;
           }
-        }();
+        })();
         let frameIndex = firstFrameIndex;
         for await (const sourceSample of videoSink.samplesAtTimestamps(sourceTimestamps)) {
           try {
@@ -33271,11 +33354,15 @@ async function renderProjectVideo(file, project2, {
             context.fillStyle = "#000";
             context.fillRect(0, 0, width, height);
             sourceSample?.drawWithFit(context, { fit: "contain" });
-            const activeImageAssets = await imageAssetCache.prepareAt(timing.outputTimestamp);
+            const activeImageAssets = await activeImageAssetCache.prepareAt(
+              timing.outputTimestamp
+            );
             for (const { asset, image } of activeImageAssets) {
               drawImageAsset(context, canvas, asset, image);
             }
-            imageAssetCache.releaseThrough(timing.outputTimestamp + timing.duration);
+            activeImageAssetCache.releaseThrough(
+              timing.outputTimestamp + timing.duration
+            );
             for (const cue of activeCuesAt(project2, timing.outputTimestamp)) {
               drawCaption(context, canvas, project2, cue);
             }
@@ -33372,6 +33459,9 @@ async function renderProjectVideo(file, project2, {
     completed = true;
     onProgress(1, "finalize");
     if (target instanceof BufferTarget) {
+      if (!target.buffer) {
+        throw new Error("\uBA54\uBAA8\uB9AC \uC601\uC0C1 \uCD9C\uB825 \uBC84\uD37C\uAC00 \uC0DD\uC131\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+      }
       return {
         blob: new Blob([target.buffer], { type: outputCodecs.mimeType }),
         ...outputCodecs,
@@ -33407,7 +33497,7 @@ async function renderProjectVideo(file, project2, {
   }
 }
 
-// src/editor/project-store.js
+// src/editor/project-store.ts
 var DATABASE_NAME = EDITOR_DATABASE_NAME;
 var DATABASE_VERSION = 3;
 var PROJECTS = "projects";
@@ -33501,7 +33591,9 @@ function openDatabase() {
   return attempt;
 }
 function isClosedDatabaseError(error) {
-  return error?.name === "InvalidStateError";
+  return Boolean(
+    error && typeof error === "object" && "name" in error && error.name === "InvalidStateError"
+  );
 }
 function discardDatabase(database) {
   if (activeDatabase === database) {
@@ -33538,7 +33630,7 @@ function runTransaction(database, storeNames, mode, operation) {
       reject(error);
       return;
     }
-    tx.oncomplete = () => resolve(result?.result);
+    tx.oncomplete = () => resolve(result.result);
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error("\uC800\uC7A5 \uC791\uC5C5\uC774 \uC911\uB2E8\uB418\uC5C8\uC2B5\uB2C8\uB2E4."));
   });
@@ -33546,7 +33638,12 @@ function runTransaction(database, storeNames, mode, operation) {
 async function transaction(storeNames, mode, operation, retryClosedDatabase = true) {
   const database = await openDatabase();
   try {
-    return await runTransaction(database, storeNames, mode, operation);
+    return await runTransaction(
+      database,
+      storeNames,
+      mode,
+      operation
+    );
   } catch (error) {
     if (retryClosedDatabase && isClosedDatabaseError(error)) {
       discardDatabase(database);
@@ -33616,10 +33713,14 @@ function createLocalDraftRecord(project2, {
   };
 }
 function isLocalDraftRecord(value, projectId = null) {
-  if (!value || value.schema !== LOCAL_DRAFT_SCHEMA || !String(value.id || "") || !String(value.projectId || "") || !Number.isFinite(Number(value.createdAtMs)) || !value.project || String(value.project.id || "") !== String(value.projectId)) {
+  if (!value || typeof value !== "object") {
     return false;
   }
-  return projectId == null || String(value.projectId) === String(projectId);
+  const candidate = value;
+  if (candidate.schema !== LOCAL_DRAFT_SCHEMA || !String(candidate.id || "") || !String(candidate.projectId || "") || !Number.isFinite(Number(candidate.createdAtMs)) || !candidate.project || String(candidate.project.id || "") !== String(candidate.projectId)) {
+    return false;
+  }
+  return projectId == null || String(candidate.projectId) === String(projectId);
 }
 function compareLocalDraftsNewestFirst(first, second) {
   return Number(second.createdAtMs) - Number(first.createdAtMs) || String(second.id).localeCompare(String(first.id));
@@ -33779,7 +33880,12 @@ async function getFileFromStoredHandle(projectId) {
     return { handle, file: await handle.getFile(), permission };
   } catch (error) {
     console.warn("\uC800\uC7A5\uB41C \uC6D0\uBCF8 \uD30C\uC77C\uC744 \uB2E4\uC2DC \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.", error);
-    return { handle: null, file: null, permission: "error", error: error.message };
+    return {
+      handle: null,
+      file: null,
+      permission: "error",
+      error: error instanceof Error ? error.message : String(error)
+    };
   }
 }
 var imageAssetKey = (projectId, assetId) => [
@@ -33879,7 +33985,7 @@ async function pruneImageAssetBlobs(projectId, keepAssetIds = []) {
   return Number(deletedCount) || 0;
 }
 
-// src/editor/audseg.js
+// src/editor/audseg.ts
 var AUDSEG_ENGINE_VERSION = "0.1.0";
 var AUDSEG_DRAFT_MODEL = "audseg-local";
 var AUDSEG_SAMPLE_RATE_HZ = 16e3;
@@ -33977,9 +34083,10 @@ function segmentAudSegPcmInWorker(samples, {
       callback(value);
     };
     const onAbort = () => {
+      const abortReason = signal?.reason;
       finish(
         reject,
-        signal.reason instanceof Error ? signal.reason : new DOMException("\uC791\uC5C5\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.", "AbortError")
+        abortReason instanceof Error ? abortReason : new DOMException("\uC791\uC5C5\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.", "AbortError")
       );
     };
     const onMessage = (event) => {
@@ -33987,6 +34094,10 @@ function segmentAudSegPcmInWorker(samples, {
         return;
       }
       if (event.data?.ok) {
+        if (!event.data.result) {
+          finish(reject, new Error("AudSeg Worker \uACB0\uACFC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."));
+          return;
+        }
         finish(resolve, event.data.result);
         return;
       }
@@ -34055,7 +34166,7 @@ function audSegBlankSubtitleDrafts(result) {
   }));
 }
 
-// src/caption-agent/editorial-context.js
+// src/caption-agent/editorial-context.ts
 var CAPTION_EDITORIAL_CONTEXT_SCHEMA = "kr-vtuber-editorial-context/v1";
 var MAX_CAPTION_GLOSSARY_ENTRIES = 48;
 var MAX_CAPTION_GLOSSARY_VARIANTS = 8;
@@ -34179,6 +34290,10 @@ function romanizeHangulForIdentity(value) {
   let output = "";
   for (const character of String(value ?? "").normalize("NFKC")) {
     const codePoint = character.codePointAt(0);
+    if (codePoint === void 0) {
+      output += character;
+      continue;
+    }
     if (codePoint < 44032 || codePoint > 55203) {
       output += character;
       continue;
@@ -34187,7 +34302,7 @@ function romanizeHangulForIdentity(value) {
     const initial = Math.floor(syllable / 588);
     const medial = Math.floor(syllable % 588 / 28);
     const final = syllable % 28;
-    output += HANGUL_INITIALS[initial] + HANGUL_MEDIALS[medial] + HANGUL_FINALS[final];
+    output += (HANGUL_INITIALS[initial] ?? "") + (HANGUL_MEDIALS[medial] ?? "") + (HANGUL_FINALS[final] ?? "");
   }
   return output;
 }
@@ -34502,7 +34617,7 @@ function captionEditorialContextFingerprint(editorialContext) {
   return `ctx-v1-${first.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`;
 }
 
-// src/caption-agent/caption-quality-harness.js
+// src/caption-agent/caption-quality-harness.ts
 var DEFAULT_SPEAKER_PALETTE = Object.freeze([
   "#FFFFFF",
   "#00E6A3",
@@ -34538,7 +34653,7 @@ var KR_VTUBER_CLEAN_PROFILE = Object.freeze({
 var CAPTION_QUALITY_PROFILE_ID = KR_VTUBER_CLEAN_PROFILE.id;
 var CAPTION_HARNESS_FINGERPRINT = "kr-vtuber-clean-v1:segment-word-v3:context-v1:quality-gate-v2";
 
-// src/editor/caption-agent.js
+// src/editor/caption-agent.ts
 var CAPTION_AGENT_SETTINGS_KEY = "chzzk-kirinuki-caption-agent-settings-v3";
 var LEGACY_CAPTION_AGENT_SETTINGS_KEY = "chzzk-kirinuki-caption-agent-settings-v2";
 var OLDEST_CAPTION_AGENT_SETTINGS_KEY = "chzzk-kirinuki-caption-agent-settings-v1";
@@ -34560,6 +34675,19 @@ var MAX_CAPTION_AGENT_WAV_BYTES = 64 * 1024 * 1024;
 var CAPTION_AGENT_SAMPLE_RATE_HZ = 16e3;
 var MAX_SESSION_TOKEN_LENGTH = 4096;
 var MAX_STT_MODEL_LENGTH = 160;
+function httpStatus(error) {
+  return error instanceof CaptionAgentHttpError ? error.status : 0;
+}
+var CaptionAgentHttpError = class extends Error {
+  status;
+  code;
+  constructor(message, status, code) {
+    super(message);
+    this.name = "CaptionAgentHttpError";
+    this.status = status;
+    this.code = code;
+  }
+};
 var DEFAULT_CAPTION_AGENT_SETTINGS = Object.freeze({
   endpoint: "http://127.0.0.1:4319/v1/captions",
   model: "whisper-tiny"
@@ -34572,6 +34700,9 @@ var ALLOWED_CAPTION_MODELS = /* @__PURE__ */ new Set([
 ]);
 var LEGACY_CAPTION_PIPELINE_FINGERPRINT = "legacy-caption-pipeline-v0";
 var REQUIRED_CAPTION_PIPELINE_FINGERPRINT = "current-caption-pipeline-required-v1";
+function isCaptionModel(model) {
+  return typeof model === "string" && ALLOWED_CAPTION_MODELS.has(model);
+}
 function captionAgentRunClipLimit(model) {
   if (model === LOCAL_AUDSEG_CAPTION_MODEL) {
     return null;
@@ -34645,11 +34776,11 @@ function normalizeCaptionAgentEndpoint(value) {
   return url2.toString();
 }
 function normalizeCaptionAgentSettings(raw = {}) {
-  const model = ALLOWED_CAPTION_MODELS.has(raw.model) ? raw.model : DEFAULT_CAPTION_AGENT_SETTINGS.model;
+  const model = isCaptionModel(raw?.model) ? raw.model : DEFAULT_CAPTION_AGENT_SETTINGS.model;
   let endpoint = DEFAULT_CAPTION_AGENT_SETTINGS.endpoint;
   try {
     endpoint = normalizeCaptionAgentEndpoint(
-      raw.endpoint || DEFAULT_CAPTION_AGENT_SETTINGS.endpoint
+      raw?.endpoint || DEFAULT_CAPTION_AGENT_SETTINGS.endpoint
     );
   } catch {
   }
@@ -34677,7 +34808,7 @@ async function loadCaptionAgentSettings(storageArea = chrome.storage.local) {
   return normalized;
 }
 async function saveCaptionAgentSettings(settings, storageArea = chrome.storage.local) {
-  const requestedModel = ALLOWED_CAPTION_MODELS.has(settings?.model) ? settings.model : DEFAULT_CAPTION_AGENT_SETTINGS.model;
+  const requestedModel = isCaptionModel(settings?.model) ? settings.model : DEFAULT_CAPTION_AGENT_SETTINGS.model;
   const normalized = requestedModel === LOCAL_AUDSEG_CAPTION_MODEL ? normalizeCaptionAgentSettings({
     ...settings,
     model: requestedModel
@@ -34713,7 +34844,7 @@ function shortStableFingerprint(value) {
 function captionAgentRuntimeIdentity(capability, {
   model = DEFAULT_CAPTION_AGENT_SETTINGS.model
 } = {}) {
-  if (!ALLOWED_CAPTION_MODELS.has(model)) {
+  if (!isCaptionModel(model)) {
     throw new Error("\uC120\uD0DD\uD55C \uC790\uB9C9 \uCD08\uBC8C \uBAA8\uB378\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   }
   if (model === LOCAL_AUDSEG_CAPTION_MODEL) {
@@ -34746,12 +34877,12 @@ function captionAgentRuntimeIdentity(capability, {
     throw new Error("\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8\uC758 STT \uC81C\uACF5\uC790\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   }
   const sttModel = boundedCapabilityString(
-    capability.models?.stt,
+    isPlainObject2(capability.models) ? capability.models.stt : void 0,
     "\uC2E4\uC81C STT \uBAA8\uB378",
     MAX_STT_MODEL_LENGTH
   );
   const transcriptionMode = boundedCapabilityString(
-    capability.transcription?.mode,
+    isPlainObject2(capability.transcription) ? capability.transcription.mode : void 0,
     "STT \uC2E4\uD589 \uBC29\uC2DD",
     80
   );
@@ -34827,7 +34958,7 @@ function createCaptionAgentCheckpoint(clip, model, {
   editorialContextFingerprint = "legacy-context-v0",
   pipelineFingerprint = REQUIRED_CAPTION_PIPELINE_FINGERPRINT
 } = {}) {
-  if (!ALLOWED_CAPTION_MODELS.has(model)) {
+  if (!isCaptionModel(model)) {
     throw new Error("\uC790\uB9C9 \uC7AC\uAC1C \uCCB4\uD06C\uD3EC\uC778\uD2B8\uC758 \uCD08\uBC8C \uBAA8\uB378\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   }
   const normalizedModel = model;
@@ -34874,7 +35005,7 @@ function discardCaptionAgentCheckpointsForClips(checkpoints, clips) {
   );
 }
 function sameCaptionMediaIdentity(left, right) {
-  if (!left || typeof left !== "object" || !right || typeof right !== "object") {
+  if (!isPlainObject2(left) || !isPlainObject2(right)) {
     return false;
   }
   for (const field of ["size", "lastModified", "durationMs"]) {
@@ -35033,6 +35164,7 @@ function createCaptionAgentRequest({
     throw new Error("\uC5D0\uC774\uC804\uD2B8\uC5D0 \uBCF4\uB0BC \uC74C\uC131\uC774 \uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
   }
   const editorialContext = buildProjectCaptionEditorialContext(project2);
+  const projectSource = isPlainObject2(project2.source) ? project2.source : {};
   return {
     schema: CAPTION_AGENT_REQUEST_SCHEMA,
     requestId: globalThis.crypto.randomUUID(),
@@ -35046,7 +35178,7 @@ function createCaptionAgentRequest({
     source: {
       projectId: String(project2?.id || ""),
       projectName: String(project2?.name || ""),
-      streamerName: String(project2?.source?.streamerName || "")
+      streamerName: String(projectSource.streamerName || "")
     },
     editorialContext,
     policy: {
@@ -35074,7 +35206,7 @@ function normalizedColor(value) {
   return /^#[0-9a-f]{6}$/iu.test(color) ? color.toLowerCase() : void 0;
 }
 function normalizedRemoteMeta(raw) {
-  const rawQuality = raw?.quality;
+  const rawQuality = isPlainObject2(raw.quality) ? raw.quality : null;
   const qualityCodes = Array.isArray(rawQuality?.codes) ? [...new Set(rawQuality.codes.map((code) => String(code || "").trim().slice(0, 128)).filter(Boolean))].slice(0, 32) : [];
   const qualityStatus = rawQuality?.status === "review-required" ? "review-required" : "accepted";
   return {
@@ -35092,10 +35224,11 @@ function normalizeCaptionAgentCues(cues, clipDurationMs2) {
   if (cues.length > MAX_REMOTE_CUES) {
     throw new Error(`\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC751\uB2F5\uC774 ${MAX_REMOTE_CUES}\uAC1C cue \uC0C1\uD55C\uC744 \uB118\uC5C8\uC2B5\uB2C8\uB2E4.`);
   }
-  const normalized = cues.map((raw, index) => {
-    const text = stripTerminalPeriod(raw?.text);
-    const rawStartMs = Number(raw?.startMs ?? raw?.start_ms);
-    const rawEndMs = Number(raw?.endMs ?? raw?.end_ms);
+  const normalized = cues.map((value, index) => {
+    const raw = isPlainObject2(value) ? value : {};
+    const text = stripTerminalPeriod(raw.text);
+    const rawStartMs = Number(raw.startMs ?? raw.start_ms);
+    const rawEndMs = Number(raw.endMs ?? raw.end_ms);
     if (!text) {
       throw new Error(`${index + 1}\uBC88\uC9F8 \uC6D0\uACA9 \uC790\uB9C9\uC758 \uD14D\uC2A4\uD2B8\uAC00 \uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.`);
     }
@@ -35107,7 +35240,7 @@ function normalizeCaptionAgentCues(cues, clipDurationMs2) {
     }
     const startOffsetMs = Math.round(rawStartMs);
     const endOffsetMs = Math.round(rawEndMs);
-    const color = normalizedColor(raw?.color);
+    const color = normalizedColor(raw.color);
     return {
       startOffsetMs,
       endOffsetMs,
@@ -35171,16 +35304,16 @@ async function parseResponse(response) {
     }
   }
   if (!response.ok) {
-    const remoteCode = String(payload?.error?.code || "");
+    const errorPayload = isPlainObject2(payload) && isPlainObject2(payload.error) ? payload.error : {};
+    const remoteCode = String(errorPayload.code || "");
     const code = /^[A-Z][A-Z0-9_]{0,63}$/u.test(remoteCode) ? remoteCode : "CAPTION_AGENT_REQUEST_FAILED";
-    const error = new Error(
-      `\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC694\uCCAD \uC2E4\uD328 (${response.status}, ${code})`
+    throw new CaptionAgentHttpError(
+      `\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC694\uCCAD \uC2E4\uD328 (${response.status}, ${code})`,
+      response.status,
+      code
     );
-    error.status = response.status;
-    error.code = code;
-    throw error;
   }
-  return payload || {};
+  return isPlainObject2(payload) ? payload : {};
 }
 function abortableDelay(milliseconds, signal) {
   return new Promise((resolve, reject) => {
@@ -35214,7 +35347,7 @@ function createDeadlineSignal(parentSignal, timeoutMs) {
   const onParentAbort = () => {
     if (!controller.signal.aborted) {
       controller.abort(
-        parentSignal.reason instanceof Error ? parentSignal.reason : new DOMException("\uC791\uC5C5\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.", "AbortError")
+        parentSignal?.reason instanceof Error ? parentSignal.reason : new DOMException("\uC791\uC5C5\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.", "AbortError")
       );
     }
   };
@@ -35244,10 +35377,11 @@ function isPlainObject2(value) {
   );
 }
 function requiredResponseString(payload, field) {
-  if (typeof payload[field] !== "string" || !payload[field].trim()) {
+  const value = payload[field];
+  if (typeof value !== "string" || !value.trim()) {
     throw new Error(`\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC751\uB2F5\uC758 ${field} \uD544\uB4DC\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`);
   }
-  return payload[field];
+  return value;
 }
 function assertExactResponseFields(value, allowedFields, label) {
   const unknownFields = Object.keys(value).filter(
@@ -35260,7 +35394,7 @@ function assertExactResponseFields(value, allowedFields, label) {
   }
 }
 function validateRemoteCueQuality(quality, index) {
-  if (!isPlainObject2(quality) || !["accepted", "review-required"].includes(quality.status) || !Array.isArray(quality.codes) || quality.codes.length > 32 || quality.codes.some((code) => typeof code !== "string" || !code.trim() || code.length > 128)) {
+  if (!isPlainObject2(quality) || typeof quality.status !== "string" || !["accepted", "review-required"].includes(quality.status) || !Array.isArray(quality.codes) || quality.codes.length > 32 || quality.codes.some((code) => typeof code !== "string" || !code.trim() || code.length > 128)) {
     throw new Error(`${index + 1}\uBC88\uC9F8 \uC790\uB9C9 \uD488\uC9C8 \uAC80\uC218 \uC815\uBCF4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`);
   }
   assertExactResponseFields(
@@ -35270,7 +35404,7 @@ function validateRemoteCueQuality(quality, index) {
   );
 }
 function validateRemoteQualityReport(report, cues) {
-  if (!isPlainObject2(report) || report.profileId !== CAPTION_QUALITY_PROFILE_ID || report.harnessFingerprint !== CAPTION_HARNESS_FINGERPRINT || typeof report.valid !== "boolean" || !["accepted", "review-required"].includes(report.disposition) || !Array.isArray(report.violations) || report.violations.length > MAX_REMOTE_WARNINGS || !Array.isArray(report.cueReviews) || report.cueReviews.length !== cues.length || !isPlainObject2(report.metrics)) {
+  if (!isPlainObject2(report) || report.profileId !== CAPTION_QUALITY_PROFILE_ID || report.harnessFingerprint !== CAPTION_HARNESS_FINGERPRINT || typeof report.valid !== "boolean" || typeof report.disposition !== "string" || !["accepted", "review-required"].includes(report.disposition) || !Array.isArray(report.violations) || report.violations.length > MAX_REMOTE_WARNINGS || !Array.isArray(report.cueReviews) || report.cueReviews.length !== cues.length || !isPlainObject2(report.metrics)) {
     throw new Error("\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC751\uB2F5\uC758 \uD488\uC9C8 \uBCF4\uACE0\uC11C\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   }
   assertExactResponseFields(report, [
@@ -35283,7 +35417,7 @@ function validateRemoteQualityReport(report, cues) {
     "metrics"
   ], "\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uD488\uC9C8 \uBCF4\uACE0\uC11C");
   for (const [index, violation] of report.violations.entries()) {
-    if (!isPlainObject2(violation) || typeof violation.code !== "string" || !violation.code.trim() || violation.code.length > 128 || !Number.isInteger(violation.cueIndex) || violation.cueIndex < 0 || !["error", "warning"].includes(violation.severity)) {
+    if (!isPlainObject2(violation) || typeof violation.code !== "string" || !violation.code.trim() || violation.code.length > 128 || typeof violation.cueIndex !== "number" || !Number.isInteger(violation.cueIndex) || violation.cueIndex < 0 || typeof violation.severity !== "string" || !["error", "warning"].includes(violation.severity)) {
       throw new Error(`${index + 1}\uBC88\uC9F8 \uD488\uC9C8 \uC704\uBC18 \uC815\uBCF4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`);
     }
     assertExactResponseFields(
@@ -35293,7 +35427,7 @@ function validateRemoteQualityReport(report, cues) {
     );
   }
   for (const [index, review] of report.cueReviews.entries()) {
-    if (!isPlainObject2(review) || review.cueIndex !== index || !["accepted", "review-required"].includes(review.status) || !Array.isArray(review.codes) || review.codes.length > 32 || review.codes.some((code) => typeof code !== "string" || !code.trim() || code.length > 128) || !isPlainObject2(review.metrics)) {
+    if (!isPlainObject2(review) || review.cueIndex !== index || typeof review.status !== "string" || !["accepted", "review-required"].includes(review.status) || !Array.isArray(review.codes) || review.codes.length > 32 || review.codes.some((code) => typeof code !== "string" || !code.trim() || code.length > 128) || !isPlainObject2(review.metrics)) {
       throw new Error(`${index + 1}\uBC88\uC9F8 cue \uD488\uC9C8 \uBCF4\uACE0\uC11C\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`);
     }
     assertExactResponseFields(
@@ -35369,7 +35503,7 @@ function validateCompletedCaptionAgentResponse(payload, request) {
   }
   const clipDurationMs2 = Number(request?.clip?.durationMs);
   for (const [index, cue] of payload.cues.entries()) {
-    if (!isPlainObject2(cue) || !Number.isInteger(cue.startMs) || !Number.isInteger(cue.endMs) || cue.startMs < 0 || cue.endMs <= cue.startMs || cue.endMs > clipDurationMs2 || cue.endMs - cue.startMs > MAX_REMOTE_CUE_DURATION_MS || typeof cue.text !== "string" || !cue.text.trim() || cue.text.length > 300 || typeof cue.speakerId !== "string" || !cue.speakerId.trim() || cue.speakerId.length > 80 || typeof cue.reviewRequired !== "boolean" || !["top", "center", "bottom"].includes(cue.placement) || cue.quality != null && !isPlainObject2(cue.quality)) {
+    if (!isPlainObject2(cue) || typeof cue.startMs !== "number" || typeof cue.endMs !== "number" || !Number.isInteger(cue.startMs) || !Number.isInteger(cue.endMs) || cue.startMs < 0 || cue.endMs <= cue.startMs || cue.endMs > clipDurationMs2 || cue.endMs - cue.startMs > MAX_REMOTE_CUE_DURATION_MS || typeof cue.text !== "string" || !cue.text.trim() || cue.text.length > 300 || typeof cue.speakerId !== "string" || !cue.speakerId.trim() || cue.speakerId.length > 80 || typeof cue.reviewRequired !== "boolean" || typeof cue.placement !== "string" || !["top", "center", "bottom"].includes(cue.placement) || cue.quality != null && !isPlainObject2(cue.quality)) {
       throw new Error(`${index + 1}\uBC88\uC9F8 \uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC751\uB2F5 cue\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`);
     }
     assertExactResponseFields(cue, [
@@ -35389,7 +35523,7 @@ function validateCompletedCaptionAgentResponse(payload, request) {
     throw new Error("\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC751\uB2F5\uC758 warnings \uD544\uB4DC\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   }
   for (const [index, warning] of payload.warnings.entries()) {
-    if (!isPlainObject2(warning) || typeof warning.code !== "string" || !warning.code.trim() || warning.code.length > 128 || !Number.isInteger(warning.cueIndex) || warning.cueIndex < 0) {
+    if (!isPlainObject2(warning) || typeof warning.code !== "string" || !warning.code.trim() || warning.code.length > 128 || typeof warning.cueIndex !== "number" || !Number.isInteger(warning.cueIndex) || warning.cueIndex < 0) {
       throw new Error(`${index + 1}\uBC88\uC9F8 \uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC751\uB2F5 warning\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`);
     }
     assertExactResponseFields(
@@ -35406,7 +35540,7 @@ function validateCompletedCaptionAgentResponse(payload, request) {
   return payload;
 }
 function assertSafeStatusUrl(statusUrl, endpoint) {
-  const status = new URL(statusUrl, endpoint);
+  const status = new URL(String(statusUrl), endpoint);
   const requested = new URL(endpoint);
   if (status.username || status.password || status.hash) {
     throw new Error("\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC791\uC5C5 \uC0C1\uD0DC \uC8FC\uC18C\uC5D0 \uC778\uC99D \uC815\uBCF4\uB098 # \uC870\uAC01\uC744 \uB123\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
@@ -35499,7 +35633,7 @@ async function requestCaptionAgent({
     let payload = await parseResponse(response);
     let statusUrl = payload.statusUrl ? assertSafeStatusUrl(payload.statusUrl, normalizedEndpoint) : null;
     let pollCount = 0;
-    while (response.status === 202 || ["queued", "transcribing", "captioning", "running"].includes(payload.status)) {
+    while (response.status === 202 || typeof payload.status === "string" && ["queued", "transcribing", "captioning", "running"].includes(payload.status)) {
       if (!statusUrl) {
         throw new Error("\uBE44\uB3D9\uAE30 \uC790\uB9C9 \uC791\uC5C5\uC5D0 \uC0C1\uD0DC \uD655\uC778 \uC8FC\uC18C\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
       }
@@ -35591,7 +35725,7 @@ async function ensureCaptionAgentSession({
       });
       return currentToken;
     } catch (error) {
-      if (Number(error?.status) !== 401) {
+      if (httpStatus(error) !== 401) {
         throw error;
       }
     }
@@ -35615,7 +35749,7 @@ async function requestCaptionAgentWithSessionRetry({
       fetchImpl
     });
   } catch (error) {
-    if (Number(error?.status) !== 401 || !isLoopbackCaptionAgentEndpoint(options.endpoint)) {
+    if (httpStatus(error) !== 401 || !isLoopbackCaptionAgentEndpoint(options.endpoint)) {
       throw error;
     }
     const token = await pairCaptionAgent({
@@ -35632,7 +35766,7 @@ async function requestCaptionAgentWithSessionRetry({
   }
 }
 
-// src/editor/dev-reload.js
+// src/editor/dev-reload.ts
 var DEV_RELOAD_SCHEMA = "chzzk-kirinuki-dev-reload/v1";
 var DEV_RELOAD_KINDS = /* @__PURE__ */ new Set([
   "initial",
@@ -35641,8 +35775,11 @@ var DEV_RELOAD_KINDS = /* @__PURE__ */ new Set([
   "content",
   "extension"
 ]);
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
 function normalizeDevReloadMarker(value) {
-  if (!value || value.schema !== DEV_RELOAD_SCHEMA || typeof value.revision !== "string" || !value.revision.trim() || !DEV_RELOAD_KINDS.has(value.kind) || !Array.isArray(value.changedFiles) || !value.changedFiles.every((entry) => typeof entry === "string") || !Number.isInteger(value.pid) || value.pid <= 0 || !Number.isFinite(Date.parse(value.createdAt))) {
+  if (!isRecord(value) || value.schema !== DEV_RELOAD_SCHEMA || typeof value.revision !== "string" || !value.revision.trim() || typeof value.kind !== "string" || !DEV_RELOAD_KINDS.has(value.kind) || !Array.isArray(value.changedFiles) || !value.changedFiles.every((entry) => typeof entry === "string") || typeof value.pid !== "number" || !Number.isInteger(value.pid) || value.pid <= 0 || typeof value.createdAt !== "string" || !Number.isFinite(Date.parse(value.createdAt))) {
     return null;
   }
   return {
@@ -35693,7 +35830,7 @@ function devReloadProjectFingerprint(value) {
   return JSON.stringify(canonicalJsonValue(value));
 }
 
-// src/editor/preview-transition.js
+// src/editor/preview-transition.ts
 var PREVIEW_BOUNDARY_TOLERANCE_MS = 20;
 function nextEnabledPreviewClip(clips, activeClipId2) {
   if (!Array.isArray(clips) || !activeClipId2) {
@@ -35711,12 +35848,13 @@ function previewReachedClipBoundary(sourceMs, sourceEndMs, toleranceMs = PREVIEW
   return sourceMs >= sourceEndMs - tolerance;
 }
 function preparedPreviewMatches(prepared, clip, targetSeconds) {
+  const preparedTargetSeconds = prepared?.targetSeconds;
   return Boolean(
-    prepared && clip && prepared.ready === true && prepared.clipId === clip.id && Number.isFinite(prepared.targetSeconds) && Number.isFinite(targetSeconds) && Math.abs(prepared.targetSeconds - targetSeconds) <= 0.03
+    prepared && clip && prepared.ready === true && prepared.clipId === clip.id && Number.isFinite(preparedTargetSeconds) && Number.isFinite(targetSeconds) && Math.abs(preparedTargetSeconds - targetSeconds) <= 0.03
   );
 }
 
-// src/editor/main.js
+// src/editor/main.ts
 var CAPTION_REVIEW_WARNING_CODES = /* @__PURE__ */ new Set([
   "NO_RECOGNIZABLE_SPEECH",
   "AUDSEG_NO_ACTIVITY",
@@ -35743,6 +35881,15 @@ var AUDSEG_WARNING_CODES = Object.freeze({
   low_level_contrast: "AUDSEG_LOW_LEVEL_CONTRAST",
   noise_floor_capped: "AUDSEG_NOISE_FLOOR_CAPPED"
 });
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function errorName(error) {
+  return error instanceof Error ? error.name : "";
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null;
+}
 var elements = Object.fromEntries([
   "project-name",
   "source-kind",
@@ -35915,9 +36062,17 @@ var elements = Object.fromEntries([
   "restore-local-draft",
   "close-local-draft-dialog",
   "toast"
-].map((id) => [id.replaceAll("-", "_"), document.querySelector(`#${id}`)]));
+].map((id) => {
+  const element = document.querySelector(`#${id}`);
+  if (!element) {
+    throw new Error(`\uD3B8\uC9D1\uAE30 \uD544\uC218 UI \uC694\uC18C\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: #${id}`);
+  }
+  return [id.replaceAll("-", "_"), element];
+}));
 var captionInspectorTab = elements.cue_selected_tab;
-var positionButtons = [...document.querySelectorAll("[data-position]")];
+var positionButtons = [
+  ...document.querySelectorAll("[data-position]")
+];
 var project = null;
 var mediaFile = null;
 var mediaHandle = null;
@@ -35970,7 +36125,9 @@ var automaticLocalDraftOperation = null;
 var lastAutomaticDraftAtMs = 0;
 var localDraftAutosaveAnchorAtMs = 0;
 var focusBeforeLocalDraftDialog = null;
-var captionAgentSettings = { ...DEFAULT_CAPTION_AGENT_SETTINGS };
+var captionAgentSettings = {
+  ...DEFAULT_CAPTION_AGENT_SETTINGS
+};
 var captionAgentRuntime = null;
 var devReloadPollTimer = null;
 var devReloadProcessing = false;
@@ -36055,7 +36212,7 @@ function sanitizeFileName(value) {
   return String(value || "kirinuki").normalize("NFKC").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-").replace(/\s+/g, " ").trim().slice(0, 80) || "kirinuki";
 }
 function showToast(message, type = "info", timeout = 3600) {
-  clearTimeout(toastTimer);
+  clearTimeout(toastTimer ?? void 0);
   toastTimer = null;
   elements.toast.textContent = message;
   elements.toast.className = `toast ${type}`;
@@ -36082,7 +36239,7 @@ function startProjectSnapshotSave(snapshot) {
   );
   void operation.catch((error) => {
     if (sequence === projectSaveSequence) {
-      showToast(`\uD504\uB85C\uC81D\uD2B8 \uC800\uC7A5 \uC2E4\uD328: ${error.message}`, "error", 0);
+      showToast(`\uD504\uB85C\uC81D\uD2B8 \uC800\uC7A5 \uC2E4\uD328: ${errorMessage(error)}`, "error", 0);
     }
   });
   return operation;
@@ -36165,12 +36322,12 @@ function queueLocalDraftOperation(operation) {
   return queued;
 }
 function localDraftSummary(draft) {
-  const snapshot = draft?.project || {};
+  const snapshot = draft.project;
   return [
-    `\uCEF7 ${snapshot.clips?.length || 0}`,
-    `\uC790\uB9C9 ${snapshot.subtitles?.length || 0}`,
-    `\uC5D0\uC14B ${snapshot.imageAssets?.length || 0}`,
-    `\uC74C\uC131 ${snapshot.audioRegions?.length || 0}`
+    `\uCEF7 ${Array.isArray(snapshot.clips) ? snapshot.clips.length : 0}`,
+    `\uC790\uB9C9 ${Array.isArray(snapshot.subtitles) ? snapshot.subtitles.length : 0}`,
+    `\uC5D0\uC14B ${Array.isArray(snapshot.imageAssets) ? snapshot.imageAssets.length : 0}`,
+    `\uC74C\uC131 ${Array.isArray(snapshot.audioRegions) ? snapshot.audioRegions.length : 0}`
   ].join(" \xB7 ");
 }
 function updateLocalDraftStatus(drafts = []) {
@@ -36264,7 +36421,7 @@ async function saveCurrentLocalDraft(reason, {
 }
 function createManualLocalDraft() {
   void queueLocalDraftOperation(() => saveCurrentLocalDraft("manual", { announce: true })).catch((error) => {
-    showToast(`\uC784\uC2DC\uC800\uC7A5 \uC2E4\uD328: ${error.message}`, "error", 0);
+    showToast(`\uC784\uC2DC\uC800\uC7A5 \uC2E4\uD328: ${errorMessage(error)}`, "error", 0);
   });
 }
 async function resetAllAiCaptionPositions() {
@@ -36310,7 +36467,7 @@ function localDraftAutosaveBlocked() {
   return !project || pointerEditActive || rangeHandleDragActive || projectMutationLockCount > 0 || Boolean(activeJobController) || !elements.job_dialog.hidden || elements.local_draft_dialog.open || localDraftOperationActive;
 }
 function scheduleLocalDraftAutosave(delayMs = LOCAL_DRAFT_AUTOSAVE_INTERVAL_MS) {
-  clearTimeout(localDraftAutosaveTimer);
+  clearTimeout(localDraftAutosaveTimer ?? void 0);
   localDraftAutosaveTimer = setTimeout(() => {
     localDraftAutosaveTimer = null;
     void runAutomaticLocalDraft();
@@ -36328,7 +36485,7 @@ function runAutomaticLocalDraft() {
     () => saveCurrentLocalDraft("auto")
   ).catch((error) => {
     console.warn("5\uBD84 \uC790\uB3D9 \uC784\uC2DC\uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.", error);
-    showToast(`\uC790\uB3D9 \uC784\uC2DC\uC800\uC7A5 \uC2E4\uD328: ${error.message}`, "error", 0);
+    showToast(`\uC790\uB3D9 \uC784\uC2DC\uC800\uC7A5 \uC2E4\uD328: ${errorMessage(error)}`, "error", 0);
     return null;
   }).finally(() => {
     automaticLocalDraftOperation = null;
@@ -36352,7 +36509,7 @@ async function openLocalDraftDialog() {
     (firstInput || elements.close_local_draft_dialog).focus();
     updateLocalDraftStatus(drafts);
   } catch (error) {
-    showToast(`\uC784\uC2DC\uC800\uC7A5 \uBAA9\uB85D\uC744 \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+    showToast(`\uC784\uC2DC\uC800\uC7A5 \uBAA9\uB85D\uC744 \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
   }
 }
 function closeLocalDraftDialog() {
@@ -36462,7 +36619,7 @@ function verifyExpectedDevReloadProject(candidateProject) {
     removeDevReloadSessionValue(DEV_RELOAD_EXPECTED_PROJECT_KEY);
     return false;
   }
-  if (expected?.projectId !== candidateProject?.id || typeof expected?.fingerprint !== "string") {
+  if (!isRecord2(expected) || expected.projectId !== candidateProject.id || typeof expected.fingerprint !== "string") {
     removeDevReloadSessionValue(DEV_RELOAD_EXPECTED_PROJECT_KEY);
     return false;
   }
@@ -36568,7 +36725,7 @@ async function hardReloadEditorFromMarker(marker) {
   } catch (error) {
     removeDevReloadSessionValue(DEV_RELOAD_EXPECTED_PROJECT_KEY);
     announceDevReload(
-      `\uC790\uB3D9 \uC7AC\uB85C\uB4DC\uB97C \uC548\uC804\uD558\uAC8C \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`,
+      `\uC790\uB3D9 \uC7AC\uB85C\uB4DC\uB97C \uC548\uC804\uD558\uAC8C \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`,
       "error",
       0
     );
@@ -36637,7 +36794,7 @@ async function applyDevReloadMarker(marker) {
   );
 }
 function scheduleDevReloadPoll(delayMs = DEV_RELOAD_POLL_INTERVAL_MS) {
-  clearTimeout(devReloadPollTimer);
+  clearTimeout(devReloadPollTimer ?? void 0);
   devReloadPollTimer = setTimeout(() => {
     devReloadPollTimer = null;
     void pollDevReloadMarker();
@@ -36666,7 +36823,7 @@ async function pollDevReloadMarker() {
     }
   } catch (error) {
     announceDevReload(
-      `\uD56B \uB9AC\uB85C\uB4DC \uBCC0\uACBD\uC744 \uC801\uC6A9\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4: ${error.message}`,
+      `\uD56B \uB9AC\uB85C\uB4DC \uBCC0\uACBD\uC744 \uC801\uC6A9\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`,
       "error",
       0
     );
@@ -36686,7 +36843,7 @@ function startDevReloadObserver() {
 }
 function stopDevReloadObserver() {
   devReloadObserverActive = false;
-  clearTimeout(devReloadPollTimer);
+  clearTimeout(devReloadPollTimer ?? void 0);
   devReloadPollTimer = null;
 }
 async function restoreSelectedLocalDraft() {
@@ -36751,7 +36908,7 @@ async function restoreSelectedLocalDraft() {
       unlockProjectMutations();
     }
   }).catch((error) => {
-    showToast(`\uC784\uC2DC\uC800\uC7A5 \uBD88\uB7EC\uC624\uAE30 \uC2E4\uD328: ${error.message}`, "error", 0);
+    showToast(`\uC784\uC2DC\uC800\uC7A5 \uBD88\uB7EC\uC624\uAE30 \uC2E4\uD328: ${errorMessage(error)}`, "error", 0);
   });
 }
 function startLocalDraftAutosave() {
@@ -36759,7 +36916,7 @@ function startLocalDraftAutosave() {
   scheduleLocalDraftAutosave();
 }
 function stopLocalDraftAutosave() {
-  clearTimeout(localDraftAutosaveTimer);
+  clearTimeout(localDraftAutosaveTimer ?? void 0);
   localDraftAutosaveTimer = null;
 }
 function collectImageAssetBlobKeys(candidateProject, keys) {
@@ -36801,7 +36958,7 @@ async function pruneUnusedImageAssetBlobs() {
   return pruneImageAssetBlobs(projectId, keep);
 }
 function scheduleImageAssetBlobPrune() {
-  clearTimeout(imageAssetPruneTimer);
+  clearTimeout(imageAssetPruneTimer ?? void 0);
   imageAssetPruneTimer = setTimeout(() => {
     imageAssetPruneTimer = null;
     void pruneUnusedImageAssetBlobs().catch((error) => {
@@ -36876,7 +37033,7 @@ function endFieldEdit(key) {
   fieldEditSession = null;
   renderHeader();
   void flushSave().catch((error) => {
-    showToast(`\uD504\uB85C\uC81D\uD2B8 \uC800\uC7A5 \uC2E4\uD328: ${error.message}`, "error", 0);
+    showToast(`\uD504\uB85C\uC81D\uD2B8 \uC800\uC7A5 \uC2E4\uD328: ${errorMessage(error)}`, "error", 0);
   });
 }
 function undo() {
@@ -36986,7 +37143,9 @@ function renderHeader() {
   elements.redo.disabled = redoStack.length === 0;
   elements.export_video.disabled = !mediaFile || !project.clips.some((clip) => clip.enabled !== false);
   if (document.activeElement !== elements.caption_style_preset) {
-    elements.caption_style_preset.value = project.subtitleDefaults?.stylePresetId || DEFAULT_CAPTION_STYLE_PRESET_ID;
+    elements.caption_style_preset.value = String(
+      project.subtitleDefaults?.stylePresetId || DEFAULT_CAPTION_STYLE_PRESET_ID
+    );
   }
   const warnings = Array.isArray(project.ai?.warnings) ? project.ai.warnings.filter((warning) => warning && typeof warning.code === "string" && warning.code.trim()) : [];
   elements.caption_agent_warning.hidden = warnings.length === 0;
@@ -37040,7 +37199,9 @@ function renderMediaCard() {
   elements.media_card.classList.toggle("empty", !mediaFile);
   elements.stage_empty.hidden = Boolean(mediaFile);
   if (document.activeElement !== elements.source_offset) {
-    elements.source_offset.value = String((project.broadcastSession?.alignmentOffsetMs || 0) / 1e3);
+    elements.source_offset.value = String(
+      (Number(project.broadcastSession?.alignmentOffsetMs) || 0) / 1e3
+    );
   }
   elements.source_offset.disabled = !mediaFile;
   elements.apply_source_offset.disabled = !mediaFile;
@@ -37049,7 +37210,7 @@ function renderMediaCard() {
     elements.media_meta.textContent = "\uBCF8\uC778 \uC18C\uC720\xB7\uC0AC\uC6A9 \uD5C8\uAC00 \uD30C\uC77C\uC744 \uC5F0\uACB0\uD558\uC138\uC694";
     return;
   }
-  elements.media_name.textContent = asset.name;
+  elements.media_name.textContent = String(asset.name || "");
   const dimensions = asset.width && asset.height ? ` \xB7 ${asset.width}\xD7${asset.height}` : "";
   elements.media_meta.textContent = `${asset.sizeLabel || ""}${dimensions} \xB7 ${formatTime(asset.durationMs, { compact: true })}`;
 }
@@ -37066,7 +37227,7 @@ function pruneClipGroupSelection() {
 function clipListPositionMap() {
   return new Map(
     [...elements.clip_list.querySelectorAll(".clip-item")].map((item) => [
-      item.dataset.id,
+      item.dataset.id || "",
       item.getBoundingClientRect().top
     ])
   );
@@ -37076,9 +37237,11 @@ function animateClipListReorder(previousPositions) {
     return;
   }
   for (const item of elements.clip_list.querySelectorAll(".clip-item")) {
-    const previousTop = previousPositions.get(item.dataset.id);
+    const previousTop = previousPositions.get(
+      item.dataset.id || ""
+    );
     const currentTop = item.getBoundingClientRect().top;
-    const delta = Number.isFinite(previousTop) ? previousTop - currentTop : 0;
+    const delta = previousTop !== void 0 && Number.isFinite(previousTop) ? previousTop - currentTop : 0;
     if (Math.abs(delta) < 0.5 || typeof item.animate !== "function") {
       continue;
     }
@@ -37114,7 +37277,9 @@ function renderClipGroupControls({ announcement = "" } = {}) {
     elements.clip_group_status.textContent = status;
   }
   for (const item of elements.clip_list.querySelectorAll(".clip-item")) {
-    const checked = clipGroupSelection.has(item.dataset.id);
+    const checked = clipGroupSelection.has(
+      item.dataset.id || ""
+    );
     item.classList.toggle("clip-group-selected", checked);
     const checkbox = item.querySelector(".clip-group-checkbox");
     if (checkbox && checkbox.checked !== checked) {
@@ -37170,6 +37335,9 @@ function anchorPlayheadAfterClipReorder(nextProject) {
     return nextProject;
   }
   const current = mapTimelineToSource(project, project.playheadMs);
+  if (!current || typeof current.clipId !== "string" || typeof current.sourceMs !== "number") {
+    return nextProject;
+  }
   const anchoredPlayheadMs = current ? mapSourceToTimeline(nextProject, current.clipId, current.sourceMs) : null;
   if (anchoredPlayheadMs == null) {
     return nextProject;
@@ -37186,19 +37354,28 @@ function renderClipList() {
   elements.clip_count.textContent = String(project.clips.length);
   elements.clip_list.replaceChildren();
   project.clips.forEach((clip, index) => {
-    const fragment = elements.clip_template.content.cloneNode(true);
-    const item = fragment.querySelector(".clip-item");
+    const fragment = elements.clip_template.content.cloneNode(
+      true
+    );
+    const templateElement = (selector) => {
+      const element = fragment.querySelector(selector);
+      if (!element) {
+        throw new Error(`\uCEF7 \uD15C\uD50C\uB9BF \uC694\uC18C\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4: ${selector}`);
+      }
+      return element;
+    };
+    const item = templateElement(".clip-item");
     const clipDisabled = clip.enabled === false;
     item.dataset.id = clip.id;
     item.classList.toggle("selected", project.selectedClipId === clip.id);
     item.classList.toggle("clip-disabled", clipDisabled);
     item.classList.toggle("clip-group-selected", clipGroupSelection.has(clip.id));
-    fragment.querySelector(".clip-index").textContent = String(index + 1);
+    templateElement(".clip-index").textContent = String(index + 1);
     const clipTitle = clip.note || `\uC120\uD0DD \uAD6C\uAC04 ${index + 1}`;
-    fragment.querySelector(".clip-title").textContent = clipTitle;
-    fragment.querySelector(".clip-time").textContent = `${formatTime(clip.sourceStartMs)} \u2192 ${formatTime(clip.sourceEndMs)}`;
-    fragment.querySelector(".clip-duration").textContent = formatDuration(clipDurationMs(clip));
-    const checkbox = fragment.querySelector(".clip-group-checkbox");
+    templateElement(".clip-title").textContent = String(clipTitle);
+    templateElement(".clip-time").textContent = `${formatTime(clip.sourceStartMs)} \u2192 ${formatTime(clip.sourceEndMs)}`;
+    templateElement(".clip-duration").textContent = formatDuration(clipDurationMs(clip));
+    const checkbox = templateElement(".clip-group-checkbox");
     checkbox.dataset.clipId = clip.id;
     checkbox.checked = clipGroupSelection.has(clip.id);
     checkbox.setAttribute(
@@ -37206,8 +37383,8 @@ function renderClipList() {
       `${index + 1}\uBC88 \uCEF7 ${clipTitle}, \uBB36\uC74C \uC774\uB3D9 \uC120\uD0DD`
     );
     checkbox.title = clipDisabled ? "\uCD9C\uB825 \uBE44\uD65C\uC131 \uCEF7\uB3C4 \uBB36\uC74C \uC21C\uC11C \uC774\uB3D9 \uAC00\uB2A5" : "\uBB36\uC74C \uC774\uB3D9\uD560 \uCEF7 \uCCB4\uD06C";
-    const up = fragment.querySelector("[data-action='up']");
-    const down = fragment.querySelector("[data-action='down']");
+    const up = templateElement("[data-action='up']");
+    const down = templateElement("[data-action='down']");
     up.disabled = index === 0;
     down.disabled = index === project.clips.length - 1;
     elements.clip_list.append(fragment);
@@ -37279,18 +37456,23 @@ function renderCueInspector() {
   if (document.activeElement !== elements.cue_end) {
     elements.cue_end.value = formatTime(range.endMs, { compact: true });
   }
-  elements.cue_x.value = String(Math.round(cue.x * 100));
-  elements.cue_y.value = String(Math.round(cue.y * 100));
-  elements.cue_x_value.textContent = `${Math.round(cue.x * 100)}%`;
-  elements.cue_y_value.textContent = `${Math.round(cue.y * 100)}%`;
-  elements.font_size.value = String((project.subtitleDefaults.fontScale || 0.0675) * 100);
-  elements.font_color.value = cue.color || project.subtitleDefaults.color || DEFAULT_SUBTITLE_COLOR;
+  const cueX = cue.x;
+  const cueY = cue.y;
+  elements.cue_x.value = String(Math.round(cueX * 100));
+  elements.cue_y.value = String(Math.round(cueY * 100));
+  elements.cue_x_value.textContent = `${Math.round(cueX * 100)}%`;
+  elements.cue_y_value.textContent = `${Math.round(cueY * 100)}%`;
+  elements.font_size.value = String(
+    (Number(project.subtitleDefaults.fontScale) || 0.0675) * 100
+  );
+  const defaultColor = project.subtitleDefaults.color;
+  elements.font_color.value = cue.color || (typeof defaultColor === "string" ? defaultColor : DEFAULT_SUBTITLE_COLOR);
   renderCaptionColorRegister(elements.font_color.value);
   const selectedAsset = selectedImageAsset();
   const canMatchAsset = Boolean(selectedAsset && selectedAsset.clipId === cue.clipId);
   elements.match_cue_to_asset.disabled = !canMatchAsset;
   elements.cue_timing_match_help.textContent = !selectedAsset ? "\uAC19\uC740 \uCEF7\uC758 \uC5D0\uC14B\uC744 \uC120\uD0DD\uD558\uBA74 \uC591\uB05D \uC2DC\uAC01\uC744 \uD55C \uBC88\uC5D0 \uB9DE\uCD9C \uC218 \uC788\uC5B4\uC694." : canMatchAsset ? `${selectedAsset.name || "\uC120\uD0DD \uC5D0\uC14B"}\uC758 \uC2DC\uC791\xB7\uB05D \uC2DC\uAC01\uC744 \uADF8\uB300\uB85C \uC801\uC6A9\uD569\uB2C8\uB2E4.` : "\uC120\uD0DD \uC5D0\uC14B\uC774 \uB2E4\uB978 \uCEF7\uC5D0 \uC788\uC5B4 \uC2DC\uAC01\uC744 \uB9DE\uCD9C \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.";
-  const position = cue.y < 0.34 ? "top" : cue.y > 0.67 ? "bottom" : "center";
+  const position = cueY < 0.34 ? "top" : cueY > 0.67 ? "bottom" : "center";
   positionButtons.forEach((button) => button.classList.toggle("active", button.dataset.position === position));
 }
 function renderImageAssetInspector() {
@@ -37475,11 +37657,12 @@ function findTimelineSnap(rawTimelineMs, {
     excludeImageAssetId: movingKind === "asset" ? itemId : null,
     preferredKind
   }).filter((candidate) => candidate.timeMs >= minimumTimelineMs && candidate.timeMs <= maximumTimelineMs);
-  return resolveTimelineSnap(rawTimelineMs, candidates, {
+  const match = resolveTimelineSnap(rawTimelineMs, candidates, {
     thresholdMs: timelineSnapThresholdMs(pixelsPerSecond, {
       thresholdPx: TIMELINE_SNAP_THRESHOLD_PX
     })
   });
+  return match && typeof match.timeMs === "number" ? match : null;
 }
 function snappedTimelinePoint(rawTimelineMs, options) {
   const match = findTimelineSnap(rawTimelineMs, options);
@@ -37487,7 +37670,7 @@ function snappedTimelinePoint(rawTimelineMs, options) {
   return match?.timeMs ?? Math.round(rawTimelineMs);
 }
 function suppressNextTimedBlockClick(kind, itemId) {
-  clearTimeout(suppressedTimedBlockClickTimer);
+  clearTimeout(suppressedTimedBlockClickTimer ?? void 0);
   suppressedTimedBlockClick = `${kind}:${itemId}`;
   suppressedTimedBlockClickTimer = setTimeout(() => {
     suppressedTimedBlockClick = null;
@@ -37499,7 +37682,7 @@ function consumeSuppressedTimedBlockClick(kind, itemId) {
   if (suppressedTimedBlockClick !== key) {
     return false;
   }
-  clearTimeout(suppressedTimedBlockClickTimer);
+  clearTimeout(suppressedTimedBlockClickTimer ?? void 0);
   suppressedTimedBlockClick = null;
   suppressedTimedBlockClickTimer = null;
   return true;
@@ -37555,8 +37738,8 @@ function renderTimelineRange() {
   const updateHandle = (handle, valueMs, minimumMs, maximumMs) => {
     handle.setAttribute("aria-valuemin", String(Math.max(0, minimumMs) / 1e3));
     handle.setAttribute("aria-valuemax", String(Math.max(minimumMs, maximumMs) / 1e3));
-    handle.setAttribute("aria-valuenow", String((valueMs || 0) / 1e3));
-    handle.setAttribute("aria-valuetext", formatTime(valueMs || 0));
+    handle.setAttribute("aria-valuenow", String((valueMs ?? 0) / 1e3));
+    handle.setAttribute("aria-valuetext", formatTime(valueMs ?? 0));
   };
   updateHandle(
     elements.range_start_handle,
@@ -37674,16 +37857,17 @@ function deleteSelectedTimelineRange() {
       "success"
     );
   } catch (error) {
-    showToast(error.message, "error", 0);
+    showToast(errorMessage(error), "error", 0);
   }
 }
 function setTimedBlockGeometry(block, range) {
-  block.hidden = !range;
+  const control = block;
+  control.hidden = !range;
   if (!range) {
     return;
   }
-  block.style.left = `${timelineX(range.startMs)}px`;
-  block.style.width = `${Math.max(8, timelineX(range.endMs - range.startMs))}px`;
+  control.style.left = `${timelineX(range.startMs)}px`;
+  control.style.width = `${Math.max(8, timelineX(range.endMs - range.startMs))}px`;
 }
 function syncLiveTimelineGeometry() {
   liveTimelineGeometryFrame = null;
@@ -37703,29 +37887,29 @@ function syncLiveTimelineGeometry() {
     track.style.width = `${width}px`;
   }
   for (const block of elements.video_track.querySelectorAll(".clip-block")) {
-    const clip = clipById.get(block.dataset.id);
+    const clip = clipById.get(block.dataset.id || "");
     setTimedBlockGeometry(block, clip && clip.enabled !== false ? {
       startMs: clip.timelineStartMs,
       endMs: clip.timelineStartMs + clipDurationMs(clip)
     } : null);
   }
   for (const block of elements.audio_track.querySelectorAll(".audio-source-block")) {
-    const clip = clipById.get(block.dataset.clipId);
+    const clip = clipById.get(block.dataset.clipId || "");
     setTimedBlockGeometry(block, clip && clip.enabled !== false ? {
       startMs: clip.timelineStartMs,
       endMs: clip.timelineStartMs + clipDurationMs(clip)
     } : null);
   }
   for (const block of elements.asset_track.querySelectorAll(".asset-block")) {
-    const asset = assetById.get(block.dataset.id);
+    const asset = assetById.get(block.dataset.id || "");
     setTimedBlockGeometry(block, asset ? imageAssetTimelineRange(project, asset) : null);
   }
   for (const block of elements.audio_track.querySelectorAll(".audio-block")) {
-    const region = audioById.get(block.dataset.id);
+    const region = audioById.get(block.dataset.id || "");
     setTimedBlockGeometry(block, region ? audioRegionTimelineRange(project, region) : null);
   }
   for (const block of elements.caption_tracks.querySelectorAll(".cue-block")) {
-    const cue = cueById.get(block.dataset.id);
+    const cue = cueById.get(block.dataset.id || "");
     setTimedBlockGeometry(block, cue ? cueTimelineRange(project, cue) : null);
   }
   const durationMs = projectDurationMs(project);
@@ -37746,7 +37930,7 @@ function layoutImageAssetSubrows(candidateProject) {
     asset,
     assetIndex,
     range: imageAssetTimelineRange(candidateProject, asset)
-  })).filter((entry) => entry.range).sort((first, second) => first.range.startMs - second.range.startMs || first.range.endMs - second.range.endMs || first.assetIndex - second.assetIndex);
+  })).filter((entry) => entry.range !== null).sort((first, second) => first.range.startMs - second.range.startMs || first.range.endMs - second.range.endMs || first.assetIndex - second.assetIndex);
   const subrowEndTimes = [];
   const byAssetId = /* @__PURE__ */ new Map();
   entries.forEach((entry) => {
@@ -37958,7 +38142,7 @@ function bindCueTrim(handle, cue, side, event) {
     overlapBlocked = false;
     project = nextProject;
     const nextCue = project.subtitles.find((candidate) => candidate.id === cue.id);
-    const range = cueTimelineRange(project, nextCue);
+    const range = nextCue ? cueTimelineRange(project, nextCue) : null;
     if (block && range) {
       block.style.left = `${timelineX(range.startMs)}px`;
       block.style.width = `${Math.max(8, timelineX(range.endMs - range.startMs))}px`;
@@ -38027,7 +38211,7 @@ function bindImageAssetTrim(handle, asset, side, event) {
     const endOffsetMs = side === "right" ? snappedBoundaryTimelineMs - clip.timelineStartMs : originalEnd;
     project = updateImageAsset(originalProject, asset.id, { startOffsetMs, endOffsetMs });
     const nextAsset = selectedImageAsset();
-    const range = imageAssetTimelineRange(project, nextAsset);
+    const range = nextAsset ? imageAssetTimelineRange(project, nextAsset) : null;
     if (block && range) {
       block.style.left = `${timelineX(range.startMs)}px`;
       block.style.width = `${Math.max(8, timelineX(range.endMs - range.startMs))}px`;
@@ -38063,7 +38247,9 @@ function bindTimedBlockMove(body, item, kind, event) {
   const clip = project.clips.find((candidate) => candidate.id === item.clipId);
   const clipDuration = clipDurationMs(clip);
   const maximumStart = Math.max(0, clipDuration - itemDuration);
-  const block = body.closest(kind === "subtitle" ? ".cue-block" : ".asset-block");
+  const block = body.closest(
+    kind === "subtitle" ? ".cue-block" : ".asset-block"
+  );
   let originalProject = null;
   let dragging = false;
   let overlapBlocked = false;
@@ -38151,8 +38337,13 @@ function bindTimedBlockMove(body, item, kind, event) {
     }
     overlapBlocked = false;
     project = nextProject;
-    const nextItem = kind === "subtitle" ? project.subtitles.find((candidate) => candidate.id === item.id) : project.imageAssets.find((candidate) => candidate.id === item.id);
-    const range = kind === "subtitle" ? cueTimelineRange(project, nextItem) : imageAssetTimelineRange(project, nextItem);
+    const range = kind === "subtitle" ? cueTimelineRange(
+      project,
+      project.subtitles.find((candidate) => candidate.id === item.id)
+    ) : imageAssetTimelineRange(
+      project,
+      project.imageAssets.find((candidate) => candidate.id === item.id)
+    );
     if (block && range) {
       block.style.left = `${timelineX(range.startMs)}px`;
       block.style.width = `${Math.max(8, timelineX(range.endMs - range.startMs))}px`;
@@ -38219,7 +38410,7 @@ function bindAudioTrim(handle, region, side, event) {
     overlapBlocked = false;
     project = nextProject;
     const nextRegion = selectedAudioRegion();
-    const range = audioRegionTimelineRange(project, nextRegion);
+    const range = nextRegion ? audioRegionTimelineRange(project, nextRegion) : null;
     if (block && range) {
       block.style.left = `${timelineX(range.startMs)}px`;
       block.style.width = `${Math.max(8, timelineX(range.endMs - range.startMs))}px`;
@@ -38314,7 +38505,12 @@ function renderTimeline({ keepScroll = false } = {}) {
     block.append(
       makeHandle(
         "left",
-        (event) => bindClipTrim(event.currentTarget, clip, "left", event),
+        (event) => bindClipTrim(
+          event.currentTarget,
+          clip,
+          "left",
+          event
+        ),
         (delta) => nudgeClip("left", delta),
         {
           label: `${index + 1}\uBC88 \uCEF7 \uC2DC\uC791 \uC2DC\uAC01`,
@@ -38326,7 +38522,12 @@ function renderTimeline({ keepScroll = false } = {}) {
       body,
       makeHandle(
         "right",
-        (event) => bindClipTrim(event.currentTarget, clip, "right", event),
+        (event) => bindClipTrim(
+          event.currentTarget,
+          clip,
+          "right",
+          event
+        ),
         (delta) => nudgeClip("right", delta),
         {
           label: `${index + 1}\uBC88 \uCEF7 \uB05D \uC2DC\uAC01`,
@@ -38400,7 +38601,12 @@ function renderTimeline({ keepScroll = false } = {}) {
     block.append(
       makeHandle(
         "left",
-        (event) => bindImageAssetTrim(event.currentTarget, asset, "left", event),
+        (event) => bindImageAssetTrim(
+          event.currentTarget,
+          asset,
+          "left",
+          event
+        ),
         (delta) => nudgeAsset("left", delta),
         {
           label: `${assetIndex + 1}\uBC88 \uC774\uBBF8\uC9C0 \uC5D0\uC14B \uC2DC\uC791 \uC2DC\uAC01`,
@@ -38412,7 +38618,12 @@ function renderTimeline({ keepScroll = false } = {}) {
       body,
       makeHandle(
         "right",
-        (event) => bindImageAssetTrim(event.currentTarget, asset, "right", event),
+        (event) => bindImageAssetTrim(
+          event.currentTarget,
+          asset,
+          "right",
+          event
+        ),
         (delta) => nudgeAsset("right", delta),
         {
           label: `${assetIndex + 1}\uBC88 \uC774\uBBF8\uC9C0 \uC5D0\uC14B \uB05D \uC2DC\uAC01`,
@@ -38460,7 +38671,12 @@ function renderTimeline({ keepScroll = false } = {}) {
     block.append(
       makeHandle(
         "left",
-        (event) => bindAudioTrim(event.currentTarget, region, "left", event),
+        (event) => bindAudioTrim(
+          event.currentTarget,
+          region,
+          "left",
+          event
+        ),
         (delta) => nudgeRegion("left", delta),
         {
           label: `${regionIndex + 1}\uBC88 \uC74C\uC131 \uC124\uC815 \uC2DC\uC791 \uC2DC\uAC01`,
@@ -38472,7 +38688,12 @@ function renderTimeline({ keepScroll = false } = {}) {
       body,
       makeHandle(
         "right",
-        (event) => bindAudioTrim(event.currentTarget, region, "right", event),
+        (event) => bindAudioTrim(
+          event.currentTarget,
+          region,
+          "right",
+          event
+        ),
         (delta) => nudgeRegion("right", delta),
         {
           label: `${regionIndex + 1}\uBC88 \uC74C\uC131 \uC124\uC815 \uB05D \uC2DC\uAC01`,
@@ -38534,7 +38755,12 @@ function renderTimeline({ keepScroll = false } = {}) {
     block.append(
       makeHandle(
         "left",
-        (event) => bindCueTrim(event.currentTarget, cue, "left", event),
+        (event) => bindCueTrim(
+          event.currentTarget,
+          cue,
+          "left",
+          event
+        ),
         (delta) => nudgeCue("left", delta),
         {
           label: `${cueIndex + 1}\uBC88 \uC790\uB9C9 \uC2DC\uC791 \uC2DC\uAC01`,
@@ -38546,7 +38772,12 @@ function renderTimeline({ keepScroll = false } = {}) {
       body,
       makeHandle(
         "right",
-        (event) => bindCueTrim(event.currentTarget, cue, "right", event),
+        (event) => bindCueTrim(
+          event.currentTarget,
+          cue,
+          "right",
+          event
+        ),
         (delta) => nudgeCue("right", delta),
         {
           label: `${cueIndex + 1}\uBC88 \uC790\uB9C9 \uB05D \uC2DC\uAC01`,
@@ -38880,7 +39111,7 @@ function waitForStandbyEvent(video, eventName, sequence) {
   return new Promise((resolve, reject) => {
     let timeout = null;
     const cleanup = () => {
-      clearTimeout(timeout);
+      clearTimeout(timeout ?? void 0);
       video.removeEventListener(eventName, handleEvent);
       video.removeEventListener("error", handleError);
     };
@@ -38908,7 +39139,9 @@ async function prepareNextClipPreview(fromClipId = activeClipId) {
   }
   const targetSeconds = sourceMsToPreviewSeconds(next.sourceStartMs);
   if (preparedPreview && preparedPreview.fromClipId === fromClipId && preparedPreview.clipId === next.id && Math.abs(preparedPreview.targetSeconds - targetSeconds) <= 0.03) {
-    return preparedPreview.promise;
+    if (preparedPreview.promise) {
+      return preparedPreview.promise;
+    }
   }
   const video = standbyPreviewVideo;
   const sequence = ++previewPreloadSequence;
@@ -39065,8 +39298,8 @@ async function seekPreviewToSourceMs(sourceMs) {
     const cleanup = (matched) => {
       video.removeEventListener("seeked", handleSeeked);
       video.removeEventListener("durationchange", retryWhenAvailable);
-      clearTimeout(retryTimer);
-      clearTimeout(settleTimer);
+      clearTimeout(retryTimer ?? void 0);
+      clearTimeout(settleTimer ?? void 0);
       if (pendingPreviewSeek?.sequence === sequence) {
         pendingPreviewSeek = null;
       }
@@ -39088,7 +39321,7 @@ async function seekPreviewToSourceMs(sourceMs) {
         return;
       }
       video.removeEventListener("durationchange", retryWhenAvailable);
-      clearTimeout(retryTimer);
+      clearTimeout(retryTimer ?? void 0);
       requestAnimationFrame(assignTarget);
     };
     const scheduleRetry = () => {
@@ -39157,9 +39390,9 @@ async function syncPreviewToPlayhead() {
   }
   const wasPlaying = !elements.preview_video.paused;
   try {
-    await seekTimeline(project.playheadMs, { play: wasPlaying });
+    await seekTimeline(project.playheadMs ?? 0, { play: wasPlaying });
   } catch (error) {
-    if (error.name !== "AbortError") {
+    if (errorName(error) !== "AbortError") {
       console.warn("\uBBF8\uB9AC\uBCF4\uAE30 \uC2DC\uAC01\uC744 \uB2E4\uC2DC \uB9DE\uCD94\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.", error);
     }
   }
@@ -39170,7 +39403,7 @@ async function togglePlayback() {
     return;
   }
   if (elements.preview_video.paused) {
-    await seekTimeline(project.playheadMs, { play: true });
+    await seekTimeline(project.playheadMs ?? 0, { play: true });
   } else {
     elements.preview_video.pause();
   }
@@ -39346,7 +39579,7 @@ function pastedImageName(mimeType) {
     "image/jpeg": "jpg",
     "image/webp": "webp",
     "image/gif": "gif"
-  }[mimeType] || "image";
+  }[String(mimeType)] || "image";
   return `\uBD99\uC5EC\uB123\uC740 \uC774\uBBF8\uC9C0.${extension}`;
 }
 async function addImageAssetFromBlob(blob, {
@@ -39366,11 +39599,11 @@ async function addImageAssetFromBlob(blob, {
   try {
     dimensions = await inspectImageAssetBlob(blob);
   } catch (error) {
-    showToast(error.message, "error", 0);
+    showToast(errorMessage(error), "error", 0);
     return null;
   }
   const clip = project.clips.find((candidate) => candidate.id === mapping.clipId);
-  const startOffsetMs = mapping.clipOffsetMs;
+  const startOffsetMs = Number(mapping.clipOffsetMs);
   const endOffsetMs = Math.min(clipDurationMs(clip), startOffsetMs + 2e3);
   if (endOffsetMs - startOffsetMs < 100) {
     showToast("\uCEF7 \uB05D\uC5D0\uC11C \uCD5C\uC18C 0.1\uCD08 \uC55E\uCABD\uC5D0 \uC774\uBBF8\uC9C0\uB97C \uCD94\uAC00\uD574 \uC8FC\uC138\uC694.", "error");
@@ -39397,12 +39630,12 @@ async function addImageAssetFromBlob(blob, {
   try {
     await saveProjectWithImageAssetBlob(nextProject, asset.id, blob);
   } catch (error) {
-    showToast(`\uC774\uBBF8\uC9C0 \uC5D0\uC14B\uC744 \uC800\uC7A5\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+    showToast(`\uC774\uBBF8\uC9C0 \uC5D0\uC14B\uC744 \uC800\uC7A5\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
     return null;
   }
   propertyInspectorMode = "asset";
   applyProject(nextProject, { save: false });
-  await seekTimeline(mapping.timelineMs);
+  await seekTimeline(Number(mapping.timelineMs));
   showToast(
     `${asset.name}\uC744 \uC5D0\uC14B \uD2B8\uB799\uC5D0 \uCD94\uAC00\uD588\uC2B5\uB2C8\uB2E4.${blob.type === "image/png" || blob.type === "image/webp" ? " \uD22C\uBA85 \uBC30\uACBD\uB3C4 \uC720\uC9C0\uB429\uB2C8\uB2E4." : ""}`,
     "success"
@@ -39432,19 +39665,23 @@ async function pasteImageFromSystemClipboard(timelineMs = project.playheadMs) {
     showToast("\uD074\uB9BD\uBCF4\uB4DC\uC5D0 PNG, JPEG, WebP \uB610\uB294 GIF \uC774\uBBF8\uC9C0\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.", "error");
     return false;
   } catch (error) {
+    const denied = errorName(error) === "NotAllowedError";
     elements.stage.focus({ preventScroll: true });
     showToast(
-      error.name === "NotAllowedError" ? "\uD074\uB9BD\uBCF4\uB4DC \uC77D\uAE30\uAC00 \uCC28\uB2E8\uB410\uC2B5\uB2C8\uB2E4. \uC6F9\uC5D0\uC11C \u2018\uC774\uBBF8\uC9C0 \uBCF5\uC0AC\u2019 \uD6C4 \uD3B8\uC9D1\uAE30\uC5D0\uC11C Ctrl/Cmd+V\uB97C \uB20C\uB7EC \uC8FC\uC138\uC694." : `\uD074\uB9BD\uBCF4\uB4DC \uC774\uBBF8\uC9C0\uB97C \uC77D\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`,
-      error.name === "NotAllowedError" ? "info" : "error"
+      denied ? "\uD074\uB9BD\uBCF4\uB4DC \uC77D\uAE30\uAC00 \uCC28\uB2E8\uB410\uC2B5\uB2C8\uB2E4. \uC6F9\uC5D0\uC11C \u2018\uC774\uBBF8\uC9C0 \uBCF5\uC0AC\u2019 \uD6C4 \uD3B8\uC9D1\uAE30\uC5D0\uC11C Ctrl/Cmd+V\uB97C \uB20C\uB7EC \uC8FC\uC138\uC694." : `\uD074\uB9BD\uBCF4\uB4DC \uC774\uBBF8\uC9C0\uB97C \uC77D\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`,
+      denied ? "info" : "error"
     );
     return false;
   }
 }
 function openImageAssetFilePicker(timelineMs = project.playheadMs) {
-  pendingAssetTimelineMs = timelineMs;
+  pendingAssetTimelineMs = timelineMs ?? 0;
   elements.asset_input.click();
 }
-function addCueAtPlayhead({ timelineMs = project.playheadMs, lane: requestedLane = null } = {}) {
+function addCueAtPlayhead({
+  timelineMs = project.playheadMs,
+  lane: requestedLane = null
+} = {}) {
   const mapping = mapTimelineToSource(project, timelineMs);
   if (!mapping) {
     showToast("\uC790\uB9C9\uC744 \uCD94\uAC00\uD560 \uC601\uC0C1 \uAD6C\uAC04\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.", "error");
@@ -39465,7 +39702,7 @@ function addCueAtPlayhead({ timelineMs = project.playheadMs, lane: requestedLane
     return;
   }
   const clip = workingProject.clips.find((candidate) => candidate.id === mapping.clipId);
-  const startOffsetMs = mapping.clipOffsetMs;
+  const startOffsetMs = Number(mapping.clipOffsetMs);
   const nextCueStartMs = workingProject.subtitles.filter((cue2) => cue2.clipId === clip.id && cue2.lane === lane && cue2.startOffsetMs > startOffsetMs).map((cue2) => cue2.startOffsetMs).sort((a, b) => a - b)[0] ?? clipDurationMs(clip);
   const endOffsetMs = Math.min(
     clipDurationMs(clip),
@@ -39482,7 +39719,10 @@ function addCueAtPlayhead({ timelineMs = project.playheadMs, lane: requestedLane
     endOffsetMs,
     text: "\uC0C8 \uC790\uB9C9",
     lane,
-    y: Math.max(0.12, (workingProject.subtitleDefaults?.y || 0.84) - lane * 0.1),
+    y: Math.max(
+      0.12,
+      Number(workingProject.subtitleDefaults?.y || 0.84) - lane * 0.1
+    ),
     origin: "human"
   });
   propertyInspectorMode = "caption";
@@ -39509,7 +39749,7 @@ function addAudioRegionAtTimeline(timelineMs = project.playheadMs) {
     return;
   }
   const clip = project.clips.find((candidate) => candidate.id === mapping.clipId);
-  const startOffsetMs = mapping.clipOffsetMs;
+  const startOffsetMs = Number(mapping.clipOffsetMs);
   const nextRegionStartMs = project.audioRegions.filter((region2) => region2.clipId === clip.id && region2.startOffsetMs > startOffsetMs).map((region2) => region2.startOffsetMs).sort((a, b) => a - b)[0] ?? clipDurationMs(clip);
   const endOffsetMs = Math.min(clipDurationMs(clip), startOffsetMs + 2e3, nextRegionStartMs);
   if (endOffsetMs - startOffsetMs < 100) {
@@ -39621,7 +39861,7 @@ async function chooseMediaFile() {
             mediaHandle = null;
             await deleteMediaHandle(project.id);
             showToast(
-              `\uC6D0\uBCF8\uC740 \uD604\uC7AC \uD0ED\uC5D0 \uC5F0\uACB0\uD588\uC9C0\uB9CC \uC7AC\uC2DC\uC791\uC6A9 \uD30C\uC77C \uAD8C\uD55C\uC744 \uC800\uC7A5\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`,
+              `\uC6D0\uBCF8\uC740 \uD604\uC7AC \uD0ED\uC5D0 \uC5F0\uACB0\uD588\uC9C0\uB9CC \uC7AC\uC2DC\uC791\uC6A9 \uD30C\uC77C \uAD8C\uD55C\uC744 \uC800\uC7A5\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`,
               "error",
               0
             );
@@ -39637,8 +39877,8 @@ async function chooseMediaFile() {
         }
       }
     } catch (error) {
-      if (error.name !== "AbortError") {
-        showToast(`\uC6D0\uBCF8 \uD30C\uC77C\uC744 \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+      if (errorName(error) !== "AbortError") {
+        showToast(`\uC6D0\uBCF8 \uD30C\uC77C\uC744 \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
       }
     }
     return;
@@ -39724,7 +39964,7 @@ async function attachMediaFile(file, { fileHandleStored = false } = {}) {
       cancelPreviewPreload({ clearSource: true });
     }
     hideJob();
-    showToast(error.message, "error", 0);
+    showToast(errorMessage(error), "error", 0);
     return false;
   } finally {
     unlockProjectMutations();
@@ -39811,7 +40051,7 @@ async function ensureLocalCaptionSession(config, signal) {
   return { ...config, token, capability, runtime };
 }
 async function prepareCaptionAgentConfig() {
-  let config = readCaptionAgentConfig();
+  const config = readCaptionAgentConfig();
   if (config.model === AUDSEG_DRAFT_MODEL) {
     const runtime2 = captionAgentRuntimeIdentity(null, {
       model: config.model
@@ -39834,17 +40074,17 @@ async function prepareCaptionAgentConfig() {
       "Whisper Tiny \uB85C\uCEEC \uCD08\uBC8C \uC8FC\uC18C\uB294 127.0.0.1 \uB610\uB294 localhost\uC5EC\uC57C \uD569\uB2C8\uB2E4."
     );
   }
-  config = await ensureLocalCaptionSession(
+  const sessionConfig = await ensureLocalCaptionSession(
     config,
     activeJobController?.signal
   );
-  const capability = config.capability || await probeCaptionAgent({
-    endpoint: config.endpoint,
-    token: config.token,
+  const capability = sessionConfig.capability || await probeCaptionAgent({
+    endpoint: sessionConfig.endpoint,
+    token: sessionConfig.token,
     signal: activeJobController?.signal
   });
-  const runtime = config.runtime || captionAgentRuntimeIdentity(capability, {
-    model: config.model
+  const runtime = sessionConfig.runtime || captionAgentRuntimeIdentity(capability, {
+    model: sessionConfig.model
   });
   captionAgentRuntime = runtime;
   const ready = capability.configured?.ready !== false;
@@ -39852,12 +40092,12 @@ async function prepareCaptionAgentConfig() {
     throw new Error("\uB85C\uCEEC Whisper STT\uAC00 \uC900\uBE44\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
   }
   captionAgentSettings = await saveCaptionAgentSettings({
-    endpoint: config.endpoint,
-    model: config.model
+    endpoint: sessionConfig.endpoint,
+    model: sessionConfig.model
   });
   elements.caption_agent_endpoint.value = captionAgentSettings.endpoint;
   return {
-    ...config,
+    ...sessionConfig,
     endpoint: captionAgentSettings.endpoint,
     model: captionAgentSettings.model,
     capability,
@@ -39938,12 +40178,12 @@ async function testCaptionAgentConnection() {
       ready ? "ready" : "waiting"
     );
   } catch (error) {
-    const canceled = error.name === "AbortError";
+    const canceled = errorName(error) === "AbortError";
     if (!canceled) {
       elements.caption_advanced_settings.open = true;
     }
     showToast(
-      canceled ? "\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC5F0\uACB0 \uD655\uC778\uC744 \uCDE8\uC18C\uD588\uC2B5\uB2C8\uB2E4." : `\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC5F0\uACB0 \uC2E4\uD328: ${error.message}`,
+      canceled ? "\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC5F0\uACB0 \uD655\uC778\uC744 \uCDE8\uC18C\uD588\uC2B5\uB2C8\uB2E4." : `\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC5F0\uACB0 \uC2E4\uD328: ${errorMessage(error)}`,
       canceled ? "info" : "error",
       0
     );
@@ -40002,7 +40242,7 @@ async function generateCaptions() {
       }
     }
   } catch (error) {
-    showToast(error.message, "error", 0);
+    showToast(errorMessage(error), "error", 0);
     return;
   }
   const returnFocus = document.activeElement;
@@ -40020,7 +40260,7 @@ async function generateCaptions() {
         "error"
       );
     }
-    showToast(`\uC790\uB9C9 \uCD08\uBC8C \uC124\uC815\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694: ${error.message}`, "error", 0);
+    showToast(`\uC790\uB9C9 \uCD08\uBC8C \uC124\uC815\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694: ${errorMessage(error)}`, "error", 0);
     activeJobController = null;
     elements.generate_captions.disabled = false;
     if (returnFocus?.isConnected) {
@@ -40110,10 +40350,10 @@ async function generateCaptions() {
       progress: 0,
       error: null,
       warnings: captionWarnings,
-      captionCheckpoints: resumeEligible ? project.ai?.captionCheckpoints : discardCaptionAgentCheckpointsForClips(
-        project.ai?.captionCheckpoints,
+      captionCheckpoints: (resumeEligible ? project.ai.captionCheckpoints : discardCaptionAgentCheckpointsForClips(
+        project.ai.captionCheckpoints,
         allEnabledClips
-      )
+      )).map((checkpoint) => ({ ...checkpoint }))
     }
   };
   renderHeader();
@@ -40240,16 +40480,16 @@ async function generateCaptions() {
           resolvedModel: String(result.resolvedModel || result.model || model),
           lastRequestId: String(result.requestId || ""),
           captionCheckpoints: upsertCaptionAgentCheckpoint(
-            project.ai?.captionCheckpoints,
+            project.ai.captionCheckpoints,
             createCaptionAgentCheckpoint(clip, model, {
-              requestId: result.requestId,
+              requestId: String(result.requestId || ""),
               editorialContextFingerprint: trustedContextFingerprint,
               pipelineFingerprint: runtime.fingerprint
             }),
             {
               maximum: audsegMode ? allEnabledClips.length : MAX_CAPTION_AGENT_CLIPS_PER_RUN
             }
-          ),
+          ).map((checkpoint) => ({ ...checkpoint })),
           status: "running",
           progress: Math.min(0.99, (index + 1) / clips.length),
           error: null,
@@ -40289,8 +40529,9 @@ async function generateCaptions() {
       !audsegMode && reviewWarningCount > 0 ? 9e3 : 6500
     );
   } catch (error) {
-    const canceled = error.name === "AbortError";
-    if (!canceled && /(?:STT|전사|companion|에이전트)/iu.test(error.message)) {
+    const canceled = errorName(error) === "AbortError";
+    const message = errorMessage(error);
+    if (!canceled && /(?:STT|전사|companion|에이전트)/iu.test(message)) {
       elements.caption_advanced_settings.open = true;
     }
     project = {
@@ -40298,12 +40539,12 @@ async function generateCaptions() {
       ai: {
         ...project.ai,
         status: canceled ? "canceled" : "error",
-        error: canceled ? null : error.message
+        error: canceled ? null : message
       }
     };
     await saveProject(project);
     elements.ai_progress.hidden = true;
-    showToast(canceled ? "AI \uC790\uB9C9 \uC791\uC5C5\uC744 \uCDE8\uC18C\uD588\uC2B5\uB2C8\uB2E4." : `AI \uC790\uB9C9 \uC2E4\uD328: ${error.message}`, canceled ? "info" : "error", 0);
+    showToast(canceled ? "AI \uC790\uB9C9 \uC791\uC5C5\uC744 \uCDE8\uC18C\uD588\uC2B5\uB2C8\uB2E4." : `AI \uC790\uB9C9 \uC2E4\uD328: ${message}`, canceled ? "info" : "error", 0);
   } finally {
     activeJobController = null;
     elements.generate_captions.disabled = false;
@@ -40326,7 +40567,10 @@ function setJobCancelable(cancelable) {
     elements.job_dialog.querySelector(".job-card")?.focus();
   }
 }
-function showJob(title, message, progress = 0, { cancelable = true, returnFocus = document.activeElement } = {}) {
+function showJob(title, message, progress = 0, {
+  cancelable = true,
+  returnFocus = document.activeElement
+} = {}) {
   focusBeforeJob = returnFocus;
   elements.job_title.textContent = title;
   elements.job_message.textContent = message;
@@ -40418,7 +40662,7 @@ async function directoryFileExists(directoryHandle, name) {
     await directoryHandle.getFileHandle(name);
     return true;
   } catch (error) {
-    if (error.name === "NotFoundError") {
+    if (errorName(error) === "NotFoundError") {
       return false;
     }
     throw error;
@@ -40474,7 +40718,7 @@ async function exportVideo() {
         );
         await document.fonts.load(`${weight} 48px "${family}"`);
       } catch (error) {
-        showToast(`\uC790\uB9C9 \uD3F0\uD2B8\uB97C \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+        showToast(`\uC790\uB9C9 \uD3F0\uD2B8\uB97C \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
         return;
       }
     }
@@ -40483,7 +40727,7 @@ async function exportVideo() {
     try {
       profile = await getPreferredOutputProfile(mediaFile, exportProject);
     } catch (error) {
-      showToast(`\uC774 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uC601\uC0C1 \uC778\uCF54\uB354\uB97C \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+      showToast(`\uC774 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uC601\uC0C1 \uC778\uCF54\uB354\uB97C \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
       return;
     }
     let baseName = sanitizeFileName(exportProject.name);
@@ -40506,10 +40750,10 @@ async function exportVideo() {
         handle = await directoryHandle.getFileHandle(videoName, { create: true });
         directoryVideoCreated = true;
       } catch (error) {
-        if (error.name === "AbortError") {
+        if (errorName(error) === "AbortError") {
           return;
         }
-        showToast(`\uC800\uC7A5 \uD3F4\uB354\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+        showToast(`\uC800\uC7A5 \uD3F4\uB354\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
         return;
       }
     } else if (typeof window.showSaveFilePicker === "function") {
@@ -40523,10 +40767,10 @@ async function exportVideo() {
           }]
         });
       } catch (error) {
-        if (error.name === "AbortError") {
+        if (errorName(error) === "AbortError") {
           return;
         }
-        showToast(`\uC800\uC7A5 \uC704\uCE58\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+        showToast(`\uC800\uC7A5 \uC704\uCE58\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
         return;
       }
     }
@@ -40580,10 +40824,11 @@ async function exportVideo() {
         }
       }
       hideJob();
-      const canceled = error.name === "AbortError";
+      const canceled = errorName(error) === "AbortError";
+      const message = errorMessage(error);
       const cleanupMessage = cleanupFailed ? " \uC0DD\uC131\uB41C \uBE48 \uC601\uC0C1 \uD30C\uC77C\uC740 \uC9C0\uC6B0\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." : "";
       showToast(
-        canceled ? `\uC601\uC0C1 \uB0B4\uBCF4\uB0B4\uAE30\uB97C \uCDE8\uC18C\uD588\uC2B5\uB2C8\uB2E4.${cleanupMessage}` : renderCompleted ? `\uC601\uC0C1\uC740 \uC800\uC7A5\uD588\uC9C0\uB9CC \uD504\uB85C\uC81D\uD2B8\xB7SRT \uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4: ${error.message}` : `\uC601\uC0C1 \uB0B4\uBCF4\uB0B4\uAE30 \uC2E4\uD328: ${error.message}${cleanupMessage}`,
+        canceled ? `\uC601\uC0C1 \uB0B4\uBCF4\uB0B4\uAE30\uB97C \uCDE8\uC18C\uD588\uC2B5\uB2C8\uB2E4.${cleanupMessage}` : renderCompleted ? `\uC601\uC0C1\uC740 \uC800\uC7A5\uD588\uC9C0\uB9CC \uD504\uB85C\uC81D\uD2B8\xB7SRT \uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4: ${message}` : `\uC601\uC0C1 \uB0B4\uBCF4\uB0B4\uAE30 \uC2E4\uD328: ${message}${cleanupMessage}`,
         canceled && !cleanupFailed ? "info" : "error",
         0
       );
@@ -40622,7 +40867,7 @@ async function focusSourceTab({ seek = false } = {}) {
       type: "KIRINUKI_EDITOR_SOURCE_ACTION",
       projectId: project.id,
       action: seek ? "seek-and-focus" : "focus",
-      sourceSeconds: mapping ? (mapping.sourceMs - (project.broadcastSession?.alignmentOffsetMs || 0)) / 1e3 : null
+      sourceSeconds: mapping ? (Number(mapping.sourceMs) - Number(project.broadcastSession?.alignmentOffsetMs || 0)) / 1e3 : null
     });
     if (!response?.ok) {
       throw new Error(response?.error || "\uC6D0\uB798 \uC601\uC0C1 \uD0ED\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
@@ -40632,12 +40877,14 @@ async function focusSourceTab({ seek = false } = {}) {
   } catch (error) {
     sourceBindingConnected = false;
     renderHeader();
-    showToast(error.message, "error");
+    showToast(errorMessage(error), "error");
   }
 }
 function bindOverlayDrag() {
   elements.subtitle_overlays.addEventListener("pointerdown", (event) => {
-    const overlay = event.target.closest(".subtitle-overlay");
+    const overlay = event.target.closest(
+      ".subtitle-overlay"
+    );
     const cueId = overlay?.dataset.cueId;
     if (!cueId) {
       return;
@@ -40695,7 +40942,9 @@ function bindOverlayDrag() {
 }
 function bindImageAssetOverlayDrag() {
   elements.image_asset_overlays.addEventListener("pointerdown", (event) => {
-    const overlay = event.target.closest(".image-asset-overlay");
+    const overlay = event.target.closest(
+      ".image-asset-overlay"
+    );
     const assetId = overlay?.dataset.assetId;
     const asset = project.imageAssets.find((candidate) => candidate.id === assetId);
     if (!overlay || !asset) {
@@ -40755,14 +41004,15 @@ function closeTimelineContextMenu() {
   timelineContext = null;
 }
 function openTimelineContextMenu(event) {
-  const clipBlock = event.target.closest(".clip-block");
-  const cueBlock = event.target.closest(".cue-block");
-  const assetBlock = event.target.closest(".asset-block");
-  const audioBlock = event.target.closest(".audio-block");
-  const captionRow = event.target.closest(".caption-track-row");
-  const inVideoTrack = Boolean(event.target.closest("#video-track"));
-  const inAssetTrack = Boolean(event.target.closest("#asset-track"));
-  const inAudioTrack = Boolean(event.target.closest("#audio-track"));
+  const target = event.target;
+  const clipBlock = target?.closest(".clip-block");
+  const cueBlock = target?.closest(".cue-block");
+  const assetBlock = target?.closest(".asset-block");
+  const audioBlock = target?.closest(".audio-block");
+  const captionRow = target?.closest(".caption-track-row");
+  const inVideoTrack = Boolean(target?.closest("#video-track"));
+  const inAssetTrack = Boolean(target?.closest("#asset-track"));
+  const inAudioTrack = Boolean(target?.closest("#audio-track"));
   if (!clipBlock && !cueBlock && !assetBlock && !audioBlock && !captionRow && !inVideoTrack && !inAssetTrack && !inAudioTrack) {
     return;
   }
@@ -40880,7 +41130,7 @@ function bindActions() {
   elements.pick_media.addEventListener("click", () => void chooseMediaFile());
   elements.pick_media_empty.addEventListener("click", () => void chooseMediaFile());
   elements.media_input.addEventListener("change", () => {
-    const [file] = elements.media_input.files;
+    const [file] = elements.media_input.files || [];
     if (file) {
       mediaHandle = null;
       void attachMediaFile(file).then(async (attached) => {
@@ -40892,7 +41142,7 @@ function bindActions() {
     elements.media_input.value = "";
   });
   elements.asset_input.addEventListener("change", () => {
-    const [file] = elements.asset_input.files;
+    const [file] = elements.asset_input.files || [];
     const timelineMs = pendingAssetTimelineMs ?? project.playheadMs;
     pendingAssetTimelineMs = null;
     elements.asset_input.value = "";
@@ -40937,7 +41187,7 @@ function bindActions() {
         overrun ? 7e3 : 3600
       );
     } catch (error) {
-      showToast(error.message, "error", 0);
+      showToast(errorMessage(error), "error", 0);
       renderMediaCard();
     }
   });
@@ -40953,10 +41203,11 @@ function bindActions() {
     clearTimelineRangeSelection();
   });
   elements.delete_range.addEventListener("click", deleteSelectedTimelineRange);
-  for (const [handle, side] of [
+  const rangeHandles = [
     [elements.range_start_handle, "start"],
     [elements.range_end_handle, "end"]
-  ]) {
+  ];
+  for (const [handle, side] of rangeHandles) {
     handle.title = "\uB4DC\uB798\uADF8 \uB610\uB294 \u2190/\u2192 0.1\uCD08 \xB7 Shift+\u2190/\u2192 1\uCD08";
     handle.addEventListener("pointerdown", (event) => {
       bindTimelineRangeHandle(handle, side, event);
@@ -40985,14 +41236,20 @@ function bindActions() {
     renderClipGroupControls({ announcement: "\uCEF7 \uCCB4\uD06C\uB97C \uBAA8\uB450 \uD574\uC81C\uD568" });
   });
   elements.clip_list.addEventListener("change", (event) => {
-    const checkbox = event.target.closest(".clip-group-checkbox");
+    const checkbox = event.target.closest(
+      ".clip-group-checkbox"
+    );
     if (!checkbox || checkbox.disabled) {
       return;
     }
+    const checkboxClipId = checkbox.dataset.clipId;
+    if (!checkboxClipId) {
+      return;
+    }
     if (checkbox.checked) {
-      clipGroupSelection.add(checkbox.dataset.clipId);
+      clipGroupSelection.add(checkboxClipId);
     } else {
-      clipGroupSelection.delete(checkbox.dataset.clipId);
+      clipGroupSelection.delete(checkboxClipId);
     }
     renderClipGroupControls();
   });
@@ -41018,7 +41275,9 @@ function bindActions() {
     });
   });
   elements.clip_list.addEventListener("click", (event) => {
-    const item = event.target.closest(".clip-item");
+    const item = event.target.closest(
+      ".clip-item"
+    );
     if (!item) {
       return;
     }
@@ -41038,7 +41297,8 @@ function bindActions() {
       ));
       const nextItem2 = [...elements.clip_list.querySelectorAll(".clip-item")].find((candidate) => candidate.dataset.id === clip.id);
       const nextAction = nextItem2?.querySelector(`[data-action="${action}"]`);
-      (nextAction && !nextAction.disabled ? nextAction : nextItem2?.querySelector(".clip-select"))?.focus({ preventScroll: true });
+      const nextControl = nextAction && !nextAction.disabled ? nextAction : nextItem2?.querySelector(".clip-select");
+      nextControl?.focus({ preventScroll: true });
       void syncPreviewToPlayhead();
       return;
     }
@@ -41049,8 +41309,12 @@ function bindActions() {
     nextItem?.querySelector(".clip-select")?.focus({ preventScroll: true });
     scheduleSave();
   });
-  configurePreviewVideoLayer(elements.preview_video, { active: true });
-  bindPreviewVideoEvents(elements.preview_video);
+  const previewVideo = elements.preview_video;
+  if (!(previewVideo instanceof HTMLVideoElement)) {
+    throw new TypeError("\uBBF8\uB9AC\uBCF4\uAE30 \uC601\uC0C1 \uC694\uC18C\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  }
+  configurePreviewVideoLayer(previewVideo, { active: true });
+  bindPreviewVideoEvents(previewVideo);
   ensureStandbyPreviewVideo();
   elements.play_toggle.addEventListener("click", () => void togglePlayback());
   elements.previous_clip.addEventListener("click", () => adjacentClip(-1));
@@ -41129,7 +41393,10 @@ function bindActions() {
     }
     updateSelectedCue({ startOffsetMs: timelineMs - clip.timelineStartMs });
     const updated = selectedCue();
-    elements.cue_start.value = formatTime(cueTimelineRange(project, updated).startMs, { compact: true });
+    elements.cue_start.value = formatTime(
+      cueTimelineRange(project, updated).startMs,
+      { compact: true }
+    );
   });
   elements.cue_end.addEventListener("change", () => {
     const cue = selectedCue();
@@ -41145,7 +41412,10 @@ function bindActions() {
     }
     updateSelectedCue({ endOffsetMs: timelineMs - clip.timelineStartMs });
     const updated = selectedCue();
-    elements.cue_end.value = formatTime(cueTimelineRange(project, updated).endMs, { compact: true });
+    elements.cue_end.value = formatTime(
+      cueTimelineRange(project, updated).endMs,
+      { compact: true }
+    );
   });
   elements.cue_x.addEventListener("input", () => {
     const cue = selectedCue();
@@ -41193,21 +41463,29 @@ function bindActions() {
   });
   elements.font_size.addEventListener("change", () => endFieldEdit("font-size"));
   elements.font_color.addEventListener("change", () => {
-    applyFieldProject(
-      rememberSubtitleColor(project, elements.font_color.value),
-      "font-color"
+    const remembered = rememberSubtitleColor(
+      project,
+      elements.font_color.value
     );
+    if (remembered) {
+      applyFieldProject(remembered, "font-color");
+    }
     endFieldEdit("font-color");
   });
   elements.caption_color_register.addEventListener("click", (event) => {
-    const button = event.target.closest(".caption-color-swatch[data-color]");
+    const button = event.target.closest(
+      ".caption-color-swatch[data-color]"
+    );
     const cue = selectedCue();
-    if (!button || !cue) {
+    const color = button?.dataset.color;
+    if (!button || !cue || !color) {
       return;
     }
-    const color = button.dataset.color;
     const colored = updateSubtitleCue(project, cue.id, { color });
-    applyProject(rememberSubtitleColor(colored, color));
+    const remembered = rememberSubtitleColor(colored, color);
+    if (remembered) {
+      applyProject(remembered);
+    }
   });
   elements.reset_font_color.addEventListener("click", () => {
     const cue = selectedCue();
@@ -41238,9 +41516,12 @@ function bindActions() {
     }
   });
   elements.cue_list.addEventListener("click", (event) => {
-    const item = event.target.closest(".cue-list-item");
-    if (item) {
-      selectCue(item.dataset.id, { seek: true });
+    const item = event.target.closest(
+      ".cue-list-item"
+    );
+    const cueId = item?.dataset.id;
+    if (cueId) {
+      selectCue(cueId, { seek: true });
       elements.cue_text.focus({ preventScroll: true });
     }
   });
@@ -41425,18 +41706,21 @@ function bindActions() {
   elements.generate_captions.addEventListener("click", () => void generateCaptions());
   elements.reset_ai_caption_positions.addEventListener("click", () => {
     void queueLocalDraftOperation(resetAllAiCaptionPositions).catch((error) => {
-      showToast(`AI \uC790\uB9C9 \uC704\uCE58\uB97C \uC815\uB82C\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+      showToast(`AI \uC790\uB9C9 \uC704\uCE58\uB97C \uC815\uB82C\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
     });
   });
   elements.test_caption_agent.addEventListener("click", () => void testCaptionAgentConnection());
   elements.caption_style_preset.addEventListener("change", () => {
     const preset = captionStylePreset(elements.caption_style_preset.value);
-    applyProject(applyCaptionStylePreset(project, preset.id));
+    const styledProject = applyCaptionStylePreset(project, preset.id);
+    if (styledProject) {
+      applyProject(styledProject);
+    }
     if (document.fonts?.load) {
       void document.fonts.load(
         `${preset.typography.fontWeight} 48px "${preset.typography.fontFamily}"`
       ).then(renderSubtitleOverlay).catch((error) => {
-        showToast(`\uC790\uB9C9 \uD3F0\uD2B8\uB97C \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+        showToast(`\uC790\uB9C9 \uD3F0\uD2B8\uB97C \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
       });
     }
     showToast(`${preset.displayName} \uC2A4\uD0C0\uC77C\uC744 \uC801\uC6A9\uD588\uC2B5\uB2C8\uB2E4.`, "success", 3600);
@@ -41450,7 +41734,7 @@ function bindActions() {
       captionAgentSettings = settings;
       elements.caption_agent_endpoint.value = settings.endpoint;
     }).catch((error) => {
-      showToast(`\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC124\uC815 \uC800\uC7A5 \uC2E4\uD328: ${error.message}`, "error", 0);
+      showToast(`\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC124\uC815 \uC800\uC7A5 \uC2E4\uD328: ${errorMessage(error)}`, "error", 0);
     });
   });
   elements.caption_agent_endpoint.addEventListener("change", () => {
@@ -41459,7 +41743,7 @@ function bindActions() {
         elements.caption_agent_endpoint.value
       );
     } catch (error) {
-      showToast(error.message, "error", 0);
+      showToast(errorMessage(error), "error", 0);
       elements.caption_agent_endpoint.value = captionAgentSettings.endpoint;
       return;
     }
@@ -41470,7 +41754,7 @@ function bindActions() {
       captionAgentSettings = settings;
       elements.caption_agent_endpoint.value = settings.endpoint;
     }).catch((error) => {
-      showToast(`\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC124\uC815 \uC800\uC7A5 \uC2E4\uD328: ${error.message}`, "error", 0);
+      showToast(`\uC790\uB9C9 \uC5D0\uC774\uC804\uD2B8 \uC124\uC815 \uC800\uC7A5 \uC2E4\uD328: ${errorMessage(error)}`, "error", 0);
     });
   });
   elements.cancel_job.addEventListener("click", cancelActiveJob);
@@ -41661,6 +41945,21 @@ function bindActions() {
     }
   });
 }
+function captureSeedFromUnknown(value) {
+  if (!isRecord2(value)) {
+    throw new TypeError("\uD3B8\uC9D1\uD560 \uCEA1\uCC98 \uB370\uC774\uD130 \uD615\uC2DD\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  }
+  if (value.source != null && !isRecord2(value.source)) {
+    throw new TypeError("\uCEA1\uCC98 \uC6D0\uBCF8 \uC815\uBCF4 \uD615\uC2DD\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  }
+  if (value.draft != null && !isRecord2(value.draft)) {
+    throw new TypeError("\uCEA1\uCC98 \uC784\uC2DC \uAD6C\uAC04 \uD615\uC2DD\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  }
+  if (value.segments != null && (!Array.isArray(value.segments) || !value.segments.every(isRecord2))) {
+    throw new TypeError("\uCEA1\uCC98 \uAD6C\uAC04 \uBAA9\uB85D \uD615\uC2DD\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  }
+  return value;
+}
 async function loadSeed() {
   const params = new URLSearchParams(location.search);
   const requestedProjectId = params.get("project");
@@ -41680,17 +41979,20 @@ async function loadSeed() {
   if (requestedProjectId) {
     const key = `${EDITOR_SEED_PREFIX}${requestedProjectId}`;
     const stored2 = await chrome.storage.local.get(key);
-    if (stored2[key]?.captureState) {
+    const seed = stored2[key];
+    if (isRecord2(seed) && seed.captureState) {
       return {
         projectId: requestedProjectId,
-        captureState: stored2[key].captureState,
+        captureState: captureSeedFromUnknown(seed.captureState),
         resumeSavedSession: false,
         openRecoveryDrafts: false
       };
     }
   }
-  const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const captureState = stored[STORAGE_KEY] || {};
+  const stored = await chrome.storage.local.get(
+    STORAGE_KEY
+  );
+  const captureState = captureSeedFromUnknown(stored[STORAGE_KEY] || {});
   return {
     projectId: requestedProjectId || captureProjectId(captureState),
     captureState,
@@ -41707,7 +42009,7 @@ async function restoreMedia() {
   if (restored?.file) {
     mediaHandle = restored.handle;
     await attachMediaFile(restored.file, { fileHandleStored: true });
-  } else if (restored?.handle && restored.permission !== "granted") {
+  } else if (restored?.handle) {
     showToast("\uC800\uC7A5\uB41C \uC6D0\uBCF8 \uD30C\uC77C\uC744 \uB2E4\uC2DC \uC4F0\uB824\uBA74 \u2018\uC6D0\uBCF8 \uC5F0\uACB0\u2019\uC744 \uB20C\uB7EC \uAD8C\uD55C\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
   } else if (restored?.error) {
     showToast("\uC800\uC7A5\uB41C \uC6D0\uBCF8 \uD30C\uC77C \uC5F0\uACB0\uC774 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \u2018\uC6D0\uBCF8 \uC5F0\uACB0\u2019\uC5D0\uC11C \uB2E4\uC2DC \uC120\uD0DD\uD574 \uC8FC\uC138\uC694.", "error");
@@ -41765,7 +42067,7 @@ async function initialize() {
         project = mergeCaptureIntoEditorProject(storedProject, captureState);
       } catch (error) {
         project = storedProject;
-        seedMergeError = error;
+        seedMergeError = error instanceof Error ? error : new Error(String(error));
       }
     }
   } else if (resumeSavedSession) {
@@ -41834,7 +42136,10 @@ async function initialize() {
 }
 function applyCaptureSeedUpdate(captureState) {
   try {
-    const next = mergeCaptureIntoEditorProject(project, captureState);
+    const next = mergeCaptureIntoEditorProject(
+      project,
+      captureSeedFromUnknown(captureState)
+    );
     clearTimelineRangeSelection({ render: false });
     applyProject(next);
     sourceBindingConnected = true;
@@ -41846,7 +42151,11 @@ function applyCaptureSeedUpdate(captureState) {
       overrun ? 7e3 : 3600
     );
   } catch (error) {
-    showToast(`\uCD5C\uC2E0 \uC120\uD0DD \uAD6C\uAC04\uC744 \uBC18\uC601\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+    showToast(
+      `\uCD5C\uC2E0 \uC120\uD0DD \uAD6C\uAC04\uC744 \uBC18\uC601\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`,
+      "error",
+      0
+    );
   }
 }
 function flushPendingCaptureSeed() {
@@ -41858,11 +42167,14 @@ function flushPendingCaptureSeed() {
   applyCaptureSeedUpdate(captureState);
 }
 function normalizeLocalCaptionFirstPass(detail) {
-  const runId = String(detail?.runId || "").trim();
+  if (!isRecord2(detail)) {
+    throw new TypeError("\uB85C\uCEEC \uC790\uB9C9 \uCD08\uBC8C \uB370\uC774\uD130 \uD615\uC2DD\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  }
+  const runId = String(detail.runId || "").trim();
   if (!runId || runId.length > 160) {
     throw new TypeError("\uB85C\uCEEC \uC790\uB9C9 \uCD08\uBC8C \uC2E4\uD589 ID\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   }
-  if (!Array.isArray(detail?.cues) || detail.cues.length === 0) {
+  if (!Array.isArray(detail.cues) || detail.cues.length === 0) {
     throw new TypeError("\uCD94\uAC00\uD560 \uB85C\uCEEC \uC790\uB9C9 \uCD08\uBC8C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
   }
   if (detail.cues.length > MAX_CAPTION_AGENT_CUES_PER_RUN) {
@@ -41872,7 +42184,10 @@ function normalizeLocalCaptionFirstPass(detail) {
   }
   const clipsById = new Map(project.clips.map((clip) => [clip.id, clip]));
   const cues = detail.cues.map((rawCue, index) => {
-    const clipId = String(rawCue?.clipId || "");
+    if (!isRecord2(rawCue)) {
+      throw new TypeError(`${index + 1}\uBC88 \uB85C\uCEEC \uC790\uB9C9 \uD615\uC2DD\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`);
+    }
+    const clipId = String(rawCue.clipId || "");
     const clip = clipsById.get(clipId);
     if (!clip) {
       throw new TypeError(`${index + 1}\uBC88 \uB85C\uCEEC \uC790\uB9C9\uC758 \uCEF7\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.`);
@@ -41889,6 +42204,7 @@ function normalizeLocalCaptionFirstPass(detail) {
     if (!text || text.length > 500) {
       throw new TypeError(`${index + 1}\uBC88 \uB85C\uCEEC \uC790\uB9C9 \uD14D\uC2A4\uD2B8\uAC00 \uBE44\uC5C8\uAC70\uB098 \uB108\uBB34 \uAE41\uB2C8\uB2E4.`);
     }
+    const remoteMeta = isRecord2(rawCue.remoteMeta) ? rawCue.remoteMeta : {};
     return {
       ...rawCue,
       id: String(rawCue.id || `cue-codex-${crypto.randomUUID()}`),
@@ -41902,21 +42218,21 @@ function normalizeLocalCaptionFirstPass(detail) {
       humanEdited: false,
       remoteMeta: {
         speakerId: String(
-          rawCue.remoteMeta?.speakerId || "codex-local-first-pass"
+          remoteMeta.speakerId || "codex-local-first-pass"
         ).slice(0, 80),
-        reviewRequired: rawCue.remoteMeta?.reviewRequired !== false,
+        reviewRequired: remoteMeta.reviewRequired !== false,
         placement: "bottom"
       }
     };
   });
   return {
     runId,
-    model: String(detail?.model || "Codex local first pass").slice(0, 120),
+    model: String(detail.model || "Codex local first pass").slice(0, 120),
     cues
   };
 }
 async function applyLocalCaptionFirstPass(detail) {
-  if (!project?.id || detail?.projectId !== project.id) {
+  if (!project?.id || !isRecord2(detail) || detail.projectId !== project.id) {
     throw new TypeError("\uD604\uC7AC \uD504\uB85C\uC81D\uD2B8\uC5D0 \uC801\uC6A9\uD560 \uB85C\uCEEC \uC790\uB9C9 \uCD08\uBC8C\uC774 \uC544\uB2D9\uB2C8\uB2E4.");
   }
   if (projectMutationLockCount > 0 || pointerEditActive || rangeHandleDragActive) {
@@ -41983,7 +42299,7 @@ async function applyLocalCaptionFirstPass(detail) {
 }
 window.addEventListener("kirinuki:apply-local-caption-first-pass", (event) => {
   const detail = event.detail;
-  const requestId = String(detail?.requestId || "");
+  const requestId = isRecord2(detail) ? String(detail.requestId || "") : "";
   void queueLocalDraftOperation(() => applyLocalCaptionFirstPass(detail)).then((result) => {
     window.dispatchEvent(new CustomEvent(
       "kirinuki:local-caption-first-pass-result",
@@ -41992,16 +42308,23 @@ window.addEventListener("kirinuki:apply-local-caption-first-pass", (event) => {
   }).catch((error) => {
     window.dispatchEvent(new CustomEvent(
       "kirinuki:local-caption-first-pass-result",
-      { detail: { requestId, ok: false, error: error.message } }
+      { detail: { requestId, ok: false, error: errorMessage(error) } }
     ));
-    showToast(`Codex \uB85C\uCEEC \uC790\uB9C9 \uCD08\uBC8C\uC744 \uC801\uC6A9\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+    showToast(
+      `Codex \uB85C\uCEEC \uC790\uB9C9 \uCD08\uBC8C\uC744 \uC801\uC6A9\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`,
+      "error",
+      0
+    );
   });
 });
 chrome.runtime.onMessage.addListener((message) => {
+  if (!isRecord2(message)) {
+    return;
+  }
   if (message?.type === "KIRINUKI_SOURCE_BINDING_STATUS" && message.projectId === project?.id) {
     sourceBindingConnected = Boolean(message.connected);
     renderHeader();
-  } else if (message?.type === "KIRINUKI_CAPTURE_SEED_UPDATED" && message.projectId === project?.id && message.captureState) {
+  } else if (message?.type === "KIRINUKI_CAPTURE_SEED_UPDATED" && message.projectId === project?.id && isRecord2(message.captureState)) {
     if (projectMutationLockCount > 0) {
       pendingCaptureSeed = message.captureState;
     } else {
@@ -42035,7 +42358,7 @@ document.addEventListener("visibilitychange", () => {
   } else if (localDraftAutosaveAnchorAtMs > 0) {
     const elapsed = Date.now() - localDraftAutosaveAnchorAtMs;
     if (elapsed >= LOCAL_DRAFT_AUTOSAVE_INTERVAL_MS) {
-      clearTimeout(localDraftAutosaveTimer);
+      clearTimeout(localDraftAutosaveTimer ?? void 0);
       localDraftAutosaveTimer = null;
       void runAutomaticLocalDraft();
     } else {
@@ -42061,7 +42384,7 @@ window.addEventListener("pageshow", () => {
 });
 void initialize().catch((error) => {
   console.error(error);
-  showToast(`\uD3B8\uC9D1\uAE30\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${error.message}`, "error", 0);
+  showToast(`\uD3B8\uC9D1\uAE30\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${errorMessage(error)}`, "error", 0);
 });
 /*! Bundled license information:
 

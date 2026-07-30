@@ -6,28 +6,30 @@
   "type": "module",
   "scripts": {
     "studio": "bash ./kirinuki.sh",
-    "acquire:youtube": "node scripts/acquire-youtube.mjs",
-    "build": "node scripts/build-editor.mjs",
-    "caption-gateway": "node scripts/caption-gateway.mjs",
-    "caption-stack": "node scripts/local-caption-stack.mjs",
-    "caption-stack:doctor": "node scripts/local-caption-stack.mjs doctor",
-    "caption-stack:setup": "node scripts/local-caption-stack.mjs setup",
-    "caption-stack:start": "node scripts/local-caption-stack.mjs start",
-    "caption-stack:status": "node scripts/local-caption-stack.mjs status",
-    "caption-stack:stop": "node scripts/local-caption-stack.mjs stop",
-    "dev:editor": "node scripts/dev-extension.mjs",
-    "test": "node --test tests/*.test.js",
-    "test:browser": "node scripts/browser-smoke.mjs",
-    "test:hot-reload": "node scripts/browser-smoke.mjs --dev-reload",
-    "test:export": "node scripts/media-export-e2e.mjs",
-    "test:interaction": "node scripts/editor-interaction-e2e.mjs",
-    "validate": "node scripts/validate-extension.mjs",
-    "license:check": "node scripts/check-third-party-licenses.mjs",
+    "acquire:youtube": "node --import tsx scripts/acquire-youtube.ts",
+    "build": "node --import tsx scripts/build-editor.ts",
+    "caption-gateway": "node --import tsx scripts/caption-gateway.ts",
+    "caption-stack": "node --import tsx scripts/local-caption-stack.ts",
+    "caption-stack:doctor": "node --import tsx scripts/local-caption-stack.ts doctor",
+    "caption-stack:setup": "node --import tsx scripts/local-caption-stack.ts setup",
+    "caption-stack:start": "node --import tsx scripts/local-caption-stack.ts start",
+    "caption-stack:status": "node --import tsx scripts/local-caption-stack.ts status",
+    "caption-stack:stop": "node --import tsx scripts/local-caption-stack.ts stop",
+    "dev:editor": "node --import tsx scripts/dev-extension.ts",
+    "typecheck": "tsc --noEmit",
+    "migration:check": "node --import tsx scripts/check-typescript-migration.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:browser": "node --import tsx scripts/browser-smoke.ts",
+    "test:hot-reload": "node --import tsx scripts/browser-smoke.ts --dev-reload",
+    "test:export": "node --import tsx scripts/media-export-e2e.ts",
+    "test:interaction": "node --import tsx scripts/editor-interaction-e2e.ts",
+    "validate": "node --import tsx scripts/validate-extension.ts",
+    "license:check": "node --import tsx scripts/check-third-party-licenses.ts",
     "audit": "npm audit --audit-level=high",
-    "check": "npm run build && npm run validate && npm run license:check && npm test && npm run audit",
+    "check": "npm run typecheck && npm run build && npm run migration:check && npm run validate && npm run license:check && npm test && npm run audit",
     "check:full": "npm run check && npm run test:browser && npm run test:hot-reload && npm run test:interaction && npm run test:export",
-    "package": "node scripts/release-package.mjs",
-    "check:policy-links": "node scripts/check-policy-links.mjs"
+    "package": "node --import tsx scripts/release-package.ts",
+    "check:policy-links": "node --import tsx scripts/check-policy-links.ts"
   },
   "engines": {
     "node": ">=20.9"
@@ -36,6 +38,10 @@
     "mediabunny": "1.51.0"
   },
   "devDependencies": {
-    "esbuild": "0.25.6"
+    "@types/chrome": "0.2.2",
+    "@types/node": "20.19.43",
+    "esbuild": "0.28.1",
+    "tsx": "4.23.1",
+    "typescript": "5.9.3"
   }
 }
