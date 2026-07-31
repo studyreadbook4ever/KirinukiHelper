@@ -118,6 +118,7 @@ const referencedFiles = [
   "lib/core.js",
   "lib/editor-core.js",
   "lib/keyboard-shortcuts.js",
+  "lib/serial-operation-gate.js",
   "lib/source-platform.js",
   "knowledge/base-editing-guidelines.md",
   "knowledge/default-creator-policy.md",
@@ -223,7 +224,7 @@ for (const [label, relativePath, expectedSha256] of [
   );
 }
 
-const [html, panelScript, contentScript, editorHtml, editorScript, audsegWorkerScript, serviceWorker, editingGuide, policyGuide, codexAgentGuide, policyIndexText, audsegLicense, projectLicense, distributedProjectLicense, keyboardShortcutScript] = await Promise.all([
+const [html, panelScript, contentScript, editorHtml, editorScript, audsegWorkerScript, serviceWorker, editingGuide, policyGuide, codexAgentGuide, policyIndexText, audsegLicense, projectLicense, distributedProjectLicense, keyboardShortcutScript, serialOperationGateScript] = await Promise.all([
   read("sidepanel.html"),
   read("sidepanel.js"),
   read("content-script.js"),
@@ -238,7 +239,8 @@ const [html, panelScript, contentScript, editorHtml, editorScript, audsegWorkerS
   readFile(path.join(root, "AudSeg", "LICENSE"), "utf8"),
   readFile(path.join(root, "LICENSE"), "utf8"),
   read("LICENSE"),
-  read("lib/keyboard-shortcuts.js")
+  read("lib/keyboard-shortcuts.js"),
+  read("lib/serial-operation-gate.js")
 ]);
 const policyIndex = JSON.parse(policyIndexText) as CreatorPolicyIndex;
 assert(
@@ -248,6 +250,10 @@ assert(
 assert(
   await read("licenses/AUDSEG-MIT.txt") === audsegLicense,
   "배포 AudSeg MIT 라이선스가 저장소 원본과 다릅니다."
+);
+assert(
+  serialOperationGateScript.includes("createSerialOperationGate"),
+  "사이드패널 원본 영상 시계 큐 생성물이 없습니다."
 );
 
 for (const id of [

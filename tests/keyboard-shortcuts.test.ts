@@ -53,7 +53,7 @@ function fakeElement({
 test("scope별 A-Z 단축키는 충돌 없이 안전한 동작만 포함한다", () => {
   assert.deepEqual(
     SIDEPANEL_SHORTCUT_BINDINGS.map(({ key }) => key),
-    ["Q", "W", "E", "R", "T", "A", "S", "D", "F", "G", "H", "Z", "X"]
+    ["Q", "W", "E", "R", "T", "A", "S", "D", "F", "G", "H", "Y", "U"]
   );
   assert.deepEqual(
     EDITOR_SHORTCUT_BINDINGS.map(({ key }) => key),
@@ -125,6 +125,49 @@ test("모든 단축키 대상은 실제 화면에 있고 두 화면 모두 공�
   );
   assert.match(
     sidepanelSource,
+    /seekBackwardFive\.addEventListener\([\s\S]+seekSourceBy\(-5\)/u
+  );
+  assert.match(
+    sidepanelSource,
+    /seekForwardFive\.addEventListener\([\s\S]+seekSourceBy\(5\)/u
+  );
+  assert.match(
+    sidepanelSource,
+    /async function captureCurrentPosition[\s\S]+reserveSourceClockOperation\(\)[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+requestForegroundPageContext\(\)/u,
+    "D/F와 E/R은 입력 순서대로 원본 영상 시계를 읽고 바꿔야 합니다."
+  );
+  assert.match(
+    sidepanelSource,
+    /async function seekSourceBy[\s\S]+reserveSourceClockOperation\(\)[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+action: "seek-relative"/u,
+    "D/F 이동도 E/R 캡처와 같은 원본 영상 시계 큐를 사용해야 합니다."
+  );
+  assert.match(
+    sidepanelSource,
+    /async function setSourcePlaybackRate[\s\S]+const operationGeneration = stateGeneration;[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+assertOperationCurrent\(operationGeneration\);[\s\S]+getActiveSourceTab\(\)/u,
+    "대기 중 초기화된 Y/U 명령은 새 원본 탭에 실행되면 안 됩니다."
+  );
+  assert.match(
+    sidepanelSource,
+    /async function seekSourceBy[\s\S]+const operationGeneration = stateGeneration;[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+assertOperationCurrent\(operationGeneration\);[\s\S]+getActiveSourceTab\(\)/u,
+    "대기 중 초기화된 D/F 명령은 새 원본 탭에 실행되면 안 됩니다."
+  );
+  assert.match(
+    sidepanelSource,
+    /async function setSourcePlaybackRate[\s\S]+await sendMessageToSourceTab\(tab, message\);\s+assertOperationCurrent\(operationGeneration\);/u,
+    "Y/U 응답 대기 중 초기화되면 이전 응답을 새 상태에 적용하면 안 됩니다."
+  );
+  assert.match(
+    sidepanelSource,
+    /async function seekSourceBy[\s\S]+await sendMessageToSourceTab\(tab, \{[\s\S]+action: "seek-relative"[\s\S]+\}\);\s+assertOperationCurrent\(operationGeneration\);/u,
+    "D/F 응답 대기 중 초기화되면 이전 응답을 새 상태에 적용하면 안 됩니다."
+  );
+  assert.match(
+    sidepanelSource,
+    /refreshSourceTabAfterPlayerCommand\([\s\S]+requestPageContextFromTab\(tab\)[\s\S]+requestSequence !== contextRequestSequence/u,
+    "D/F 직후에는 같은 원본 탭의 최신 SPA 문맥만 다시 표시해야 합니다."
+  );
+  assert.match(
+    sidepanelSource,
     /playbackRateQuarter\.addEventListener\([\s\S]+setSourcePlaybackRate\(0\.25\)/u
   );
   assert.match(
@@ -135,21 +178,37 @@ test("모든 단축키 대상은 실제 화면에 있고 두 화면 모두 공�
   assert.match(editorSource, /keyboardShortcutBindingForScope\("editor"/u);
 });
 
-test("사이드패널 Z/X는 원본 영상 0.25배속과 2배속 버튼에 고정한다", () => {
-  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "z"), {
-    key: "Z",
+test("사이드패널 D/F와 Y/U는 원본 영상 이동·배속 버튼에 고정한다", () => {
+  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "d"), {
+    key: "D",
+    action: "player-seek-backward-five",
+    targetId: "seek-backward-five",
+    label: "원본 영상을 5초 이전으로 이동",
+    trigger: "click"
+  });
+  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "F"), {
+    key: "F",
+    action: "player-seek-forward-five",
+    targetId: "seek-forward-five",
+    label: "원본 영상을 5초 이후로 이동",
+    trigger: "click"
+  });
+  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "y"), {
+    key: "Y",
     action: "player-rate-quarter",
     targetId: "playback-rate-quarter",
     label: "원본 영상을 0.25배속으로 재생",
     trigger: "click"
   });
-  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "X"), {
-    key: "X",
+  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "U"), {
+    key: "U",
     action: "player-rate-double",
     targetId: "playback-rate-double",
     label: "원본 영상을 2배속으로 재생",
     trigger: "click"
   });
+  assert.equal(keyboardShortcutBindingForScope("sidepanel", "Z"), null);
+  assert.equal(keyboardShortcutBindingForScope("sidepanel", "X"), null);
   assert.equal(keyboardShortcutBindingForScope("editor", "X"), null);
 });
 

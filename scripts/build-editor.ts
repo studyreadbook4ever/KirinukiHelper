@@ -85,6 +85,7 @@ await Promise.all([
       path.join(sourceRoot, "lib", "core.ts"),
       path.join(sourceRoot, "lib", "editor-core.ts"),
       path.join(sourceRoot, "lib", "keyboard-shortcuts.ts"),
+      path.join(sourceRoot, "lib", "serial-operation-gate.ts"),
       path.join(sourceRoot, "lib", "session-recovery.ts"),
       path.join(sourceRoot, "lib", "source-platform.ts")
     ],

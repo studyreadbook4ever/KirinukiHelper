@@ -36,8 +36,8 @@ import {
 type RenderProjectFixture = Parameters<typeof activeCuesAt>[0];
 type RenderClipFixture = Parameters<typeof cfrFrameRange>[0];
 type CaptionContextFixture = Parameters<typeof wrapCaption>[0];
-type AssetCanvasFixture = Parameters<typeof imageAssetDrawRect>[0];
-type AssetImageFixture = Parameters<typeof imageAssetDrawRect>[2];
+type AssetCanvasFixture = Parameters<typeof drawImageAsset>[1];
+type AssetImageFixture = Parameters<typeof drawImageAsset>[3];
 type AssetDrawContextFixture = Parameters<typeof drawImageAsset>[0];
 type AudioSampleFixture = Parameters<typeof audioTrimFrameRange>[0];
 
@@ -491,6 +491,39 @@ test("이미지 에셋은 비율·투명도를 보존해 영상 위에 합성한
     ["drawImage", image, 624, 372, 672, 336, 0.4, "source-over"],
     ["restore"]
   ]);
+});
+
+test("작은 이미지 에셋은 같은 화면비의 미리보기와 출력에서 비례한다", () => {
+  const asset = {
+    x: 0.32903981264637056,
+    y: 0.42922196200447277,
+    scale: 2.77,
+    opacity: 1,
+    naturalWidth: 505,
+    naturalHeight: 229
+  };
+  const image = { width: 505, height: 229 };
+  const previewRect = imageAssetDrawRect(
+    { width: 960, height: 540 },
+    asset as unknown as Parameters<typeof imageAssetDrawRect>[1],
+    image
+  );
+  const outputRect = imageAssetDrawRect(
+    { width: 1_920, height: 1_080 },
+    asset as unknown as Parameters<typeof imageAssetDrawRect>[1],
+    image
+  );
+
+  for (const key of ["x", "y", "width", "height"] as const) {
+    assert.ok(
+      Math.abs(outputRect[key] - previewRect[key] * 2) < 1e-9,
+      `${key}가 해상도에 비례하지 않습니다: ${JSON.stringify({ previewRect, outputRect })}`
+    );
+  }
+  assert.ok(Math.abs(outputRect.x - -298.96355971896855) < 1e-9);
+  assert.ok(Math.abs(outputRect.y - 41.51045163809789) < 1e-9);
+  assert.ok(Math.abs(outputRect.width - 1_861.44) < 1e-9);
+  assert.ok(Math.abs(outputRect.height - 844.0985346534654) < 1e-9);
 });
 
 test("렌더 캐시는 현재 활성 이미지 에셋만 디코드하고 구간 종료 즉시 해제한다", async () => {

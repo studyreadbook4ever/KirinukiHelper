@@ -78,6 +78,7 @@ import {
   exportProgressPercent,
   fitSingleLineCaptionFontSize,
   getPreferredOutputProfile,
+  imageAssetDrawRect,
   inspectMediaFile,
   renderProjectVideo,
   singleLineCaptionText
@@ -3774,18 +3775,29 @@ function renderTimeline({ keepScroll = false } = {}) {
   }
 }
 
-function videoContentRect() {
-  const stageRect = elements.stage.getBoundingClientRect();
+function videoContentRect(container = elements.image_asset_overlays) {
+  const containerRect = container.getBoundingClientRect();
   const video = elements.preview_video;
+  const videoRect = video.getBoundingClientRect();
+  const surfaceLeft = videoRect.left - containerRect.left;
+  const surfaceTop = videoRect.top - containerRect.top;
   if (!video.videoWidth || !video.videoHeight) {
-    return { left: 0, top: 0, width: stageRect.width, height: stageRect.height };
+    return {
+      left: surfaceLeft,
+      top: surfaceTop,
+      width: videoRect.width,
+      height: videoRect.height
+    };
   }
-  const scale = Math.min(stageRect.width / video.videoWidth, stageRect.height / video.videoHeight);
+  const scale = Math.min(
+    videoRect.width / video.videoWidth,
+    videoRect.height / video.videoHeight
+  );
   const width = video.videoWidth * scale;
   const height = video.videoHeight * scale;
   return {
-    left: (stageRect.width - width) / 2,
-    top: (stageRect.height - height) / 2,
+    left: surfaceLeft + (videoRect.width - width) / 2,
+    top: surfaceTop + (videoRect.height - height) / 2,
     width,
     height
   };
@@ -3812,10 +3824,10 @@ async function renderImageAssetOverlays() {
     }
     const naturalWidth = Math.max(1, asset.naturalWidth || 512);
     const naturalHeight = Math.max(1, asset.naturalHeight || 512);
-    const baseFit = Math.min(
-      1,
-      contentRect.width * 0.35 / naturalWidth,
-      contentRect.height * 0.35 / naturalHeight
+    const drawRect = imageAssetDrawRect(
+      { width: contentRect.width, height: contentRect.height },
+      asset,
+      { width: naturalWidth, height: naturalHeight }
     );
     const overlay = document.createElement("button");
     overlay.type = "button";
@@ -3823,10 +3835,10 @@ async function renderImageAssetOverlays() {
     overlay.classList.toggle("selected", asset.id === project.selectedImageAssetId);
     overlay.dataset.assetId = asset.id;
     overlay.setAttribute("aria-label", `이미지 에셋: ${asset.name}`);
-    overlay.style.left = `${contentRect.left + contentRect.width * asset.x}px`;
-    overlay.style.top = `${contentRect.top + contentRect.height * asset.y}px`;
-    overlay.style.width = `${Math.max(1, naturalWidth * baseFit * asset.scale)}px`;
-    overlay.style.height = `${Math.max(1, naturalHeight * baseFit * asset.scale)}px`;
+    overlay.style.left = `${contentRect.left + drawRect.x + drawRect.width / 2}px`;
+    overlay.style.top = `${contentRect.top + drawRect.y + drawRect.height / 2}px`;
+    overlay.style.width = `${drawRect.width}px`;
+    overlay.style.height = `${drawRect.height}px`;
     overlay.style.opacity = String(asset.opacity);
     const image = document.createElement("img");
     image.src = url;
@@ -3846,7 +3858,7 @@ function renderSubtitleOverlay() {
   if (cues.length === 0) {
     return;
   }
-  const contentRect = videoContentRect();
+  const contentRect = videoContentRect(elements.subtitle_overlays);
   cues.forEach((cue) => {
     const overlay = document.createElement("button");
     overlay.type = "button";
@@ -6368,10 +6380,10 @@ function bindOverlayDrag() {
       if (moveEvent.pointerId !== pointerId) {
         return;
       }
-      const rect = elements.stage.getBoundingClientRect();
-      const content = videoContentRect();
-      const x = Math.max(0.05, Math.min(0.95, (moveEvent.clientX - rect.left - content.left) / content.width));
-      const y = Math.max(0.05, Math.min(0.95, (moveEvent.clientY - rect.top - content.top) / content.height));
+      const layerRect = elements.subtitle_overlays.getBoundingClientRect();
+      const content = videoContentRect(elements.subtitle_overlays);
+      const x = Math.max(0.05, Math.min(0.95, (moveEvent.clientX - layerRect.left - content.left) / content.width));
+      const y = Math.max(0.05, Math.min(0.95, (moveEvent.clientY - layerRect.top - content.top) / content.height));
       project = updateSubtitleCue(project, cueId, { x, y });
       renderCueInspector();
       overlay.style.left = `${content.left + content.width * x}px`;
@@ -6428,10 +6440,10 @@ function bindImageAssetOverlayDrag() {
       if (moveEvent.pointerId !== pointerId) {
         return;
       }
-      const rect = elements.stage.getBoundingClientRect();
-      const content = videoContentRect();
-      const x = Math.max(0, Math.min(1, (moveEvent.clientX - rect.left - content.left) / content.width));
-      const y = Math.max(0, Math.min(1, (moveEvent.clientY - rect.top - content.top) / content.height));
+      const layerRect = elements.image_asset_overlays.getBoundingClientRect();
+      const content = videoContentRect(elements.image_asset_overlays);
+      const x = Math.max(0, Math.min(1, (moveEvent.clientX - layerRect.left - content.left) / content.width));
+      const y = Math.max(0, Math.min(1, (moveEvent.clientY - layerRect.top - content.top) / content.height));
       project = updateImageAsset(project, asset.id, { x, y });
       renderImageAssetInspector();
       overlay.style.left = `${content.left + content.width * x}px`;

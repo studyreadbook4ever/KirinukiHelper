@@ -1102,7 +1102,7 @@ svg {
 .image-asset-overlay {
   position: absolute;
   padding: 0;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 5px;
   appearance: none;
   background: transparent;
@@ -1124,7 +1124,8 @@ svg {
 
 .image-asset-overlay:hover,
 .image-asset-overlay.selected {
-  border-color: #64b5ff;
+  outline: 1px solid #64b5ff;
+  outline-offset: -1px;
   box-shadow: 0 0 0 2px rgba(73, 158, 255, 0.2);
 }
 

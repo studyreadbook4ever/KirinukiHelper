@@ -114,6 +114,7 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
   interface BridgeMessage {
     type: string;
     action?: string;
+    deltaSeconds?: number;
     playbackRate?: number;
   }
   type MessageListener = (
@@ -360,6 +361,80 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
   assert.ok("error" in invalidSpeedResponse);
   assert.match(invalidSpeedResponse.error, /0\.25배 또는 2배/u);
   assert.equal(video.playbackRate, 2);
+
+  const backwardSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: -5
+  });
+  assert.equal(backwardSeekResponse.ok, true);
+  assert.ok("player" in backwardSeekResponse);
+  assert.ok(
+    Math.abs(backwardSeekResponse.player.currentTime - 118.456) < 1e-9
+  );
+  assert.ok(Math.abs(video.currentTime - 118.456) < 1e-9);
+
+  const forwardSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: 5
+  });
+  assert.equal(forwardSeekResponse.ok, true);
+  assert.ok("player" in forwardSeekResponse);
+  assert.ok(
+    Math.abs(forwardSeekResponse.player.currentTime - 123.456) < 1e-9
+  );
+  assert.ok(Math.abs(video.currentTime - 123.456) < 1e-9);
+
+  video.seekable.start = (_index: number) => 10;
+  video.seekable.end = (_index: number) => 3_590;
+  video.currentTime = 12;
+  const lowerClampedSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: -5
+  });
+  assert.equal(lowerClampedSeekResponse.ok, true);
+  assert.ok("player" in lowerClampedSeekResponse);
+  assert.equal(lowerClampedSeekResponse.player.currentTime, 10);
+  assert.equal(video.currentTime, 10);
+
+  video.currentTime = 3_588;
+  const upperClampedSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: 5
+  });
+  assert.equal(upperClampedSeekResponse.ok, true);
+  assert.ok("player" in upperClampedSeekResponse);
+  assert.equal(upperClampedSeekResponse.player.currentTime, 3_590);
+  assert.equal(video.currentTime, 3_590);
+
+  const invalidSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: 4
+  });
+  assert.equal(invalidSeekResponse.ok, false);
+  assert.ok("error" in invalidSeekResponse);
+  assert.match(invalidSeekResponse.error, /5초/u);
+  assert.equal(video.currentTime, 3_590);
+
+  location.href = `https://chzzk.naver.com/live/${channelId}`;
+  video.currentTime = 200;
+  const liveDvrSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: 5
+  });
+  assert.equal(liveDvrSeekResponse.ok, true);
+  assert.ok("player" in liveDvrSeekResponse);
+  assert.equal(liveDvrSeekResponse.player.currentTime, 205);
+  assert.equal(
+    video.currentTime,
+    205,
+    "치지직 라이브 DVR도 wall-clock 보정값이 아닌 media currentTime을 상대 이동해야 합니다."
+  );
 
   location.href = `https://chzzk.naver.com/video/${retryVideoId}`;
   const failedMetadataResponse = await sendMessage({

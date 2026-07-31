@@ -132,6 +132,7 @@ test("YouTube SPA에서는 stale og:url 대신 URL과 활성 플레이어 ID를 
   interface BridgeMessage {
     type: string;
     action?: string;
+    deltaSeconds?: number;
     playbackRate?: number;
   }
   type MessageListener = (
@@ -297,7 +298,76 @@ test("YouTube SPA에서는 stale og:url 대신 URL과 활성 플레이어 ID를 
   assert.match(invalidSpeedResponse.error, /0\.25배 또는 2배/u);
   assert.equal(video.playbackRate, 2);
 
+  const backwardSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: -5
+  });
+  assert.equal(backwardSeekResponse.ok, true);
+  assert.ok("player" in backwardSeekResponse);
+  assert.ok(
+    Math.abs(backwardSeekResponse.player.currentTime - 37.125) < 1e-9
+  );
+  assert.ok(Math.abs(video.currentTime - 37.125) < 1e-9);
+
+  const forwardSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: 5
+  });
+  assert.equal(forwardSeekResponse.ok, true);
+  assert.ok("player" in forwardSeekResponse);
+  assert.ok(
+    Math.abs(forwardSeekResponse.player.currentTime - 42.125) < 1e-9
+  );
+  assert.ok(Math.abs(video.currentTime - 42.125) < 1e-9);
+
+  video.seekable.start = (_index: number) => 10;
+  video.seekable.end = (_index: number) => 170;
+  video.currentTime = 12;
+  const lowerClampedSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: -5
+  });
+  assert.equal(lowerClampedSeekResponse.ok, true);
+  assert.ok("player" in lowerClampedSeekResponse);
+  assert.equal(lowerClampedSeekResponse.player.currentTime, 10);
+  assert.equal(video.currentTime, 10);
+
+  video.currentTime = 168;
+  const upperClampedSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: 5
+  });
+  assert.equal(upperClampedSeekResponse.ok, true);
+  assert.ok("player" in upperClampedSeekResponse);
+  assert.equal(upperClampedSeekResponse.player.currentTime, 170);
+  assert.equal(video.currentTime, 170);
+
+  const invalidSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: 4
+  });
+  assert.equal(invalidSeekResponse.ok, false);
+  assert.ok("error" in invalidSeekResponse);
+  assert.match(invalidSeekResponse.error, /5초/u);
+  assert.equal(video.currentTime, 170);
+
   adShowing = true;
+  video.currentTime = 42.125;
+  const adBlockedSeekResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "seek-relative",
+    deltaSeconds: 5
+  });
+  assert.equal(adBlockedSeekResponse.ok, false);
+  assert.ok("error" in adBlockedSeekResponse);
+  assert.match(adBlockedSeekResponse.error, /광고 재생 중/u);
+  assert.equal(video.currentTime, 42.125);
+
   const adBlockedResponse = await sendMessage({
     type: "KIRINUKI_PLAYER_COMMAND",
     action: "set-playback-rate",

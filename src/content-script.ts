@@ -55,8 +55,16 @@ interface PlayerState {
 
 interface PlayerCommand {
   type?: string;
-  action?: "play" | "pause" | "seek" | string;
+  action?: (
+    | "play"
+    | "pause"
+    | "seek"
+    | "seek-relative"
+    | "set-playback-rate"
+    | string
+  );
   positionSeconds?: number;
+  deltaSeconds?: number;
   playbackRate?: number;
 }
 
@@ -722,6 +730,12 @@ if (!globalThis.__kirinukiSourceBridgeLoaded) {
     playbackRate: number;
   }> => {
     const platform = sourcePlatformFromUrl(location.href);
+    if (
+      platform !== SOURCE_PLATFORM_YOUTUBE
+      && platform !== SOURCE_PLATFORM_CHZZK
+    ) {
+      throw new Error("지원하지 않는 영상 페이지입니다.");
+    }
     const video = choosePrimaryVideo();
     if (!video) {
       throw new Error("영상 플레이어를 찾지 못했습니다.");
@@ -769,6 +783,44 @@ if (!globalThis.__kirinukiSourceBridgeLoaded) {
         target = Math.min(end, Math.max(start, target));
       }
       video.currentTime = target;
+    } else if (message.action === "seek-relative") {
+      if (
+        message.deltaSeconds !== -5
+        && message.deltaSeconds !== 5
+      ) {
+        throw new Error("상대 이동은 5초 뒤로 또는 5초 앞으로만 지원합니다.");
+      }
+      if (!Number.isFinite(video.currentTime)) {
+        throw new Error("현재 영상 시각을 읽지 못했습니다.");
+      }
+
+      // Relative movement must use the media clock. In particular, CHZZK
+      // live context timestamps are normalized against openDate, while its
+      // HTMLVideoElement currentTime remains the authoritative seek clock.
+      let target: number;
+      if (platform === SOURCE_PLATFORM_YOUTUBE) {
+        target = video.currentTime + message.deltaSeconds;
+      } else if (platform === SOURCE_PLATFORM_CHZZK) {
+        target = video.currentTime + message.deltaSeconds;
+      } else {
+        throw new Error("지원하지 않는 영상 페이지입니다.");
+      }
+
+      let minimum = 0;
+      let maximum = (
+        Number.isFinite(video.duration)
+        && video.duration >= 0
+      )
+        ? video.duration
+        : Number.POSITIVE_INFINITY;
+      if (video.seekable.length > 0) {
+        minimum = video.seekable.start(0);
+        maximum = video.seekable.end(video.seekable.length - 1);
+      }
+      video.currentTime = Math.min(
+        maximum,
+        Math.max(minimum, target)
+      );
     } else if (message.action === "set-playback-rate") {
       if (
         message.playbackRate !== 0.25
@@ -778,7 +830,13 @@ if (!globalThis.__kirinukiSourceBridgeLoaded) {
           "재생 속도는 0.25배 또는 2배만 선택할 수 있습니다."
         );
       }
-      video.playbackRate = message.playbackRate;
+      if (platform === SOURCE_PLATFORM_YOUTUBE) {
+        video.playbackRate = message.playbackRate;
+      } else if (platform === SOURCE_PLATFORM_CHZZK) {
+        video.playbackRate = message.playbackRate;
+      } else {
+        throw new Error("지원하지 않는 영상 페이지입니다.");
+      }
     } else {
       throw new Error(
         `지원하지 않는 플레이어 명령입니다: ${message.action}`

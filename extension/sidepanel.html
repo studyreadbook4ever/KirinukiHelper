@@ -70,9 +70,9 @@
                 id="playback-rate-quarter"
                 class="playback-rate-button"
                 type="button"
-                title="재생 속도 0.25배 (Z)"
+                title="재생 속도 0.25배 (Y)"
                 aria-label="재생 속도 0.25배"
-                aria-keyshortcuts="Z"
+                aria-keyshortcuts="Y"
                 aria-pressed="false"
                 disabled
               >0.25×</button>
@@ -80,9 +80,9 @@
                 id="playback-rate-double"
                 class="playback-rate-button"
                 type="button"
-                title="재생 속도 2배 (X)"
+                title="재생 속도 2배 (U)"
                 aria-label="재생 속도 2배"
-                aria-keyshortcuts="X"
+                aria-keyshortcuts="U"
                 aria-pressed="false"
                 disabled
               >2×</button>
@@ -135,6 +135,33 @@
           <span class="flow-step">2 끝</span>
           <span class="flow-line"></span>
           <span class="flow-step">3 설명</span>
+        </div>
+
+        <div class="capture-seek-controls" role="group" aria-label="원본 영상 위치 이동">
+          <button
+            id="seek-backward-five"
+            class="capture-seek-button"
+            type="button"
+            title="원본 영상 5초 뒤로 이동 (D)"
+            aria-label="원본 영상 5초 뒤로 이동"
+            aria-keyshortcuts="D"
+            disabled
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 7-5 5 5 5"/><path d="M6 12h8a4 4 0 0 1 4 4v1"/></svg>
+            −5초
+          </button>
+          <button
+            id="seek-forward-five"
+            class="capture-seek-button"
+            type="button"
+            title="원본 영상 5초 앞으로 이동 (F)"
+            aria-label="원본 영상 5초 앞으로 이동"
+            aria-keyshortcuts="F"
+            disabled
+          >
+            +5초
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13 7 5 5-5 5"/><path d="M18 12h-8a4 4 0 0 0-4 4v1"/></svg>
+          </button>
         </div>
 
         <div class="timestamp-grid">

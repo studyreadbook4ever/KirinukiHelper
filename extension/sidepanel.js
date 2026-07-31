@@ -22,6 +22,7 @@ import {
   sourceSessionIdentity
 } from "./lib/editor-core.js";
 import {
+  SOURCE_PLATFORM_CHZZK,
   SOURCE_PLATFORM_YOUTUBE,
   canStartSourceRefresh,
   isSupportedSourceUrl,
@@ -36,6 +37,9 @@ import {
   keyboardShortcutBindingForScope,
   keyboardShortcutLetterFromEvent
 } from "./lib/keyboard-shortcuts.js";
+import {
+  createSerialOperationGate
+} from "./lib/serial-operation-gate.js";
 const requiredElement = (selector) => {
   const element = document.querySelector(selector);
   if (!element) {
@@ -65,6 +69,8 @@ const elements = {
   playerStatus: requiredElement("#player-status"),
   playbackRateQuarter: requiredElement("#playback-rate-quarter"),
   playbackRateDouble: requiredElement("#playback-rate-double"),
+  seekBackwardFive: requiredElement("#seek-backward-five"),
+  seekForwardFive: requiredElement("#seek-forward-five"),
   streamerName: requiredElement("#streamer-name"),
   broadcastTitle: requiredElement("#broadcast-title"),
   sourceLink: requiredElement("#source-link"),
@@ -171,6 +177,7 @@ let contextRequestSequence = 0;
 let foregroundContextRequestCount = 0;
 let sourceRefreshRequestCount = 0;
 let playerCommandInProgress = false;
+const sourceClockOperationGate = createSerialOperationGate();
 let stateGeneration = 0;
 let resetInProgress = false;
 let persistenceChain = Promise.resolve();
@@ -709,7 +716,7 @@ function setConnectionBadge(text, variant) {
   elements.connectionBadge.textContent = text;
   elements.connectionBadge.className = `badge ${variant}`;
 }
-function renderPlaybackRateControls(player) {
+function renderPlayerControls(player) {
   const currentRate = Number(player?.playbackRate);
   const available = Boolean(
     currentContext && player?.found && !player.adActive && !playerCommandInProgress
@@ -718,6 +725,8 @@ function renderPlaybackRateControls(player) {
     [elements.playbackRateQuarter, 0.25],
     [elements.playbackRateDouble, 2]
   ];
+  elements.seekBackwardFive.disabled = !available;
+  elements.seekForwardFive.disabled = !available;
   for (const [button, rate] of controls) {
     button.disabled = !available;
     button.setAttribute(
@@ -731,7 +740,7 @@ function renderSource() {
   const connected = context !== null;
   elements.sourceEmpty.hidden = connected;
   elements.sourceDetails.hidden = !connected;
-  renderPlaybackRateControls(context?.player);
+  renderPlayerControls(context?.player);
   if (!context) {
     setConnectionBadge("\uBBF8\uC5F0\uACB0", "badge-muted");
     return;
@@ -766,20 +775,13 @@ async function getActiveSourceTab() {
 }
 async function requestPageContext() {
   const tab = await getActiveSourceTab();
-  let response;
-  try {
-    response = await chrome.tabs.sendMessage(
-      tab.id,
-      { type: "KIRINUKI_GET_CONTEXT" }
-    );
-  } catch {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content-script.js"] });
-    await wait(40);
-    response = await chrome.tabs.sendMessage(
-      tab.id,
-      { type: "KIRINUKI_GET_CONTEXT" }
-    );
-  }
+  return requestPageContextFromTab(tab);
+}
+async function requestPageContextFromTab(tab) {
+  const response = await sendMessageToSourceTab(
+    tab,
+    { type: "KIRINUKI_GET_CONTEXT" }
+  );
   if (!response?.ok) {
     throw new Error(response?.error || "\uC601\uC0C1 \uD398\uC774\uC9C0 \uC815\uBCF4\uB97C \uC77D\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
   }
@@ -788,36 +790,45 @@ async function requestPageContext() {
     sourceTabId: tab.id
   };
 }
+async function sendMessageToSourceTab(tab, message) {
+  let response;
+  try {
+    response = await chrome.tabs.sendMessage(
+      tab.id,
+      message
+    );
+  } catch {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content-script.js"] });
+    await wait(40);
+    response = await chrome.tabs.sendMessage(
+      tab.id,
+      message
+    );
+  }
+  return response;
+}
+function reserveSourceClockOperation() {
+  return sourceClockOperationGate.reserve();
+}
 async function setSourcePlaybackRate(playbackRate) {
   if (resetInProgress || playerCommandInProgress) {
     return;
   }
+  const operationGeneration = stateGeneration;
+  const sourceClockOperation = reserveSourceClockOperation();
   playerCommandInProgress = true;
   renderSource();
   try {
+    await sourceClockOperation.waitForTurn;
+    assertOperationCurrent(operationGeneration);
     const tab = await getActiveSourceTab();
     const message = {
       type: "KIRINUKI_PLAYER_COMMAND",
       action: "set-playback-rate",
       playbackRate
     };
-    let response;
-    try {
-      response = await chrome.tabs.sendMessage(
-        tab.id,
-        message
-      );
-    } catch {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ["content-script.js"]
-      });
-      await wait(40);
-      response = await chrome.tabs.sendMessage(
-        tab.id,
-        message
-      );
-    }
+    const response = await sendMessageToSourceTab(tab, message);
+    assertOperationCurrent(operationGeneration);
     if (!response?.ok) {
       throw new Error(response?.error || "\uC6D0\uBCF8 \uC7AC\uC0DD \uC18D\uB3C4\uB97C \uBC14\uAFB8\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
     }
@@ -832,10 +843,88 @@ async function setSourcePlaybackRate(playbackRate) {
     }
     setStatus(`\uC6D0\uBCF8 \uD50C\uB808\uC774\uC5B4\uB97C ${playbackRate}\uBC30\uC18D\uC73C\uB85C \uBC14\uAFE8\uC2B5\uB2C8\uB2E4.`, "success");
   } catch (error) {
-    setStatus(errorMessage(error), "error");
+    if (!isAbortError(error)) {
+      setStatus(errorMessage(error), "error");
+    }
   } finally {
     playerCommandInProgress = false;
+    sourceClockOperation.release();
     renderSource();
+  }
+}
+async function seekSourceBy(deltaSeconds) {
+  if (resetInProgress || playerCommandInProgress) {
+    return;
+  }
+  const operationGeneration = stateGeneration;
+  const sourceClockOperation = reserveSourceClockOperation();
+  playerCommandInProgress = true;
+  renderSource();
+  try {
+    await sourceClockOperation.waitForTurn;
+    assertOperationCurrent(operationGeneration);
+    contextRequestSequence += 1;
+    const tab = await getActiveSourceTab();
+    const response = await sendMessageToSourceTab(tab, {
+      type: "KIRINUKI_PLAYER_COMMAND",
+      action: "seek-relative",
+      deltaSeconds
+    });
+    assertOperationCurrent(operationGeneration);
+    if (!response?.ok) {
+      throw new Error(response?.error || "\uC6D0\uBCF8 \uD50C\uB808\uC774\uC5B4 \uC704\uCE58\uB97C \uC62E\uAE30\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+    }
+    const mediaTime = Number(response.player?.currentTime);
+    if (Number.isFinite(mediaTime) && currentContext && (!currentContext.sourceTabId || currentContext.sourceTabId === tab.id)) {
+      const previousPlayer = currentContext.player || {};
+      const previousPosition = Number(previousPlayer.positionSeconds);
+      const previousRawPosition = Number(
+        previousPlayer.rawMediaPositionSeconds
+      );
+      const previousLiveEdgeOffset = Number(
+        previousPlayer.liveEdgeOffsetSeconds
+      );
+      const chzzkLiveMediaDelta = currentContext.platform === SOURCE_PLATFORM_CHZZK && currentContext.contentType === "live" && Number.isFinite(previousPosition) && Number.isFinite(previousRawPosition) ? mediaTime - previousRawPosition : null;
+      currentContext = {
+        ...currentContext,
+        player: {
+          ...previousPlayer,
+          positionSeconds: chzzkLiveMediaDelta === null ? mediaTime : Math.max(0, previousPosition + chzzkLiveMediaDelta),
+          rawMediaPositionSeconds: chzzkLiveMediaDelta === null ? previousPlayer.rawMediaPositionSeconds : mediaTime,
+          liveEdgeOffsetSeconds: chzzkLiveMediaDelta !== null && Number.isFinite(previousLiveEdgeOffset) ? Math.max(0, previousLiveEdgeOffset - chzzkLiveMediaDelta) : previousPlayer.liveEdgeOffsetSeconds
+        }
+      };
+      renderSource();
+    }
+    void refreshSourceTabAfterPlayerCommand(
+      tab,
+      operationGeneration
+    );
+    setStatus(
+      `\uC6D0\uBCF8 \uC601\uC0C1\uC744 5\uCD08 ${deltaSeconds < 0 ? "\uB4A4\uB85C" : "\uC55E\uC73C\uB85C"} \uC774\uB3D9\uD588\uC2B5\uB2C8\uB2E4.`,
+      "success"
+    );
+  } catch (error) {
+    if (!isAbortError(error)) {
+      setStatus(errorMessage(error), "error");
+    }
+  } finally {
+    playerCommandInProgress = false;
+    sourceClockOperation.release();
+    renderSource();
+  }
+}
+async function refreshSourceTabAfterPlayerCommand(tab, operationGeneration) {
+  const requestSequence = ++contextRequestSequence;
+  try {
+    const context = await requestPageContextFromTab(tab);
+    if (requestSequence !== contextRequestSequence || resetInProgress || operationGeneration !== stateGeneration) {
+      return;
+    }
+    currentContext = context;
+    applyContextToProject(context);
+    renderSource();
+  } catch {
   }
 }
 async function requestLatestPageContext() {
@@ -865,7 +954,7 @@ async function requestForegroundPageContext() {
   }
 }
 async function refreshSource({ silent = false } = {}) {
-  if (resetInProgress || !canStartSourceRefresh({
+  if (resetInProgress || playerCommandInProgress || !canStartSourceRefresh({
     silent,
     foregroundRequestCount: foregroundContextRequestCount,
     backgroundRequestCount: sourceRefreshRequestCount
@@ -906,9 +995,12 @@ async function captureCurrentPosition(kind) {
     return;
   }
   const operationGeneration = stateGeneration;
+  const sourceClockOperation = reserveSourceClockOperation();
   const button = kind === "start" ? elements.captureStart : elements.captureEnd;
   button.disabled = true;
   try {
+    await sourceClockOperation.waitForTurn;
+    assertOperationCurrent(operationGeneration);
     const context = await requestForegroundPageContext();
     assertOperationCurrent(operationGeneration);
     currentContext = context;
@@ -959,6 +1051,7 @@ async function captureCurrentPosition(kind) {
       setStatus(errorMessage(error), "error");
     }
   } finally {
+    sourceClockOperation.release();
     button.disabled = resetInProgress;
   }
 }
@@ -1494,6 +1587,14 @@ function bindActions() {
   elements.playbackRateDouble.addEventListener(
     "click",
     () => void setSourcePlaybackRate(2)
+  );
+  elements.seekBackwardFive.addEventListener(
+    "click",
+    () => void seekSourceBy(-5)
+  );
+  elements.seekForwardFive.addEventListener(
+    "click",
+    () => void seekSourceBy(5)
   );
   elements.captureStart.addEventListener("click", () => void captureCurrentPosition("start"));
   elements.captureEnd.addEventListener("click", () => void captureCurrentPosition("end"));

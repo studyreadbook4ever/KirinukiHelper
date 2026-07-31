@@ -27,6 +27,7 @@ import {
   sourceSessionIdentity
 } from "./lib/editor-core.js";
 import {
+  SOURCE_PLATFORM_CHZZK,
   SOURCE_PLATFORM_YOUTUBE,
   canStartSourceRefresh,
   isSupportedSourceUrl,
@@ -44,6 +45,12 @@ import {
 import type {
   KeyboardShortcutBinding
 } from "./lib/keyboard-shortcuts.js";
+import {
+  createSerialOperationGate
+} from "./lib/serial-operation-gate.js";
+import type {
+  SerialOperationReservation
+} from "./lib/serial-operation-gate.js";
 
 declare global {
   interface Window {
@@ -100,6 +107,7 @@ interface PagePlayerContext {
   paused?: boolean;
   adActive?: boolean;
   playbackRate?: number;
+  currentTime?: number;
   positionSeconds?: number;
   rawMediaPositionSeconds?: number;
   positionSource?: string;
@@ -198,6 +206,8 @@ const elements = {
   playerStatus: requiredElement<HTMLElement>("#player-status"),
   playbackRateQuarter: requiredElement<HTMLButtonElement>("#playback-rate-quarter"),
   playbackRateDouble: requiredElement<HTMLButtonElement>("#playback-rate-double"),
+  seekBackwardFive: requiredElement<HTMLButtonElement>("#seek-backward-five"),
+  seekForwardFive: requiredElement<HTMLButtonElement>("#seek-forward-five"),
   streamerName: requiredElement<HTMLInputElement>("#streamer-name"),
   broadcastTitle: requiredElement<HTMLInputElement>("#broadcast-title"),
   sourceLink: requiredElement<HTMLAnchorElement>("#source-link"),
@@ -342,6 +352,7 @@ let contextRequestSequence = 0;
 let foregroundContextRequestCount = 0;
 let sourceRefreshRequestCount = 0;
 let playerCommandInProgress = false;
+const sourceClockOperationGate = createSerialOperationGate();
 let stateGeneration = 0;
 let resetInProgress = false;
 let persistenceChain: Promise<unknown> = Promise.resolve();
@@ -1004,7 +1015,7 @@ function setConnectionBadge(text: string, variant: string): void {
   elements.connectionBadge.className = `badge ${variant}`;
 }
 
-function renderPlaybackRateControls(
+function renderPlayerControls(
   player: PagePlayerContext | null | undefined
 ): void {
   const currentRate = Number(player?.playbackRate);
@@ -1018,6 +1029,8 @@ function renderPlaybackRateControls(
     [elements.playbackRateQuarter, 0.25],
     [elements.playbackRateDouble, 2]
   ];
+  elements.seekBackwardFive.disabled = !available;
+  elements.seekForwardFive.disabled = !available;
   for (const [button, rate] of controls) {
     button.disabled = !available;
     button.setAttribute(
@@ -1032,7 +1045,7 @@ function renderSource(): void {
   const connected = context !== null;
   elements.sourceEmpty.hidden = connected;
   elements.sourceDetails.hidden = !connected;
-  renderPlaybackRateControls(context?.player);
+  renderPlayerControls(context?.player);
 
   if (!context) {
     setConnectionBadge("미연결", "badge-muted");
@@ -1079,20 +1092,16 @@ async function getActiveSourceTab(): Promise<SourceTabWithId> {
 
 async function requestPageContext(): Promise<PageContext> {
   const tab = await getActiveSourceTab();
-  let response;
-  try {
-    response = await chrome.tabs.sendMessage(
-      tab.id,
-      { type: "KIRINUKI_GET_CONTEXT" }
-    ) as RuntimeResponse;
-  } catch {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content-script.js"] });
-    await wait(40);
-    response = await chrome.tabs.sendMessage(
-      tab.id,
-      { type: "KIRINUKI_GET_CONTEXT" }
-    ) as RuntimeResponse;
-  }
+  return requestPageContextFromTab(tab);
+}
+
+async function requestPageContextFromTab(
+  tab: SourceTabWithId
+): Promise<PageContext> {
+  const response = await sendMessageToSourceTab(
+    tab,
+    { type: "KIRINUKI_GET_CONTEXT" }
+  );
 
   if (!response?.ok) {
     throw new Error(response?.error || "영상 페이지 정보를 읽지 못했습니다.");
@@ -1103,36 +1112,50 @@ async function requestPageContext(): Promise<PageContext> {
   } as PageContext;
 }
 
+async function sendMessageToSourceTab(
+  tab: SourceTabWithId,
+  message: Record<string, unknown>
+): Promise<RuntimeResponse> {
+  let response: RuntimeResponse;
+  try {
+    response = await chrome.tabs.sendMessage(
+      tab.id,
+      message
+    ) as RuntimeResponse;
+  } catch {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content-script.js"] });
+    await wait(40);
+    response = await chrome.tabs.sendMessage(
+      tab.id,
+      message
+    ) as RuntimeResponse;
+  }
+  return response;
+}
+
+function reserveSourceClockOperation(): SerialOperationReservation {
+  return sourceClockOperationGate.reserve();
+}
+
 async function setSourcePlaybackRate(playbackRate: 0.25 | 2): Promise<void> {
   if (resetInProgress || playerCommandInProgress) {
     return;
   }
+  const operationGeneration = stateGeneration;
+  const sourceClockOperation = reserveSourceClockOperation();
   playerCommandInProgress = true;
   renderSource();
   try {
+    await sourceClockOperation.waitForTurn;
+    assertOperationCurrent(operationGeneration);
     const tab = await getActiveSourceTab();
     const message = {
       type: "KIRINUKI_PLAYER_COMMAND",
       action: "set-playback-rate",
       playbackRate
     };
-    let response: RuntimeResponse;
-    try {
-      response = await chrome.tabs.sendMessage(
-        tab.id,
-        message
-      ) as RuntimeResponse;
-    } catch {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ["content-script.js"]
-      });
-      await wait(40);
-      response = await chrome.tabs.sendMessage(
-        tab.id,
-        message
-      ) as RuntimeResponse;
-    }
+    const response = await sendMessageToSourceTab(tab, message);
+    assertOperationCurrent(operationGeneration);
     if (!response?.ok) {
       throw new Error(response?.error || "원본 재생 속도를 바꾸지 못했습니다.");
     }
@@ -1153,10 +1176,124 @@ async function setSourcePlaybackRate(playbackRate: 0.25 | 2): Promise<void> {
     }
     setStatus(`원본 플레이어를 ${playbackRate}배속으로 바꿨습니다.`, "success");
   } catch (error) {
-    setStatus(errorMessage(error), "error");
+    if (!isAbortError(error)) {
+      setStatus(errorMessage(error), "error");
+    }
   } finally {
     playerCommandInProgress = false;
+    sourceClockOperation.release();
     renderSource();
+  }
+}
+
+async function seekSourceBy(deltaSeconds: -5 | 5): Promise<void> {
+  if (resetInProgress || playerCommandInProgress) {
+    return;
+  }
+  const operationGeneration = stateGeneration;
+  const sourceClockOperation = reserveSourceClockOperation();
+  playerCommandInProgress = true;
+  renderSource();
+  try {
+    await sourceClockOperation.waitForTurn;
+    assertOperationCurrent(operationGeneration);
+    // Any context request that began before the seek must not repaint the
+    // pre-seek position after the player has already moved.
+    contextRequestSequence += 1;
+    const tab = await getActiveSourceTab();
+    const response = await sendMessageToSourceTab(tab, {
+      type: "KIRINUKI_PLAYER_COMMAND",
+      action: "seek-relative",
+      deltaSeconds
+    });
+    assertOperationCurrent(operationGeneration);
+    if (!response?.ok) {
+      throw new Error(response?.error || "원본 플레이어 위치를 옮기지 못했습니다.");
+    }
+    const mediaTime = Number(response.player?.currentTime);
+    if (
+      Number.isFinite(mediaTime)
+      && currentContext
+      && (
+        !currentContext.sourceTabId
+        || currentContext.sourceTabId === tab.id
+      )
+    ) {
+      const previousPlayer = currentContext.player || {};
+      const previousPosition = Number(previousPlayer.positionSeconds);
+      const previousRawPosition = Number(
+        previousPlayer.rawMediaPositionSeconds
+      );
+      const previousLiveEdgeOffset = Number(
+        previousPlayer.liveEdgeOffsetSeconds
+      );
+      const chzzkLiveMediaDelta = (
+        currentContext.platform === SOURCE_PLATFORM_CHZZK
+        && currentContext.contentType === "live"
+        && Number.isFinite(previousPosition)
+        && Number.isFinite(previousRawPosition)
+      )
+        ? mediaTime - previousRawPosition
+        : null;
+      currentContext = {
+        ...currentContext,
+        player: {
+          ...previousPlayer,
+          positionSeconds: chzzkLiveMediaDelta === null
+            ? mediaTime
+            : Math.max(0, previousPosition + chzzkLiveMediaDelta),
+          rawMediaPositionSeconds: chzzkLiveMediaDelta === null
+            ? previousPlayer.rawMediaPositionSeconds
+            : mediaTime,
+          liveEdgeOffsetSeconds: (
+            chzzkLiveMediaDelta !== null
+            && Number.isFinite(previousLiveEdgeOffset)
+          )
+            ? Math.max(0, previousLiveEdgeOffset - chzzkLiveMediaDelta)
+            : previousPlayer.liveEdgeOffsetSeconds
+        }
+      };
+      renderSource();
+    }
+    void refreshSourceTabAfterPlayerCommand(
+      tab,
+      operationGeneration
+    );
+    setStatus(
+      `원본 영상을 5초 ${deltaSeconds < 0 ? "뒤로" : "앞으로"} 이동했습니다.`,
+      "success"
+    );
+  } catch (error) {
+    if (!isAbortError(error)) {
+      setStatus(errorMessage(error), "error");
+    }
+  } finally {
+    playerCommandInProgress = false;
+    sourceClockOperation.release();
+    renderSource();
+  }
+}
+
+async function refreshSourceTabAfterPlayerCommand(
+  tab: SourceTabWithId,
+  operationGeneration: number
+): Promise<void> {
+  const requestSequence = ++contextRequestSequence;
+  try {
+    const context = await requestPageContextFromTab(tab);
+    if (
+      requestSequence !== contextRequestSequence
+      || resetInProgress
+      || operationGeneration !== stateGeneration
+    ) {
+      return;
+    }
+    currentContext = context;
+    applyContextToProject(context);
+    renderSource();
+  } catch {
+    // The seek itself already succeeded. A later poll or foreground capture
+    // will retry transient navigation/content-script context failures.
   }
 }
 
@@ -1193,6 +1330,7 @@ async function refreshSource(
 ): Promise<void> {
   if (
     resetInProgress
+    || playerCommandInProgress
     || !canStartSourceRefresh({
       silent,
       foregroundRequestCount: foregroundContextRequestCount,
@@ -1236,9 +1374,12 @@ async function captureCurrentPosition(kind: "start" | "end"): Promise<void> {
     return;
   }
   const operationGeneration = stateGeneration;
+  const sourceClockOperation = reserveSourceClockOperation();
   const button = kind === "start" ? elements.captureStart : elements.captureEnd;
   button.disabled = true;
   try {
+    await sourceClockOperation.waitForTurn;
+    assertOperationCurrent(operationGeneration);
     const context = await requestForegroundPageContext();
     assertOperationCurrent(operationGeneration);
     currentContext = context;
@@ -1295,6 +1436,7 @@ async function captureCurrentPosition(kind: "start" | "end"): Promise<void> {
       setStatus(errorMessage(error), "error");
     }
   } finally {
+    sourceClockOperation.release();
     button.disabled = resetInProgress;
   }
 }
@@ -1895,6 +2037,14 @@ function bindActions(): void {
   elements.playbackRateDouble.addEventListener(
     "click",
     () => void setSourcePlaybackRate(2)
+  );
+  elements.seekBackwardFive.addEventListener(
+    "click",
+    () => void seekSourceBy(-5)
+  );
+  elements.seekForwardFive.addEventListener(
+    "click",
+    () => void seekSourceBy(5)
   );
   elements.captureStart.addEventListener("click", () => void captureCurrentPosition("start"));
   elements.captureEnd.addEventListener("click", () => void captureCurrentPosition("end"));
