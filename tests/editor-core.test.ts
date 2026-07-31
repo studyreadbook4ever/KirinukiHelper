@@ -64,6 +64,7 @@ import {
   type EditorProject,
   type EditorSubtitleCue
 } from "../src/lib/editor-core.js";
+import { BLACK_BOX_CAPTION_STYLE_PRESET_ID } from "../src/lib/caption-style.js";
 
 function required<T>(value: T | null | undefined): T {
   assert.ok(value);
@@ -385,6 +386,68 @@ test("저작권 고지를 포함한 Paperlogy 프리셋을 명시적으로 적�
   );
   assert.equal(repairedMismatch.subtitleDefaults.fontId, "paperlogy");
   assert.equal(repairedMismatch.subtitleDefaults.fontFamily, "Paperlogy");
+});
+
+test("검은 직사각형 프리셋은 각진 배경을 저장 왕복하고 사용자 cue 색을 보존한다", () => {
+  const original = createEditorProjectFromCapture(captureState);
+  const cue = createSubtitleCue(original, {
+    id: "custom-color-cue",
+    clipId: original.clips[0].id,
+    startOffsetMs: 0,
+    endOffsetMs: 1_000,
+    text: "사용자 색",
+    color: "#F06088"
+  });
+  const withCue = {
+    ...original,
+    subtitles: [cue]
+  };
+  const styled = applyCaptionStylePreset(
+    withCue,
+    BLACK_BOX_CAPTION_STYLE_PRESET_ID
+  );
+  assert.ok(styled);
+  assert.equal(
+    styled.subtitleDefaults.stylePresetId,
+    BLACK_BOX_CAPTION_STYLE_PRESET_ID
+  );
+  assert.equal(styled.subtitleDefaults.fontFamily, "Pretendard");
+  assert.equal(styled.subtitleDefaults.color, "#ffffff");
+  assert.equal(styled.subtitleDefaults.backgroundColor, "#000000");
+  assert.equal(styled.subtitleDefaults.backgroundRadiusEm, 0);
+  assert.equal(styled.subtitles[0].color, "#f06088");
+
+  const normalized = normalizeEditorProject(
+    JSON.parse(JSON.stringify(styled))
+  );
+  assert.ok(normalized);
+  assert.equal(normalized.subtitleDefaults.backgroundRadiusEm, 0);
+  assert.equal(normalized.subtitles[0].color, "#f06088");
+
+  const customizedRadius = normalizeEditorProject({
+    ...normalized,
+    subtitleDefaults: {
+      ...normalized.subtitleDefaults,
+      backgroundRadiusEm: 0.35
+    }
+  });
+  assert.ok(customizedRadius);
+  assert.equal(customizedRadius.subtitleDefaults.backgroundRadiusEm, 0.35);
+});
+
+test("배경 곡률 필드가 없는 기존 프로젝트는 기존 둥근 배경값으로 호환된다", () => {
+  const current = createEditorProjectFromCapture(captureState);
+  const subtitleDefaults = {
+    ...current.subtitleDefaults
+  } as Partial<typeof current.subtitleDefaults>;
+  delete subtitleDefaults.backgroundRadiusEm;
+
+  const normalized = normalizeEditorProject({
+    ...current,
+    subtitleDefaults
+  });
+  assert.ok(normalized);
+  assert.equal(normalized.subtitleDefaults.backgroundRadiusEm, 0.14);
 });
 
 test("AI 처리 경고는 프로젝트 전체 상한에서 잘라 저장·병합한다", () => {

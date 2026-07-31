@@ -76,6 +76,7 @@ test("개발 변경을 안전한 리로드 종류로 분류한다", () => {
     "editor"
   );
   assert.equal(classifyDevReload(["src/lib/source-platform.ts"]), "extension");
+  assert.equal(classifyDevReload(["src/lib/keyboard-shortcuts.ts"]), "extension");
   assert.equal(classifyDevReload(["src/lib/session-recovery.ts"]), "extension");
   assert.equal(
     classifyDevReload(["src/editor/main.ts", "extension/manifest.json"]),
@@ -88,6 +89,7 @@ test("번들이 필요한 변경만 빌드 대상으로 분리한다", () => {
   assert.equal(devChangeNeedsBuild(["src/editor/main.ts"]), true);
   assert.equal(devChangeNeedsBuild(["src/caption-agent/protocol.ts"]), true);
   assert.equal(devChangeNeedsBuild(["src/lib/editor-core.ts"]), true);
+  assert.equal(devChangeNeedsBuild(["src/lib/keyboard-shortcuts.ts"]), true);
   assert.equal(devChangeNeedsBuild(["src/content-script.ts"]), true);
   assert.equal(devChangeNeedsBuild(["extension/editor/editor.css"]), false);
   assert.equal(devChangeNeedsBuild(["extension/editor.html"]), false);

@@ -158,8 +158,11 @@
   // src/content-script.ts
   if (!globalThis.__kirinukiSourceBridgeLoaded) {
     globalThis.__kirinukiSourceBridgeLoaded = true;
+    const CHZZK_METADATA_FETCH_TIMEOUT_MS = 8e3;
     let liveMetadataCache = null;
     let vodMetadataCache = null;
+    const liveMetadataRequests = /* @__PURE__ */ new Map();
+    const vodMetadataRequests = /* @__PURE__ */ new Map();
     const isVisible = (element) => {
       if (!(element instanceof HTMLElement)) {
         return false;
@@ -338,61 +341,86 @@
         adActive
       };
     };
-    const fetchLiveMetadata = async (channelId) => {
+    const fetchChzzkMetadata = (requestKey, endpoint, pendingRequests, cacheValue) => {
+      const pendingRequest = pendingRequests.get(requestKey);
+      if (pendingRequest) {
+        return pendingRequest;
+      }
+      const request = Promise.resolve().then(async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(
+          () => controller.abort(),
+          CHZZK_METADATA_FETCH_TIMEOUT_MS
+        );
+        try {
+          const response = await fetch(endpoint, {
+            credentials: "include",
+            cache: "no-store",
+            signal: controller.signal
+          });
+          if (!response.ok) {
+            return null;
+          }
+          const payload = await response.json();
+          const value = payload?.code === 200 && payload?.content ? payload.content : null;
+          cacheValue(value);
+          return value;
+        } catch {
+          return null;
+        } finally {
+          clearTimeout(timeout);
+        }
+      });
+      pendingRequests.set(requestKey, request);
+      const clearPendingRequest = () => {
+        if (pendingRequests.get(requestKey) === request) {
+          pendingRequests.delete(requestKey);
+        }
+      };
+      void request.then(clearPendingRequest, clearPendingRequest);
+      return request;
+    };
+    const fetchLiveMetadata = (channelId) => {
       if (!channelId) {
-        return null;
+        return Promise.resolve(null);
       }
       if (liveMetadataCache?.channelId === channelId && Date.now() - liveMetadataCache.fetchedAt < 15e3) {
-        return liveMetadataCache.value;
+        return Promise.resolve(liveMetadataCache.value);
       }
-      try {
-        const endpoint = `https://api.chzzk.naver.com/polling/v3.1/channels/${encodeURIComponent(channelId)}/live-status?includePlayerRecommendContent=false`;
-        const response = await fetch(endpoint, {
-          credentials: "include",
-          cache: "no-store"
-        });
-        if (!response.ok) {
-          return null;
+      const endpoint = `https://api.chzzk.naver.com/polling/v3.1/channels/${encodeURIComponent(channelId)}/live-status?includePlayerRecommendContent=false`;
+      return fetchChzzkMetadata(
+        channelId,
+        endpoint,
+        liveMetadataRequests,
+        (value) => {
+          liveMetadataCache = {
+            channelId,
+            fetchedAt: Date.now(),
+            value
+          };
         }
-        const payload = await response.json();
-        const value = payload?.code === 200 && payload?.content ? payload.content : null;
-        liveMetadataCache = {
-          channelId,
-          fetchedAt: Date.now(),
-          value
-        };
-        return value;
-      } catch {
-        return null;
-      }
+      );
     };
-    const fetchVodMetadata = async (videoId) => {
+    const fetchVodMetadata = (videoId) => {
       if (!videoId) {
-        return null;
+        return Promise.resolve(null);
       }
       if (vodMetadataCache?.videoId === videoId && Date.now() - vodMetadataCache.fetchedAt < 6e4) {
-        return vodMetadataCache.value;
+        return Promise.resolve(vodMetadataCache.value);
       }
-      try {
-        const endpoint = "https://api.chzzk.naver.com/service/v3/videos/" + encodeURIComponent(videoId);
-        const response = await fetch(endpoint, {
-          credentials: "include",
-          cache: "no-store"
-        });
-        if (!response.ok) {
-          return null;
+      const endpoint = "https://api.chzzk.naver.com/service/v3/videos/" + encodeURIComponent(videoId);
+      return fetchChzzkMetadata(
+        videoId,
+        endpoint,
+        vodMetadataRequests,
+        (value) => {
+          vodMetadataCache = {
+            videoId,
+            fetchedAt: Date.now(),
+            value
+          };
         }
-        const payload = await response.json();
-        const value = payload?.code === 200 && payload?.content ? payload.content : null;
-        vodMetadataCache = {
-          videoId,
-          fetchedAt: Date.now(),
-          value
-        };
-        return value;
-      } catch {
-        return null;
-      }
+      );
     };
     const parseChzzkOpenDate = (value) => {
       if (!value) {
@@ -570,6 +598,13 @@
           target = Math.min(end, Math.max(start, target));
         }
         video.currentTime = target;
+      } else if (message.action === "set-playback-rate") {
+        if (message.playbackRate !== 0.25 && message.playbackRate !== 2) {
+          throw new Error(
+            "\uC7AC\uC0DD \uC18D\uB3C4\uB294 0.25\uBC30 \uB610\uB294 2\uBC30\uB9CC \uC120\uD0DD\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."
+          );
+        }
+        video.playbackRate = message.playbackRate;
       } else {
         throw new Error(
           `\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uD50C\uB808\uC774\uC5B4 \uBA85\uB839\uC785\uB2C8\uB2E4: ${message.action}`
@@ -577,7 +612,8 @@
       }
       return {
         paused: video.paused,
-        currentTime: video.currentTime
+        currentTime: video.currentTime,
+        playbackRate: video.playbackRate
       };
     };
     chrome.runtime.onMessage.addListener(

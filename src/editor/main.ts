@@ -65,6 +65,15 @@ import {
 } from "../lib/caption-style.js";
 import { STORAGE_KEY } from "../lib/core.js";
 import {
+  EDITOR_SHORTCUT_BINDINGS,
+  formatKeyboardShortcutHint,
+  keyboardShortcutBindingForScope,
+  keyboardShortcutLetterFromEvent
+} from "../lib/keyboard-shortcuts.js";
+import type {
+  KeyboardShortcutBinding
+} from "../lib/keyboard-shortcuts.js";
+import {
   extractClipPcm16k,
   exportProgressPercent,
   fitSingleLineCaptionFontSize,
@@ -486,6 +495,58 @@ const elements = Object.fromEntries([
   return [id.replaceAll("-", "_"), element as EditorControl];
 })) as Record<string, EditorControl>;
 
+function shortcutTargetIds(
+  binding: KeyboardShortcutBinding
+): readonly string[] {
+  return [binding.targetId, ...(binding.alternateTargetIds || [])];
+}
+
+function editorShortcutBindingForTarget(
+  targetId: string
+): KeyboardShortcutBinding | null {
+  return EDITOR_SHORTCUT_BINDINGS.find(
+    (binding) => shortcutTargetIds(binding).includes(targetId)
+  ) || null;
+}
+
+function editorShortcutTitle(targetId: string, label: string): string {
+  const binding = editorShortcutBindingForTarget(targetId);
+  return binding
+    ? formatKeyboardShortcutHint(label, binding.key)
+    : label;
+}
+
+function usableEditorShortcutTarget(
+  binding: KeyboardShortcutBinding
+): EditorControl | null {
+  for (const targetId of shortcutTargetIds(binding)) {
+    const target = document.getElementById(targetId) as EditorControl | null;
+    if (
+      !target
+      || target.closest("[hidden]")
+      || target.getAttribute("aria-disabled") === "true"
+      || target.disabled
+    ) {
+      continue;
+    }
+    return target;
+  }
+  return null;
+}
+
+function installEditorShortcutHints(): void {
+  for (const binding of EDITOR_SHORTCUT_BINDINGS) {
+    for (const targetId of shortcutTargetIds(binding)) {
+      const target = document.getElementById(targetId);
+      if (!(target instanceof HTMLElement)) {
+        throw new Error(`편집기 단축키 대상이 없습니다: #${targetId}`);
+      }
+      target.title = formatKeyboardShortcutHint(binding.label, binding.key);
+      target.setAttribute("aria-keyshortcuts", binding.key);
+    }
+  }
+}
+
 const captionInspectorTab = elements.cue_selected_tab;
 const positionButtons = [
   ...document.querySelectorAll<HTMLButtonElement>("[data-position]")
@@ -796,7 +857,8 @@ function updateLocalDraftStatus(drafts: LocalDraftRecord[] = []) {
   elements.local_draft_status.textContent = (
     `최근 ${count}/5개 · 5분마다 자동 저장${lastAutoText}`
   );
-  elements.open_local_drafts.title = (
+  elements.open_local_drafts.title = editorShortcutTitle(
+    "open-local-drafts",
     `최근 임시저장 ${count}개 불러오기`
   );
 }
@@ -3841,7 +3903,17 @@ function renderSubtitleOverlay() {
       Number(project.subtitleDefaults.lineHeight) || 1.24
     );
     overlay.style.color = cue.color || project.subtitleDefaults.color || "#ffffff";
-    overlay.style.background = "transparent";
+    overlay.style.backgroundColor = String(
+      project.subtitleDefaults.backgroundColor || "transparent"
+    );
+    const rawBackgroundRadiusEm = Number(
+      project.subtitleDefaults.backgroundRadiusEm
+    );
+    overlay.style.borderRadius = `${
+      Number.isFinite(rawBackgroundRadiusEm)
+        ? Math.max(0, rawBackgroundRadiusEm)
+        : 0.14
+    }em`;
     overlay.style.textShadow = [
       `${Number(project.subtitleDefaults.shadowOffsetXEm) || 0}em`,
       `${Number(project.subtitleDefaults.shadowOffsetYEm) || 0}em`,
@@ -3920,11 +3992,15 @@ function applyPreviewAudioSettings(timelineMs = project?.playheadMs || 0) {
   video.muted = previewMuted || Boolean(region?.muted && region.fadeInMs === 0 && region.fadeOutMs === 0);
   video.volume = Math.max(0, Math.min(1, previewVolume * regionGain));
   elements.toggle_mute.classList.toggle("active", previewMuted);
-  elements.toggle_mute.title = region?.muted && !previewMuted
+  const muteTitle = region?.muted && !previewMuted
     ? "현재 음성 설정 구간이 음소거됨"
     : previewMuted
       ? "미리보기 음소거 해제"
       : "미리보기 음소거";
+  elements.toggle_mute.title = editorShortcutTitle(
+    "toggle-mute",
+    muteTitle
+  );
 }
 
 function stopPreviewAudioClock({ sync = true } = {}) {
@@ -6488,6 +6564,7 @@ function bindTimelineSeeking() {
 }
 
 function bindActions() {
+  installEditorShortcutHints();
   elements.project_name.addEventListener("input", () => {
     applyFieldProject({ ...project, name: elements.project_name.value }, "project-name");
   });
@@ -7219,9 +7296,12 @@ function bindActions() {
     timelineSnapEnabled = !timelineSnapEnabled;
     elements.toggle_timeline_snap.classList.toggle("active", timelineSnapEnabled);
     elements.toggle_timeline_snap.setAttribute("aria-pressed", String(timelineSnapEnabled));
-    elements.toggle_timeline_snap.title = timelineSnapEnabled
-      ? "타임라인 자석 켜짐 · 드래그 중 Alt로 잠시 해제"
-      : "타임라인 자석 꺼짐";
+    elements.toggle_timeline_snap.title = editorShortcutTitle(
+      "toggle-timeline-snap",
+      timelineSnapEnabled
+        ? "타임라인 자석 켜짐 · 드래그 중 Alt로 잠시 해제"
+        : "타임라인 자석 꺼짐"
+    );
     if (!timelineSnapEnabled) {
       hideTimelineSnapGuide();
     }
@@ -7357,21 +7437,29 @@ function bindActions() {
       clearTimelineRangeSelection();
       return;
     }
+    const shortcutLetter = keyboardShortcutLetterFromEvent(event);
+    const shortcutBinding = shortcutLetter
+      ? keyboardShortcutBindingForScope("editor", shortcutLetter)
+      : null;
+    const shortcutTarget = shortcutBinding
+      ? usableEditorShortcutTarget(shortcutBinding)
+      : null;
     if (!editingText && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
       event.preventDefault();
       event.shiftKey ? redo() : undo();
     } else if (!editingText && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
       event.preventDefault();
       redo();
+    } else if (shortcutBinding && shortcutTarget) {
+      event.preventDefault();
+      if (shortcutBinding.trigger === "focus") {
+        shortcutTarget.focus({ preventScroll: false });
+      } else {
+        shortcutTarget.click();
+      }
     } else if (!interactive && event.code === "Space") {
       event.preventDefault();
       void togglePlayback();
-    } else if (!editingText && !event.ctrlKey && !event.metaKey && !event.altKey && (event.code === "KeyI" || event.key.toLowerCase() === "i")) {
-      event.preventDefault();
-      setTimelineRangeBoundary("start", project.playheadMs);
-    } else if (!editingText && !event.ctrlKey && !event.metaKey && !event.altKey && (event.code === "KeyO" || event.key.toLowerCase() === "o")) {
-      event.preventDefault();
-      setTimelineRangeBoundary("end", project.playheadMs);
     } else if (!editingText && (event.key === "Delete" || event.key === "Backspace") && selectedTimelineRange()) {
       event.preventDefault();
       deleteSelectedTimelineRange();

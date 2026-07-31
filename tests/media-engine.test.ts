@@ -18,6 +18,7 @@ import {
   clampCaptionBoxCenter,
   createFileWriteTransaction,
   createImageAssetRenderCache,
+  drawCaption,
   drawImageAsset,
   exportProgressPercent,
   fallbackCaptionPlacementHints,
@@ -85,6 +86,75 @@ test("로컬 대용량 미디어는 Chromium stream reader를 피하고 제한�
     useStreamReader: false
   });
   assert.equal(Object.isFrozen(LOCAL_MEDIA_BLOB_SOURCE_OPTIONS), true);
+});
+
+test("각진 불투명 자막 배경은 텍스트보다 먼저 fillRect로 렌더하고 cue 색을 보존한다", () => {
+  const calls: string[] = [];
+  let fillStyle = "";
+  const context = {
+    save: () => calls.push("save"),
+    restore: () => calls.push("restore"),
+    measureText: (text: string) => ({ width: text.length * 20 }),
+    fillRect: () => calls.push("fillRect"),
+    beginPath: () => calls.push("beginPath"),
+    roundRect: () => calls.push("roundRect"),
+    fill: () => calls.push("fill"),
+    strokeText: () => calls.push("strokeText"),
+    fillText: () => calls.push(`fillText:${fillStyle}`),
+    set fillStyle(value: string) {
+      fillStyle = value;
+    },
+    get fillStyle() {
+      return fillStyle;
+    },
+    textAlign: "center",
+    textBaseline: "middle",
+    lineJoin: "round",
+    font: "",
+    lineWidth: 0,
+    strokeStyle: "",
+    shadowColor: "",
+    shadowOffsetX: 0,
+    shadowOffsetY: 0,
+    shadowBlur: 0
+  };
+  const project = {
+    subtitleDefaults: {
+      fontFamily: "Pretendard",
+      fontWeight: 800,
+      fontScale: 0.0675,
+      lineHeight: 1.24,
+      maxLines: 1,
+      maxWidth: 0.86,
+      outlineWidth: 0.006,
+      outlineColor: "#111111",
+      backgroundColor: "#000000",
+      backgroundRadiusEm: 0,
+      color: "#ffffff",
+      shadowColor: "transparent",
+      shadowOffsetXEm: 0,
+      shadowOffsetYEm: 0,
+      shadowBlurEm: 0,
+      align: "center"
+    }
+  };
+  const cue = {
+    text: "사용자 색",
+    color: "#f06088",
+    x: 0.5,
+    y: 0.84
+  };
+
+  drawCaption(
+    context as unknown as CanvasRenderingContext2D,
+    { width: 1_920, height: 1_080 } as HTMLCanvasElement,
+    project as RenderProjectFixture,
+    cue as never
+  );
+
+  assert.ok(calls.indexOf("fillRect") < calls.indexOf("strokeText"));
+  assert.ok(calls.indexOf("fillRect") < calls.indexOf("fillText:#f06088"));
+  assert.equal(calls.includes("roundRect"), false);
 });
 
 test("내보내기 진행률은 실제 commit 전까지 99%를 넘지 않는다", () => {

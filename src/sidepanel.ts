@@ -35,6 +35,15 @@ import {
   sourcePlatformLabel,
   sourceRefreshFailureAction
 } from "./lib/source-platform.js";
+import {
+  SIDEPANEL_SHORTCUT_BINDINGS,
+  formatKeyboardShortcutHint,
+  keyboardShortcutBindingForScope,
+  keyboardShortcutLetterFromEvent
+} from "./lib/keyboard-shortcuts.js";
+import type {
+  KeyboardShortcutBinding
+} from "./lib/keyboard-shortcuts.js";
 
 declare global {
   interface Window {
@@ -90,6 +99,7 @@ interface PagePlayerContext {
   found?: boolean;
   paused?: boolean;
   adActive?: boolean;
+  playbackRate?: number;
   positionSeconds?: number;
   rawMediaPositionSeconds?: number;
   positionSource?: string;
@@ -125,6 +135,7 @@ interface RuntimeResponse {
   error?: string;
   sessions?: RecoverySession[];
   context?: PageContext;
+  player?: PagePlayerContext;
   workspaceMeta?: unknown;
   cleanupErrors?: unknown;
 }
@@ -185,6 +196,8 @@ const elements = {
   sourceType: requiredElement<HTMLElement>("#source-type"),
   playerPosition: requiredElement<HTMLElement>("#player-position"),
   playerStatus: requiredElement<HTMLElement>("#player-status"),
+  playbackRateQuarter: requiredElement<HTMLButtonElement>("#playback-rate-quarter"),
+  playbackRateDouble: requiredElement<HTMLButtonElement>("#playback-rate-double"),
   streamerName: requiredElement<HTMLInputElement>("#streamer-name"),
   broadcastTitle: requiredElement<HTMLInputElement>("#broadcast-title"),
   sourceLink: requiredElement<HTMLAnchorElement>("#source-link"),
@@ -217,6 +230,71 @@ const elements = {
   resetProject: requiredElement<HTMLButtonElement>("#reset-project"),
   statusBar: requiredElement<HTMLElement>("#status-bar")
 };
+
+function shortcutTargetIds(
+  binding: KeyboardShortcutBinding
+): readonly string[] {
+  return [binding.targetId, ...(binding.alternateTargetIds || [])];
+}
+
+function usableShortcutTarget(
+  binding: KeyboardShortcutBinding
+): HTMLElement | null {
+  if (
+    binding.action === "save-segment"
+    && Boolean(state.draft.editingId)
+  ) {
+    return null;
+  }
+  for (const targetId of shortcutTargetIds(binding)) {
+    const target = document.getElementById(targetId);
+    if (
+      !(target instanceof HTMLElement)
+      || target.closest("[hidden]")
+      || target.getAttribute("aria-disabled") === "true"
+      || (
+        target instanceof HTMLButtonElement
+        && target.disabled
+      )
+    ) {
+      continue;
+    }
+    return target;
+  }
+  return null;
+}
+
+function installShortcutHints(): void {
+  for (const binding of SIDEPANEL_SHORTCUT_BINDINGS) {
+    for (const targetId of shortcutTargetIds(binding)) {
+      const target = document.getElementById(targetId);
+      if (!(target instanceof HTMLElement)) {
+        throw new Error(`사이드패널 단축키 대상이 없습니다: #${targetId}`);
+      }
+      target.title = formatKeyboardShortcutHint(binding.label, binding.key);
+      target.setAttribute("aria-keyshortcuts", binding.key);
+    }
+  }
+}
+
+function bindKeyboardShortcuts(): void {
+  document.addEventListener("keydown", (event) => {
+    const letter = keyboardShortcutLetterFromEvent(event);
+    const binding = letter
+      ? keyboardShortcutBindingForScope("sidepanel", letter)
+      : null;
+    const target = binding ? usableShortcutTarget(binding) : null;
+    if (!binding || !target) {
+      return;
+    }
+    event.preventDefault();
+    if (binding.trigger === "focus") {
+      target.focus({ preventScroll: false });
+    } else {
+      target.click();
+    }
+  });
+}
 
 const panelState = (value: unknown): PanelState => (
   normalizeState(value) as unknown as PanelState
@@ -262,6 +340,8 @@ let statusTimer: number | null = null;
 let refreshTimer: number | null = null;
 let contextRequestSequence = 0;
 let foregroundContextRequestCount = 0;
+let sourceRefreshRequestCount = 0;
+let playerCommandInProgress = false;
 let stateGeneration = 0;
 let resetInProgress = false;
 let persistenceChain: Promise<unknown> = Promise.resolve();
@@ -770,6 +850,21 @@ function renderDraft(): void {
   elements.editingBadge.hidden = !editing;
   elements.cancelEdit.hidden = !editing;
   elements.saveSegment.textContent = editing ? "구간 수정 저장" : "구간 저장";
+  if (editing) {
+    elements.saveSegment.removeAttribute("aria-keyshortcuts");
+    elements.saveSegment.title = "기존 구간을 바꾸는 동작이므로 단축키 없음";
+  } else {
+    const binding = SIDEPANEL_SHORTCUT_BINDINGS.find(
+      (candidate) => candidate.targetId === "save-segment"
+    );
+    if (binding) {
+      elements.saveSegment.setAttribute("aria-keyshortcuts", binding.key);
+      elements.saveSegment.title = formatKeyboardShortcutHint(
+        binding.label,
+        binding.key
+      );
+    }
+  }
 }
 
 function clearDraft(): void {
@@ -909,11 +1004,35 @@ function setConnectionBadge(text: string, variant: string): void {
   elements.connectionBadge.className = `badge ${variant}`;
 }
 
+function renderPlaybackRateControls(
+  player: PagePlayerContext | null | undefined
+): void {
+  const currentRate = Number(player?.playbackRate);
+  const available = Boolean(
+    currentContext
+    && player?.found
+    && !player.adActive
+    && !playerCommandInProgress
+  );
+  const controls: Array<[HTMLButtonElement, number]> = [
+    [elements.playbackRateQuarter, 0.25],
+    [elements.playbackRateDouble, 2]
+  ];
+  for (const [button, rate] of controls) {
+    button.disabled = !available;
+    button.setAttribute(
+      "aria-pressed",
+      String(Number.isFinite(currentRate) && currentRate === rate)
+    );
+  }
+}
+
 function renderSource(): void {
   const context = currentContext;
   const connected = context !== null;
   elements.sourceEmpty.hidden = connected;
   elements.sourceDetails.hidden = !connected;
+  renderPlaybackRateControls(context?.player);
 
   if (!context) {
     setConnectionBadge("미연결", "badge-muted");
@@ -984,6 +1103,63 @@ async function requestPageContext(): Promise<PageContext> {
   } as PageContext;
 }
 
+async function setSourcePlaybackRate(playbackRate: 0.25 | 2): Promise<void> {
+  if (resetInProgress || playerCommandInProgress) {
+    return;
+  }
+  playerCommandInProgress = true;
+  renderSource();
+  try {
+    const tab = await getActiveSourceTab();
+    const message = {
+      type: "KIRINUKI_PLAYER_COMMAND",
+      action: "set-playback-rate",
+      playbackRate
+    };
+    let response: RuntimeResponse;
+    try {
+      response = await chrome.tabs.sendMessage(
+        tab.id,
+        message
+      ) as RuntimeResponse;
+    } catch {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content-script.js"]
+      });
+      await wait(40);
+      response = await chrome.tabs.sendMessage(
+        tab.id,
+        message
+      ) as RuntimeResponse;
+    }
+    if (!response?.ok) {
+      throw new Error(response?.error || "원본 재생 속도를 바꾸지 못했습니다.");
+    }
+    if (
+      currentContext
+      && (
+        !currentContext.sourceTabId
+        || currentContext.sourceTabId === tab.id
+      )
+    ) {
+      currentContext = {
+        ...currentContext,
+        player: {
+          ...(currentContext.player || {}),
+          playbackRate: Number(response.player?.playbackRate) || playbackRate
+        }
+      };
+    }
+    setStatus(`원본 플레이어를 ${playbackRate}배속으로 바꿨습니다.`, "success");
+  } catch (error) {
+    setStatus(errorMessage(error), "error");
+  } finally {
+    playerCommandInProgress = false;
+    renderSource();
+  }
+}
+
 async function requestLatestPageContext(): Promise<PageContext> {
   const requestSequence = ++contextRequestSequence;
   try {
@@ -1019,11 +1195,13 @@ async function refreshSource(
     resetInProgress
     || !canStartSourceRefresh({
       silent,
-      foregroundRequestCount: foregroundContextRequestCount
+      foregroundRequestCount: foregroundContextRequestCount,
+      backgroundRequestCount: sourceRefreshRequestCount
     })
   ) {
     return;
   }
+  sourceRefreshRequestCount += 1;
   try {
     currentContext = await requestLatestPageContext();
     applyContextToProject(currentContext);
@@ -1048,6 +1226,8 @@ async function refreshSource(
     if (!silent) {
       setStatus(errorMessage(error), "error");
     }
+  } finally {
+    sourceRefreshRequestCount = Math.max(0, sourceRefreshRequestCount - 1);
   }
 }
 
@@ -1708,6 +1888,14 @@ function bindActions(): void {
     });
   });
   elements.refreshSource.addEventListener("click", () => void refreshSource());
+  elements.playbackRateQuarter.addEventListener(
+    "click",
+    () => void setSourcePlaybackRate(0.25)
+  );
+  elements.playbackRateDouble.addEventListener(
+    "click",
+    () => void setSourcePlaybackRate(2)
+  );
   elements.captureStart.addEventListener("click", () => void captureCurrentPosition("start"));
   elements.captureEnd.addEventListener("click", () => void captureCurrentPosition("end"));
   elements.saveSegment.addEventListener("click", () => void saveSegment());
@@ -1753,6 +1941,8 @@ function bindActions(): void {
 }
 
 async function initialize(): Promise<void> {
+  installShortcutHints();
+  bindKeyboardShortcuts();
   bindInputPersistence();
   bindActions();
   const recoveryLoad = refreshRecoverySessions();

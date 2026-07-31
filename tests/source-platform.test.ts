@@ -330,7 +330,7 @@ test("SOURCE silent 갱신의 일시 오류만 마지막 정상 문맥을 유지
   }
 });
 
-test("SOURCE silent 갱신은 사용자의 foreground 문맥 요청을 선점하지 않는다", () => {
+test("SOURCE silent 갱신은 진행 중인 문맥 요청과 중첩되지 않는다", () => {
   assert.equal(canStartSourceRefresh({
     silent: true,
     foregroundRequestCount: 1
@@ -344,8 +344,22 @@ test("SOURCE silent 갱신은 사용자의 foreground 문맥 요청을 선점하
     foregroundRequestCount: 0
   }), true);
   assert.equal(canStartSourceRefresh({
+    silent: true,
+    backgroundRequestCount: 1
+  }), false);
+  assert.equal(canStartSourceRefresh({
+    silent: true,
+    foregroundRequestCount: 0,
+    backgroundRequestCount: 3
+  }), false);
+  assert.equal(canStartSourceRefresh({
+    silent: true,
+    backgroundRequestCount: -1
+  }), true);
+  assert.equal(canStartSourceRefresh({
     silent: false,
-    foregroundRequestCount: 1
+    foregroundRequestCount: 1,
+    backgroundRequestCount: 1
   }), true);
 });
 

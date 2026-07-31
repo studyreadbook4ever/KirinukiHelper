@@ -65,6 +65,28 @@
             <span id="source-type" class="badge badge-live">LIVE</span>
             <span id="player-position" class="player-position">--:--:--</span>
             <span id="player-status" class="subtle">플레이어 확인 중</span>
+            <div class="playback-rate-controls" role="group" aria-label="원본 재생 속도">
+              <button
+                id="playback-rate-quarter"
+                class="playback-rate-button"
+                type="button"
+                title="재생 속도 0.25배 (Z)"
+                aria-label="재생 속도 0.25배"
+                aria-keyshortcuts="Z"
+                aria-pressed="false"
+                disabled
+              >0.25×</button>
+              <button
+                id="playback-rate-double"
+                class="playback-rate-button"
+                type="button"
+                title="재생 속도 2배 (X)"
+                aria-label="재생 속도 2배"
+                aria-keyshortcuts="X"
+                aria-pressed="false"
+                disabled
+              >2×</button>
+            </div>
           </div>
           <label class="field compact-field">
             <span>방송인/채널명</span>

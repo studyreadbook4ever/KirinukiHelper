@@ -114,17 +114,33 @@ test("YouTube SPA에서는 stale og:url 대신 URL과 활성 플레이어 ID를 
     player: {
       positionSeconds: number;
       liveEdgeOffsetSeconds: number | null;
+      playbackRate: number;
     };
   }
-  type BridgeResponse =
+  type BridgeResponse = (
     | { ok: true; context: YouTubeContext }
-    | { ok: false; error: string };
+    | {
+      ok: true;
+      player: {
+        currentTime: number;
+        paused: boolean;
+        playbackRate: number;
+      };
+    }
+    | { ok: false; error: string }
+  );
+  interface BridgeMessage {
+    type: string;
+    action?: string;
+    playbackRate?: number;
+  }
   type MessageListener = (
-    message: { type: string },
+    message: BridgeMessage,
     sender: Record<string, unknown>,
     sendResponse: (response: BridgeResponse) => void
   ) => boolean;
   let messageListener: MessageListener | null = null;
+  let adShowing = false;
 
   const meta = (content: string) => new MockHTMLElement({
     attributes: { content }
@@ -132,6 +148,15 @@ test("YouTube SPA에서는 stale og:url 대신 URL과 활성 플레이어 ID를 
   const document = {
     title: "새 영상 - YouTube",
     querySelector(selector: string) {
+      if (
+        adShowing
+        && (
+          selector === "#movie_player.ad-showing"
+          || selector === ".html5-video-player.ad-showing"
+        )
+      ) {
+        return player;
+      }
       const fixed: Record<string, MockHTMLElement> = {
         "meta[property='og:title']": meta("이전 영상"),
         "meta[property='og:url']": meta(
@@ -197,7 +222,9 @@ test("YouTube SPA에서는 stale og:url 대신 URL과 활성 플레이어 ID를 
   await import(sourceUrl.href);
   assert.equal(typeof messageListener, "function");
 
-  const readContext = () => new Promise<BridgeResponse>((resolve, reject) => {
+  const sendMessage = (
+    message: BridgeMessage
+  ) => new Promise<BridgeResponse>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("content-script 응답 시간 초과")),
       2_000
@@ -205,7 +232,7 @@ test("YouTube SPA에서는 stale og:url 대신 URL과 활성 플레이어 ID를 
     const listener = messageListener;
     assert.ok(listener);
     const keepChannelOpen = listener(
-      { type: "KIRINUKI_GET_CONTEXT" },
+      message,
       {},
       (response: BridgeResponse) => {
         clearTimeout(timeout);
@@ -214,9 +241,13 @@ test("YouTube SPA에서는 stale og:url 대신 URL과 활성 플레이어 ID를 
     );
     assert.equal(keepChannelOpen, true);
   });
+  const readContext = () => sendMessage({
+    type: "KIRINUKI_GET_CONTEXT"
+  });
 
   const watchResponse = await readContext();
   assert.equal(watchResponse.ok, true);
+  assert.ok("context" in watchResponse);
   assert.equal(watchResponse.context.contentId, ids.watch);
   assert.equal(
     watchResponse.context.canonicalUrl,
@@ -229,15 +260,59 @@ test("YouTube SPA에서는 stale og:url 대신 URL과 활성 플레이어 ID를 
   assert.equal(watchResponse.context.channelId, "");
   assert.equal(watchResponse.context.contentType, "vod");
   assert.equal(watchResponse.context.player.positionSeconds, 42.125);
+  assert.equal(watchResponse.context.player.playbackRate, 1);
   assert.equal(
     watchResponse.context.player.liveEdgeOffsetSeconds,
     null,
     "VOD의 남은 재생시간을 라이브 지연으로 노출하면 안 됩니다."
   );
 
+  const quarterSpeedResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "set-playback-rate",
+    playbackRate: 0.25
+  });
+  assert.equal(quarterSpeedResponse.ok, true);
+  assert.ok("player" in quarterSpeedResponse);
+  assert.equal(quarterSpeedResponse.player.playbackRate, 0.25);
+  assert.equal(video.playbackRate, 0.25);
+
+  const doubleSpeedResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "set-playback-rate",
+    playbackRate: 2
+  });
+  assert.equal(doubleSpeedResponse.ok, true);
+  assert.ok("player" in doubleSpeedResponse);
+  assert.equal(doubleSpeedResponse.player.playbackRate, 2);
+  assert.equal(video.playbackRate, 2);
+
+  const invalidSpeedResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "set-playback-rate",
+    playbackRate: 1
+  });
+  assert.equal(invalidSpeedResponse.ok, false);
+  assert.ok("error" in invalidSpeedResponse);
+  assert.match(invalidSpeedResponse.error, /0\.25배 또는 2배/u);
+  assert.equal(video.playbackRate, 2);
+
+  adShowing = true;
+  const adBlockedResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "set-playback-rate",
+    playbackRate: 0.25
+  });
+  assert.equal(adBlockedResponse.ok, false);
+  assert.ok("error" in adBlockedResponse);
+  assert.match(adBlockedResponse.error, /광고 재생 중/u);
+  assert.equal(video.playbackRate, 2);
+  adShowing = false;
+
   activeWatchId = ids.old;
   const transitionResponse = await readContext();
   assert.equal(transitionResponse.ok, false);
+  assert.ok("error" in transitionResponse);
   assert.match(transitionResponse.error, /전환되는 중/u);
 
   activeWatchId = "";
@@ -255,6 +330,7 @@ test("YouTube SPA에서는 stale og:url 대신 URL과 활성 플레이어 ID를 
   });
   const shortsResponse = await readContext();
   assert.equal(shortsResponse.ok, true);
+  assert.ok("context" in shortsResponse);
   assert.equal(shortsResponse.context.contentId, ids.shorts);
   assert.equal(
     shortsResponse.context.canonicalUrl,

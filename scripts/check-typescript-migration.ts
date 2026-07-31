@@ -16,6 +16,7 @@ const generatedJavaScript = new Set([
   "lib/caption-style.js",
   "lib/core.js",
   "lib/editor-core.js",
+  "lib/keyboard-shortcuts.js",
   "lib/session-recovery.js",
   "lib/source-platform.js",
   "service-worker.js",
@@ -104,7 +105,7 @@ const actualGeneratedJavaScript = new Set(
 assert(
   JSON.stringify([...actualGeneratedJavaScript].sort())
     === JSON.stringify([...generatedJavaScript].sort()),
-  "Extension JavaScript 생성물 목록이 승인된 10개와 다릅니다."
+  "Extension JavaScript 생성물 목록이 승인 목록과 다릅니다."
 );
 for (const relativePath of generatedJavaScript) {
   const contents = await readFile(
