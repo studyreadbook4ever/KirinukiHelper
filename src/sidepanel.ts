@@ -1428,9 +1428,6 @@ async function captureCurrentPosition(kind: "start" | "end"): Promise<void> {
     await persistState();
     assertOperationCurrent(operationGeneration);
     setStatus(`${kind === "start" ? "시작" : "끝"} 스탬프를 ${formatTimestamp(rounded, { precision: 3 })}로 기록했습니다.`, "success");
-    if (kind === "end") {
-      elements.segmentDescription.focus();
-    }
   } catch (error) {
     if (!resetInProgress && operationGeneration === stateGeneration) {
       setStatus(errorMessage(error), "error");
@@ -1499,18 +1496,22 @@ async function saveSegment(): Promise<void> {
     return;
   }
   const operationGeneration = stateGeneration;
-  if (sourceConflict) {
-    setStatus("기존 구간과 다른 원본 영상입니다. 모든 로컬 작업을 초기화한 뒤 기록해 주세요.", "error", 0);
-    return;
-  }
-  syncDraftFromForm();
-  const validation = validateSegmentInput(state.draft);
-  if (!validation.ok) {
-    setStatus(validation.message, "error");
-    return;
-  }
+  const sourceClockOperation = reserveSourceClockOperation();
+  elements.saveSegment.disabled = true;
 
   try {
+    await sourceClockOperation.waitForTurn;
+    assertOperationCurrent(operationGeneration);
+    if (sourceConflict) {
+      setStatus("기존 구간과 다른 원본 영상입니다. 모든 로컬 작업을 초기화한 뒤 기록해 주세요.", "error", 0);
+      return;
+    }
+    syncDraftFromForm();
+    const validation = validateSegmentInput(state.draft);
+    if (!validation.ok) {
+      setStatus(validation.message, "error");
+      return;
+    }
     const expectedSessionId = sourceIdentity(state.source);
     const capturedSessionIds = [
       state.draft.startCapture?.sourceSessionId,
@@ -1551,6 +1552,9 @@ async function saveSegment(): Promise<void> {
     if (!resetInProgress && operationGeneration === stateGeneration) {
       setStatus(errorMessage(error), "error");
     }
+  } finally {
+    sourceClockOperation.release();
+    elements.saveSegment.disabled = resetInProgress;
   }
 }
 

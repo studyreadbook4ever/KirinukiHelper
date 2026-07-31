@@ -1043,9 +1043,6 @@ async function captureCurrentPosition(kind) {
     await persistState();
     assertOperationCurrent(operationGeneration);
     setStatus(`${kind === "start" ? "\uC2DC\uC791" : "\uB05D"} \uC2A4\uD0EC\uD504\uB97C ${formatTimestamp(rounded, { precision: 3 })}\uB85C \uAE30\uB85D\uD588\uC2B5\uB2C8\uB2E4.`, "success");
-    if (kind === "end") {
-      elements.segmentDescription.focus();
-    }
   } catch (error) {
     if (!resetInProgress && operationGeneration === stateGeneration) {
       setStatus(errorMessage(error), "error");
@@ -1109,17 +1106,21 @@ async function saveSegment() {
     return;
   }
   const operationGeneration = stateGeneration;
-  if (sourceConflict) {
-    setStatus("\uAE30\uC874 \uAD6C\uAC04\uACFC \uB2E4\uB978 \uC6D0\uBCF8 \uC601\uC0C1\uC785\uB2C8\uB2E4. \uBAA8\uB4E0 \uB85C\uCEEC \uC791\uC5C5\uC744 \uCD08\uAE30\uD654\uD55C \uB4A4 \uAE30\uB85D\uD574 \uC8FC\uC138\uC694.", "error", 0);
-    return;
-  }
-  syncDraftFromForm();
-  const validation = validateSegmentInput(state.draft);
-  if (!validation.ok) {
-    setStatus(validation.message, "error");
-    return;
-  }
+  const sourceClockOperation = reserveSourceClockOperation();
+  elements.saveSegment.disabled = true;
   try {
+    await sourceClockOperation.waitForTurn;
+    assertOperationCurrent(operationGeneration);
+    if (sourceConflict) {
+      setStatus("\uAE30\uC874 \uAD6C\uAC04\uACFC \uB2E4\uB978 \uC6D0\uBCF8 \uC601\uC0C1\uC785\uB2C8\uB2E4. \uBAA8\uB4E0 \uB85C\uCEEC \uC791\uC5C5\uC744 \uCD08\uAE30\uD654\uD55C \uB4A4 \uAE30\uB85D\uD574 \uC8FC\uC138\uC694.", "error", 0);
+      return;
+    }
+    syncDraftFromForm();
+    const validation = validateSegmentInput(state.draft);
+    if (!validation.ok) {
+      setStatus(validation.message, "error");
+      return;
+    }
     const expectedSessionId = sourceIdentity(state.source);
     const capturedSessionIds = [
       state.draft.startCapture?.sourceSessionId,
@@ -1154,6 +1155,9 @@ async function saveSegment() {
     if (!resetInProgress && operationGeneration === stateGeneration) {
       setStatus(errorMessage(error), "error");
     }
+  } finally {
+    sourceClockOperation.release();
+    elements.saveSegment.disabled = resetInProgress;
   }
 }
 function startEditingSegment(id) {

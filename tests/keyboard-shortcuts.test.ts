@@ -136,6 +136,19 @@ test("모든 단축키 대상은 실제 화면에 있고 두 화면 모두 공�
     /async function captureCurrentPosition[\s\S]+reserveSourceClockOperation\(\)[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+requestForegroundPageContext\(\)/u,
     "D/F와 E/R은 입력 순서대로 원본 영상 시계를 읽고 바꿔야 합니다."
   );
+  const captureFunction = /async function captureCurrentPosition[\s\S]+?(?=\nfunction captureOriginLabel)/u.exec(
+    sidepanelSource
+  )?.[0] || "";
+  assert.doesNotMatch(
+    captureFunction,
+    /segmentDescription\.focus/u,
+    "R 캡처 뒤 설명 입력으로 포커스를 옮기면 즉시 T 저장을 할 수 없습니다."
+  );
+  assert.match(
+    sidepanelSource,
+    /async function saveSegment[\s\S]+reserveSourceClockOperation\(\)[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+syncDraftFromForm\(\)/u,
+    "R 직후 T를 누르면 끝 스탬프 저장 완료 뒤 구간을 저장해야 합니다."
+  );
   assert.match(
     sidepanelSource,
     /async function seekSourceBy[\s\S]+reserveSourceClockOperation\(\)[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+action: "seek-relative"/u,
