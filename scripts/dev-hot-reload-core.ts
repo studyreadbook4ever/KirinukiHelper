@@ -50,6 +50,7 @@ const SHARED_EXTENSION_FILES = new Set([
   "src/lib/core.ts",
   "src/lib/editor-core.ts",
   "src/lib/keyboard-shortcuts.ts",
+  "src/lib/serial-operation-gate.ts",
   "src/lib/source-platform.ts"
 ]);
 const EXTENSION_FILES = new Set([

@@ -371,16 +371,16 @@ export const SIDEPANEL_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
     },
     {
       key: "D",
-      action: "create-codex-job",
-      targetId: "create-codex-job",
-      label: "Codex 작업 폴더 만들기",
+      action: "player-seek-backward-five",
+      targetId: "seek-backward-five",
+      label: "원본 영상을 5초 이전으로 이동",
       trigger: "click"
     },
     {
       key: "F",
-      action: "copy-prompt",
-      targetId: "copy-prompt",
-      label: "프롬프트 복사",
+      action: "player-seek-forward-five",
+      targetId: "seek-forward-five",
+      label: "원본 영상을 5초 이후로 이동",
       trigger: "click"
     },
     {
@@ -398,14 +398,14 @@ export const SIDEPANEL_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
       trigger: "click"
     },
     {
-      key: "Z",
+      key: "Y",
       action: "player-rate-quarter",
       targetId: "playback-rate-quarter",
       label: "원본 영상을 0.25배속으로 재생",
       trigger: "click"
     },
     {
-      key: "X",
+      key: "U",
       action: "player-rate-double",
       targetId: "playback-rate-double",
       label: "원본 영상을 2배속으로 재생",

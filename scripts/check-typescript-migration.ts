@@ -17,6 +17,7 @@ const generatedJavaScript = new Set([
   "lib/core.js",
   "lib/editor-core.js",
   "lib/keyboard-shortcuts.js",
+  "lib/serial-operation-gate.js",
   "lib/session-recovery.js",
   "lib/source-platform.js",
   "service-worker.js",

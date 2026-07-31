@@ -16,6 +16,7 @@ export const EXTENSION_PACKAGE_FILES = Object.freeze([
   "lib/caption-style.js",
   "lib/editor-core.js",
   "lib/keyboard-shortcuts.js",
+  "lib/serial-operation-gate.js",
   "lib/session-recovery.js",
   "lib/source-platform.js",
   "licenses/AUDSEG-MIT.txt",

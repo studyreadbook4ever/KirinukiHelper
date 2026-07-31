@@ -564,6 +564,9 @@
     };
     const applyPlayerCommand = async (message) => {
       const platform = sourcePlatformFromUrl(location.href);
+      if (platform !== SOURCE_PLATFORM_YOUTUBE && platform !== SOURCE_PLATFORM_CHZZK) {
+        throw new Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC601\uC0C1 \uD398\uC774\uC9C0\uC785\uB2C8\uB2E4.");
+      }
       const video = choosePrimaryVideo();
       if (!video) {
         throw new Error("\uC601\uC0C1 \uD50C\uB808\uC774\uC5B4\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
@@ -598,13 +601,44 @@
           target = Math.min(end, Math.max(start, target));
         }
         video.currentTime = target;
+      } else if (message.action === "seek-relative") {
+        if (message.deltaSeconds !== -5 && message.deltaSeconds !== 5) {
+          throw new Error("\uC0C1\uB300 \uC774\uB3D9\uC740 5\uCD08 \uB4A4\uB85C \uB610\uB294 5\uCD08 \uC55E\uC73C\uB85C\uB9CC \uC9C0\uC6D0\uD569\uB2C8\uB2E4.");
+        }
+        if (!Number.isFinite(video.currentTime)) {
+          throw new Error("\uD604\uC7AC \uC601\uC0C1 \uC2DC\uAC01\uC744 \uC77D\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+        }
+        let target;
+        if (platform === SOURCE_PLATFORM_YOUTUBE) {
+          target = video.currentTime + message.deltaSeconds;
+        } else if (platform === SOURCE_PLATFORM_CHZZK) {
+          target = video.currentTime + message.deltaSeconds;
+        } else {
+          throw new Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC601\uC0C1 \uD398\uC774\uC9C0\uC785\uB2C8\uB2E4.");
+        }
+        let minimum = 0;
+        let maximum = Number.isFinite(video.duration) && video.duration >= 0 ? video.duration : Number.POSITIVE_INFINITY;
+        if (video.seekable.length > 0) {
+          minimum = video.seekable.start(0);
+          maximum = video.seekable.end(video.seekable.length - 1);
+        }
+        video.currentTime = Math.min(
+          maximum,
+          Math.max(minimum, target)
+        );
       } else if (message.action === "set-playback-rate") {
         if (message.playbackRate !== 0.25 && message.playbackRate !== 2) {
           throw new Error(
             "\uC7AC\uC0DD \uC18D\uB3C4\uB294 0.25\uBC30 \uB610\uB294 2\uBC30\uB9CC \uC120\uD0DD\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."
           );
         }
-        video.playbackRate = message.playbackRate;
+        if (platform === SOURCE_PLATFORM_YOUTUBE) {
+          video.playbackRate = message.playbackRate;
+        } else if (platform === SOURCE_PLATFORM_CHZZK) {
+          video.playbackRate = message.playbackRate;
+        } else {
+          throw new Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC601\uC0C1 \uD398\uC774\uC9C0\uC785\uB2C8\uB2E4.");
+        }
       } else {
         throw new Error(
           `\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uD50C\uB808\uC774\uC5B4 \uBA85\uB839\uC785\uB2C8\uB2E4: ${message.action}`

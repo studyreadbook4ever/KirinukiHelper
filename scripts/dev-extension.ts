@@ -43,6 +43,7 @@ const watchedFiles = new Set([
   "src/lib/core.ts",
   "src/lib/editor-core.ts",
   "src/lib/keyboard-shortcuts.ts",
+  "src/lib/serial-operation-gate.ts",
   "src/lib/session-recovery.ts",
   "src/lib/source-platform.ts",
   "extension/editor.html",

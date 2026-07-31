@@ -127,11 +127,17 @@ type EditorShortcutProbe = {
 };
 type SidepanelShortcutProbe = {
   adjacentRateButtons: boolean;
+  adjacentSeekButtons: boolean;
   quarterKey: string | null;
   quarterTitle: string;
   doubleKey: string | null;
   doubleTitle: string;
+  seekBackwardKey: string | null;
+  seekBackwardTitle: string;
+  seekForwardKey: string | null;
+  seekForwardTitle: string;
   captureStartKey: string | null;
+  captureEndKey: string | null;
   resetKey: string | null;
 };
 
@@ -912,6 +918,8 @@ async function main() {
         "player-status",
         "playback-rate-quarter",
         "playback-rate-double",
+        "seek-backward-five",
+        "seek-forward-five",
         "streamer-name",
         "broadcast-title",
         "capture-start",
@@ -941,13 +949,22 @@ async function main() {
       script: `
         const quarter = document.getElementById("playback-rate-quarter");
         const double = document.getElementById("playback-rate-double");
+        const seekBackward = document.getElementById("seek-backward-five");
+        const seekForward = document.getElementById("seek-forward-five");
         return {
           adjacentRateButtons: quarter?.nextElementSibling === double,
+          adjacentSeekButtons: seekBackward?.nextElementSibling === seekForward,
           quarterKey: quarter?.getAttribute("aria-keyshortcuts"),
           quarterTitle: quarter?.title || "",
           doubleKey: double?.getAttribute("aria-keyshortcuts"),
           doubleTitle: double?.title || "",
+          seekBackwardKey: seekBackward?.getAttribute("aria-keyshortcuts"),
+          seekBackwardTitle: seekBackward?.title || "",
+          seekForwardKey: seekForward?.getAttribute("aria-keyshortcuts"),
+          seekForwardTitle: seekForward?.title || "",
           captureStartKey: document.getElementById("capture-start")
+            ?.getAttribute("aria-keyshortcuts"),
+          captureEndKey: document.getElementById("capture-end")
             ?.getAttribute("aria-keyshortcuts"),
           resetKey: document.getElementById("reset-project")
             ?.getAttribute("aria-keyshortcuts")
@@ -957,11 +974,17 @@ async function main() {
     }
   );
   assert(sidepanelShortcuts.adjacentRateButtons, "0.25×와 2× 버튼이 나란히 있지 않습니다.");
-  assert(sidepanelShortcuts.quarterKey === "Z", "0.25× 버튼의 Z 단축키가 없습니다.");
-  assert(sidepanelShortcuts.doubleKey === "X", "2× 버튼의 X 단축키가 없습니다.");
-  assert(sidepanelShortcuts.quarterTitle.includes("Z"), "0.25× tooltip에 Z가 없습니다.");
-  assert(sidepanelShortcuts.doubleTitle.includes("X"), "2× tooltip에 X가 없습니다.");
+  assert(sidepanelShortcuts.adjacentSeekButtons, "5초 뒤로와 앞으로 버튼이 나란히 있지 않습니다.");
+  assert(sidepanelShortcuts.quarterKey === "Y", "0.25× 버튼의 Y 단축키가 없습니다.");
+  assert(sidepanelShortcuts.doubleKey === "U", "2× 버튼의 U 단축키가 없습니다.");
+  assert(sidepanelShortcuts.quarterTitle.includes("Y"), "0.25× tooltip에 Y가 없습니다.");
+  assert(sidepanelShortcuts.doubleTitle.includes("U"), "2× tooltip에 U가 없습니다.");
+  assert(sidepanelShortcuts.seekBackwardKey === "D", "5초 뒤로 버튼의 D 단축키가 없습니다.");
+  assert(sidepanelShortcuts.seekForwardKey === "F", "5초 앞으로 버튼의 F 단축키가 없습니다.");
+  assert(sidepanelShortcuts.seekBackwardTitle.includes("D"), "5초 뒤로 tooltip에 D가 없습니다.");
+  assert(sidepanelShortcuts.seekForwardTitle.includes("F"), "5초 앞으로 tooltip에 F가 없습니다.");
   assert(sidepanelShortcuts.captureStartKey === "E", "시작 스탬프의 E 단축키가 없습니다.");
+  assert(sidepanelShortcuts.captureEndKey === "R", "끝 스탬프의 R 단축키가 없습니다.");
   assert(sidepanelShortcuts.resetKey === null, "전체 초기화에 A-Z 단축키가 배정됐습니다.");
 
   const sourceLayout = await webdriver<SourceLayoutProbe>(

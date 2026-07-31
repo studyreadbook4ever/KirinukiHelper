@@ -2687,16 +2687,16 @@ var SIDEPANEL_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
     },
     {
       key: "D",
-      action: "create-codex-job",
-      targetId: "create-codex-job",
-      label: "Codex \uC791\uC5C5 \uD3F4\uB354 \uB9CC\uB4E4\uAE30",
+      action: "player-seek-backward-five",
+      targetId: "seek-backward-five",
+      label: "\uC6D0\uBCF8 \uC601\uC0C1\uC744 5\uCD08 \uC774\uC804\uC73C\uB85C \uC774\uB3D9",
       trigger: "click"
     },
     {
       key: "F",
-      action: "copy-prompt",
-      targetId: "copy-prompt",
-      label: "\uD504\uB86C\uD504\uD2B8 \uBCF5\uC0AC",
+      action: "player-seek-forward-five",
+      targetId: "seek-forward-five",
+      label: "\uC6D0\uBCF8 \uC601\uC0C1\uC744 5\uCD08 \uC774\uD6C4\uB85C \uC774\uB3D9",
       trigger: "click"
     },
     {
@@ -2714,14 +2714,14 @@ var SIDEPANEL_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
       trigger: "click"
     },
     {
-      key: "Z",
+      key: "Y",
       action: "player-rate-quarter",
       targetId: "playback-rate-quarter",
       label: "\uC6D0\uBCF8 \uC601\uC0C1\uC744 0.25\uBC30\uC18D\uC73C\uB85C \uC7AC\uC0DD",
       trigger: "click"
     },
     {
-      key: "X",
+      key: "U",
       action: "player-rate-double",
       targetId: "playback-rate-double",
       label: "\uC6D0\uBCF8 \uC601\uC0C1\uC744 2\uBC30\uC18D\uC73C\uB85C \uC7AC\uC0DD",
