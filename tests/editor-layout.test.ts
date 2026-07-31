@@ -52,3 +52,16 @@ test("미리보기 영상은 원본 종횡비와 무관하게 stage 안에서 co
   assertDeclaration(videoRule, "object-fit", "contain");
   assertDeclaration(videoRule, "object-position", "center");
 });
+
+test("이미지 에셋 선택선은 미리보기 이미지의 실측 크기를 바꾸지 않는다", async () => {
+  const css = await readFile(editorCssUrl, "utf8");
+  const overlayRule = cssRule(css, ".image-asset-overlay");
+  const selectedRule = cssRule(
+    css,
+    ".image-asset-overlay:hover,\n.image-asset-overlay.selected"
+  );
+
+  assertDeclaration(overlayRule, "border", "0");
+  assertDeclaration(selectedRule, "outline", "1px solid #64b5ff");
+  assertDeclaration(selectedRule, "outline-offset", "-1px");
+});

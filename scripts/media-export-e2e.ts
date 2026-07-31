@@ -167,6 +167,17 @@ type TransparentAssetFixture = {
     semiGreen?: number[];
   };
 };
+type PreviewImageAssetGeometry = {
+  content: { left: number; top: number; width: number; height: number };
+  image: { left: number; top: number; width: number; height: number };
+  normalized: {
+    centerX: number;
+    centerY: number;
+    width: number;
+    height: number;
+  };
+  borderWidth: number;
+};
 type WritableOperation = ExternalRecord & {
   type: string;
   mode?: string;
@@ -1939,6 +1950,87 @@ async function main() {
       "미리보기 UI 일시정지"
     );
   }
+  const assetPreviewSeek = await seekTimelineAtClipFraction("clip-blue", 0.25, 0.5);
+  const previewAssetGeometry = await waitUntil(async () => {
+    const geometry = await executeSync<PreviewImageAssetGeometry | null>(`
+      const assetId = arguments[0];
+      const video = document.querySelector("#preview-video");
+      const layer = document.querySelector("#image-asset-overlays");
+      const overlay = layer?.querySelector(
+        '.image-asset-overlay[data-asset-id="' + CSS.escape(assetId) + '"]'
+      );
+      const image = overlay?.querySelector("img");
+      if (
+        !video || !layer || !overlay || !image ||
+        !video.videoWidth || !video.videoHeight ||
+        !image.complete || !image.naturalWidth || !image.naturalHeight
+      ) {
+        return null;
+      }
+      const videoRect = video.getBoundingClientRect();
+      const layerRect = layer.getBoundingClientRect();
+      const imageRect = image.getBoundingClientRect();
+      const scale = Math.min(
+        videoRect.width / video.videoWidth,
+        videoRect.height / video.videoHeight
+      );
+      const contentWidth = video.videoWidth * scale;
+      const contentHeight = video.videoHeight * scale;
+      const contentLeft = videoRect.left + (videoRect.width - contentWidth) / 2;
+      const contentTop = videoRect.top + (videoRect.height - contentHeight) / 2;
+      const style = getComputedStyle(overlay);
+      return {
+        content: {
+          left: contentLeft - layerRect.left,
+          top: contentTop - layerRect.top,
+          width: contentWidth,
+          height: contentHeight
+        },
+        image: {
+          left: imageRect.left - layerRect.left,
+          top: imageRect.top - layerRect.top,
+          width: imageRect.width,
+          height: imageRect.height
+        },
+        normalized: {
+          centerX: (imageRect.left + imageRect.width / 2 - contentLeft) / contentWidth,
+          centerY: (imageRect.top + imageRect.height / 2 - contentTop) / contentHeight,
+          width: imageRect.width / contentWidth,
+          height: imageRect.height / contentHeight
+        },
+        borderWidth: [
+          style.borderLeftWidth,
+          style.borderRightWidth,
+          style.borderTopWidth,
+          style.borderBottomWidth
+        ].reduce((total, value) => total + (Number.parseFloat(value) || 0), 0)
+      };
+    `, [IMAGE_ASSET_ID]);
+    return geometry?.image.width && geometry?.image.height ? geometry : false;
+  }, "투명 PNG 에셋 미리보기 좌표");
+  const previewExpectedBaseFit = Math.min(
+    FRAME_WIDTH * 0.35 / imageAsset.naturalWidth,
+    FRAME_HEIGHT * 0.35 / imageAsset.naturalHeight
+  );
+  const previewExpectedNormalized = {
+    centerX: imageAsset.x,
+    centerY: imageAsset.y,
+    width: imageAsset.naturalWidth * previewExpectedBaseFit * imageAsset.scale / FRAME_WIDTH,
+    height: imageAsset.naturalHeight * previewExpectedBaseFit * imageAsset.scale / FRAME_HEIGHT
+  };
+  for (const key of ["centerX", "centerY", "width", "height"] as const) {
+    assert(
+      Math.abs(previewAssetGeometry.normalized[key] - previewExpectedNormalized[key]) <= 0.003,
+      `이미지 에셋 미리보기 ${key}가 출력 비율과 다릅니다: ${JSON.stringify({
+        previewAssetGeometry,
+        previewExpectedNormalized
+      })}`
+    );
+  }
+  assert(
+    previewAssetGeometry.borderWidth === 0,
+    `미리보기 선택 테두리가 이미지 실측 크기를 줄입니다: ${JSON.stringify(previewAssetGeometry)}`
+  );
   const reorderedTimeline = await waitUntil(async () => {
     const state = await executeSync<{
       blueLeft: number;
@@ -2650,7 +2742,6 @@ async function main() {
   );
 
   const assetBaseFit = Math.min(
-    1,
     FRAME_WIDTH * 0.35 / imageAsset.naturalWidth,
     FRAME_HEIGHT * 0.35 / imageAsset.naturalHeight
   );
@@ -3021,6 +3112,9 @@ async function main() {
       ),
       timelineUi: {
         reorderedTimeline,
+        assetPreviewSeek,
+        previewAssetGeometry,
+        previewExpectedNormalized,
         safePointerTargets,
         firstSeekPlayhead,
         safePlayhead,

@@ -59,6 +59,16 @@ type RenderImageAsset = EditorImageAsset;
 type RenderAudioRegion = EditorAudioRegion;
 export type RenderProject = EditorProject;
 
+type ImageAssetSurface = {
+  width: number;
+  height: number;
+};
+
+type ImageAssetDimensions = {
+  width?: number;
+  height?: number;
+};
+
 type ProgressCallback = (progress: number, phase?: string) => void;
 type FetchImplementation = typeof fetch;
 type HardwareAcceleration = NonNullable<
@@ -751,9 +761,9 @@ export function activeImageAssetsAt(
 }
 
 export function imageAssetDrawRect(
-  canvas: OffscreenCanvas | HTMLCanvasElement,
+  canvas: ImageAssetSurface,
   asset: RenderImageAsset,
-  image: CanvasImageSource & { width?: number; height?: number }
+  image: ImageAssetDimensions
 ) {
   const canvasWidth = Math.max(1, Number(canvas?.width) || 1);
   const canvasHeight = Math.max(1, Number(canvas?.height) || 1);
@@ -765,8 +775,10 @@ export function imageAssetDrawRect(
     1,
     Number(asset?.naturalHeight) || Number(image?.height) || 1
   );
+  // Scale from the render surface so CSS preview pixels and output pixels keep
+  // the same normalized geometry even when only one surface exceeds the image's
+  // natural dimensions.
   const baseFit = Math.min(
-    1,
     canvasWidth * 0.35 / naturalWidth,
     canvasHeight * 0.35 / naturalHeight
   );
