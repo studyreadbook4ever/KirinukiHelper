@@ -88,7 +88,7 @@ const read = (relativePath: string) => (
 const manifest = JSON.parse(await read("manifest.json")) as ExtensionManifest;
 assert(manifest.manifest_version === 3, "manifest_version은 3이어야 합니다.");
 assert(manifest.side_panel?.default_path === "sidepanel.html", "사이드패널 진입점이 없습니다.");
-assert(manifest.version === "2.5.1", "통합 편집기 manifest 버전이 2.5.1이 아닙니다.");
+assert(manifest.version === "2.6.0", "통합 편집기 manifest 버전이 2.6.0이 아닙니다.");
 assert(manifest.host_permissions?.includes("https://chzzk.naver.com/*"), "치지직 host permission이 없습니다.");
 assert(manifest.host_permissions?.includes("https://api.chzzk.naver.com/*"), "치지직 라이브 상태 메타데이터 permission이 없습니다.");
 assert(manifest.host_permissions?.includes("https://youtube.com/*"), "YouTube 루트 영상 permission이 없습니다.");
@@ -117,6 +117,7 @@ const referencedFiles = [
   PRETENDARD_FONT.extensionFontPath,
   "lib/core.js",
   "lib/editor-core.js",
+  "lib/keyboard-shortcuts.js",
   "lib/source-platform.js",
   "knowledge/base-editing-guidelines.md",
   "knowledge/default-creator-policy.md",
@@ -222,7 +223,7 @@ for (const [label, relativePath, expectedSha256] of [
   );
 }
 
-const [html, panelScript, contentScript, editorHtml, editorScript, audsegWorkerScript, serviceWorker, editingGuide, policyGuide, codexAgentGuide, policyIndexText, audsegLicense, projectLicense, distributedProjectLicense] = await Promise.all([
+const [html, panelScript, contentScript, editorHtml, editorScript, audsegWorkerScript, serviceWorker, editingGuide, policyGuide, codexAgentGuide, policyIndexText, audsegLicense, projectLicense, distributedProjectLicense, keyboardShortcutScript] = await Promise.all([
   read("sidepanel.html"),
   read("sidepanel.js"),
   read("content-script.js"),
@@ -236,7 +237,8 @@ const [html, panelScript, contentScript, editorHtml, editorScript, audsegWorkerS
   read("knowledge/creator-policy-index.json"),
   readFile(path.join(root, "AudSeg", "LICENSE"), "utf8"),
   readFile(path.join(root, "LICENSE"), "utf8"),
-  read("LICENSE")
+  read("LICENSE"),
+  read("lib/keyboard-shortcuts.js")
 ]);
 const policyIndex = JSON.parse(policyIndexText) as CreatorPolicyIndex;
 assert(
@@ -253,6 +255,8 @@ for (const id of [
   "end-time",
   "capture-start",
   "capture-end",
+  "playback-rate-quarter",
+  "playback-rate-double",
   "segment-description",
   "save-segment",
   "policy-match-badge",
@@ -278,6 +282,9 @@ assert(!panelScript.includes("writePolicyCacheFiles"), "재배포 허가 없는 
 assert(!panelScript.includes("policy-cache"), "정책 캐시 경로가 사이드패널에 남아 있습니다.");
 assert(panelScript.includes("showDirectoryPicker"), "Codex 작업 폴더 선택 로직이 없습니다.");
 assert(panelScript.includes("KIRINUKI_OPEN_EDITOR"), "사이드패널에서 통합 편집기를 열지 않습니다.");
+assert(panelScript.includes("setSourcePlaybackRate"), "사이드패널 재생 배속 제어가 없습니다.");
+assert(panelScript.includes("sourceRefreshRequestCount"), "SOURCE 자동 갱신 중첩 차단이 없습니다.");
+assert(panelScript.includes("SIDEPANEL_SHORTCUT_BINDINGS"), "사이드패널 안전 단축키 정책을 설치하지 않습니다.");
 assert(
   panelScript.includes("KIRINUKI_LIST_RECOVERY_SESSIONS")
     && panelScript.includes("KIRINUKI_OPEN_SAVED_EDITOR"),
@@ -309,6 +316,9 @@ for (const fileName of ["AGENTS.md", "START_HERE.md", "edit-brief.md", "creator-
 }
 assert(contentScript.includes("HTMLVideoElement") || contentScript.includes("querySelectorAll(\"video\")"), "플레이어 시각 읽기 로직이 없습니다.");
 assert(contentScript.includes("KIRINUKI_PLAYER_COMMAND"), "편집기에서 치지직 플레이어를 제어하는 프로토콜이 없습니다.");
+assert(contentScript.includes("set-playback-rate"), "치지직·YouTube 공용 배속 명령이 없습니다.");
+assert(contentScript.includes("CHZZK_METADATA_FETCH_TIMEOUT_MS"), "치지직 메타데이터 요청 timeout이 없습니다.");
+assert(contentScript.includes("pendingRequests.delete"), "메타데이터 single-flight 정리 경로가 없습니다.");
 assert(contentScript.includes("/service/v3/videos/"), "치지직 다시보기 회차 메타데이터 연결 로직이 없습니다.");
 assert(contentScript.includes("liveOpenDate"), "다시보기를 생방송 회차에 연결할 시작 시각 로직이 없습니다.");
 assert(contentScript.includes("youtube-ad-blocked"), "YouTube 광고 시각 캡처 차단이 없습니다.");
@@ -395,7 +405,19 @@ for (const id of [
 ]) {
   assert(editorHtml.includes(`id="${id}"`), `통합 편집기 UI 요소가 없습니다: #${id}`);
 }
+assert(
+  editorHtml.includes('value="kr-vtuber-black-box-v1"'),
+  "흰 자막·검은 사각 배경 프리셋 선택지가 없습니다."
+);
 assert(editorScript.includes("renderProjectVideo"), "편집기 번들에 영상 렌더 경로가 없습니다.");
+assert(editorScript.includes("backgroundRadiusEm"), "자막 배경 곡률의 미리보기·렌더 경로가 없습니다.");
+assert(editorScript.includes("EDITOR_SHORTCUT_BINDINGS"), "편집기 안전 단축키 정책을 설치하지 않습니다.");
+assert(
+  keyboardShortcutScript.includes("playback-rate-quarter")
+    && keyboardShortcutScript.includes("playback-rate-double")
+    && keyboardShortcutScript.includes("DANGEROUS_KEYBOARD_SHORTCUT_ACTION_TOKENS"),
+  "배포 단축키 정책이 배속 버튼 또는 위험 동작 denylist를 보존하지 않습니다."
+);
 assert(
   editorScript.includes("LOCAL_MEDIA_BLOB_SOURCE_OPTIONS")
     && editorScript.includes("useStreamReader: false"),

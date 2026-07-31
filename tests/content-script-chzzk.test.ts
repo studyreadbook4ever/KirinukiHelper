@@ -85,18 +85,46 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
       channelId: string;
       streamerName: string;
       broadcastTitle: string;
-      player: { positionSeconds: number };
+      player: {
+        positionSeconds: number;
+        playbackRate: number;
+      };
     };
   }
 
+  interface PlayerBridgeResponse {
+    ok: true;
+    player: {
+      currentTime: number;
+      paused: boolean;
+      playbackRate: number;
+    };
+  }
+
+  interface BridgeErrorResponse {
+    ok: false;
+    error: string;
+  }
+
+  type BridgeResponse = (
+    ChzzkBridgeResponse
+    | PlayerBridgeResponse
+    | BridgeErrorResponse
+  );
+  interface BridgeMessage {
+    type: string;
+    action?: string;
+    playbackRate?: number;
+  }
   type MessageListener = (
-    message: { type: string },
+    message: BridgeMessage,
     sender: Record<string, unknown>,
-    sendResponse: (response: ChzzkBridgeResponse) => void
+    sendResponse: (response: BridgeResponse) => void
   ) => boolean;
 
   const previousVideoId = "14405629";
   const currentVideoId = "13583412";
+  const retryVideoId = "11804637";
   const channelId = "088973112d8acc831ec20274f7ffbb99";
   const location = {
     href: `https://chzzk.naver.com/video/${currentVideoId}?from=spa`
@@ -106,6 +134,23 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
   const video = new MockVideo();
   let messageListener: MessageListener | null = null;
   const requestedEndpoints: string[] = [];
+  const requestSignals: AbortSignal[] = [];
+  let retryAttempts = 0;
+  type MockFetchResponse = {
+    ok: boolean;
+    json(): Promise<Record<string, unknown>>;
+  };
+  let resolveInitialMetadataRequest: (
+    response: MockFetchResponse
+  ) => void = () => {
+    throw new Error("초기 메타데이터 요청이 시작되지 않았습니다.");
+  };
+  const activeMetadataTimeouts = new Set<
+    ReturnType<typeof setTimeout>
+  >();
+  let metadataTimeoutScheduledCount = 0;
+  const nativeSetTimeout = globalThis.setTimeout;
+  const nativeClearTimeout = globalThis.clearTimeout;
 
   const document = {
     title: "fallback title - CHZZK",
@@ -130,26 +175,56 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
     display: "block",
     visibility: "visible"
   }));
-  installGlobal("fetch", async (url: URL | RequestInfo) => {
+  installGlobal("setTimeout", ((
+    ...args: Parameters<typeof setTimeout>
+  ) => {
+    const handle = nativeSetTimeout(...args);
+    if (args[1] === 8_000) {
+      activeMetadataTimeouts.add(handle);
+      metadataTimeoutScheduledCount += 1;
+    }
+    return handle;
+  }) as typeof setTimeout);
+  installGlobal("clearTimeout", ((
+    handle?: ReturnType<typeof setTimeout>
+  ) => {
+    if (handle) {
+      activeMetadataTimeouts.delete(handle);
+    }
+    nativeClearTimeout(handle);
+  }) as typeof clearTimeout);
+  installGlobal("fetch", (
+    url: URL | RequestInfo,
+    init?: RequestInit
+  ) => {
     requestedEndpoints.push(String(url));
-    return {
-      ok: true,
-      async json() {
-        return {
-          code: 200,
-          content: {
-            channel: {
-              channelId,
-              channelName: "현재 채널"
-            },
-            videoTitle: "현재 VOD",
-            liveOpenDate: "2026-07-28 21:00:00",
-            clipActive: true,
-            videoCategoryValue: "게임"
-          }
-        };
+    if (init?.signal) {
+      requestSignals.push(init.signal);
+    }
+    if (String(url).endsWith(`/${retryVideoId}`)) {
+      retryAttempts += 1;
+      if (retryAttempts === 1) {
+        return Promise.reject(new Error("일시적인 메타데이터 오류"));
       }
-    };
+      return Promise.resolve({
+        ok: true,
+        async json() {
+          return {
+            code: 200,
+            content: {
+              channel: {
+                channelId,
+                channelName: "재시도 채널"
+              },
+              videoTitle: "재시도 VOD"
+            }
+          };
+        }
+      });
+    }
+    return new Promise<MockFetchResponse>((resolve) => {
+      resolveInitialMetadataRequest = resolve;
+    });
   });
   installGlobal("chrome", {
     runtime: {
@@ -168,7 +243,9 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
   await import(sourceUrl.href);
   assert.equal(typeof messageListener, "function");
 
-  const response = await new Promise<ChzzkBridgeResponse>((resolve, reject) => {
+  const sendMessage = (
+    message: BridgeMessage
+  ) => new Promise<BridgeResponse>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("content-script 응답 시간 초과")),
       2_000
@@ -176,9 +253,9 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
     const listener = messageListener;
     assert.ok(listener);
     const keepChannelOpen = listener(
-      { type: "KIRINUKI_GET_CONTEXT" },
+      message,
       {},
-      (value: ChzzkBridgeResponse) => {
+      (value: BridgeResponse) => {
         clearTimeout(timeout);
         resolve(value);
       }
@@ -186,7 +263,45 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
     assert.equal(keepChannelOpen, true);
   });
 
+  const firstContextRequest = sendMessage({
+    type: "KIRINUKI_GET_CONTEXT"
+  });
+  const coalescedContextRequest = sendMessage({
+    type: "KIRINUKI_GET_CONTEXT"
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(
+    requestedEndpoints.length,
+    1,
+    "동일 VOD 메타데이터 요청은 하나의 fetch를 공유해야 합니다."
+  );
+  resolveInitialMetadataRequest({
+    ok: true,
+    async json() {
+      return {
+        code: 200,
+        content: {
+          channel: {
+            channelId,
+            channelName: "현재 채널"
+          },
+          videoTitle: "현재 VOD",
+          liveOpenDate: "2026-07-28 21:00:00",
+          clipActive: true,
+          videoCategoryValue: "게임"
+        }
+      };
+    }
+  });
+  const [response, coalescedResponse] = await Promise.all([
+    firstContextRequest,
+    coalescedContextRequest
+  ]);
   assert.equal(response.ok, true);
+  assert.ok("context" in response);
+  assert.equal(coalescedResponse.ok, true);
+  assert.ok("context" in coalescedResponse);
   assert.equal(response.context.contentId, currentVideoId);
   assert.equal(
     response.context.canonicalUrl,
@@ -196,11 +311,75 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
   assert.equal(response.context.streamerName, "현재 채널");
   assert.equal(response.context.broadcastTitle, "현재 VOD");
   assert.equal(response.context.player.positionSeconds, 123.456);
+  assert.equal(response.context.player.playbackRate, 1);
   assert.equal(requestedEndpoints.length, 1);
+  assert.equal(metadataTimeoutScheduledCount, 1);
+  assert.equal(activeMetadataTimeouts.size, 0);
+  assert.equal(requestSignals.length, 1);
+  assert.equal(requestSignals[0]?.aborted, false);
   assert.match(requestedEndpoints[0], new RegExp(`/${currentVideoId}$`, "u"));
   assert.equal(
     response.context.canonicalUrl.includes(previousVideoId),
     false,
     "DOM에 남은 이전 canonical 주소를 SOURCE에 섞으면 안 됩니다."
   );
+
+  const cachedResponse = await sendMessage({
+    type: "KIRINUKI_GET_CONTEXT"
+  });
+  assert.equal(cachedResponse.ok, true);
+  assert.equal(requestedEndpoints.length, 1);
+  assert.equal(metadataTimeoutScheduledCount, 1);
+
+  const quarterSpeedResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "set-playback-rate",
+    playbackRate: 0.25
+  });
+  assert.equal(quarterSpeedResponse.ok, true);
+  assert.ok("player" in quarterSpeedResponse);
+  assert.equal(quarterSpeedResponse.player.playbackRate, 0.25);
+  assert.equal(video.playbackRate, 0.25);
+
+  const doubleSpeedResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "set-playback-rate",
+    playbackRate: 2
+  });
+  assert.equal(doubleSpeedResponse.ok, true);
+  assert.ok("player" in doubleSpeedResponse);
+  assert.equal(doubleSpeedResponse.player.playbackRate, 2);
+  assert.equal(video.playbackRate, 2);
+
+  const invalidSpeedResponse = await sendMessage({
+    type: "KIRINUKI_PLAYER_COMMAND",
+    action: "set-playback-rate",
+    playbackRate: 1
+  });
+  assert.equal(invalidSpeedResponse.ok, false);
+  assert.ok("error" in invalidSpeedResponse);
+  assert.match(invalidSpeedResponse.error, /0\.25배 또는 2배/u);
+  assert.equal(video.playbackRate, 2);
+
+  location.href = `https://chzzk.naver.com/video/${retryVideoId}`;
+  const failedMetadataResponse = await sendMessage({
+    type: "KIRINUKI_GET_CONTEXT"
+  });
+  assert.equal(failedMetadataResponse.ok, true);
+  assert.equal(retryAttempts, 1);
+  assert.equal(activeMetadataTimeouts.size, 0);
+
+  const retriedMetadataResponse = await sendMessage({
+    type: "KIRINUKI_GET_CONTEXT"
+  });
+  assert.equal(retriedMetadataResponse.ok, true);
+  assert.ok("context" in retriedMetadataResponse);
+  assert.equal(retriedMetadataResponse.context.contentId, retryVideoId);
+  assert.equal(retriedMetadataResponse.context.streamerName, "재시도 채널");
+  assert.equal(retriedMetadataResponse.context.broadcastTitle, "재시도 VOD");
+  assert.equal(retryAttempts, 2);
+  assert.equal(requestedEndpoints.length, 3);
+  assert.equal(requestSignals.length, 3);
+  assert.equal(metadataTimeoutScheduledCount, 3);
+  assert.equal(activeMetadataTimeouts.size, 0);
 });

@@ -115,6 +115,25 @@ type SourceLayoutProbe = {
   streamer: Dimensions;
   broadcast: Dimensions;
 };
+type EditorShortcutProbe = {
+  assetSelectedByV: string | null;
+  inputBlockedC: string | null;
+  captionSelectedByC: string | null;
+  buttonFocusAllowsV: string | null;
+  addCueKey: string | null;
+  addCueTitle: string;
+  deleteCueKey: string | null;
+  exportKey: string | null;
+};
+type SidepanelShortcutProbe = {
+  adjacentRateButtons: boolean;
+  quarterKey: string | null;
+  quarterTitle: string;
+  doubleKey: string | null;
+  doubleTitle: string;
+  captureStartKey: string | null;
+  resetKey: string | null;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -640,7 +659,7 @@ async function main() {
   );
   assert(
     editor.stylePresetOptions.join(",") ===
-      "kr-vtuber-clean-v1,kr-vtuber-paperlogy-v1,pretendard-legacy-v1",
+      "kr-vtuber-clean-v1,kr-vtuber-black-box-v1,kr-vtuber-paperlogy-v1,pretendard-legacy-v1",
     `자막 스타일 선택지가 다릅니다: ${editor.stylePresetOptions.join(",")}`
   );
   assert(editor.tokenType === "hidden", "자동 session 토큰 요소는 사용자에게 숨겨져야 합니다.");
@@ -651,6 +670,61 @@ async function main() {
   assert(editor.advancedOpen === false, "Whisper companion 세부설정은 기본으로 접혀 있어야 합니다.");
   assert(editor.endpointInAdvanced === true, "companion 주소가 세부설정 밖에 노출되어 있습니다.");
   assert(editor.missingIds.length === 0, `editor 핵심 DOM 누락: ${editor.missingIds.join(", ")}`);
+
+  const editorShortcuts = await webdriver<EditorShortcutProbe>(
+    baseUrl,
+    "POST",
+    `/session/${sessionId}/execute/sync`,
+    {
+      script: `
+        const dispatchLetter = (target, letter) => target.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: letter.toLowerCase(),
+            code: "Key" + letter,
+            bubbles: true
+          })
+        );
+        const projectName = document.getElementById("project-name");
+        dispatchLetter(document.body, "V");
+        const assetSelectedByV = document.getElementById("asset-mode-tab")
+          ?.getAttribute("aria-selected");
+        projectName.focus();
+        dispatchLetter(projectName, "C");
+        const inputBlockedC = document.getElementById("asset-mode-tab")
+          ?.getAttribute("aria-selected");
+        projectName.blur();
+        dispatchLetter(document.body, "C");
+        const captionSelectedByC = document.getElementById("caption-mode-tab")
+          ?.getAttribute("aria-selected");
+        const addCue = document.getElementById("add-cue");
+        addCue.focus();
+        dispatchLetter(addCue, "V");
+        return {
+          assetSelectedByV,
+          inputBlockedC,
+          captionSelectedByC,
+          buttonFocusAllowsV: document.getElementById("asset-mode-tab")
+            ?.getAttribute("aria-selected"),
+          addCueKey: document.getElementById("add-cue")
+            ?.getAttribute("aria-keyshortcuts"),
+          addCueTitle: document.getElementById("add-cue")?.title || "",
+          deleteCueKey: document.getElementById("delete-cue")
+            ?.getAttribute("aria-keyshortcuts"),
+          exportKey: document.getElementById("export-video")
+            ?.getAttribute("aria-keyshortcuts")
+        };
+      `,
+      args: []
+    }
+  );
+  assert(editorShortcuts.assetSelectedByV === "true", "편집기 V 단축키가 에셋 탭을 열지 않습니다.");
+  assert(editorShortcuts.inputBlockedC === "true", "입력칸 포커스 중 C 단축키가 실행됐습니다.");
+  assert(editorShortcuts.captionSelectedByC === "true", "편집기 C 단축키가 자막 탭을 열지 않습니다.");
+  assert(editorShortcuts.buttonFocusAllowsV === "true", "버튼 포커스가 안전한 V 단축키를 막습니다.");
+  assert(editorShortcuts.addCueKey === "A", "자막 추가 버튼의 A 단축키 접근성 표기가 없습니다.");
+  assert(editorShortcuts.addCueTitle.includes("A"), "자막 추가 버튼 tooltip에 A 단축키가 없습니다.");
+  assert(editorShortcuts.deleteCueKey === null, "자막 삭제에 A-Z 단축키가 배정됐습니다.");
+  assert(editorShortcuts.exportKey === null, "영상 내보내기에 A-Z 단축키가 배정됐습니다.");
 
   let devReload = null;
   if (testDevReload) {
@@ -836,6 +910,8 @@ async function main() {
         "source-type",
         "player-position",
         "player-status",
+        "playback-rate-quarter",
+        "playback-rate-double",
         "streamer-name",
         "broadcast-title",
         "capture-start",
@@ -857,6 +933,37 @@ async function main() {
   assert(sidepanel.readyState === "complete", `sidepanel readyState가 complete가 아닙니다: ${sidepanel.readyState}`);
   assert(sidepanel.missingIds.length === 0, `sidepanel 핵심 DOM 누락: ${sidepanel.missingIds.join(", ")}`);
 
+  const sidepanelShortcuts = await webdriver<SidepanelShortcutProbe>(
+    baseUrl,
+    "POST",
+    `/session/${sessionId}/execute/sync`,
+    {
+      script: `
+        const quarter = document.getElementById("playback-rate-quarter");
+        const double = document.getElementById("playback-rate-double");
+        return {
+          adjacentRateButtons: quarter?.nextElementSibling === double,
+          quarterKey: quarter?.getAttribute("aria-keyshortcuts"),
+          quarterTitle: quarter?.title || "",
+          doubleKey: double?.getAttribute("aria-keyshortcuts"),
+          doubleTitle: double?.title || "",
+          captureStartKey: document.getElementById("capture-start")
+            ?.getAttribute("aria-keyshortcuts"),
+          resetKey: document.getElementById("reset-project")
+            ?.getAttribute("aria-keyshortcuts")
+        };
+      `,
+      args: []
+    }
+  );
+  assert(sidepanelShortcuts.adjacentRateButtons, "0.25×와 2× 버튼이 나란히 있지 않습니다.");
+  assert(sidepanelShortcuts.quarterKey === "Z", "0.25× 버튼의 Z 단축키가 없습니다.");
+  assert(sidepanelShortcuts.doubleKey === "X", "2× 버튼의 X 단축키가 없습니다.");
+  assert(sidepanelShortcuts.quarterTitle.includes("Z"), "0.25× tooltip에 Z가 없습니다.");
+  assert(sidepanelShortcuts.doubleTitle.includes("X"), "2× tooltip에 X가 없습니다.");
+  assert(sidepanelShortcuts.captureStartKey === "E", "시작 스탬프의 E 단축키가 없습니다.");
+  assert(sidepanelShortcuts.resetKey === null, "전체 초기화에 A-Z 단축키가 배정됐습니다.");
+
   const sourceLayout = await webdriver<SourceLayoutProbe>(
     baseUrl,
     "POST",
@@ -876,7 +983,7 @@ async function main() {
       empty.hidden = true;
       details.hidden = false;
       type.className = "badge badge-vod";
-      type.textContent = "VOD";
+      type.textContent = "YOUTUBE · VOD";
       position.textContent = "123:45:56";
       status.textContent = "원본 VOD 플레이어 연결됨 · 최대 화질 재생 준비 완료 · 타임스탬프 동기화 확인 중";
       streamer.value = "아주 긴 방송인 채널 이름이 자동 인식된 360픽셀 사이드패널 회귀 검사";
@@ -960,9 +1067,11 @@ async function main() {
     extensionId,
     serviceWorker: extensionTarget.url,
     editor,
+    editorShortcuts,
     devReload,
     runtime,
     sidepanel,
+    sidepanelShortcuts,
     sourceLayout,
     browserSevereLogs: unexpectedSevereLogs.length,
     expectedLocalCaptionOffline: expectedLocalCaptionOffline.length,

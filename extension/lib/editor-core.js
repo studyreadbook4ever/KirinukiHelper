@@ -636,6 +636,14 @@ function normalizeEditorProject(raw) {
     backgroundColor: migratingLegacyProject ? "transparent" : String(
       rawSubtitleDefaults.backgroundColor || selectedStyleDefaults.backgroundColor
     ),
+    backgroundRadiusEm: clamp(
+      finiteNumber(
+        rawSubtitleDefaults.backgroundRadiusEm,
+        selectedStyleDefaults.backgroundRadiusEm
+      ),
+      0,
+      1
+    ),
     shadowColor: String(
       rawSubtitleDefaults.shadowColor || selectedStyleDefaults.shadowColor
     ),

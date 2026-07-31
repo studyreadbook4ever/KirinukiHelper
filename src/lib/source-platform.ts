@@ -224,11 +224,16 @@ export function sourceRefreshFailureAction({
 
 export function canStartSourceRefresh({
   silent = false,
-  foregroundRequestCount = 0
+  foregroundRequestCount = 0,
+  backgroundRequestCount = 0
 } = {}) {
+  const pendingRequestCount = (
+    Math.max(0, Number(foregroundRequestCount) || 0)
+    + Math.max(0, Number(backgroundRequestCount) || 0)
+  );
   return !(
     silent
-    && Math.max(0, Number(foregroundRequestCount) || 0) > 0
+    && pendingRequestCount > 0
   );
 }
 

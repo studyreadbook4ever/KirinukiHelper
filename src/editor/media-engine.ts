@@ -1089,7 +1089,7 @@ export function clampCaptionBoxCenter({
   };
 }
 
-function drawCaption(
+export function drawCaption(
   context: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
   canvas: OffscreenCanvas | HTMLCanvasElement,
   project: RenderProject,
@@ -1184,15 +1184,28 @@ function drawCaption(
     && !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/iu.test(backgroundColor)
   ) {
     context.fillStyle = backgroundColor;
-    context.beginPath();
-    context.roundRect(
-      x - boxWidth / 2,
-      y - boxHeight / 2,
-      boxWidth,
-      boxHeight,
-      Math.max(5, fontSize * 0.14)
-    );
-    context.fill();
+    const rawBackgroundRadiusEm = Number(defaults.backgroundRadiusEm);
+    const backgroundRadiusEm = Number.isFinite(rawBackgroundRadiusEm)
+      ? Math.max(0, rawBackgroundRadiusEm)
+      : 0.14;
+    if (backgroundRadiusEm === 0) {
+      context.fillRect(
+        x - boxWidth / 2,
+        y - boxHeight / 2,
+        boxWidth,
+        boxHeight
+      );
+    } else {
+      context.beginPath();
+      context.roundRect(
+        x - boxWidth / 2,
+        y - boxHeight / 2,
+        boxWidth,
+        boxHeight,
+        Math.max(5, fontSize * backgroundRadiusEm)
+      );
+      context.fill();
+    }
   }
 
   const firstY = y - ((lines.length - 1) * lineHeight) / 2;

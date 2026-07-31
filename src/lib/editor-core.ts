@@ -87,6 +87,7 @@ export interface SubtitleDefaultsRecord extends DynamicRecord {
   outlineColor: string;
   outlineWidth: number;
   backgroundColor: string;
+  backgroundRadiusEm: number;
   shadowColor: string;
   shadowOffsetXEm: number;
   shadowOffsetYEm: number;
@@ -1142,6 +1143,14 @@ export function normalizeEditorProject(raw: DynamicRecord | null | undefined): E
         rawSubtitleDefaults.backgroundColor
         || selectedStyleDefaults.backgroundColor
       ),
+    backgroundRadiusEm: clamp(
+      finiteNumber(
+        rawSubtitleDefaults.backgroundRadiusEm,
+        selectedStyleDefaults.backgroundRadiusEm
+      ),
+      0,
+      1
+    ),
     shadowColor: String(
       rawSubtitleDefaults.shadowColor || selectedStyleDefaults.shadowColor
     ),

@@ -7,6 +7,7 @@ const deepFreeze = (value) => {
   return Object.freeze(value);
 };
 const DEFAULT_CAPTION_STYLE_PRESET_ID = "kr-vtuber-clean-v1";
+const BLACK_BOX_CAPTION_STYLE_PRESET_ID = "kr-vtuber-black-box-v1";
 const PAPERLOGY_CAPTION_STYLE_PRESET_ID = "kr-vtuber-paperlogy-v1";
 const LEGACY_CAPTION_STYLE_PRESET_ID = "pretendard-legacy-v1";
 const CAPTION_FONT_REGISTRY = deepFreeze({
@@ -54,6 +55,7 @@ const CAPTION_STYLE_PRESETS = deepFreeze({
     paint: {
       color: "#ffffff",
       backgroundColor: "transparent",
+      backgroundRadiusEm: 0.14,
       outlineColor: "#111111",
       outlineWidth: 6e-3,
       shadowColor: "rgba(0, 0, 0, 0.45)",
@@ -66,6 +68,39 @@ const CAPTION_STYLE_PRESETS = deepFreeze({
       observedBodyCaptionLines: 1,
       selectedFontScale: 0.0675,
       basis: "user-final-local-reference-frames"
+    }
+  },
+  [BLACK_BOX_CAPTION_STYLE_PRESET_ID]: {
+    id: BLACK_BOX_CAPTION_STYLE_PRESET_ID,
+    displayName: "\uD55C\uAD6D \uBC84\uD29C\uBC84 \uD0A4\uB9AC\uB204\uD0A4 \xB7 \uAC80\uC740 \uC9C1\uC0AC\uAC01\uD615",
+    fontId: "pretendard",
+    typography: {
+      fontFamily: "Pretendard",
+      fontWeight: 800,
+      fontScale: 0.0675,
+      lineHeight: 1.24,
+      maxLines: 1
+    },
+    placement: {
+      x: 0.5,
+      y: 0.84,
+      maxWidth: 0.86,
+      align: "center"
+    },
+    paint: {
+      color: "#ffffff",
+      backgroundColor: "#000000",
+      backgroundRadiusEm: 0,
+      outlineColor: "#111111",
+      outlineWidth: 6e-3,
+      shadowColor: "rgba(0, 0, 0, 0.45)",
+      shadowOffsetXEm: 0,
+      shadowOffsetYEm: 0.08,
+      shadowBlurEm: 0.08
+    },
+    measurement: {
+      selectedFontScale: 0.0675,
+      basis: "clean-preset-with-opaque-rectangular-background"
     }
   },
   /*
@@ -93,6 +128,7 @@ const CAPTION_STYLE_PRESETS = deepFreeze({
     paint: {
       color: "#ffffff",
       backgroundColor: "transparent",
+      backgroundRadiusEm: 0.14,
       outlineColor: "#14171c",
       outlineWidth: 55e-4,
       shadowColor: "rgba(0, 0, 0, 0.3)",
@@ -126,6 +162,7 @@ const CAPTION_STYLE_PRESETS = deepFreeze({
     paint: {
       color: "#ffffff",
       backgroundColor: "transparent",
+      backgroundRadiusEm: 0.14,
       outlineColor: "#111111",
       outlineWidth: 6e-3,
       shadowColor: "rgba(0, 0, 0, 0.45)",
@@ -234,6 +271,7 @@ function captionSpeakerColorAssignments(speakerIds, existingAssignments = {}) {
   return assignments;
 }
 export {
+  BLACK_BOX_CAPTION_STYLE_PRESET_ID,
   CAPTION_FONT_REGISTRY,
   CAPTION_STYLE_PRESETS,
   DEFAULT_CAPTION_STYLE_PRESET_ID,

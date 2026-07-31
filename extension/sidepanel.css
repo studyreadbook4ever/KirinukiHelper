@@ -357,19 +357,55 @@ svg {
 
 .source-row {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   align-items: center;
   min-width: 0;
 }
 
 .source-row .subtle {
-  flex: 1 1 0;
+  order: 2;
+  flex: 1 0 100%;
   min-width: 0;
+}
+
+.playback-rate-controls {
+  display: inline-flex;
+  order: 1;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.playback-rate-button {
+  min-width: 35px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.playback-rate-button:hover:not(:disabled),
+.playback-rate-button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.playback-rate-button:disabled {
+  opacity: 0.42;
+  cursor: wait;
 }
 
 .player-position {
   font-variant-numeric: tabular-nums;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 800;
   letter-spacing: -0.02em;
 }

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  BLACK_BOX_CAPTION_STYLE_PRESET_ID,
   CAPTION_FONT_REGISTRY,
   CAPTION_STYLE_PRESETS,
   DEFAULT_CAPTION_STYLE_PRESET_ID,
@@ -94,6 +95,20 @@ test("Paperlogy is an optional licensed style rather than a silent substitution"
   assert.ok(preset.typography.fontScale >= 0.058);
   assert.ok(preset.typography.fontScale <= 0.063);
   assert.equal(preset.paint.backgroundColor, "transparent");
+  assert.equal(preset.paint.backgroundRadiusEm, 0.14);
+});
+
+test("black box preset is white Pretendard on an opaque square black background", () => {
+  const preset = captionStylePreset(BLACK_BOX_CAPTION_STYLE_PRESET_ID);
+  const defaults = captionStyleDefaults(BLACK_BOX_CAPTION_STYLE_PRESET_ID);
+
+  assert.equal(preset.fontId, "pretendard");
+  assert.equal(preset.typography.fontFamily, "Pretendard");
+  assert.equal(preset.paint.color, "#ffffff");
+  assert.equal(preset.paint.backgroundColor, "#000000");
+  assert.equal(preset.paint.backgroundRadiusEm, 0);
+  assert.equal(defaults.stylePresetId, BLACK_BOX_CAPTION_STYLE_PRESET_ID);
+  assert.equal(defaults.backgroundRadiusEm, 0);
 });
 
 test("unknown presets fail closed to clean while legacy remains addressable", () => {
@@ -121,6 +136,7 @@ test("flat defaults map directly to editor subtitle defaults", () => {
   assert.equal(defaults.fontWeight, 800);
   assert.equal(defaults.fontScale, 0.0675);
   assert.equal(defaults.backgroundColor, "transparent");
+  assert.equal(defaults.backgroundRadiusEm, 0.14);
   assert.equal(defaults.outlineColor, "#111111");
   assert.equal(defaults.x, 0.5);
   assert.equal(defaults.y, 0.84);

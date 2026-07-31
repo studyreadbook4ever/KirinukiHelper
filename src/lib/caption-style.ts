@@ -7,6 +7,7 @@ const deepFreeze = <T>(value: T): Readonly<T> => {
 };
 
 export const DEFAULT_CAPTION_STYLE_PRESET_ID = "kr-vtuber-clean-v1";
+export const BLACK_BOX_CAPTION_STYLE_PRESET_ID = "kr-vtuber-black-box-v1";
 export const PAPERLOGY_CAPTION_STYLE_PRESET_ID = "kr-vtuber-paperlogy-v1";
 export const LEGACY_CAPTION_STYLE_PRESET_ID = "pretendard-legacy-v1";
 
@@ -56,6 +57,7 @@ export const CAPTION_STYLE_PRESETS = deepFreeze({
     paint: {
       color: "#ffffff",
       backgroundColor: "transparent",
+      backgroundRadiusEm: 0.14,
       outlineColor: "#111111",
       outlineWidth: 0.006,
       shadowColor: "rgba(0, 0, 0, 0.45)",
@@ -68,6 +70,39 @@ export const CAPTION_STYLE_PRESETS = deepFreeze({
       observedBodyCaptionLines: 1,
       selectedFontScale: 0.0675,
       basis: "user-final-local-reference-frames"
+    }
+  },
+  [BLACK_BOX_CAPTION_STYLE_PRESET_ID]: {
+    id: BLACK_BOX_CAPTION_STYLE_PRESET_ID,
+    displayName: "한국 버튜버 키리누키 · 검은 직사각형",
+    fontId: "pretendard",
+    typography: {
+      fontFamily: "Pretendard",
+      fontWeight: 800,
+      fontScale: 0.0675,
+      lineHeight: 1.24,
+      maxLines: 1
+    },
+    placement: {
+      x: 0.5,
+      y: 0.84,
+      maxWidth: 0.86,
+      align: "center"
+    },
+    paint: {
+      color: "#ffffff",
+      backgroundColor: "#000000",
+      backgroundRadiusEm: 0,
+      outlineColor: "#111111",
+      outlineWidth: 0.006,
+      shadowColor: "rgba(0, 0, 0, 0.45)",
+      shadowOffsetXEm: 0,
+      shadowOffsetYEm: 0.08,
+      shadowBlurEm: 0.08
+    },
+    measurement: {
+      selectedFontScale: 0.0675,
+      basis: "clean-preset-with-opaque-rectangular-background"
     }
   },
   /*
@@ -95,6 +130,7 @@ export const CAPTION_STYLE_PRESETS = deepFreeze({
     paint: {
       color: "#ffffff",
       backgroundColor: "transparent",
+      backgroundRadiusEm: 0.14,
       outlineColor: "#14171c",
       outlineWidth: 0.0055,
       shadowColor: "rgba(0, 0, 0, 0.3)",
@@ -128,6 +164,7 @@ export const CAPTION_STYLE_PRESETS = deepFreeze({
     paint: {
       color: "#ffffff",
       backgroundColor: "transparent",
+      backgroundRadiusEm: 0.14,
       outlineColor: "#111111",
       outlineWidth: 0.006,
       shadowColor: "rgba(0, 0, 0, 0.45)",
