@@ -28,3 +28,26 @@ test("짧은 자막·에셋 블록도 양쪽 손잡이 사이에 몸체 drag 영
     /\.asset-block \.trim-handle\.right,\s*\.cue-block \.trim-handle\.right\s*\{[^}]*right:\s*0;/u
   );
 });
+
+test("재생 playhead의 포인터 hitbox는 ruler에만 있고 세로선은 클릭을 가로채지 않는다", () => {
+  const playheadRule = editorCss.match(/\.playhead\s*\{([^}]*)\}/u);
+  assert.ok(playheadRule, "playhead 본체 CSS 규칙이 필요합니다.");
+  assert.match(
+    playheadRule[1],
+    /height:\s*var\(--ruler-height\)\s*;/u,
+    "움직이는 playhead 버튼의 hitbox는 ruler 높이에만 머물러야 합니다."
+  );
+  assert.doesNotMatch(
+    playheadRule[1],
+    /height:\s*calc\(\s*100%/u,
+    "playhead 버튼이 자막·에셋·음성 트랙 전체를 덮으면 안 됩니다."
+  );
+
+  const verticalLineRule = editorCss.match(/\.playhead span\s*\{([^}]*)\}/u);
+  assert.ok(verticalLineRule, "playhead 세로선 CSS 규칙이 필요합니다.");
+  assert.match(
+    verticalLineRule[1],
+    /pointer-events:\s*none\s*;/u,
+    "시각적 playhead 세로선은 아래 타임라인 항목의 포인터 입력을 가로채면 안 됩니다."
+  );
+});

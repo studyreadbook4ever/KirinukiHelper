@@ -2026,6 +2026,25 @@ svg {
   background: rgba(255, 189, 89, 0.1);
 }
 
+.caption-background-toggle {
+  border-color: rgba(154, 134, 255, 0.25);
+  color: #c9c1ef;
+}
+
+.caption-background-toggle.active {
+  color: #f2efff;
+  border-color: rgba(176, 160, 255, 0.7);
+  background: rgba(154, 134, 255, 0.14);
+}
+
+.caption-background-swatch {
+  width: 18px;
+  height: 11px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background: #000000;
+}
+
 .audio-fades {
   margin-top: 16px;
 }
@@ -2827,7 +2846,7 @@ svg {
 
 .playhead {
   width: 13px;
-  height: calc(100% - 2px);
+  height: var(--ruler-height);
   position: absolute;
   top: 0;
   left: 0;
@@ -2837,6 +2856,7 @@ svg {
   background: transparent;
   transform: translateX(-6px);
   touch-action: none;
+  overflow: visible;
 }
 
 .playhead::before {
@@ -2852,10 +2872,11 @@ svg {
 
 .playhead span {
   width: 1px;
+  height: calc(var(--timeline-content-height) - 7px);
   position: absolute;
   top: 7px;
-  bottom: 0;
   left: 6px;
+  pointer-events: none;
   background: var(--mint);
   box-shadow: 0 0 6px rgba(0, 230, 163, 0.32);
 }

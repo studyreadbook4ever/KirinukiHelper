@@ -88,7 +88,7 @@ test("로컬 대용량 미디어는 Chromium stream reader를 피하고 제한�
   assert.equal(Object.isFrozen(LOCAL_MEDIA_BLOB_SOURCE_OPTIONS), true);
 });
 
-test("각진 불투명 자막 배경은 텍스트보다 먼저 fillRect로 렌더하고 cue 색을 보존한다", () => {
+test("자막 배경 토글은 켜면 텍스트보다 먼저 각진 배경을 그리고 끄면 배경을 생략한다", () => {
   const calls: string[] = [];
   let fillStyle = "";
   const context = {
@@ -155,6 +155,18 @@ test("각진 불투명 자막 배경은 텍스트보다 먼저 fillRect로 렌�
   assert.ok(calls.indexOf("fillRect") < calls.indexOf("strokeText"));
   assert.ok(calls.indexOf("fillRect") < calls.indexOf("fillText:#f06088"));
   assert.equal(calls.includes("roundRect"), false);
+
+  calls.length = 0;
+  project.subtitleDefaults.backgroundColor = "transparent";
+  drawCaption(
+    context as unknown as CanvasRenderingContext2D,
+    { width: 1_920, height: 1_080 } as HTMLCanvasElement,
+    project as RenderProjectFixture,
+    cue as never
+  );
+  assert.equal(calls.includes("fillRect"), false);
+  assert.equal(calls.includes("roundRect"), false);
+  assert.ok(calls.includes("fillText:#f06088"));
 });
 
 test("내보내기 진행률은 실제 commit 전까지 99%를 넘지 않는다", () => {

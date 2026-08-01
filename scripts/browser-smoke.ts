@@ -82,6 +82,8 @@ type EditorProbe = {
   fontSize?: string;
   stylePreset?: string;
   stylePresetOptions: string[];
+  captionBackgroundPressed?: string;
+  captionBackgroundLabel?: string;
   tokenType?: string;
   modelOptions: string[];
   advancedOpen?: boolean;
@@ -631,6 +633,8 @@ async function main() {
         "caption-agent-warning",
         "cue-review-note",
         "caption-style-preset",
+        "toggle-caption-background",
+        "caption-background-label",
         "export-video"
       ];
       return {
@@ -643,6 +647,10 @@ async function main() {
         stylePresetOptions: [
           ...document.getElementById("caption-style-preset")?.options || []
         ].map((option) => option.value),
+        captionBackgroundPressed: document.getElementById("toggle-caption-background")
+          ?.getAttribute("aria-pressed"),
+        captionBackgroundLabel: document.getElementById("caption-background-label")
+          ?.textContent,
         tokenType: document.getElementById("caption-agent-token")?.type,
         modelOptions: [...document.getElementById("caption-model")?.options || []]
           .map((option) => option.value),
@@ -667,6 +675,14 @@ async function main() {
     editor.stylePresetOptions.join(",") ===
       "kr-vtuber-clean-v1,kr-vtuber-black-box-v1,kr-vtuber-paperlogy-v1,pretendard-legacy-v1",
     `자막 스타일 선택지가 다릅니다: ${editor.stylePresetOptions.join(",")}`
+  );
+  assert(
+    editor.captionBackgroundPressed === "false"
+      && editor.captionBackgroundLabel === "검은 사각 배경 켜기",
+    `새 프로젝트의 검은 자막 배경 토글 기본값이 꺼짐이 아닙니다: ${JSON.stringify({
+      pressed: editor.captionBackgroundPressed,
+      label: editor.captionBackgroundLabel
+    })}`
   );
   assert(editor.tokenType === "hidden", "자동 session 토큰 요소는 사용자에게 숨겨져야 합니다.");
   assert(

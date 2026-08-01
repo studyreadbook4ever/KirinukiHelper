@@ -28,6 +28,7 @@ import type {
 
 import {
   audioRegionTimelineRange,
+  captionBackgroundEnabled,
   clamp,
   cueTimelineRange,
   findAudioRegionOverlaps,
@@ -1190,11 +1191,7 @@ export function drawCaption(
     safeInset
   });
   const backgroundColor = String(defaults.backgroundColor || "transparent").trim();
-  if (
-    backgroundColor
-    && backgroundColor !== "transparent"
-    && !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/iu.test(backgroundColor)
-  ) {
+  if (captionBackgroundEnabled(defaults)) {
     context.fillStyle = backgroundColor;
     const rawBackgroundRadiusEm = Number(defaults.backgroundRadiusEm);
     const backgroundRadiusEm = Number.isFinite(rawBackgroundRadiusEm)
