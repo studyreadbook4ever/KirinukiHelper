@@ -532,6 +532,13 @@ export const EDITOR_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
       trigger: "click"
     },
     {
+      key: "X",
+      action: "toggle-cue-caption-background",
+      targetId: "toggle-caption-background",
+      label: "선택 자막 검은 상자 전환",
+      trigger: "click"
+    },
+    {
       key: "W",
       action: "preview-source-tab",
       targetId: "preview-source-tab",

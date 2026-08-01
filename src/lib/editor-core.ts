@@ -166,6 +166,7 @@ export interface SubtitleCueDraftInput {
   text?: unknown;
   lane?: unknown;
   color?: unknown;
+  backgroundEnabled?: unknown;
   x?: unknown;
   y?: unknown;
   origin?: unknown;
@@ -245,6 +246,7 @@ export interface EditorSubtitleCue extends DynamicRecord {
   x: number;
   y: number;
   color: string;
+  backgroundEnabled?: boolean;
   confidence: number | null;
 }
 
@@ -1304,6 +1306,45 @@ export function captionBackgroundEnabled(
   );
 }
 
+export interface ResolvedSubtitleCueBackground {
+  enabled: boolean;
+  color: string;
+  radiusEm: number;
+}
+
+export function resolveSubtitleCueBackground(
+  defaults: Pick<
+    SubtitleDefaultsRecord,
+    "backgroundColor" | "backgroundRadiusEm"
+  > | null | undefined,
+  cue: Pick<EditorSubtitleCue, "backgroundEnabled"> | null | undefined
+): ResolvedSubtitleCueBackground {
+  if (cue?.backgroundEnabled === true) {
+    return {
+      enabled: true,
+      color: "#000000",
+      radiusEm: 0
+    };
+  }
+  if (cue?.backgroundEnabled === false) {
+    return {
+      enabled: false,
+      color: "transparent",
+      radiusEm: 0
+    };
+  }
+  const color = String(defaults?.backgroundColor || "transparent").trim()
+    || "transparent";
+  const rawRadiusEm = Number(defaults?.backgroundRadiusEm);
+  return {
+    enabled: captionBackgroundEnabled(defaults),
+    color,
+    radiusEm: Number.isFinite(rawRadiusEm)
+      ? Math.max(0, rawRadiusEm)
+      : 0.14
+  };
+}
+
 export function setCaptionBackgroundEnabled(
   project: EditorProject,
   enabled: boolean
@@ -1704,6 +1745,9 @@ function normalizeSubtitleCue(
       Math.max(0, Math.min(MAX_SUBTITLE_LANES, laneCount) - 1)
     ),
     color: normalizeHexColor(cue.color, "#ffffff"),
+    ...(typeof cue.backgroundEnabled === "boolean"
+      ? { backgroundEnabled: cue.backgroundEnabled }
+      : {}),
     x: automaticAiCue
       ? AUTOMATIC_CAPTION_POSITION.x
       : clamp(finiteNumber(cue.x, AUTOMATIC_CAPTION_POSITION.x), 0.05, 0.95),
@@ -1779,6 +1823,7 @@ export function createSubtitleCue(project: EditorProject, {
   text = "",
   lane = 0,
   color,
+  backgroundEnabled,
   x,
   y,
   origin = "human",
@@ -1798,6 +1843,7 @@ export function createSubtitleCue(project: EditorProject, {
     text,
     lane,
     color: color ?? project.subtitleDefaults?.color,
+    backgroundEnabled,
     x: x ?? project.subtitleDefaults?.x,
     y: y ?? project.subtitleDefaults?.y,
     origin,

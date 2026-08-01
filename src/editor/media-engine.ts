@@ -28,13 +28,13 @@ import type {
 
 import {
   audioRegionTimelineRange,
-  captionBackgroundEnabled,
   clamp,
   cueTimelineRange,
   findAudioRegionOverlaps,
   findSubtitleOverlaps,
   imageAssetTimelineRange,
-  imageAssetsAtTimeline
+  imageAssetsAtTimeline,
+  resolveSubtitleCueBackground
 } from "../lib/editor-core.js";
 import type {
   EditorAudioRegion,
@@ -1190,14 +1190,10 @@ export function drawCaption(
     canvasHeight: canvas.height,
     safeInset
   });
-  const backgroundColor = String(defaults.backgroundColor || "transparent").trim();
-  if (captionBackgroundEnabled(defaults)) {
-    context.fillStyle = backgroundColor;
-    const rawBackgroundRadiusEm = Number(defaults.backgroundRadiusEm);
-    const backgroundRadiusEm = Number.isFinite(rawBackgroundRadiusEm)
-      ? Math.max(0, rawBackgroundRadiusEm)
-      : 0.14;
-    if (backgroundRadiusEm === 0) {
+  const background = resolveSubtitleCueBackground(defaults, cue);
+  if (background.enabled) {
+    context.fillStyle = background.color;
+    if (background.radiusEm === 0) {
       context.fillRect(
         x - boxWidth / 2,
         y - boxHeight / 2,
@@ -1211,7 +1207,7 @@ export function drawCaption(
         y - boxHeight / 2,
         boxWidth,
         boxHeight,
-        Math.max(5, fontSize * backgroundRadiusEm)
+        Math.max(5, fontSize * background.radiusEm)
       );
       context.fill();
     }

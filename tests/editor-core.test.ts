@@ -49,6 +49,7 @@ import {
   replaceAiSubtitleDraft,
   resetAiSubtitlePositions,
   rememberSubtitleColor,
+  resolveSubtitleCueBackground,
   resolveTimelineSnap,
   rippleDeleteTimelineRange,
   serializeSrt,
@@ -500,6 +501,89 @@ test("검은 배경 토글은 선택한 글꼴 프리셋을 검은 배경 프리
   assert.equal(disabled.subtitleDefaults.stylePresetId, "kr-vtuber-paperlogy-v1");
   assert.equal(disabled.subtitleDefaults.fontFamily, "Paperlogy");
   assert.equal(disabled.subtitleDefaults.backgroundColor, "transparent");
+});
+
+test("자막별 검은 배경 override는 다른 cue와 전역 스타일을 보존하고 기존 프로젝트는 상속한다", () => {
+  const original = createEditorProjectFromCapture(captureState);
+  const first = createSubtitleCue(original, {
+    id: "cue-background-first",
+    clipId: original.clips[0].id,
+    startOffsetMs: 0,
+    endOffsetMs: 1_000,
+    text: "첫 자막"
+  });
+  const second = createSubtitleCue(original, {
+    id: "cue-background-second",
+    clipId: original.clips[0].id,
+    startOffsetMs: 1_000,
+    endOffsetMs: 2_000,
+    text: "둘째 자막"
+  });
+  const withCues = {
+    ...original,
+    subtitles: [first, second]
+  };
+  const originalDefaults = structuredClone(withCues.subtitleDefaults);
+
+  const enabled = updateSubtitleCue(withCues, first.id, {
+    backgroundEnabled: true
+  });
+  assert.deepEqual(enabled.subtitleDefaults, originalDefaults);
+  assert.equal(enabled.subtitles[0].backgroundEnabled, true);
+  assert.equal(enabled.subtitles[1].backgroundEnabled, undefined);
+  assert.deepEqual(
+    resolveSubtitleCueBackground(enabled.subtitleDefaults, enabled.subtitles[0]),
+    { enabled: true, color: "#000000", radiusEm: 0 }
+  );
+  assert.equal(
+    resolveSubtitleCueBackground(enabled.subtitleDefaults, enabled.subtitles[1]).enabled,
+    false
+  );
+
+  const globalBlack = setCaptionBackgroundEnabled(enabled, true);
+  const disabledFirst = updateSubtitleCue(globalBlack, first.id, {
+    backgroundEnabled: false
+  });
+  assert.deepEqual(
+    resolveSubtitleCueBackground(
+      disabledFirst.subtitleDefaults,
+      disabledFirst.subtitles[0]
+    ),
+    { enabled: false, color: "transparent", radiusEm: 0 }
+  );
+  assert.deepEqual(
+    resolveSubtitleCueBackground(
+      disabledFirst.subtitleDefaults,
+      disabledFirst.subtitles[1]
+    ),
+    { enabled: true, color: "#000000", radiusEm: 0 }
+  );
+
+  const normalized = normalizeEditorProject(
+    JSON.parse(JSON.stringify(disabledFirst))
+  );
+  assert.ok(normalized);
+  assert.equal(normalized.subtitles[0].backgroundEnabled, false);
+  assert.equal(normalized.subtitles[1].backgroundEnabled, undefined);
+  assert.deepEqual(normalized.subtitleDefaults, disabledFirst.subtitleDefaults);
+
+  const invalidOverride = normalizeEditorProject({
+    ...normalized,
+    subtitles: normalized.subtitles.map((cue) => (
+      cue.id === second.id
+        ? { ...cue, backgroundEnabled: "true" }
+        : cue
+    ))
+  });
+  assert.ok(invalidOverride);
+  assert.equal(invalidOverride.subtitles[1].backgroundEnabled, undefined);
+  assert.equal(
+    resolveSubtitleCueBackground(
+      invalidOverride.subtitleDefaults,
+      invalidOverride.subtitles[1]
+    ).enabled,
+    true
+  );
 });
 
 test("배경 곡률 필드가 없는 기존 프로젝트는 기존 둥근 배경값으로 호환된다", () => {
