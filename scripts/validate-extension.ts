@@ -419,25 +419,35 @@ assert(
 );
 assert(
   /id="toggle-caption-background"[^>]*aria-pressed="false"/u.test(editorHtml),
-  "검은 자막 배경을 직접 켜고 끄는 접근 가능한 버튼이 없습니다."
+  "선택 자막의 검은 배경을 직접 켜고 끄는 접근 가능한 버튼이 없습니다."
 );
 assert(
-  /id="toggle-caption-background"[^>]*aria-label="검은 사각 자막 배경"/u.test(editorHtml),
+  /id="toggle-caption-background"[^>]*aria-label="선택 자막 검은 사각 배경"/u.test(editorHtml),
   "자막 배경 토글의 접근 가능한 이름은 상태와 무관하게 고정되어야 합니다."
+);
+const cueTimingHelpOffset = editorHtml.indexOf('id="cue-timing-match-help"');
+const cueBackgroundToggleOffset = editorHtml.indexOf('id="toggle-caption-background"');
+const cuePositionOffset = editorHtml.indexOf('<span class="field-label">화면 위치</span>');
+assert(
+  cueTimingHelpOffset >= 0
+    && cueTimingHelpOffset < cueBackgroundToggleOffset
+    && cueBackgroundToggleOffset < cuePositionOffset,
+  "선택 자막 검은 배경 버튼이 타이밍 도움말과 화면 위치 사이에 있지 않습니다."
 );
 assert(editorScript.includes("renderProjectVideo"), "편집기 번들에 영상 렌더 경로가 없습니다.");
 assert(editorScript.includes("backgroundRadiusEm"), "자막 배경 곡률의 미리보기·렌더 경로가 없습니다.");
 assert(
-  editorScript.includes("setCaptionBackgroundEnabled")
-    && editorScript.includes("captionBackgroundEnabled"),
-  "자막 배경 토글이 프로젝트 모델과 연결되지 않았습니다."
+  editorScript.includes("resolveSubtitleCueBackground")
+    && editorScript.includes("backgroundEnabled"),
+  "자막별 배경 토글이 cue 모델·미리보기·렌더 경로와 연결되지 않았습니다."
 );
 assert(editorScript.includes("EDITOR_SHORTCUT_BINDINGS"), "편집기 안전 단축키 정책을 설치하지 않습니다.");
 assert(
   keyboardShortcutScript.includes("playback-rate-quarter")
     && keyboardShortcutScript.includes("playback-rate-double")
+    && keyboardShortcutScript.includes("toggle-cue-caption-background")
     && keyboardShortcutScript.includes("DANGEROUS_KEYBOARD_SHORTCUT_ACTION_TOKENS"),
-  "배포 단축키 정책이 배속 버튼 또는 위험 동작 denylist를 보존하지 않습니다."
+  "배포 단축키 정책이 배속·자막 배경 버튼 또는 위험 동작 denylist를 보존하지 않습니다."
 );
 assert(
   editorScript.includes("LOCAL_MEDIA_BLOB_SOURCE_OPTIONS")

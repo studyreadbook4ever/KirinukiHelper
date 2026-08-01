@@ -78,6 +78,7 @@ interface EditorCue extends ExternalRecord {
   y: number;
   color: string;
   lane: number;
+  backgroundEnabled?: boolean;
   remoteMeta?: CaptionRemoteMeta;
 }
 interface EditorClip extends ExternalRecord {
@@ -876,6 +877,34 @@ async function clickTimelineRulerAtTimelineMs(timelineMs: number) {
 
 async function seekPausedPreviewWithRuler(timelineMs: number) {
   await pausePreviewForPointerTest();
+  const beforeSeek = await readPreviewState();
+  if (Math.abs(beforeSeek.playheadMs - timelineMs) <= 250) {
+    const stored = await readStoredProject();
+    const durationMs = Math.max(
+      0,
+      ...(stored?.clips || []).filter((clip) => clip.enabled !== false).map(
+        (clip) => clip.timelineStartMs + clip.sourceEndMs - clip.sourceStartMs
+      )
+    );
+    const stagingTimelineMs = [
+      Math.min(Math.max(0, durationMs - 100), timelineMs + 1_500),
+      Math.max(0, timelineMs - 1_500)
+    ].find((candidate) => (
+      Math.abs(candidate - beforeSeek.playheadMs) >= 500
+      && Math.abs(candidate - timelineMs) >= 500
+    ));
+    if (stagingTimelineMs !== undefined) {
+      await clickTimelineRulerAtTimelineMs(stagingTimelineMs);
+      await waitUntil(async () => {
+        const observed = await readPreviewState();
+        return (
+          observed.paused
+          && !observed.seeking
+          && Math.abs(observed.playheadMs - stagingTimelineMs) <= 45
+        ) ? observed : false;
+      }, `playhead hitbox 밖 ${stagingTimelineMs}ms ruler 준비 seek`);
+    }
+  }
   const pointer = await clickTimelineRulerAtTimelineMs(timelineMs);
   let lastObserved: PreviewState | null = null;
   let state: PreviewState;
@@ -980,6 +1009,75 @@ async function assertPlayingSelectionDoesNotSeek({
   );
   await pausePreviewForPointerTest();
   return { start, beforeClick, afterClick, selectedId: selected[selectionKey] };
+}
+
+async function assertPlayingCrossClipCueSelectionSeeks({
+  selector,
+  selectionId,
+  itemStartMs,
+  itemClipId,
+  playbackTimelineMs,
+  expectedInspectorTab,
+  label
+}: {
+  selector: string;
+  selectionId: string;
+  itemStartMs: number;
+  itemClipId: string;
+  playbackTimelineMs: number;
+  expectedInspectorTab?: string;
+  label: string;
+}) {
+  assert(
+    Math.abs(playbackTimelineMs - itemStartMs) >= 600,
+    `${label} 재생 위치와 다른 컷 자막 시작점이 충분히 떨어져 있지 않습니다.`
+  );
+  const start = await startPreviewAtTimeline(playbackTimelineMs);
+  const beforeClick = await readPreviewState();
+  await clickElement(selector);
+  const selected = await waitForStoredProject(
+    (candidate) => (
+      candidate.selectedCueId === selectionId
+      && candidate.selectedClipId === itemClipId
+    ),
+    `${label} 재생 중 다른 컷 선택 autosave`
+  );
+  if (expectedInspectorTab) {
+    await waitUntil(
+      () => executeSync(
+        `return document.querySelector(arguments[0])?.getAttribute("aria-selected") === "true";`,
+        [expectedInspectorTab]
+      ),
+      `${label} 재생 중 inspector 선택`
+    );
+  }
+  const itemClip = selected.clips.find((clip) => clip.id === itemClipId);
+  assert(itemClip, `${label} 재생 중 실제 media seek를 검증할 컷이 없습니다.`);
+  const expectedPreviewSeconds = (
+    (Number(selected.mediaAsset?.mediaOriginMs) || 0)
+    + itemClip.sourceStartMs
+    + itemStartMs
+    - itemClip.timelineStartMs
+  ) / 1000;
+  const afterClick = await waitUntil(async () => {
+    const state = await readPreviewState();
+    return (
+      !state.paused
+      && !state.seeking
+      && state.playheadMs >= itemStartMs - 45
+      && state.playheadMs <= itemStartMs + 1_200
+      && state.currentTime >= expectedPreviewSeconds - 0.06
+      && state.currentTime <= expectedPreviewSeconds + 1.2
+    ) ? state : false;
+  }, `${label} 재생 중 다른 컷 자막 시작점 seek 후 재생 유지`);
+  await pausePreviewForPointerTest();
+  return {
+    start,
+    beforeClick,
+    afterClick,
+    selectedCueId: selected.selectedCueId,
+    selectedClipId: selected.selectedClipId
+  };
 }
 
 async function assertPausedSelectionSeeks({
@@ -2555,25 +2653,30 @@ async function main() {
 
   const captionBackgroundBefore = await readStoredProject();
   assert(captionBackgroundBefore, "자막 배경 토글 전 저장 프로젝트가 없습니다.");
+  const captionBackgroundBeforeOtherCues = captionBackgroundBefore.subtitles.filter(
+    (cue) => cue.id !== cueId
+  );
+  const captionBackgroundBeforeDefaults = structuredClone(
+    captionBackgroundBefore.subtitleDefaults
+  );
   await clickElement("#toggle-caption-background");
   const captionBackgroundEnabledProject = await waitForStoredProject(
     (project) => (
-      project.subtitleDefaults.backgroundColor === "#000000"
-      && project.subtitleDefaults.backgroundRadiusEm === 0
-      && project.subtitleDefaults.stylePresetId === "kr-vtuber-black-box-v1"
+      project.subtitles.some((cue) => (
+        cue.id === cueId && cue.backgroundEnabled === true
+      ))
     ),
-    "검은 사각 자막 배경 켜기 autosave"
+    "선택 자막 검은 사각 배경 켜기 autosave"
   );
   assert(
     JSON.stringify(captionBackgroundEnabledProject.clips)
       === JSON.stringify(captionBackgroundBefore.clips)
-      && JSON.stringify(captionBackgroundEnabledProject.subtitles)
-        === JSON.stringify(captionBackgroundBefore.subtitles)
-      && captionBackgroundEnabledProject.subtitleDefaults.fontFamily
-        === captionBackgroundBefore.subtitleDefaults.fontFamily
-      && captionBackgroundEnabledProject.subtitleDefaults.fontScale
-        === captionBackgroundBefore.subtitleDefaults.fontScale,
-    "검은 자막 배경을 켜면서 컷·cue·글꼴이 바뀌었습니다."
+      && JSON.stringify(captionBackgroundEnabledProject.subtitles.filter(
+        (cue) => cue.id !== cueId
+      )) === JSON.stringify(captionBackgroundBeforeOtherCues)
+      && JSON.stringify(captionBackgroundEnabledProject.subtitleDefaults)
+        === JSON.stringify(captionBackgroundBeforeDefaults),
+    "선택 자막 검은 배경을 켜면서 컷·다른 cue·전역 스타일이 바뀌었습니다."
   );
   const captionBackgroundEnabledUi = await waitUntil(async () => {
     const state = await executeSync<{
@@ -2594,19 +2697,48 @@ async function main() {
     `);
     return (
       state.pressed === "true"
-      && state.label === "검은 사각 배경 끄기"
+      && state.label === "이 자막 검은 상자 끄기 · X"
       && state.overlayBackground === "rgb(0, 0, 0)"
       && state.overlayRadius === "0px"
     ) ? state : false;
-  }, "검은 사각 자막 배경 미리보기와 접근성 상태");
+  }, "선택 자막 검은 사각 배경 미리보기와 접근성 상태");
 
-  await clickElement("#toggle-caption-background");
+  await clickElement(`.cue-block[data-id="${cueId}"] .cue-block-body`);
+  const cueShortcutFocus = await executeSync<{
+    id: string;
+    tagName: string;
+    cueText: string;
+  }>(`
+    return {
+      id: document.activeElement?.id || "",
+      tagName: document.activeElement?.tagName || "",
+      cueText: document.querySelector("#cue-text")?.value || ""
+    };
+  `);
+  assert(
+    cueShortcutFocus.id !== "cue-text"
+      && cueShortcutFocus.tagName === "BUTTON"
+      && cueShortcutFocus.cueText === EDITED_TEXT,
+    `자막 클릭 직후 X 단축키를 받을 포커스가 아닙니다: ${JSON.stringify(cueShortcutFocus)}`
+  );
+  await pressKey("x");
   const captionBackgroundDisabledProject = await waitForStoredProject(
     (project) => (
-      project.subtitleDefaults.backgroundColor === "transparent"
-      && project.subtitleDefaults.stylePresetId === "kr-vtuber-clean-v1"
+      project.subtitles.some((cue) => (
+        cue.id === cueId && cue.backgroundEnabled === false
+      ))
     ),
-    "검은 사각 자막 배경 끄기 autosave"
+    "자막 클릭 직후 X 단축키 검은 사각 배경 끄기 autosave"
+  );
+  assert(
+    JSON.stringify(captionBackgroundDisabledProject.clips)
+      === JSON.stringify(captionBackgroundBefore.clips)
+      && JSON.stringify(captionBackgroundDisabledProject.subtitles.filter(
+        (cue) => cue.id !== cueId
+      )) === JSON.stringify(captionBackgroundBeforeOtherCues)
+      && JSON.stringify(captionBackgroundDisabledProject.subtitleDefaults)
+        === JSON.stringify(captionBackgroundBeforeDefaults),
+    "X 단축키로 선택 자막 배경을 끄면서 컷·다른 cue·전역 스타일이 바뀌었습니다."
   );
   const captionBackgroundDisabledUi = await waitUntil(async () => {
     const state = await executeSync<{
@@ -2624,14 +2756,18 @@ async function main() {
     `);
     return (
       state.pressed === "false"
-      && state.label === "검은 사각 배경 켜기"
+      && state.label === "이 자막 검은 상자 켜기 · X"
       && state.overlayBackground === "rgba(0, 0, 0, 0)"
     ) ? state : false;
-  }, "검은 사각 자막 배경 끄기 미리보기와 접근성 상태");
+  }, "X 단축키 선택 자막 검은 사각 배경 끄기 미리보기와 접근성 상태");
   const captionBackgroundToggle = {
-    enabledProject: captionBackgroundEnabledProject.subtitleDefaults,
+    enabledCue: captionBackgroundEnabledProject.subtitles.find(
+      (cue) => cue.id === cueId
+    ),
     enabledUi: captionBackgroundEnabledUi,
-    disabledProject: captionBackgroundDisabledProject.subtitleDefaults,
+    disabledCue: captionBackgroundDisabledProject.subtitles.find(
+      (cue) => cue.id === cueId
+    ),
     disabledUi: captionBackgroundDisabledUi
   };
 
@@ -3906,10 +4042,15 @@ async function main() {
   for (const selectionCase of selectionCases) {
     playingSelectionResults.push({
       label: selectionCase.label,
-      result: await assertPlayingSelectionDoesNotSeek({
-        ...selectionCase,
-        playbackTimelineMs: playbackTimelineAwayFrom(selectionCase.itemClipId)
-      })
+      result: selectionCase.selectionKey === "selectedCueId"
+        ? await assertPlayingCrossClipCueSelectionSeeks({
+          ...selectionCase,
+          playbackTimelineMs: playbackTimelineAwayFrom(selectionCase.itemClipId)
+        })
+        : await assertPlayingSelectionDoesNotSeek({
+          ...selectionCase,
+          playbackTimelineMs: playbackTimelineAwayFrom(selectionCase.itemClipId)
+        })
     });
   }
 
@@ -3919,11 +4060,11 @@ async function main() {
     cueClipForPointer,
     playbackPointerCue.startOffsetMs
   );
-  const playingCueListSelection = await assertPlayingSelectionDoesNotSeek({
+  const playingCueListSelection = await assertPlayingCrossClipCueSelectionSeeks({
     selector: `.cue-list-item[data-id="${cueId}"]`,
-    selectionKey: "selectedCueId",
     selectionId: cueId,
     itemStartMs: cueListStartMs,
+    itemClipId: playbackPointerCue.clipId,
     playbackTimelineMs: playbackTimelineAwayFrom(playbackPointerCue.clipId),
     expectedInspectorTab: "#caption-mode-tab",
     label: "자막 목록"

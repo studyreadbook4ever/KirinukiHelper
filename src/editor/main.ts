@@ -9,7 +9,6 @@ import {
   audioRegionAtTimeline,
   audioRegionTimelineRange,
   canReorderClipGroup,
-  captionBackgroundEnabled,
   captureProjectId,
   clipDurationMs,
   createAudioRegion,
@@ -39,11 +38,11 @@ import {
   replaceAiBlankTimingDraft,
   replaceAiSubtitleDraft,
   resetAiSubtitlePositions,
+  resolveSubtitleCueBackground,
   rememberSubtitleColor,
   resolveTimelineSnap,
   rippleDeleteTimelineRange,
   serializeSrt,
-  setCaptionBackgroundEnabled,
   subtitleCueNeedsReview,
   timelineSnapCandidates,
   timelineSnapThresholdMs,
@@ -1832,15 +1831,6 @@ function renderHeader() {
       || DEFAULT_CAPTION_STYLE_PRESET_ID
     );
   }
-  const backgroundEnabled = captionBackgroundEnabled(project.subtitleDefaults);
-  elements.toggle_caption_background.classList.toggle("active", backgroundEnabled);
-  elements.toggle_caption_background.setAttribute(
-    "aria-pressed",
-    String(backgroundEnabled)
-  );
-  elements.caption_background_label.textContent = backgroundEnabled
-    ? "검은 사각 배경 끄기"
-    : "검은 사각 배경 켜기";
   const warnings = Array.isArray(project.ai?.warnings)
     ? project.ai.warnings.filter((warning) => (
       warning &&
@@ -2220,6 +2210,21 @@ function renderCueInspector() {
   elements.font_color.value = cue.color
     || (typeof defaultColor === "string" ? defaultColor : DEFAULT_SUBTITLE_COLOR);
   renderCaptionColorRegister(elements.font_color.value);
+  const cueBackground = resolveSubtitleCueBackground(
+    project.subtitleDefaults,
+    cue
+  );
+  elements.toggle_caption_background.classList.toggle(
+    "active",
+    cueBackground.enabled
+  );
+  elements.toggle_caption_background.setAttribute(
+    "aria-pressed",
+    String(cueBackground.enabled)
+  );
+  elements.caption_background_label.textContent = cueBackground.enabled
+    ? "이 자막 검은 상자 끄기 · X"
+    : "이 자막 검은 상자 켜기 · X";
   const selectedAsset = selectedImageAsset();
   const canMatchAsset = Boolean(selectedAsset && selectedAsset.clipId === cue.clipId);
   elements.match_cue_to_asset.disabled = !canMatchAsset;
@@ -3805,7 +3810,6 @@ function renderTimeline({ keepScroll = false } = {}) {
         return;
       }
       selectCue(cue.id, { seek: true });
-      elements.cue_text.focus({ preventScroll: true });
     });
     const cueClip = project.clips.find((candidate) => candidate.id === cue.clipId);
     const nudgeCue = (side: TimelineSide, delta: number) => {
@@ -4011,17 +4015,12 @@ function renderSubtitleOverlay() {
       Number(project.subtitleDefaults.lineHeight) || 1.24
     );
     overlay.style.color = cue.color || project.subtitleDefaults.color || "#ffffff";
-    overlay.style.backgroundColor = String(
-      project.subtitleDefaults.backgroundColor || "transparent"
+    const cueBackground = resolveSubtitleCueBackground(
+      project.subtitleDefaults,
+      cue
     );
-    const rawBackgroundRadiusEm = Number(
-      project.subtitleDefaults.backgroundRadiusEm
-    );
-    overlay.style.borderRadius = `${
-      Number.isFinite(rawBackgroundRadiusEm)
-        ? Math.max(0, rawBackgroundRadiusEm)
-        : 0.14
-    }em`;
+    overlay.style.backgroundColor = cueBackground.color;
+    overlay.style.borderRadius = `${cueBackground.radiusEm}em`;
     overlay.style.textShadow = [
       `${Number(project.subtitleDefaults.shadowOffsetXEm) || 0}em`,
       `${Number(project.subtitleDefaults.shadowOffsetYEm) || 0}em`,
@@ -4752,7 +4751,12 @@ function selectCue(cueId: string, { seek = false } = {}) {
   if (!cue) {
     return;
   }
-  const seekSelection = seek && shouldSeekTimelineItemSelection();
+  const previewWasPlaying = previewPlaybackIsActive();
+  const selectingAnotherClip = cue.clipId !== activeClipId;
+  const seekSelection = seek && (
+    selectingAnotherClip
+    || shouldSeekTimelineItemSelection()
+  );
   project = {
     ...project,
     selectedCueId: cue.id,
@@ -4762,9 +4766,14 @@ function selectCue(cueId: string, { seek = false } = {}) {
   propertyInspectorMode = "caption";
   const range = cueTimelineRange(project, cue);
   if (seekSelection && range) {
-    void seekTimeline(range.startMs);
+    void seekTimeline(range.startMs, {
+      play: selectingAnotherClip && previewWasPlaying
+    });
   }
   renderAll({ keepScroll: true });
+  document.querySelector<HTMLButtonElement>(
+    `.cue-block[data-id="${CSS.escape(cue.id)}"] .cue-block-body`
+  )?.focus({ preventScroll: true });
   scheduleSave();
 }
 
@@ -7277,7 +7286,6 @@ function bindActions() {
     const cueId = item?.dataset.id;
     if (cueId) {
       selectCue(cueId, { seek: true });
-      elements.cue_text.focus({ preventScroll: true });
     }
   });
   captionInspectorTab.addEventListener("click", () => {
@@ -7472,10 +7480,19 @@ function bindActions() {
   });
   elements.test_caption_agent.addEventListener("click", () => void testCaptionAgentConnection());
   elements.toggle_caption_background.addEventListener("click", () => {
-    const enabled = !captionBackgroundEnabled(project.subtitleDefaults);
-    applyProject(setCaptionBackgroundEnabled(project, enabled));
+    const cue = selectedCue();
+    if (!cue) {
+      return;
+    }
+    const enabled = !resolveSubtitleCueBackground(
+      project.subtitleDefaults,
+      cue
+    ).enabled;
+    updateSelectedCue({ backgroundEnabled: enabled });
     showToast(
-      enabled ? "검은 사각 자막 배경을 켰습니다." : "자막 배경을 껐습니다.",
+      enabled
+        ? "이 자막에 검은 사각 배경을 켰습니다."
+        : "이 자막의 검은 배경을 껐습니다.",
       "success"
     );
   });

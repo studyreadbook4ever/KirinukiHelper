@@ -57,7 +57,15 @@ test("scope별 A-Z 단축키는 충돌 없이 안전한 동작만 포함한다",
   );
   assert.deepEqual(
     EDITOR_SHORTCUT_BINDINGS.map(({ key }) => key),
-    ["A", "S", "D", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "C", "V", "B", "W", "E", "I", "O"]
+    ["A", "S", "D", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "C", "V", "B", "X", "W", "E", "I", "O"]
+  );
+  assert.equal(
+    keyboardShortcutBindingForScope("editor", "X")?.targetId,
+    "toggle-caption-background"
+  );
+  assert.equal(
+    keyboardShortcutBindingForScope("editor", "B")?.targetId,
+    "audio-mode-tab"
   );
   for (const [scope, bindings] of Object.entries(
     KEYBOARD_SHORTCUT_BINDINGS_BY_SCOPE
@@ -222,7 +230,10 @@ test("사이드패널 D/F와 Y/U는 원본 영상 이동·배속 버튼에 고�
   });
   assert.equal(keyboardShortcutBindingForScope("sidepanel", "Z"), null);
   assert.equal(keyboardShortcutBindingForScope("sidepanel", "X"), null);
-  assert.equal(keyboardShortcutBindingForScope("editor", "X"), null);
+  assert.equal(
+    keyboardShortcutBindingForScope("editor", "X")?.targetId,
+    "toggle-caption-background"
+  );
 });
 
 test("위험 동작 denylist는 초기화·삭제·복구·취소·내보내기·생성을 fail closed 한다", () => {

@@ -416,6 +416,13 @@ const EDITOR_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
       trigger: "click"
     },
     {
+      key: "X",
+      action: "toggle-cue-caption-background",
+      targetId: "toggle-caption-background",
+      label: "\uC120\uD0DD \uC790\uB9C9 \uAC80\uC740 \uC0C1\uC790 \uC804\uD658",
+      trigger: "click"
+    },
+    {
       key: "W",
       action: "preview-source-tab",
       targetId: "preview-source-tab",

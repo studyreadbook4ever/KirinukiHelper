@@ -772,6 +772,29 @@ function captionBackgroundEnabled(defaults) {
     backgroundColor && backgroundColor.toLowerCase() !== "transparent" && !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/iu.test(backgroundColor)
   );
 }
+function resolveSubtitleCueBackground(defaults, cue) {
+  if (cue?.backgroundEnabled === true) {
+    return {
+      enabled: true,
+      color: "#000000",
+      radiusEm: 0
+    };
+  }
+  if (cue?.backgroundEnabled === false) {
+    return {
+      enabled: false,
+      color: "transparent",
+      radiusEm: 0
+    };
+  }
+  const color = String(defaults?.backgroundColor || "transparent").trim() || "transparent";
+  const rawRadiusEm = Number(defaults?.backgroundRadiusEm);
+  return {
+    enabled: captionBackgroundEnabled(defaults),
+    color,
+    radiusEm: Number.isFinite(rawRadiusEm) ? Math.max(0, rawRadiusEm) : 0.14
+  };
+}
 function setCaptionBackgroundEnabled(project, enabled) {
   const currentPresetId = normalizeCaptionStylePresetId(
     project.subtitleDefaults.stylePresetId
@@ -1077,6 +1100,7 @@ function normalizeSubtitleCue(cue, clip, laneCount = MAX_SUBTITLE_LANES) {
       Math.max(0, Math.min(MAX_SUBTITLE_LANES, laneCount) - 1)
     ),
     color: normalizeHexColor(cue.color, "#ffffff"),
+    ...typeof cue.backgroundEnabled === "boolean" ? { backgroundEnabled: cue.backgroundEnabled } : {},
     x: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.x : clamp(finiteNumber(cue.x, AUTOMATIC_CAPTION_POSITION.x), 0.05, 0.95),
     y: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.y : clamp(finiteNumber(cue.y, AUTOMATIC_CAPTION_POSITION.y), 0.05, 0.95),
     origin,
@@ -1129,6 +1153,7 @@ function createSubtitleCue(project, {
   text = "",
   lane = 0,
   color,
+  backgroundEnabled,
   x,
   y,
   origin = "human",
@@ -1148,6 +1173,7 @@ function createSubtitleCue(project, {
     text,
     lane,
     color: color ?? project.subtitleDefaults?.color,
+    backgroundEnabled,
     x: x ?? project.subtitleDefaults?.x,
     y: y ?? project.subtitleDefaults?.y,
     origin,
@@ -2484,6 +2510,7 @@ export {
   replaceAiBlankTimingDraft,
   replaceAiSubtitleDraft,
   resetAiSubtitlePositions,
+  resolveSubtitleCueBackground,
   resolveTimelineSnap,
   rippleDeleteTimelineRange,
   sameSourceSession,

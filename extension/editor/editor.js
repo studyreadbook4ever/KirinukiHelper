@@ -982,23 +982,27 @@ function captionBackgroundEnabled(defaults) {
     backgroundColor && backgroundColor.toLowerCase() !== "transparent" && !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/iu.test(backgroundColor)
   );
 }
-function setCaptionBackgroundEnabled(project2, enabled) {
-  const currentPresetId = normalizeCaptionStylePresetId(
-    project2.subtitleDefaults.stylePresetId
-  );
-  const nextPresetId = enabled && currentPresetId === DEFAULT_CAPTION_STYLE_PRESET_ID ? BLACK_BOX_CAPTION_STYLE_PRESET_ID : !enabled && currentPresetId === BLACK_BOX_CAPTION_STYLE_PRESET_ID ? DEFAULT_CAPTION_STYLE_PRESET_ID : currentPresetId;
-  const blackBoxDefaults = normalizedCaptionStyleDefaults(
-    BLACK_BOX_CAPTION_STYLE_PRESET_ID
-  );
+function resolveSubtitleCueBackground(defaults, cue) {
+  if (cue?.backgroundEnabled === true) {
+    return {
+      enabled: true,
+      color: "#000000",
+      radiusEm: 0
+    };
+  }
+  if (cue?.backgroundEnabled === false) {
+    return {
+      enabled: false,
+      color: "transparent",
+      radiusEm: 0
+    };
+  }
+  const color = String(defaults?.backgroundColor || "transparent").trim() || "transparent";
+  const rawRadiusEm = Number(defaults?.backgroundRadiusEm);
   return {
-    ...project2,
-    subtitleDefaults: {
-      ...project2.subtitleDefaults,
-      stylePresetId: nextPresetId,
-      backgroundColor: enabled ? blackBoxDefaults.backgroundColor : "transparent",
-      backgroundRadiusEm: enabled ? blackBoxDefaults.backgroundRadiusEm : project2.subtitleDefaults.backgroundRadiusEm
-    },
-    updatedAt: nowIso()
+    enabled: captionBackgroundEnabled(defaults),
+    color,
+    radiusEm: Number.isFinite(rawRadiusEm) ? Math.max(0, rawRadiusEm) : 0.14
   };
 }
 function mergeCaptureIntoEditorProject(project2, captureState = {}) {
@@ -1287,6 +1291,7 @@ function normalizeSubtitleCue(cue, clip, laneCount = MAX_SUBTITLE_LANES) {
       Math.max(0, Math.min(MAX_SUBTITLE_LANES, laneCount) - 1)
     ),
     color: normalizeHexColor(cue.color, "#ffffff"),
+    ...typeof cue.backgroundEnabled === "boolean" ? { backgroundEnabled: cue.backgroundEnabled } : {},
     x: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.x : clamp(finiteNumber(cue.x, AUTOMATIC_CAPTION_POSITION.x), 0.05, 0.95),
     y: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.y : clamp(finiteNumber(cue.y, AUTOMATIC_CAPTION_POSITION.y), 0.05, 0.95),
     origin,
@@ -1339,6 +1344,7 @@ function createSubtitleCue(project2, {
   text = "",
   lane = 0,
   color,
+  backgroundEnabled,
   x,
   y,
   origin = "human",
@@ -1358,6 +1364,7 @@ function createSubtitleCue(project2, {
     text,
     lane,
     color: color ?? project2.subtitleDefaults?.color,
+    backgroundEnabled,
     x: x ?? project2.subtitleDefaults?.x,
     y: y ?? project2.subtitleDefaults?.y,
     origin,
@@ -2869,6 +2876,13 @@ var EDITOR_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
       action: "audio-mode-tab",
       targetId: "audio-mode-tab",
       label: "\uC74C\uC131 \uD3B8\uC9D1 \uD0ED \uC5F4\uAE30",
+      trigger: "click"
+    },
+    {
+      key: "X",
+      action: "toggle-cue-caption-background",
+      targetId: "toggle-caption-background",
+      label: "\uC120\uD0DD \uC790\uB9C9 \uAC80\uC740 \uC0C1\uC790 \uC804\uD658",
       trigger: "click"
     },
     {
@@ -33488,12 +33502,10 @@ function drawCaption(context, canvas, project2, cue) {
     canvasHeight: canvas.height,
     safeInset
   });
-  const backgroundColor = String(defaults.backgroundColor || "transparent").trim();
-  if (captionBackgroundEnabled(defaults)) {
-    context.fillStyle = backgroundColor;
-    const rawBackgroundRadiusEm = Number(defaults.backgroundRadiusEm);
-    const backgroundRadiusEm = Number.isFinite(rawBackgroundRadiusEm) ? Math.max(0, rawBackgroundRadiusEm) : 0.14;
-    if (backgroundRadiusEm === 0) {
+  const background = resolveSubtitleCueBackground(defaults, cue);
+  if (background.enabled) {
+    context.fillStyle = background.color;
+    if (background.radiusEm === 0) {
       context.fillRect(
         x - boxWidth / 2,
         y - boxHeight / 2,
@@ -33507,7 +33519,7 @@ function drawCaption(context, canvas, project2, cue) {
         y - boxHeight / 2,
         boxWidth,
         boxHeight,
-        Math.max(5, fontSize * backgroundRadiusEm)
+        Math.max(5, fontSize * background.radiusEm)
       );
       context.fill();
     }
@@ -37744,13 +37756,6 @@ function renderHeader() {
       project.subtitleDefaults?.stylePresetId || DEFAULT_CAPTION_STYLE_PRESET_ID
     );
   }
-  const backgroundEnabled = captionBackgroundEnabled(project.subtitleDefaults);
-  elements.toggle_caption_background.classList.toggle("active", backgroundEnabled);
-  elements.toggle_caption_background.setAttribute(
-    "aria-pressed",
-    String(backgroundEnabled)
-  );
-  elements.caption_background_label.textContent = backgroundEnabled ? "\uAC80\uC740 \uC0AC\uAC01 \uBC30\uACBD \uB044\uAE30" : "\uAC80\uC740 \uC0AC\uAC01 \uBC30\uACBD \uCF1C\uAE30";
   const warnings = Array.isArray(project.ai?.warnings) ? project.ai.warnings.filter((warning) => warning && typeof warning.code === "string" && warning.code.trim()) : [];
   elements.caption_agent_warning.hidden = warnings.length === 0;
   if (warnings.length > 0) {
@@ -38072,6 +38077,19 @@ function renderCueInspector() {
   const defaultColor = project.subtitleDefaults.color;
   elements.font_color.value = cue.color || (typeof defaultColor === "string" ? defaultColor : DEFAULT_SUBTITLE_COLOR);
   renderCaptionColorRegister(elements.font_color.value);
+  const cueBackground = resolveSubtitleCueBackground(
+    project.subtitleDefaults,
+    cue
+  );
+  elements.toggle_caption_background.classList.toggle(
+    "active",
+    cueBackground.enabled
+  );
+  elements.toggle_caption_background.setAttribute(
+    "aria-pressed",
+    String(cueBackground.enabled)
+  );
+  elements.caption_background_label.textContent = cueBackground.enabled ? "\uC774 \uC790\uB9C9 \uAC80\uC740 \uC0C1\uC790 \uB044\uAE30 \xB7 X" : "\uC774 \uC790\uB9C9 \uAC80\uC740 \uC0C1\uC790 \uCF1C\uAE30 \xB7 X";
   const selectedAsset = selectedImageAsset();
   const canMatchAsset = Boolean(selectedAsset && selectedAsset.clipId === cue.clipId);
   elements.match_cue_to_asset.disabled = !canMatchAsset;
@@ -39418,7 +39436,6 @@ function renderTimeline({ keepScroll = false } = {}) {
         return;
       }
       selectCue(cue.id, { seek: true });
-      elements.cue_text.focus({ preventScroll: true });
     });
     const cueClip = project.clips.find((candidate) => candidate.id === cue.clipId);
     const nudgeCue = (side, delta) => {
@@ -39612,13 +39629,12 @@ function renderSubtitleOverlay() {
       Number(project.subtitleDefaults.lineHeight) || 1.24
     );
     overlay.style.color = cue.color || project.subtitleDefaults.color || "#ffffff";
-    overlay.style.backgroundColor = String(
-      project.subtitleDefaults.backgroundColor || "transparent"
+    const cueBackground = resolveSubtitleCueBackground(
+      project.subtitleDefaults,
+      cue
     );
-    const rawBackgroundRadiusEm = Number(
-      project.subtitleDefaults.backgroundRadiusEm
-    );
-    overlay.style.borderRadius = `${Number.isFinite(rawBackgroundRadiusEm) ? Math.max(0, rawBackgroundRadiusEm) : 0.14}em`;
+    overlay.style.backgroundColor = cueBackground.color;
+    overlay.style.borderRadius = `${cueBackground.radiusEm}em`;
     overlay.style.textShadow = [
       `${Number(project.subtitleDefaults.shadowOffsetXEm) || 0}em`,
       `${Number(project.subtitleDefaults.shadowOffsetYEm) || 0}em`,
@@ -40253,7 +40269,9 @@ function selectCue(cueId, { seek = false } = {}) {
   if (!cue) {
     return;
   }
-  const seekSelection = seek && shouldSeekTimelineItemSelection();
+  const previewWasPlaying = previewPlaybackIsActive();
+  const selectingAnotherClip = cue.clipId !== activeClipId;
+  const seekSelection = seek && (selectingAnotherClip || shouldSeekTimelineItemSelection());
   project = {
     ...project,
     selectedCueId: cue.id,
@@ -40263,9 +40281,14 @@ function selectCue(cueId, { seek = false } = {}) {
   propertyInspectorMode = "caption";
   const range = cueTimelineRange(project, cue);
   if (seekSelection && range) {
-    void seekTimeline(range.startMs);
+    void seekTimeline(range.startMs, {
+      play: selectingAnotherClip && previewWasPlaying
+    });
   }
   renderAll({ keepScroll: true });
+  document.querySelector(
+    `.cue-block[data-id="${CSS.escape(cue.id)}"] .cue-block-body`
+  )?.focus({ preventScroll: true });
   scheduleSave();
 }
 function cueHasOverlap(candidateProject, cueId) {
@@ -42502,7 +42525,6 @@ function bindActions() {
     const cueId = item?.dataset.id;
     if (cueId) {
       selectCue(cueId, { seek: true });
-      elements.cue_text.focus({ preventScroll: true });
     }
   });
   captionInspectorTab.addEventListener("click", () => {
@@ -42691,10 +42713,17 @@ function bindActions() {
   });
   elements.test_caption_agent.addEventListener("click", () => void testCaptionAgentConnection());
   elements.toggle_caption_background.addEventListener("click", () => {
-    const enabled = !captionBackgroundEnabled(project.subtitleDefaults);
-    applyProject(setCaptionBackgroundEnabled(project, enabled));
+    const cue = selectedCue();
+    if (!cue) {
+      return;
+    }
+    const enabled = !resolveSubtitleCueBackground(
+      project.subtitleDefaults,
+      cue
+    ).enabled;
+    updateSelectedCue({ backgroundEnabled: enabled });
     showToast(
-      enabled ? "\uAC80\uC740 \uC0AC\uAC01 \uC790\uB9C9 \uBC30\uACBD\uC744 \uCF30\uC2B5\uB2C8\uB2E4." : "\uC790\uB9C9 \uBC30\uACBD\uC744 \uAED0\uC2B5\uB2C8\uB2E4.",
+      enabled ? "\uC774 \uC790\uB9C9\uC5D0 \uAC80\uC740 \uC0AC\uAC01 \uBC30\uACBD\uC744 \uCF30\uC2B5\uB2C8\uB2E4." : "\uC774 \uC790\uB9C9\uC758 \uAC80\uC740 \uBC30\uACBD\uC744 \uAED0\uC2B5\uB2C8\uB2E4.",
       "success"
     );
   });

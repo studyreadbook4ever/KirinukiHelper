@@ -128,7 +128,7 @@ test("자막 배경 토글은 켜면 텍스트보다 먼저 각진 배경을 그
       maxWidth: 0.86,
       outlineWidth: 0.006,
       outlineColor: "#111111",
-      backgroundColor: "#000000",
+      backgroundColor: "transparent",
       backgroundRadiusEm: 0,
       color: "#ffffff",
       shadowColor: "transparent",
@@ -138,11 +138,18 @@ test("자막 배경 토글은 켜면 텍스트보다 먼저 각진 배경을 그
       align: "center"
     }
   };
-  const cue = {
+  const cue: {
+    text: string;
+    color: string;
+    x: number;
+    y: number;
+    backgroundEnabled?: boolean;
+  } = {
     text: "사용자 색",
     color: "#f06088",
     x: 0.5,
-    y: 0.84
+    y: 0.84,
+    backgroundEnabled: true
   };
 
   drawCaption(
@@ -157,7 +164,7 @@ test("자막 배경 토글은 켜면 텍스트보다 먼저 각진 배경을 그
   assert.equal(calls.includes("roundRect"), false);
 
   calls.length = 0;
-  project.subtitleDefaults.backgroundColor = "transparent";
+  cue.backgroundEnabled = false;
   drawCaption(
     context as unknown as CanvasRenderingContext2D,
     { width: 1_920, height: 1_080 } as HTMLCanvasElement,
@@ -167,6 +174,27 @@ test("자막 배경 토글은 켜면 텍스트보다 먼저 각진 배경을 그
   assert.equal(calls.includes("fillRect"), false);
   assert.equal(calls.includes("roundRect"), false);
   assert.ok(calls.includes("fillText:#f06088"));
+
+  calls.length = 0;
+  delete cue.backgroundEnabled;
+  project.subtitleDefaults.backgroundColor = "#000000";
+  drawCaption(
+    context as unknown as CanvasRenderingContext2D,
+    { width: 1_920, height: 1_080 } as HTMLCanvasElement,
+    project as RenderProjectFixture,
+    cue as never
+  );
+  assert.ok(calls.includes("fillRect"), "override가 없는 기존 cue는 전역 검은 배경을 상속해야 합니다.");
+
+  calls.length = 0;
+  cue.backgroundEnabled = false;
+  drawCaption(
+    context as unknown as CanvasRenderingContext2D,
+    { width: 1_920, height: 1_080 } as HTMLCanvasElement,
+    project as RenderProjectFixture,
+    cue as never
+  );
+  assert.equal(calls.includes("fillRect"), false, "개별 OFF는 전역 검은 배경보다 우선해야 합니다.");
 });
 
 test("내보내기 진행률은 실제 commit 전까지 99%를 넘지 않는다", () => {

@@ -84,6 +84,7 @@ type EditorProbe = {
   stylePresetOptions: string[];
   captionBackgroundPressed?: string;
   captionBackgroundLabel?: string;
+  captionBackgroundKey?: string;
   tokenType?: string;
   modelOptions: string[];
   advancedOpen?: boolean;
@@ -124,6 +125,9 @@ type EditorShortcutProbe = {
   buttonFocusAllowsV: string | null;
   addCueKey: string | null;
   addCueTitle: string;
+  captionBackgroundKey: string | null;
+  captionBackgroundTitle: string;
+  audioModeKey: string | null;
   deleteCueKey: string | null;
   exportKey: string | null;
 };
@@ -651,6 +655,8 @@ async function main() {
           ?.getAttribute("aria-pressed"),
         captionBackgroundLabel: document.getElementById("caption-background-label")
           ?.textContent,
+        captionBackgroundKey: document.getElementById("toggle-caption-background")
+          ?.getAttribute("aria-keyshortcuts"),
         tokenType: document.getElementById("caption-agent-token")?.type,
         modelOptions: [...document.getElementById("caption-model")?.options || []]
           .map((option) => option.value),
@@ -678,10 +684,12 @@ async function main() {
   );
   assert(
     editor.captionBackgroundPressed === "false"
-      && editor.captionBackgroundLabel === "검은 사각 배경 켜기",
+      && editor.captionBackgroundLabel === "이 자막 검은 상자 켜기 · X"
+      && editor.captionBackgroundKey === "X",
     `새 프로젝트의 검은 자막 배경 토글 기본값이 꺼짐이 아닙니다: ${JSON.stringify({
       pressed: editor.captionBackgroundPressed,
-      label: editor.captionBackgroundLabel
+      label: editor.captionBackgroundLabel,
+      key: editor.captionBackgroundKey
     })}`
   );
   assert(editor.tokenType === "hidden", "자동 session 토큰 요소는 사용자에게 숨겨져야 합니다.");
@@ -730,6 +738,12 @@ async function main() {
           addCueKey: document.getElementById("add-cue")
             ?.getAttribute("aria-keyshortcuts"),
           addCueTitle: document.getElementById("add-cue")?.title || "",
+          captionBackgroundKey: document.getElementById("toggle-caption-background")
+            ?.getAttribute("aria-keyshortcuts"),
+          captionBackgroundTitle: document.getElementById("toggle-caption-background")
+            ?.title || "",
+          audioModeKey: document.getElementById("audio-mode-tab")
+            ?.getAttribute("aria-keyshortcuts"),
           deleteCueKey: document.getElementById("delete-cue")
             ?.getAttribute("aria-keyshortcuts"),
           exportKey: document.getElementById("export-video")
@@ -745,6 +759,9 @@ async function main() {
   assert(editorShortcuts.buttonFocusAllowsV === "true", "버튼 포커스가 안전한 V 단축키를 막습니다.");
   assert(editorShortcuts.addCueKey === "A", "자막 추가 버튼의 A 단축키 접근성 표기가 없습니다.");
   assert(editorShortcuts.addCueTitle.includes("A"), "자막 추가 버튼 tooltip에 A 단축키가 없습니다.");
+  assert(editorShortcuts.captionBackgroundKey === "X", "선택 자막 검은 배경 버튼의 X 단축키 표기가 없습니다.");
+  assert(editorShortcuts.captionBackgroundTitle.includes("X"), "선택 자막 검은 배경 tooltip에 X 단축키가 없습니다.");
+  assert(editorShortcuts.audioModeKey === "B", "음성 편집 탭의 기존 B 단축키 표기가 없습니다.");
   assert(editorShortcuts.deleteCueKey === null, "자막 삭제에 A-Z 단축키가 배정됐습니다.");
   assert(editorShortcuts.exportKey === null, "영상 내보내기에 A-Z 단축키가 배정됐습니다.");
 
