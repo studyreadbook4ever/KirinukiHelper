@@ -4752,11 +4752,6 @@ function selectCue(cueId: string, { seek = false } = {}) {
     return;
   }
   const previewWasPlaying = previewPlaybackIsActive();
-  const selectingAnotherClip = cue.clipId !== activeClipId;
-  const seekSelection = seek && (
-    selectingAnotherClip
-    || shouldSeekTimelineItemSelection()
-  );
   project = {
     ...project,
     selectedCueId: cue.id,
@@ -4765,9 +4760,9 @@ function selectCue(cueId: string, { seek = false } = {}) {
   inspectorMode = "selected";
   propertyInspectorMode = "caption";
   const range = cueTimelineRange(project, cue);
-  if (seekSelection && range) {
+  if (seek && range) {
     void seekTimeline(range.startMs, {
-      play: selectingAnotherClip && previewWasPlaying
+      play: previewWasPlaying
     });
   }
   renderAll({ keepScroll: true });
