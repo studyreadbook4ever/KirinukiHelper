@@ -127,6 +127,13 @@ type EditorShortcutProbe = {
   addCueTitle: string;
   captionBackgroundKey: string | null;
   captionBackgroundTitle: string;
+  previousCueKey: string | null;
+  previousCueTitle: string;
+  nextCueKey: string | null;
+  nextCueTitle: string;
+  previousClipKey: string | null;
+  playKey: string | null;
+  nextClipKey: string | null;
   audioModeKey: string | null;
   deleteCueKey: string | null;
   exportKey: string | null;
@@ -639,6 +646,8 @@ async function main() {
         "caption-style-preset",
         "toggle-caption-background",
         "caption-background-label",
+        "previous-cue-in-lane",
+        "next-cue-in-lane",
         "export-video"
       ];
       return {
@@ -742,6 +751,20 @@ async function main() {
             ?.getAttribute("aria-keyshortcuts"),
           captionBackgroundTitle: document.getElementById("toggle-caption-background")
             ?.title || "",
+          previousCueKey: document.getElementById("previous-cue-in-lane")
+            ?.getAttribute("aria-keyshortcuts"),
+          previousCueTitle: document.getElementById("previous-cue-in-lane")
+            ?.title || "",
+          nextCueKey: document.getElementById("next-cue-in-lane")
+            ?.getAttribute("aria-keyshortcuts"),
+          nextCueTitle: document.getElementById("next-cue-in-lane")
+            ?.title || "",
+          previousClipKey: document.getElementById("previous-clip")
+            ?.getAttribute("aria-keyshortcuts"),
+          playKey: document.getElementById("play-toggle")
+            ?.getAttribute("aria-keyshortcuts"),
+          nextClipKey: document.getElementById("next-clip")
+            ?.getAttribute("aria-keyshortcuts"),
           audioModeKey: document.getElementById("audio-mode-tab")
             ?.getAttribute("aria-keyshortcuts"),
           deleteCueKey: document.getElementById("delete-cue")
@@ -761,6 +784,19 @@ async function main() {
   assert(editorShortcuts.addCueTitle.includes("A"), "자막 추가 버튼 tooltip에 A 단축키가 없습니다.");
   assert(editorShortcuts.captionBackgroundKey === "X", "선택 자막 검은 배경 버튼의 X 단축키 표기가 없습니다.");
   assert(editorShortcuts.captionBackgroundTitle.includes("X"), "선택 자막 검은 배경 tooltip에 X 단축키가 없습니다.");
+  assert(
+    editorShortcuts.previousCueKey === "J"
+      && editorShortcuts.nextCueKey === "K"
+      && editorShortcuts.previousCueTitle.includes("J")
+      && editorShortcuts.nextCueTitle.includes("K"),
+    `같은 레인 자막 이동 J/K 단축키 표기가 없습니다: ${JSON.stringify(editorShortcuts)}`
+  );
+  assert(
+    editorShortcuts.previousClipKey === ","
+      && editorShortcuts.playKey === "Space"
+      && editorShortcuts.nextClipKey === ".",
+    `미리보기 구간·재생 단축키가 ,/Space/.가 아닙니다: ${JSON.stringify(editorShortcuts)}`
+  );
   assert(editorShortcuts.audioModeKey === "B", "음성 편집 탭의 기존 B 단축키 표기가 없습니다.");
   assert(editorShortcuts.deleteCueKey === null, "자막 삭제에 A-Z 단축키가 배정됐습니다.");
   assert(editorShortcuts.exportKey === null, "영상 내보내기에 A-Z 단축키가 배정됐습니다.");

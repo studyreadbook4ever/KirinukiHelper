@@ -390,6 +390,8 @@ for (const id of [
   "caption-style-preset",
   "toggle-caption-background",
   "caption-background-label",
+  "previous-cue-in-lane",
+  "next-cue-in-lane",
   "caption-model",
   "caption-mode-description",
   "caption-advanced-settings",
@@ -427,12 +429,22 @@ assert(
 );
 const cueTimingHelpOffset = editorHtml.indexOf('id="cue-timing-match-help"');
 const cueBackgroundToggleOffset = editorHtml.indexOf('id="toggle-caption-background"');
+const previousCueInLaneOffset = editorHtml.indexOf('id="previous-cue-in-lane"');
+const nextCueInLaneOffset = editorHtml.indexOf('id="next-cue-in-lane"');
 const cuePositionOffset = editorHtml.indexOf('<span class="field-label">화면 위치</span>');
 assert(
   cueTimingHelpOffset >= 0
     && cueTimingHelpOffset < cueBackgroundToggleOffset
-    && cueBackgroundToggleOffset < cuePositionOffset,
-  "선택 자막 검은 배경 버튼이 타이밍 도움말과 화면 위치 사이에 있지 않습니다."
+    && cueBackgroundToggleOffset < previousCueInLaneOffset
+    && previousCueInLaneOffset < nextCueInLaneOffset
+    && nextCueInLaneOffset < cuePositionOffset,
+  "같은 레인 자막 이동 버튼이 검은 배경 버튼과 화면 위치 사이에 있지 않습니다."
+);
+assert(
+  /id="play-toggle"[^>]*aria-keyshortcuts="Space"/u.test(editorHtml)
+    && /id="previous-clip"[^>]*aria-keyshortcuts=","/u.test(editorHtml)
+    && /id="next-clip"[^>]*aria-keyshortcuts="\."/u.test(editorHtml),
+  "미리보기 Space 및 스페이스 인접 ,/. 구간 이동 단축키 표기가 없습니다."
 );
 assert(editorScript.includes("renderProjectVideo"), "편집기 번들에 영상 렌더 경로가 없습니다.");
 assert(editorScript.includes("backgroundRadiusEm"), "자막 배경 곡률의 미리보기·렌더 경로가 없습니다.");
@@ -443,11 +455,23 @@ assert(
 );
 assert(editorScript.includes("EDITOR_SHORTCUT_BINDINGS"), "편집기 안전 단축키 정책을 설치하지 않습니다.");
 assert(
+  editorScript.includes("captionColorShortcutDigitFromEvent")
+    && editorScript.includes("clipNavigationShortcutDirectionFromEvent")
+    && editorScript.includes("adjacentSubtitleCueInLane")
+    && editorScript.includes("data-shortcut"),
+  "편집기 번들에 숫자 색상·,/. 컷 이동·J/K 같은 레인 자막 이동 경로가 없습니다."
+);
+assert(
   keyboardShortcutScript.includes("playback-rate-quarter")
     && keyboardShortcutScript.includes("playback-rate-double")
     && keyboardShortcutScript.includes("toggle-cue-caption-background")
+    && keyboardShortcutScript.includes("previous-cue-in-lane")
+    && keyboardShortcutScript.includes("next-cue-in-lane")
+    && keyboardShortcutScript.includes("CAPTION_COLOR_SHORTCUT_DIGITS")
+    && keyboardShortcutScript.includes("captionColorShortcutDigitFromEvent")
+    && keyboardShortcutScript.includes("clipNavigationShortcutDirectionFromEvent")
     && keyboardShortcutScript.includes("DANGEROUS_KEYBOARD_SHORTCUT_ACTION_TOKENS"),
-  "배포 단축키 정책이 배속·자막 배경 버튼 또는 위험 동작 denylist를 보존하지 않습니다."
+  "배포 단축키 정책이 배속·자막 배경·색상·이동 또는 위험 동작 denylist를 보존하지 않습니다."
 );
 assert(
   editorScript.includes("LOCAL_MEDIA_BLOB_SOURCE_OPTIONS")

@@ -28,6 +28,17 @@ export const KEYBOARD_SHORTCUT_LETTERS = Object.freeze([
 ] as const);
 
 export type KeyboardShortcutLetter = typeof KEYBOARD_SHORTCUT_LETTERS[number];
+export const CAPTION_COLOR_SHORTCUT_DIGITS = Object.freeze([
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6"
+] as const);
+export type CaptionColorShortcutDigit =
+  typeof CAPTION_COLOR_SHORTCUT_DIGITS[number];
+export type ClipNavigationShortcutDirection = -1 | 1;
 export type KeyboardShortcutScope = "sidepanel" | "editor";
 export type KeyboardShortcutTrigger = "click" | "focus";
 
@@ -232,6 +243,59 @@ export function keyboardShortcutLetterFromEvent(
   }
   const codeMatch = /^Key([A-Z])$/u.exec(String(event.code || ""));
   return normalizeKeyboardShortcutLetter(codeMatch?.[1] || event.key);
+}
+
+export function captionColorShortcutDigitFromEvent(
+  event: KeyboardShortcutEventLike
+): CaptionColorShortcutDigit | null {
+  if (isKeyboardShortcutEventBlocked(event)) {
+    return null;
+  }
+  const code = String(event.code || "");
+  const topRowMatch = /^Digit([1-6])$/u.exec(code);
+  if (topRowMatch) {
+    return topRowMatch[1] as CaptionColorShortcutDigit;
+  }
+  const numpadMatch = /^Numpad([1-6])$/u.exec(code);
+  if (numpadMatch) {
+    return String(event.key || "") === numpadMatch[1]
+      ? numpadMatch[1] as CaptionColorShortcutDigit
+      : null;
+  }
+  if (code && code !== "Unidentified") {
+    return null;
+  }
+  const key = String(event.key || "");
+  return CAPTION_COLOR_SHORTCUT_DIGITS.includes(
+    key as CaptionColorShortcutDigit
+  )
+    ? key as CaptionColorShortcutDigit
+    : null;
+}
+
+export function clipNavigationShortcutDirectionFromEvent(
+  event: KeyboardShortcutEventLike
+): ClipNavigationShortcutDirection | null {
+  if (isKeyboardShortcutEventBlocked(event)) {
+    return null;
+  }
+  const code = String(event.code || "");
+  if (code === "Comma") {
+    return -1;
+  }
+  if (code === "Period") {
+    return 1;
+  }
+  if (code && code !== "Unidentified") {
+    return null;
+  }
+  if (event.key === ",") {
+    return -1;
+  }
+  if (event.key === ".") {
+    return 1;
+  }
+  return null;
 }
 
 export function shouldHandleKeyboardShortcut(
@@ -463,23 +527,16 @@ export const EDITOR_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
     },
     {
       key: "J",
-      action: "previous-clip",
-      targetId: "previous-clip",
-      label: "이전 구간으로 이동",
+      action: "previous-cue-in-lane",
+      targetId: "previous-cue-in-lane",
+      label: "같은 자막 라인의 이전 자막으로 이동",
       trigger: "click"
     },
     {
       key: "K",
-      action: "play-toggle",
-      targetId: "play-toggle",
-      label: "미리보기 재생 또는 일시정지",
-      trigger: "click"
-    },
-    {
-      key: "L",
-      action: "next-clip",
-      targetId: "next-clip",
-      label: "다음 구간으로 이동",
+      action: "next-cue-in-lane",
+      targetId: "next-cue-in-lane",
+      label: "같은 자막 라인의 다음 자막으로 이동",
       trigger: "click"
     },
     {

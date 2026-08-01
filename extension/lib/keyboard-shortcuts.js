@@ -27,6 +27,14 @@ const KEYBOARD_SHORTCUT_LETTERS = Object.freeze([
   "Y",
   "Z"
 ]);
+const CAPTION_COLOR_SHORTCUT_DIGITS = Object.freeze([
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6"
+]);
 const DANGEROUS_KEYBOARD_SHORTCUT_ACTION_TOKENS = Object.freeze([
   "reset",
   "delete",
@@ -144,6 +152,49 @@ function keyboardShortcutLetterFromEvent(event) {
   }
   const codeMatch = /^Key([A-Z])$/u.exec(String(event.code || ""));
   return normalizeKeyboardShortcutLetter(codeMatch?.[1] || event.key);
+}
+function captionColorShortcutDigitFromEvent(event) {
+  if (isKeyboardShortcutEventBlocked(event)) {
+    return null;
+  }
+  const code = String(event.code || "");
+  const topRowMatch = /^Digit([1-6])$/u.exec(code);
+  if (topRowMatch) {
+    return topRowMatch[1];
+  }
+  const numpadMatch = /^Numpad([1-6])$/u.exec(code);
+  if (numpadMatch) {
+    return String(event.key || "") === numpadMatch[1] ? numpadMatch[1] : null;
+  }
+  if (code && code !== "Unidentified") {
+    return null;
+  }
+  const key = String(event.key || "");
+  return CAPTION_COLOR_SHORTCUT_DIGITS.includes(
+    key
+  ) ? key : null;
+}
+function clipNavigationShortcutDirectionFromEvent(event) {
+  if (isKeyboardShortcutEventBlocked(event)) {
+    return null;
+  }
+  const code = String(event.code || "");
+  if (code === "Comma") {
+    return -1;
+  }
+  if (code === "Period") {
+    return 1;
+  }
+  if (code && code !== "Unidentified") {
+    return null;
+  }
+  if (event.key === ",") {
+    return -1;
+  }
+  if (event.key === ".") {
+    return 1;
+  }
+  return null;
 }
 function shouldHandleKeyboardShortcut(event) {
   return keyboardShortcutLetterFromEvent(event) !== null;
@@ -347,23 +398,16 @@ const EDITOR_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
     },
     {
       key: "J",
-      action: "previous-clip",
-      targetId: "previous-clip",
-      label: "\uC774\uC804 \uAD6C\uAC04\uC73C\uB85C \uC774\uB3D9",
+      action: "previous-cue-in-lane",
+      targetId: "previous-cue-in-lane",
+      label: "\uAC19\uC740 \uC790\uB9C9 \uB77C\uC778\uC758 \uC774\uC804 \uC790\uB9C9\uC73C\uB85C \uC774\uB3D9",
       trigger: "click"
     },
     {
       key: "K",
-      action: "play-toggle",
-      targetId: "play-toggle",
-      label: "\uBBF8\uB9AC\uBCF4\uAE30 \uC7AC\uC0DD \uB610\uB294 \uC77C\uC2DC\uC815\uC9C0",
-      trigger: "click"
-    },
-    {
-      key: "L",
-      action: "next-clip",
-      targetId: "next-clip",
-      label: "\uB2E4\uC74C \uAD6C\uAC04\uC73C\uB85C \uC774\uB3D9",
+      action: "next-cue-in-lane",
+      targetId: "next-cue-in-lane",
+      label: "\uAC19\uC740 \uC790\uB9C9 \uB77C\uC778\uC758 \uB2E4\uC74C \uC790\uB9C9\uC73C\uB85C \uC774\uB3D9",
       trigger: "click"
     },
     {
@@ -465,11 +509,14 @@ function keyboardShortcutBindingForScope(scope, key) {
   return KEYBOARD_SHORTCUT_BINDINGS_BY_SCOPE[scope].find((binding) => binding.key === normalizedKey) || null;
 }
 export {
+  CAPTION_COLOR_SHORTCUT_DIGITS,
   DANGEROUS_KEYBOARD_SHORTCUT_ACTION_TOKENS,
   EDITOR_SHORTCUT_BINDINGS,
   KEYBOARD_SHORTCUT_BINDINGS_BY_SCOPE,
   KEYBOARD_SHORTCUT_LETTERS,
   SIDEPANEL_SHORTCUT_BINDINGS,
+  captionColorShortcutDigitFromEvent,
+  clipNavigationShortcutDirectionFromEvent,
   findKeyboardShortcutCollisions,
   formatKeyboardShortcutHint,
   isDangerousKeyboardShortcutAction,

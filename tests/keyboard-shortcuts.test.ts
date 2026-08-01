@@ -3,10 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  CAPTION_COLOR_SHORTCUT_DIGITS,
   DANGEROUS_KEYBOARD_SHORTCUT_ACTION_TOKENS,
   EDITOR_SHORTCUT_BINDINGS,
   KEYBOARD_SHORTCUT_BINDINGS_BY_SCOPE,
   SIDEPANEL_SHORTCUT_BINDINGS,
+  captionColorShortcutDigitFromEvent,
+  clipNavigationShortcutDirectionFromEvent,
   findKeyboardShortcutCollisions,
   formatKeyboardShortcutHint,
   isDangerousKeyboardShortcutAction,
@@ -57,8 +60,17 @@ test("scope별 A-Z 단축키는 충돌 없이 안전한 동작만 포함한다",
   );
   assert.deepEqual(
     EDITOR_SHORTCUT_BINDINGS.map(({ key }) => key),
-    ["A", "S", "D", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "C", "V", "B", "X", "W", "E", "I", "O"]
+    ["A", "S", "D", "F", "G", "H", "J", "K", "M", "N", "P", "Q", "C", "V", "B", "X", "W", "E", "I", "O"]
   );
+  assert.equal(
+    keyboardShortcutBindingForScope("editor", "J")?.targetId,
+    "previous-cue-in-lane"
+  );
+  assert.equal(
+    keyboardShortcutBindingForScope("editor", "K")?.targetId,
+    "next-cue-in-lane"
+  );
+  assert.equal(keyboardShortcutBindingForScope("editor", "L"), null);
   assert.equal(
     keyboardShortcutBindingForScope("editor", "X")?.targetId,
     "toggle-caption-background"
@@ -384,4 +396,116 @@ test("비대화형 편집기 표면의 단일 영문 키만 처리한다", () =>
     "A",
     "한글 자판이어도 물리 A-Z 위치를 사용해야 합니다."
   );
+});
+
+test("자막 색상 숫자키는 상단 1~6과 NumLock이 켜진 숫자패드만 허용한다", () => {
+  const stage = fakeElement({ tagName: "DIV" });
+  assert.deepEqual(CAPTION_COLOR_SHORTCUT_DIGITS, ["1", "2", "3", "4", "5", "6"]);
+  for (const digit of CAPTION_COLOR_SHORTCUT_DIGITS) {
+    assert.equal(
+      captionColorShortcutDigitFromEvent({
+        key: "Process",
+        code: `Digit${digit}`,
+        target: stage
+      }),
+      digit,
+      `상단 숫자 ${digit}은 물리 키 위치로 인식해야 합니다.`
+    );
+    assert.equal(
+      captionColorShortcutDigitFromEvent({
+        key: digit,
+        code: `Numpad${digit}`,
+        target: stage
+      }),
+      digit,
+      `NumLock이 켜진 숫자패드 ${digit}을 인식해야 합니다.`
+    );
+  }
+  assert.equal(
+    captionColorShortcutDigitFromEvent({ key: "6", target: stage }),
+    "6",
+    "code를 제공하지 않는 환경은 event.key로 보완해야 합니다."
+  );
+  assert.equal(
+    captionColorShortcutDigitFromEvent({
+      key: "End",
+      code: "Numpad1",
+      target: stage
+    }),
+    null,
+    "NumLock이 꺼진 숫자패드는 색상 단축키가 아니어야 합니다."
+  );
+  for (const event of [
+    { key: "0", code: "Digit0", target: stage },
+    { key: "7", code: "Digit7", target: stage },
+    { key: "1", code: "KeyA", target: stage },
+    { key: "!", code: "Digit1", shiftKey: true, target: stage }
+  ]) {
+    assert.equal(captionColorShortcutDigitFromEvent(event), null);
+  }
+});
+
+test("자막 색상 숫자키는 IME·반복·수정키와 입력 control 안에서 차단한다", () => {
+  const input = fakeElement({ tagName: "INPUT" });
+  const stage = fakeElement({ tagName: "DIV" });
+  for (const event of [
+    { key: "1", code: "Digit1", isComposing: true, target: stage },
+    { key: "1", code: "Digit1", keyCode: 229, target: stage },
+    { key: "1", code: "Digit1", repeat: true, target: stage },
+    { key: "1", code: "Digit1", defaultPrevented: true, target: stage },
+    { key: "1", code: "Digit1", altKey: true, target: stage },
+    { key: "1", code: "Digit1", ctrlKey: true, target: stage },
+    { key: "1", code: "Digit1", metaKey: true, target: stage },
+    { key: "1", code: "Digit1", shiftKey: true, target: stage },
+    { key: "1", code: "Digit1", target: input }
+  ]) {
+    assert.equal(captionColorShortcutDigitFromEvent(event), null);
+  }
+});
+
+test("쉼표·마침표 컷 이동은 물리 키를 우선하고 안전 차단 정책을 공유한다", () => {
+  const stage = fakeElement({ tagName: "DIV" });
+  const textarea = fakeElement({ tagName: "TEXTAREA" });
+  assert.equal(
+    clipNavigationShortcutDirectionFromEvent({
+      key: "다른 값",
+      code: "Comma",
+      target: stage
+    }),
+    -1
+  );
+  assert.equal(
+    clipNavigationShortcutDirectionFromEvent({
+      key: "다른 값",
+      code: "Period",
+      target: stage
+    }),
+    1
+  );
+  assert.equal(
+    clipNavigationShortcutDirectionFromEvent({ key: ",", target: stage }),
+    -1
+  );
+  assert.equal(
+    clipNavigationShortcutDirectionFromEvent({ key: ".", target: stage }),
+    1
+  );
+  assert.equal(
+    clipNavigationShortcutDirectionFromEvent({
+      key: ".",
+      code: "NumpadDecimal",
+      target: stage
+    }),
+    null,
+    "숫자패드 소수점은 다음 컷 단축키가 아니어야 합니다."
+  );
+  for (const event of [
+    { key: ",", code: "Comma", isComposing: true, target: stage },
+    { key: ",", code: "Comma", repeat: true, target: stage },
+    { key: ",", code: "Comma", shiftKey: true, target: stage },
+    { key: ",", code: "Comma", ctrlKey: true, target: stage },
+    { key: ",", code: "Comma", target: textarea }
+  ]) {
+    assert.equal(clipNavigationShortcutDirectionFromEvent(event), null);
+  }
 });
