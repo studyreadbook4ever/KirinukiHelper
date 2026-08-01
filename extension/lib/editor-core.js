@@ -1407,6 +1407,27 @@ function cueTimelineRange(project, cue) {
     endMs: clip.timelineStartMs + cue.endOffsetMs
   };
 }
+function adjacentSubtitleCueInLane(project, cueId, direction) {
+  if (!project || direction !== -1 && direction !== 1) {
+    return null;
+  }
+  const currentCue = project.subtitles.find((cue) => cue.id === cueId);
+  if (!currentCue || !cueTimelineRange(project, currentCue)) {
+    return null;
+  }
+  const ordered = project.subtitles.flatMap((cue) => {
+    if (cue.lane !== currentCue.lane) {
+      return [];
+    }
+    const range = cueTimelineRange(project, cue);
+    return range ? [{ cue, range }] : [];
+  }).sort((left, right) => left.range.startMs - right.range.startMs || left.range.endMs - right.range.endMs || left.cue.id.localeCompare(right.cue.id));
+  const currentIndex = ordered.findIndex(({ cue }) => cue.id === currentCue.id);
+  if (currentIndex < 0) {
+    return null;
+  }
+  return ordered[currentIndex + direction]?.cue || null;
+}
 function imageAssetTimelineRange(project, asset) {
   const clip = project?.clips?.find((candidate) => candidate.id === asset?.clipId);
   if (!clip || clip.enabled === false) {
@@ -2459,6 +2480,7 @@ export {
   MIN_SUBTITLE_LANES,
   SUPPORTED_IMAGE_ASSET_MIME_TYPES,
   addSubtitleLane,
+  adjacentSubtitleCueInLane,
   appendAiSubtitleDrafts,
   applyCaptionStylePreset,
   applyMediaAlignmentOffset,

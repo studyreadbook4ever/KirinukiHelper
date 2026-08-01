@@ -1598,6 +1598,27 @@ function cueTimelineRange(project2, cue) {
     endMs: clip.timelineStartMs + cue.endOffsetMs
   };
 }
+function adjacentSubtitleCueInLane(project2, cueId, direction) {
+  if (!project2 || direction !== -1 && direction !== 1) {
+    return null;
+  }
+  const currentCue = project2.subtitles.find((cue) => cue.id === cueId);
+  if (!currentCue || !cueTimelineRange(project2, currentCue)) {
+    return null;
+  }
+  const ordered = project2.subtitles.flatMap((cue) => {
+    if (cue.lane !== currentCue.lane) {
+      return [];
+    }
+    const range = cueTimelineRange(project2, cue);
+    return range ? [{ cue, range }] : [];
+  }).sort((left, right) => left.range.startMs - right.range.startMs || left.range.endMs - right.range.endMs || left.cue.id.localeCompare(right.cue.id));
+  const currentIndex = ordered.findIndex(({ cue }) => cue.id === currentCue.id);
+  if (currentIndex < 0) {
+    return null;
+  }
+  return ordered[currentIndex + direction]?.cue || null;
+}
 function imageAssetTimelineRange(project2, asset) {
   const clip = project2?.clips?.find((candidate) => candidate.id === asset?.clipId);
   if (!clip || clip.enabled === false) {
@@ -2493,6 +2514,14 @@ var KEYBOARD_SHORTCUT_LETTERS = Object.freeze([
   "Y",
   "Z"
 ]);
+var CAPTION_COLOR_SHORTCUT_DIGITS = Object.freeze([
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6"
+]);
 var DANGEROUS_KEYBOARD_SHORTCUT_ACTION_TOKENS = Object.freeze([
   "reset",
   "delete",
@@ -2610,6 +2639,49 @@ function keyboardShortcutLetterFromEvent(event) {
   }
   const codeMatch = /^Key([A-Z])$/u.exec(String(event.code || ""));
   return normalizeKeyboardShortcutLetter(codeMatch?.[1] || event.key);
+}
+function captionColorShortcutDigitFromEvent(event) {
+  if (isKeyboardShortcutEventBlocked(event)) {
+    return null;
+  }
+  const code = String(event.code || "");
+  const topRowMatch = /^Digit([1-6])$/u.exec(code);
+  if (topRowMatch) {
+    return topRowMatch[1];
+  }
+  const numpadMatch = /^Numpad([1-6])$/u.exec(code);
+  if (numpadMatch) {
+    return String(event.key || "") === numpadMatch[1] ? numpadMatch[1] : null;
+  }
+  if (code && code !== "Unidentified") {
+    return null;
+  }
+  const key = String(event.key || "");
+  return CAPTION_COLOR_SHORTCUT_DIGITS.includes(
+    key
+  ) ? key : null;
+}
+function clipNavigationShortcutDirectionFromEvent(event) {
+  if (isKeyboardShortcutEventBlocked(event)) {
+    return null;
+  }
+  const code = String(event.code || "");
+  if (code === "Comma") {
+    return -1;
+  }
+  if (code === "Period") {
+    return 1;
+  }
+  if (code && code !== "Unidentified") {
+    return null;
+  }
+  if (event.key === ",") {
+    return -1;
+  }
+  if (event.key === ".") {
+    return 1;
+  }
+  return null;
 }
 function formatKeyboardShortcutHint(label, key) {
   const normalizedLabel = String(label || "").trim();
@@ -2810,23 +2882,16 @@ var EDITOR_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
     },
     {
       key: "J",
-      action: "previous-clip",
-      targetId: "previous-clip",
-      label: "\uC774\uC804 \uAD6C\uAC04\uC73C\uB85C \uC774\uB3D9",
+      action: "previous-cue-in-lane",
+      targetId: "previous-cue-in-lane",
+      label: "\uAC19\uC740 \uC790\uB9C9 \uB77C\uC778\uC758 \uC774\uC804 \uC790\uB9C9\uC73C\uB85C \uC774\uB3D9",
       trigger: "click"
     },
     {
       key: "K",
-      action: "play-toggle",
-      targetId: "play-toggle",
-      label: "\uBBF8\uB9AC\uBCF4\uAE30 \uC7AC\uC0DD \uB610\uB294 \uC77C\uC2DC\uC815\uC9C0",
-      trigger: "click"
-    },
-    {
-      key: "L",
-      action: "next-clip",
-      targetId: "next-clip",
-      label: "\uB2E4\uC74C \uAD6C\uAC04\uC73C\uB85C \uC774\uB3D9",
+      action: "next-cue-in-lane",
+      targetId: "next-cue-in-lane",
+      label: "\uAC19\uC740 \uC790\uB9C9 \uB77C\uC778\uC758 \uB2E4\uC74C \uC790\uB9C9\uC73C\uB85C \uC774\uB3D9",
       trigger: "click"
     },
     {
@@ -36512,6 +36577,8 @@ var elements = Object.fromEntries([
   "caption-style-preset",
   "toggle-caption-background",
   "caption-background-label",
+  "previous-cue-in-lane",
+  "next-cue-in-lane",
   "caption-model",
   "caption-local-status",
   "caption-advanced-settings",
@@ -38009,12 +38076,19 @@ function renderCaptionColorRegister(selectedColor) {
   elements.caption_color_register.replaceChildren();
   for (let index = 0; index < 6; index += 1) {
     const color = colors[index] || null;
+    const shortcut = String(index + 1);
     const button = document.createElement("button");
     button.type = "button";
     button.className = `caption-color-swatch${color ? "" : " placeholder"}`;
+    button.dataset.shortcut = shortcut;
+    button.setAttribute("aria-keyshortcuts", shortcut);
     if (!color) {
       button.disabled = true;
-      button.setAttribute("aria-label", `\uBE44\uC5B4 \uC788\uB294 \uCD5C\uADFC \uC0C9\uC0C1 \uC2AC\uB86F ${index}`);
+      button.setAttribute(
+        "aria-label",
+        `\uBE44\uC5B4 \uC788\uB294 \uCD5C\uADFC \uC0C9\uC0C1 \uC2AC\uB86F ${index + 1} \xB7 \uB2E8\uCD95\uD0A4 ${shortcut}`
+      );
+      button.title = `\uBE44\uC5B4 \uC788\uB294 \uC0C9\uC0C1 \uC2AC\uB86F \xB7 ${shortcut}`;
       elements.caption_color_register.append(button);
       continue;
     }
@@ -38023,15 +38097,17 @@ function renderCaptionColorRegister(selectedColor) {
     button.setAttribute("aria-pressed", String(color === activeColor));
     button.setAttribute(
       "aria-label",
-      index === 0 ? `\uAE30\uBCF8 \uD770\uC0C9 ${color}` : `\uCD5C\uADFC \uC790\uB9C9 \uC0C9\uC0C1 ${index} ${color}`
+      index === 0 ? `\uAE30\uBCF8 \uD770\uC0C9 ${color} \xB7 \uB2E8\uCD95\uD0A4 ${shortcut}` : `\uCD5C\uADFC \uC790\uB9C9 \uC0C9\uC0C1 ${index} ${color} \xB7 \uB2E8\uCD95\uD0A4 ${shortcut}`
     );
-    button.title = index === 0 ? `\uAE30\uBCF8 \uD770\uC0C9 \xB7 ${color.toUpperCase()}` : `\uCD5C\uADFC \uC0C9\uC0C1 ${index} \xB7 ${color.toUpperCase()}`;
+    button.title = index === 0 ? `\uAE30\uBCF8 \uD770\uC0C9 \xB7 ${color.toUpperCase()} \xB7 ${shortcut}` : `\uCD5C\uADFC \uC0C9\uC0C1 ${index} \xB7 ${color.toUpperCase()} \xB7 ${shortcut}`;
     elements.caption_color_register.append(button);
   }
 }
 function renderCueInspector() {
   const cue = selectedCue();
   const showingList = inspectorMode === "list";
+  const previousCueInLane = cue && !showingList ? adjacentSubtitleCueInLane(project, cue.id, -1) : null;
+  const nextCueInLane = cue && !showingList ? adjacentSubtitleCueInLane(project, cue.id, 1) : null;
   elements.cue_count.textContent = String(project.subtitles.length);
   captionInspectorTab.classList.toggle("active", !showingList);
   captionInspectorTab.setAttribute("aria-selected", String(!showingList));
@@ -38043,6 +38119,8 @@ function renderCueInspector() {
   elements.cue_list.hidden = !showingList;
   elements.cue_empty.hidden = Boolean(cue);
   elements.cue_editor.hidden = !cue;
+  elements.previous_cue_in_lane.disabled = showingList || !previousCueInLane;
+  elements.next_cue_in_lane.disabled = showingList || !nextCueInLane;
   if (!cue || showingList) {
     return;
   }
@@ -42725,6 +42803,19 @@ function bindActions() {
       "success"
     );
   });
+  const selectAdjacentCueInLane = (direction) => {
+    const cue = selectedCue();
+    const adjacentCue = cue ? adjacentSubtitleCueInLane(project, cue.id, direction) : null;
+    if (adjacentCue) {
+      selectCue(adjacentCue.id, { seek: true });
+    }
+  };
+  elements.previous_cue_in_lane.addEventListener("click", () => {
+    selectAdjacentCueInLane(-1);
+  });
+  elements.next_cue_in_lane.addEventListener("click", () => {
+    selectAdjacentCueInLane(1);
+  });
   elements.caption_style_preset.addEventListener("change", () => {
     const preset = captionStylePreset(elements.caption_style_preset.value);
     const styledProject = applyCaptionStylePreset(project, preset.id);
@@ -42941,12 +43032,26 @@ function bindActions() {
     const shortcutLetter = keyboardShortcutLetterFromEvent(event);
     const shortcutBinding = shortcutLetter ? keyboardShortcutBindingForScope("editor", shortcutLetter) : null;
     const shortcutTarget = shortcutBinding ? usableEditorShortcutTarget(shortcutBinding) : null;
+    const captionColorDigit = captionColorShortcutDigitFromEvent(event);
+    const captionColorTarget = captionColorDigit ? document.querySelector(
+      `#caption-color-register .caption-color-swatch[data-shortcut="${captionColorDigit}"][data-color]`
+    ) : null;
+    const clipNavigationDirection = clipNavigationShortcutDirectionFromEvent(event);
+    const clipNavigationTarget = clipNavigationDirection === -1 ? elements.previous_clip : clipNavigationDirection === 1 ? elements.next_clip : null;
+    const spaceCode = String(event.code || "");
+    const spaceShortcut = (spaceCode === "Space" || (!spaceCode || spaceCode === "Unidentified") && (event.key === " " || event.key === "Spacebar")) && !isKeyboardShortcutEventBlocked(event);
     if (!editingText && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
       event.preventDefault();
       event.shiftKey ? redo() : undo();
     } else if (!editingText && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
       event.preventDefault();
       redo();
+    } else if (captionColorTarget && !captionColorTarget.disabled && !captionColorTarget.closest("[hidden]")) {
+      event.preventDefault();
+      captionColorTarget.click();
+    } else if (clipNavigationTarget && !clipNavigationTarget.disabled) {
+      event.preventDefault();
+      clipNavigationTarget.click();
     } else if (shortcutBinding && shortcutTarget) {
       event.preventDefault();
       if (shortcutBinding.trigger === "focus") {
@@ -42954,7 +43059,7 @@ function bindActions() {
       } else {
         shortcutTarget.click();
       }
-    } else if (!interactive && event.code === "Space") {
+    } else if (!interactive && spaceShortcut) {
       event.preventDefault();
       void togglePlayback();
     } else if (!editingText && (event.key === "Delete" || event.key === "Backspace") && selectedTimelineRange()) {

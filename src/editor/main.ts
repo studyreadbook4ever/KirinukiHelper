@@ -3,6 +3,7 @@ import {
   EDITOR_SEED_PREFIX,
   MAX_SUBTITLE_LANES,
   addSubtitleLane,
+  adjacentSubtitleCueInLane,
   appendAiSubtitleDrafts,
   applyCaptionStylePreset,
   applyMediaAlignmentOffset,
@@ -67,7 +68,10 @@ import {
 import { STORAGE_KEY } from "../lib/core.js";
 import {
   EDITOR_SHORTCUT_BINDINGS,
+  captionColorShortcutDigitFromEvent,
+  clipNavigationShortcutDirectionFromEvent,
   formatKeyboardShortcutHint,
+  isKeyboardShortcutEventBlocked,
   keyboardShortcutBindingForScope,
   keyboardShortcutLetterFromEvent
 } from "../lib/keyboard-shortcuts.js";
@@ -370,6 +374,8 @@ const elements = Object.fromEntries([
   "caption-style-preset",
   "toggle-caption-background",
   "caption-background-label",
+  "previous-cue-in-lane",
+  "next-cue-in-lane",
   "caption-model",
   "caption-local-status",
   "caption-advanced-settings",
@@ -2132,12 +2138,19 @@ function renderCaptionColorRegister(selectedColor: string) {
   elements.caption_color_register.replaceChildren();
   for (let index = 0; index < 6; index += 1) {
     const color = colors[index] || null;
+    const shortcut = String(index + 1);
     const button = document.createElement("button");
     button.type = "button";
     button.className = `caption-color-swatch${color ? "" : " placeholder"}`;
+    button.dataset.shortcut = shortcut;
+    button.setAttribute("aria-keyshortcuts", shortcut);
     if (!color) {
       button.disabled = true;
-      button.setAttribute("aria-label", `비어 있는 최근 색상 슬롯 ${index}`);
+      button.setAttribute(
+        "aria-label",
+        `비어 있는 최근 색상 슬롯 ${index + 1} · 단축키 ${shortcut}`
+      );
+      button.title = `비어 있는 색상 슬롯 · ${shortcut}`;
       elements.caption_color_register.append(button);
       continue;
     }
@@ -2147,12 +2160,12 @@ function renderCaptionColorRegister(selectedColor: string) {
     button.setAttribute(
       "aria-label",
       index === 0
-        ? `기본 흰색 ${color}`
-        : `최근 자막 색상 ${index} ${color}`
+        ? `기본 흰색 ${color} · 단축키 ${shortcut}`
+        : `최근 자막 색상 ${index} ${color} · 단축키 ${shortcut}`
     );
     button.title = index === 0
-      ? `기본 흰색 · ${color.toUpperCase()}`
-      : `최근 색상 ${index} · ${color.toUpperCase()}`;
+      ? `기본 흰색 · ${color.toUpperCase()} · ${shortcut}`
+      : `최근 색상 ${index} · ${color.toUpperCase()} · ${shortcut}`;
     elements.caption_color_register.append(button);
   }
 }
@@ -2160,6 +2173,12 @@ function renderCaptionColorRegister(selectedColor: string) {
 function renderCueInspector() {
   const cue = selectedCue();
   const showingList = inspectorMode === "list";
+  const previousCueInLane = cue && !showingList
+    ? adjacentSubtitleCueInLane(project, cue.id, -1)
+    : null;
+  const nextCueInLane = cue && !showingList
+    ? adjacentSubtitleCueInLane(project, cue.id, 1)
+    : null;
   elements.cue_count.textContent = String(project.subtitles.length);
   captionInspectorTab.classList.toggle("active", !showingList);
   captionInspectorTab.setAttribute("aria-selected", String(!showingList));
@@ -2171,6 +2190,8 @@ function renderCueInspector() {
   elements.cue_list.hidden = !showingList;
   elements.cue_empty.hidden = Boolean(cue);
   elements.cue_editor.hidden = !cue;
+  elements.previous_cue_in_lane.disabled = showingList || !previousCueInLane;
+  elements.next_cue_in_lane.disabled = showingList || !nextCueInLane;
   if (!cue || showingList) {
     return;
   }
@@ -7491,6 +7512,21 @@ function bindActions() {
       "success"
     );
   });
+  const selectAdjacentCueInLane = (direction: -1 | 1) => {
+    const cue = selectedCue();
+    const adjacentCue = cue
+      ? adjacentSubtitleCueInLane(project, cue.id, direction)
+      : null;
+    if (adjacentCue) {
+      selectCue(adjacentCue.id, { seek: true });
+    }
+  };
+  elements.previous_cue_in_lane.addEventListener("click", () => {
+    selectAdjacentCueInLane(-1);
+  });
+  elements.next_cue_in_lane.addEventListener("click", () => {
+    selectAdjacentCueInLane(1);
+  });
   elements.caption_style_preset.addEventListener("change", () => {
     const preset = captionStylePreset(elements.caption_style_preset.value);
     const styledProject = applyCaptionStylePreset(project, preset.id);
@@ -7722,12 +7758,42 @@ function bindActions() {
     const shortcutTarget = shortcutBinding
       ? usableEditorShortcutTarget(shortcutBinding)
       : null;
+    const captionColorDigit = captionColorShortcutDigitFromEvent(event);
+    const captionColorTarget = captionColorDigit
+      ? document.querySelector<HTMLButtonElement>(
+        `#caption-color-register .caption-color-swatch[data-shortcut="${captionColorDigit}"][data-color]`
+      )
+      : null;
+    const clipNavigationDirection = clipNavigationShortcutDirectionFromEvent(event);
+    const clipNavigationTarget = clipNavigationDirection === -1
+      ? elements.previous_clip
+      : clipNavigationDirection === 1
+        ? elements.next_clip
+        : null;
+    const spaceCode = String(event.code || "");
+    const spaceShortcut = (
+      spaceCode === "Space"
+      || (
+        (!spaceCode || spaceCode === "Unidentified")
+        && (event.key === " " || event.key === "Spacebar")
+      )
+    ) && !isKeyboardShortcutEventBlocked(event);
     if (!editingText && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
       event.preventDefault();
       event.shiftKey ? redo() : undo();
     } else if (!editingText && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
       event.preventDefault();
       redo();
+    } else if (
+      captionColorTarget
+      && !captionColorTarget.disabled
+      && !captionColorTarget.closest("[hidden]")
+    ) {
+      event.preventDefault();
+      captionColorTarget.click();
+    } else if (clipNavigationTarget && !clipNavigationTarget.disabled) {
+      event.preventDefault();
+      clipNavigationTarget.click();
     } else if (shortcutBinding && shortcutTarget) {
       event.preventDefault();
       if (shortcutBinding.trigger === "focus") {
@@ -7735,7 +7801,7 @@ function bindActions() {
       } else {
         shortcutTarget.click();
       }
-    } else if (!interactive && event.code === "Space") {
+    } else if (!interactive && spaceShortcut) {
       event.preventDefault();
       void togglePlayback();
     } else if (!editingText && (event.key === "Delete" || event.key === "Backspace") && selectedTimelineRange()) {

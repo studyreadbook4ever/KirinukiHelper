@@ -2120,6 +2120,38 @@ export function cueTimelineRange(
   };
 }
 
+export function adjacentSubtitleCueInLane(
+  project: EditorProject | null | undefined,
+  cueId: unknown,
+  direction: unknown
+): EditorSubtitleCue | null {
+  if (!project || (direction !== -1 && direction !== 1)) {
+    return null;
+  }
+  const currentCue = project.subtitles.find((cue) => cue.id === cueId);
+  if (!currentCue || !cueTimelineRange(project, currentCue)) {
+    return null;
+  }
+  const ordered = project.subtitles
+    .flatMap((cue) => {
+      if (cue.lane !== currentCue.lane) {
+        return [];
+      }
+      const range = cueTimelineRange(project, cue);
+      return range ? [{ cue, range }] : [];
+    })
+    .sort((left, right) => (
+      left.range.startMs - right.range.startMs
+      || left.range.endMs - right.range.endMs
+      || left.cue.id.localeCompare(right.cue.id)
+    ));
+  const currentIndex = ordered.findIndex(({ cue }) => cue.id === currentCue.id);
+  if (currentIndex < 0) {
+    return null;
+  }
+  return ordered[currentIndex + direction]?.cue || null;
+}
+
 export function imageAssetTimelineRange(
   project: EditorProject,
   asset: EditorImageAsset

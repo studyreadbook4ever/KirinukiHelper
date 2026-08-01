@@ -2501,6 +2501,118 @@ async function main() {
     `cue 시작점과 겹친 왼쪽 handle hit target 회귀: ${JSON.stringify(cueLeftHandleHit)}`
   );
 
+  const transportShortcutProject = await readStoredProject();
+  const transportShortcutCue = transportShortcutProject?.subtitles.find(
+    (cue) => cue.id === cueId
+  );
+  const transportShortcutClips = (transportShortcutProject?.clips || []).filter(
+    (clip) => clip.enabled !== false
+  );
+  assert(
+    transportShortcutProject && transportShortcutCue && transportShortcutClips.length >= 2,
+    "Space 및 ,/. 이동 단축키를 검증할 영상 컷·자막 fixture가 없습니다."
+  );
+  const transportFirstClip = transportShortcutClips[0];
+  const transportNextClip = transportShortcutClips[1];
+  const transportFirstDurationMs = (
+    transportFirstClip.sourceEndMs - transportFirstClip.sourceStartMs
+  );
+  const transportSpaceStartMs = transportFirstClip.timelineStartMs + Math.min(
+    500,
+    Math.max(100, transportFirstDurationMs - 500)
+  );
+  await seekPausedPreviewWithRuler(transportSpaceStartMs);
+  await executeSync(`document.querySelector("#stage")?.focus();`);
+  const globalSpaceBefore = await readPreviewState();
+  await pressKey(KEY.SPACE);
+  const globalSpacePlaying = await waitUntil(async () => {
+    const state = await readPreviewState();
+    return (
+      !state.paused
+      && !state.seeking
+      && state.playheadMs >= globalSpaceBefore.playheadMs + 50
+      && await executeSync<boolean>(
+        `return document.querySelector("#play-toggle")?.classList.contains("playing") === true;`
+      )
+    ) ? state : false;
+  }, "비대화형 편집 영역에서 Space 재생");
+  await pressKey(KEY.SPACE);
+  const globalSpacePaused = await waitUntil(async () => {
+    const state = await readPreviewState();
+    return (
+      state.paused
+      && !state.seeking
+      && await executeSync<boolean>(
+        `return document.querySelector("#play-toggle")?.classList.contains("playing") === false;`
+      )
+    ) ? state : false;
+  }, "비대화형 편집 영역에서 Space 일시정지");
+
+  const waitForClipShortcutSeek = async (clip: EditorClip, label: string) => {
+    const expectedCurrentTime = (
+      (Number(transportShortcutProject.mediaAsset?.mediaOriginMs) || 0)
+      + clip.sourceStartMs
+    ) / 1000;
+    return waitUntil(async () => {
+      const state = await readPreviewState();
+      const selectedClipId = await executeSync<string | null>(`
+        return document.querySelector("#video-track .clip-block.selected")?.dataset.id || null;
+      `);
+      return (
+        selectedClipId === clip.id
+        && state.paused
+        && !state.seeking
+        && Math.abs(state.playheadMs - clip.timelineStartMs) <= 45
+        && Math.abs(state.currentTime - expectedCurrentTime) <= 0.06
+      ) ? { ...state, selectedClipId } : false;
+    }, label);
+  };
+
+  await executeSync(`document.querySelector("#stage")?.focus();`);
+  await pressKey(".");
+  const periodNextClip = await waitForClipShortcutSeek(
+    transportNextClip,
+    "마침표로 다음 구간 시작점 이동"
+  );
+  await executeSync(`document.querySelector("#stage")?.focus();`);
+  await pressKey(",");
+  const commaPreviousClip = await waitForClipShortcutSeek(
+    transportFirstClip,
+    "쉼표로 이전 구간 시작점 이동"
+  );
+
+  await clickElement(`.cue-block[data-id="${cueId}"] .cue-block-body`);
+  const transportCueTimelineMs = (
+    transportShortcutProject.clips.find(
+      (clip) => clip.id === transportShortcutCue.clipId
+    )!.timelineStartMs + transportShortcutCue.startOffsetMs
+  );
+  await waitForStoredProject(
+    (project) => (
+      project.selectedCueId === cueId
+      && project.selectedClipId === transportShortcutCue.clipId
+    ),
+    "운송 단축키 검증 뒤 원래 자막 선택 복원"
+  );
+  const transportCueRestored = await waitUntil(async () => {
+    const state = await readPreviewState();
+    return (
+      state.paused
+      && !state.seeking
+      && Math.abs(state.playheadMs - transportCueTimelineMs) <= 45
+    ) ? state : false;
+  }, "운송 단축키 검증 뒤 원래 자막 시작점 복원");
+  const transportShortcutRemap = {
+    space: {
+      before: globalSpaceBefore,
+      playing: globalSpacePlaying,
+      paused: globalSpacePaused
+    },
+    periodNextClip,
+    commaPreviousClip,
+    restored: transportCueRestored
+  };
+
   const cueHandleNudgeBefore = await executeSync(`
     const handle = document.querySelector(
       '.cue-block[data-id="' + arguments[0] + '"] .trim-handle.left'
@@ -2829,6 +2941,8 @@ async function main() {
     const state = await executeSync<{
       count: number;
       colors: Array<string | null>;
+      shortcuts: Array<string | null>;
+      ariaShortcuts: Array<string | null>;
       selected: string | null;
       placeholderCount: number;
     }>(`
@@ -2838,6 +2952,8 @@ async function main() {
       return {
         count: buttons.length,
         colors: buttons.map((button) => button.dataset.color || null),
+        shortcuts: buttons.map((button) => button.dataset.shortcut || null),
+        ariaShortcuts: buttons.map((button) => button.getAttribute("aria-keyshortcuts")),
         selected: buttons.find((button) => button.getAttribute("aria-pressed") === "true")
           ?.dataset.color || null,
         placeholderCount: buttons.filter((button) => button.disabled).length
@@ -2847,10 +2963,106 @@ async function main() {
       state.count === 6
       && state.colors.join(",")
         === "#ffffff,#00ffff,#ff00ff,#ffff00,#0000ff,#00ff00"
+      && state.shortcuts.join(",") === "1,2,3,4,5,6"
+      && state.ariaShortcuts.join(",") === "1,2,3,4,5,6"
       && state.selected === "#00ffff"
       && state.placeholderCount === 0
     ) ? state : false;
   }, "흰색 고정 + 최근 5색 레지스터 UI");
+
+  await executeSync(`
+    const input = document.querySelector("#cue-text");
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  `);
+  await pressKey("1");
+  const colorShortcutInputBlock = await waitUntil(async () => {
+    const stored = await readStoredProject();
+    const state = await executeSync<{
+      activeId: string | null;
+      text: string;
+      selectedColor: string | null;
+    }>(`
+      return {
+        activeId: document.activeElement?.id || null,
+        text: document.querySelector("#cue-text")?.value || "",
+        selectedColor: document.querySelector(
+          '#caption-color-register .caption-color-swatch[aria-pressed="true"]'
+        )?.dataset.color || null
+      };
+    `);
+    const cue = stored?.subtitles.find((candidate) => candidate.id === cueId);
+    return (
+      state.activeId === "cue-text"
+      && state.text === `${EDITED_TEXT}1`
+      && state.selectedColor === "#00ffff"
+      && cue?.text === `${EDITED_TEXT}1`
+      && cue.color === "#00ffff"
+      && stored?.recentSubtitleColors.join(",")
+        === colorRegisterProject.recentSubtitleColors.join(",")
+    ) ? {
+      ...state,
+      cueColor: cue.color,
+      recent: stored.recentSubtitleColors
+    } : false;
+  }, "자막 텍스트 input에서 숫자 1은 입력되고 색상 단축키는 차단");
+  await clearAndType("#cue-text", EDITED_TEXT);
+  await executeSync(`document.querySelector("#cue-text")?.blur();`);
+  await waitForStoredProject(
+    (project) => (
+      project.subtitles.find((cue) => cue.id === cueId)?.text === EDITED_TEXT
+      && project.subtitles.find((cue) => cue.id === cueId)?.color === "#00ffff"
+    ),
+    "숫자 색상 단축키 input 차단 검증 뒤 자막 텍스트 복원"
+  );
+
+  const captionColorShortcutSteps: Array<{
+    digit: string;
+    targetColor: string;
+    selectedColor: string;
+    recent: string[];
+  }> = [];
+  await executeSync(`document.querySelector("#stage")?.focus();`);
+  for (const digit of ["1", "2", "3", "4", "5", "6"]) {
+    const targetColor = await executeSync<string | null>(`
+      return document.querySelector(
+        '#caption-color-register .caption-color-swatch[data-shortcut="' + arguments[0] + '"]'
+      )?.dataset.color || null;
+    `, [digit]);
+    assert(targetColor, `숫자 ${digit}에 연결된 자막 색상이 없습니다.`);
+    await pressKey(digit);
+    const applied = await waitUntil(async () => {
+      const stored = await readStoredProject();
+      const selectedColor = await executeSync<string | null>(`
+        return document.querySelector(
+          '#caption-color-register .caption-color-swatch[aria-pressed="true"]'
+        )?.dataset.color || null;
+      `);
+      const cueColor = stored?.subtitles.find(
+        (candidate) => candidate.id === cueId
+      )?.color;
+      return (
+        cueColor === targetColor
+        && selectedColor === targetColor
+      ) ? {
+        selectedColor,
+        recent: [...(stored?.recentSubtitleColors || [])]
+      } : false;
+    }, `숫자 ${digit}로 현재 ${targetColor} 색상 슬롯 적용`);
+    captionColorShortcutSteps.push({
+      digit,
+      targetColor,
+      selectedColor: applied.selectedColor!,
+      recent: applied.recent
+    });
+  }
+  assert(
+    captionColorShortcutSteps[0]?.targetColor === "#ffffff",
+    `숫자 1이 기본 흰색이 아닙니다: ${JSON.stringify(captionColorShortcutSteps)}`
+  );
+
+  const recentBeforeWhiteClick = await readStoredProject();
+  assert(recentBeforeWhiteClick, "흰색 레지스터 click 검증 전 저장 프로젝트가 없습니다.");
   await clickElement(
     '#caption-color-register .caption-color-swatch[data-color="#ffffff"]'
   );
@@ -2858,10 +3070,15 @@ async function main() {
     (project) => (
       project.subtitles.find((cue) => cue.id === cueId)?.color === "#ffffff"
       && project.recentSubtitleColors?.join(",")
-        === colorRegisterProject.recentSubtitleColors.join(",")
+        === recentBeforeWhiteClick.recentSubtitleColors.join(",")
     ),
     "고정 흰색 레지스터 적용과 최근 5색 보존"
   );
+  const captionColorShortcuts = {
+    register: colorRegisterUi,
+    inputBlocked: colorShortcutInputBlock,
+    steps: captionColorShortcutSteps
+  };
   await executeSync(`
     const input = document.querySelector("#font-color");
     input.value = "#ff66aa";
@@ -2967,6 +3184,188 @@ async function main() {
     rangeCueTimelineStartBefore !== null && Number.isFinite(rangeCueTimelineStartBefore),
     `후행 자막의 삭제 전 타임라인 시각을 찾지 못했습니다: ${JSON.stringify(rangeCue)}`
   );
+
+  const firstLaneCue = rangeCueProject.subtitles.find((cue) => cue.id === cueId);
+  const firstLaneCueTimelineStart = cueTimelineStart(rangeCueProject, firstLaneCue);
+  assert(
+    firstLaneCue
+      && firstLaneCue.lane === rangeCue.lane
+      && firstLaneCueTimelineStart !== null
+      && firstLaneCueTimelineStart < rangeCueTimelineStartBefore
+      && rangeCueProject.selectedCueId === rangeCue.id,
+    `같은 레인의 앞/뒤 자막 fixture가 올바르지 않습니다: ${JSON.stringify({
+      selectedCueId: rangeCueProject.selectedCueId,
+      firstLaneCue,
+      rangeCue,
+      firstLaneCueTimelineStart,
+      rangeCueTimelineStartBefore
+    })}`
+  );
+  await pausePreviewForPointerTest();
+
+  const readCueLaneNavigationControls = () => executeSync<{
+    previousDisabled?: boolean;
+    nextDisabled?: boolean;
+  }>(`
+    return {
+      previousDisabled: document.querySelector("#previous-cue-in-lane")?.disabled,
+      nextDisabled: document.querySelector("#next-cue-in-lane")?.disabled
+    };
+  `);
+  const waitForCueLaneSelection = async (
+    cue: EditorCue,
+    expectedTimelineMs: number,
+    label: string
+  ) => {
+    const selected = await waitForStoredProject(
+      (project) => (
+        project.selectedCueId === cue.id
+        && project.selectedClipId === cue.clipId
+      ),
+      `${label} autosave`
+    );
+    const clip = selected.clips.find((candidate) => candidate.id === cue.clipId);
+    assert(clip, `${label}의 media 시각을 계산할 컷이 없습니다.`);
+    const expectedCurrentTime = (
+      (Number(selected.mediaAsset?.mediaOriginMs) || 0)
+      + clip.sourceStartMs
+      + cue.startOffsetMs
+    ) / 1000;
+    const preview = await waitUntil(async () => {
+      const state = await readPreviewState();
+      return (
+        state.paused
+        && !state.seeking
+        && Math.abs(state.playheadMs - expectedTimelineMs) <= 45
+        && Math.abs(state.currentTime - expectedCurrentTime) <= 0.06
+      ) ? state : false;
+    }, `${label} 자막 시작점 seek`);
+    return {
+      selectedCueId: selected.selectedCueId,
+      selectedClipId: selected.selectedClipId,
+      preview,
+      controls: await readCueLaneNavigationControls()
+    };
+  };
+
+  const lastCueBoundaryInitial = await waitUntil(async () => {
+    const controls = await readCueLaneNavigationControls();
+    return (
+      controls.previousDisabled === false
+      && controls.nextDisabled === true
+    ) ? controls : false;
+  }, "같은 레인 마지막 자막의 오른쪽 경계 버튼 상태");
+  await clickElement("#previous-cue-in-lane");
+  const firstCueByButton = await waitForCueLaneSelection(
+    firstLaneCue,
+    firstLaneCueTimelineStart,
+    "왼쪽 자막 버튼으로 같은 레인 앞 자막 선택"
+  );
+  assert(
+    firstCueByButton.controls.previousDisabled === true
+      && firstCueByButton.controls.nextDisabled === false,
+    `같은 레인 첫 자막의 경계 버튼 상태가 올바르지 않습니다: ${JSON.stringify(
+      firstCueByButton
+    )}`
+  );
+
+  await executeSync(`document.querySelector("#stage")?.focus();`);
+  const firstBoundaryBefore = await readPreviewState();
+  await pressKey("j");
+  await delay(220);
+  const firstBoundaryProject = await readStoredProject();
+  const firstBoundaryAfter = await readPreviewState();
+  const firstBoundaryControls = await readCueLaneNavigationControls();
+  assert(
+    firstBoundaryProject?.selectedCueId === firstLaneCue.id
+      && firstBoundaryProject.selectedClipId === firstLaneCue.clipId
+      && firstBoundaryAfter.paused
+      && Math.abs(firstBoundaryAfter.playheadMs - firstBoundaryBefore.playheadMs) <= 5
+      && Math.abs(firstBoundaryAfter.currentTime - firstBoundaryBefore.currentTime) <= 0.02
+      && firstBoundaryControls.previousDisabled === true
+      && firstBoundaryControls.nextDisabled === false,
+    `첫 자막에서 J가 끝 자막으로 순환했습니다: ${JSON.stringify({
+      project: firstBoundaryProject,
+      before: firstBoundaryBefore,
+      after: firstBoundaryAfter,
+      controls: firstBoundaryControls
+    })}`
+  );
+
+  await clickElement("#next-cue-in-lane");
+  const lastCueByButton = await waitForCueLaneSelection(
+    rangeCue,
+    rangeCueTimelineStartBefore,
+    "오른쪽 자막 버튼으로 같은 레인 뒤 자막 선택"
+  );
+  assert(
+    lastCueByButton.controls.previousDisabled === false
+      && lastCueByButton.controls.nextDisabled === true,
+    `같은 레인 마지막 자막의 경계 버튼 상태가 올바르지 않습니다: ${JSON.stringify(
+      lastCueByButton
+    )}`
+  );
+
+  await executeSync(`document.querySelector("#stage")?.focus();`);
+  const lastBoundaryBefore = await readPreviewState();
+  await pressKey("k");
+  await delay(220);
+  const lastBoundaryProject = await readStoredProject();
+  const lastBoundaryAfter = await readPreviewState();
+  const lastBoundaryControls = await readCueLaneNavigationControls();
+  assert(
+    lastBoundaryProject?.selectedCueId === rangeCue.id
+      && lastBoundaryProject.selectedClipId === rangeCue.clipId
+      && lastBoundaryAfter.paused
+      && Math.abs(lastBoundaryAfter.playheadMs - lastBoundaryBefore.playheadMs) <= 5
+      && Math.abs(lastBoundaryAfter.currentTime - lastBoundaryBefore.currentTime) <= 0.02
+      && lastBoundaryControls.previousDisabled === false
+      && lastBoundaryControls.nextDisabled === true,
+    `마지막 자막에서 K가 첫 자막으로 순환했습니다: ${JSON.stringify({
+      project: lastBoundaryProject,
+      before: lastBoundaryBefore,
+      after: lastBoundaryAfter,
+      controls: lastBoundaryControls
+    })}`
+  );
+
+  await executeSync(`document.querySelector("#stage")?.focus();`);
+  await pressKey("j");
+  const firstCueByJ = await waitForCueLaneSelection(
+    firstLaneCue,
+    firstLaneCueTimelineStart,
+    "J로 같은 레인 왼쪽 자막 선택"
+  );
+  await executeSync(`document.querySelector("#stage")?.focus();`);
+  await pressKey("k");
+  const lastCueByK = await waitForCueLaneSelection(
+    rangeCue,
+    rangeCueTimelineStartBefore,
+    "K로 같은 레인 오른쪽 자막 선택"
+  );
+  const cueLaneNavigation = {
+    initialLastBoundary: lastCueBoundaryInitial,
+    buttons: {
+      previous: firstCueByButton,
+      next: lastCueByButton
+    },
+    shortcuts: {
+      previous: firstCueByJ,
+      next: lastCueByK
+    },
+    noWrap: {
+      first: {
+        before: firstBoundaryBefore,
+        after: firstBoundaryAfter,
+        controls: firstBoundaryControls
+      },
+      last: {
+        before: lastBoundaryBefore,
+        after: lastBoundaryAfter,
+        controls: lastBoundaryControls
+      }
+    }
+  };
 
   await clickElement('.clip-block[data-id="clip-selection-a"] .clip-block-body');
   await clickElement("#set-range-start");
@@ -4477,9 +4876,11 @@ async function main() {
     color: coloredCueProject.subtitles.find((cue) => cue.id === cueId)?.color,
     colorRegister: {
       ui: colorRegisterUi,
-      recent: colorRegisterProject.recentSubtitleColors
+      recent: colorRegisterProject.recentSubtitleColors,
+      shortcuts: captionColorShortcuts
     },
     laneUi,
+    cueLaneNavigation,
     captionContextMenu,
     simultaneousCueLane: simultaneousCue.lane,
     simultaneousOverlayCount,
@@ -6330,6 +6731,7 @@ async function main() {
     },
     semantics: {
       nativeSpaceButton,
+      transportShortcutRemap,
       localDrafts: localDraftSmoke,
       recoveryHub: recoveryHubSmoke,
       multitrackUi: multitrackUiProbe,

@@ -11,6 +11,7 @@ import {
   MIN_SUBTITLE_LANES,
   SUPPORTED_IMAGE_ASSET_MIME_TYPES,
   addSubtitleLane,
+  adjacentSubtitleCueInLane,
   appendAiSubtitleDrafts,
   applyCaptionStylePreset,
   applyMediaAlignmentOffset,
@@ -854,6 +855,114 @@ test("자막 텍스트·표시 구간·위치는 사용자 수정 상태로 보�
     endMs: 2_900
   });
   assert.equal(cueAtTimeline(project, 1_000)?.id, "cue-1");
+});
+
+test("같은 UI 레인의 활성 자막 이웃을 컷 경계 너머까지 시간순으로 찾는다", () => {
+  const threeClipProject = createEditorProjectFromCapture({
+    ...captureState,
+    segments: [
+      ...captureState.segments,
+      {
+        id: "third",
+        startSeconds: 50,
+        endSeconds: 55,
+        description: "셋째 구간"
+      }
+    ]
+  });
+  const base = required(normalizeEditorProject({
+    ...threeClipProject,
+    clips: threeClipProject.clips.map((clip) => (
+      clip.id === "clip-second" ? { ...clip, enabled: false } : clip
+    ))
+  }));
+  const left = createSubtitleCue(base, {
+    id: "lane-0-left",
+    clipId: "clip-first",
+    startOffsetMs: 500,
+    endOffsetMs: 1_000,
+    lane: 0
+  });
+  const otherLane = createSubtitleCue(base, {
+    id: "lane-1-interleaved",
+    clipId: "clip-first",
+    startOffsetMs: 1_200,
+    endOffsetMs: 1_500,
+    lane: 1
+  });
+  const middle = createSubtitleCue(base, {
+    id: "lane-0-middle",
+    clipId: "clip-first",
+    startOffsetMs: 2_000,
+    endOffsetMs: 2_500,
+    lane: 0
+  });
+  const hidden = createSubtitleCue(base, {
+    id: "lane-0-disabled-clip",
+    clipId: "clip-second",
+    startOffsetMs: 100,
+    endOffsetMs: 500,
+    lane: 0
+  });
+  const right = createSubtitleCue(base, {
+    id: "lane-0-right",
+    clipId: "clip-third",
+    startOffsetMs: 200,
+    endOffsetMs: 800,
+    lane: 0
+  });
+  const project = {
+    ...base,
+    subtitles: [right, otherLane, hidden, left, middle]
+  };
+
+  assert.equal(adjacentSubtitleCueInLane(project, left.id, -1), null);
+  assert.equal(adjacentSubtitleCueInLane(project, left.id, 1)?.id, middle.id);
+  assert.equal(adjacentSubtitleCueInLane(project, middle.id, -1)?.id, left.id);
+  assert.equal(adjacentSubtitleCueInLane(project, middle.id, 1)?.id, right.id);
+  assert.equal(adjacentSubtitleCueInLane(project, right.id, -1)?.id, middle.id);
+  assert.equal(adjacentSubtitleCueInLane(project, right.id, 1), null);
+  assert.equal(adjacentSubtitleCueInLane(project, otherLane.id, -1), null);
+  assert.equal(adjacentSubtitleCueInLane(project, otherLane.id, 1), null);
+  assert.equal(adjacentSubtitleCueInLane(project, hidden.id, -1), null);
+  assert.equal(adjacentSubtitleCueInLane(project, hidden.id, 1), null);
+  assert.equal(adjacentSubtitleCueInLane(project, "missing", 1), null);
+  assert.equal(adjacentSubtitleCueInLane(project, left.id, 0), null);
+  assert.equal(adjacentSubtitleCueInLane(project, left.id, "1"), null);
+  assert.equal(adjacentSubtitleCueInLane(null, left.id, 1), null);
+});
+
+test("같은 시각의 자막 이웃은 종료 시각과 ID로 안정적으로 정렬한다", () => {
+  const base = createEditorProjectFromCapture(captureState);
+  const short = createSubtitleCue(base, {
+    id: "tie-short",
+    clipId: "clip-first",
+    startOffsetMs: 100,
+    endOffsetMs: 400,
+    lane: 0
+  });
+  const sameEndLast = createSubtitleCue(base, {
+    id: "tie-z",
+    clipId: "clip-first",
+    startOffsetMs: 100,
+    endOffsetMs: 500,
+    lane: 0
+  });
+  const sameEndFirst = createSubtitleCue(base, {
+    id: "tie-a",
+    clipId: "clip-first",
+    startOffsetMs: 100,
+    endOffsetMs: 500,
+    lane: 0
+  });
+  const project = {
+    ...base,
+    subtitles: [sameEndLast, sameEndFirst, short]
+  };
+
+  assert.equal(adjacentSubtitleCueInLane(project, short.id, 1)?.id, sameEndFirst.id);
+  assert.equal(adjacentSubtitleCueInLane(project, sameEndFirst.id, -1)?.id, short.id);
+  assert.equal(adjacentSubtitleCueInLane(project, sameEndFirst.id, 1)?.id, sameEndLast.id);
 });
 
 test("저장된 자동 AI 자막만 기본 위치로 이관하고 사람 소유 위치는 보존한다", () => {

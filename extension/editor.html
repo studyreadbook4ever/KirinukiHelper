@@ -169,14 +169,14 @@
           </div>
 
           <div class="transport">
-            <button id="previous-clip" class="transport-button" type="button" aria-label="이전 구간">
+            <button id="previous-clip" class="transport-button" type="button" aria-label="이전 구간" aria-keyshortcuts="," title="이전 구간으로 이동 (단축키 ,)">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14"/><path d="m18 6-9 6 9 6Z"/></svg>
             </button>
-            <button id="play-toggle" class="play-button" type="button" aria-label="재생">
+            <button id="play-toggle" class="play-button" type="button" aria-label="재생" aria-keyshortcuts="Space" title="미리보기 재생 또는 일시정지 (단축키 Space)">
               <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>
               <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>
             </button>
-            <button id="next-clip" class="transport-button" type="button" aria-label="다음 구간">
+            <button id="next-clip" class="transport-button" type="button" aria-label="다음 구간" aria-keyshortcuts="." title="다음 구간으로 이동 (단축키 .)">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14"/><path d="m6 6 9 6-9 6Z"/></svg>
             </button>
             <span id="current-time" class="timecode">00:00:00.000</span>
@@ -329,6 +329,11 @@
                 <span class="caption-background-swatch" aria-hidden="true"></span>
                 <span id="caption-background-label">이 자막 검은 상자 켜기 · X</span>
               </button>
+
+              <div class="cue-lane-navigation" role="group" aria-label="같은 자막 레인의 좌우 자막 이동">
+                <button id="previous-cue-in-lane" type="button" aria-label="같은 자막 레인의 왼쪽 자막으로 이동" disabled>← 왼쪽 자막 · J</button>
+                <button id="next-cue-in-lane" type="button" aria-label="같은 자막 레인의 오른쪽 자막으로 이동" disabled>오른쪽 자막 · K →</button>
+              </div>
 
               <div class="field-group">
                 <span class="field-label">화면 위치</span>
