@@ -1011,7 +1011,7 @@ async function assertPlayingSelectionDoesNotSeek({
   return { start, beforeClick, afterClick, selectedId: selected[selectionKey] };
 }
 
-async function assertPlayingCrossClipCueSelectionSeeks({
+async function assertPlayingCueSelectionSeeks({
   selector,
   selectionId,
   itemStartMs,
@@ -1029,8 +1029,8 @@ async function assertPlayingCrossClipCueSelectionSeeks({
   label: string;
 }) {
   assert(
-    Math.abs(playbackTimelineMs - itemStartMs) >= 600,
-    `${label} 재생 위치와 다른 컷 자막 시작점이 충분히 떨어져 있지 않습니다.`
+    Math.abs(playbackTimelineMs - itemStartMs) >= 1_500,
+    `${label} 재생 위치와 자막 시작점이 충분히 떨어져 있지 않습니다.`
   );
   const start = await startPreviewAtTimeline(playbackTimelineMs);
   const beforeClick = await readPreviewState();
@@ -1040,7 +1040,7 @@ async function assertPlayingCrossClipCueSelectionSeeks({
       candidate.selectedCueId === selectionId
       && candidate.selectedClipId === itemClipId
     ),
-    `${label} 재생 중 다른 컷 선택 autosave`
+    `${label} 재생 중 자막 선택 autosave`
   );
   if (expectedInspectorTab) {
     await waitUntil(
@@ -1069,7 +1069,7 @@ async function assertPlayingCrossClipCueSelectionSeeks({
       && state.currentTime >= expectedPreviewSeconds - 0.06
       && state.currentTime <= expectedPreviewSeconds + 1.2
     ) ? state : false;
-  }, `${label} 재생 중 다른 컷 자막 시작점 seek 후 재생 유지`);
+  }, `${label} 재생 중 자막 시작점 seek 후 재생 유지`);
   await pausePreviewForPointerTest();
   return {
     start,
@@ -3843,6 +3843,31 @@ async function main() {
       Math.max(625, durationMs - 1_500)
     );
   };
+  const playbackTimelineWithinClipAwayFrom = (
+    clip: EditorClip,
+    itemStartMs: number
+  ) => {
+    const durationMs = clip.sourceEndMs - clip.sourceStartMs;
+    const candidates = [
+      clip.timelineStartMs + 250,
+      clip.timelineStartMs + Math.max(250, durationMs - 750)
+    ];
+    const target = candidates.reduce((best, candidate) => (
+      Math.abs(candidate - itemStartMs) > Math.abs(best - itemStartMs)
+        ? candidate
+        : best
+    ));
+    assert(
+      Math.abs(target - itemStartMs) >= 1_500,
+      `같은 컷 자막 재생 검증 위치가 시작점과 충분히 떨어져 있지 않습니다: ${JSON.stringify({
+        clipId: clip.id,
+        durationMs,
+        itemStartMs,
+        target
+      })}`
+    );
+    return target;
+  };
 
   const playheadTestClip = playbackPointerProject.clips.find(
     (clip) => clip.enabled !== false && clip.id !== playbackPointerCue.clipId
@@ -4043,7 +4068,7 @@ async function main() {
     playingSelectionResults.push({
       label: selectionCase.label,
       result: selectionCase.selectionKey === "selectedCueId"
-        ? await assertPlayingCrossClipCueSelectionSeeks({
+        ? await assertPlayingCueSelectionSeeks({
           ...selectionCase,
           playbackTimelineMs: playbackTimelineAwayFrom(selectionCase.itemClipId)
         })
@@ -4060,7 +4085,7 @@ async function main() {
     cueClipForPointer,
     playbackPointerCue.startOffsetMs
   );
-  const playingCueListSelection = await assertPlayingCrossClipCueSelectionSeeks({
+  const playingCueListSelection = await assertPlayingCueSelectionSeeks({
     selector: `.cue-list-item[data-id="${cueId}"]`,
     selectionId: cueId,
     itemStartMs: cueListStartMs,
@@ -4068,6 +4093,30 @@ async function main() {
     playbackTimelineMs: playbackTimelineAwayFrom(playbackPointerCue.clipId),
     expectedInspectorTab: "#caption-mode-tab",
     label: "자막 목록"
+  });
+
+  const sameClipPlaybackTimelineMs = playbackTimelineWithinClipAwayFrom(
+    cueClipForPointer,
+    cueListStartMs
+  );
+  const playingSameClipCueBlockSelection = await assertPlayingCueSelectionSeeks({
+    selector: `.cue-block[data-id="${cueId}"] .cue-block-body`,
+    selectionId: cueId,
+    itemStartMs: cueListStartMs,
+    itemClipId: playbackPointerCue.clipId,
+    playbackTimelineMs: sameClipPlaybackTimelineMs,
+    expectedInspectorTab: "#caption-mode-tab",
+    label: "같은 컷 자막 블록"
+  });
+  await clickElement("#cue-list-tab");
+  const playingSameClipCueListSelection = await assertPlayingCueSelectionSeeks({
+    selector: `.cue-list-item[data-id="${cueId}"]`,
+    selectionId: cueId,
+    itemStartMs: cueListStartMs,
+    itemClipId: playbackPointerCue.clipId,
+    playbackTimelineMs: sameClipPlaybackTimelineMs,
+    expectedInspectorTab: "#caption-mode-tab",
+    label: "같은 컷 자막 목록"
   });
 
   const pausedSelectionResults = [];
@@ -4206,6 +4255,8 @@ async function main() {
     playhead: playheadPointerContract,
     playingSelections: playingSelectionResults,
     playingCueListSelection,
+    playingSameClipCueBlockSelection,
+    playingSameClipCueListSelection,
     pausedSelections: pausedSelectionResults,
     pausedCueListSelection,
     timedBlockPlaybackDrags
