@@ -976,6 +976,31 @@ function applyCaptionStylePreset(project2, presetId) {
     updatedAt: nowIso()
   };
 }
+function captionBackgroundEnabled(defaults) {
+  const backgroundColor = String(defaults?.backgroundColor || "").trim();
+  return Boolean(
+    backgroundColor && backgroundColor.toLowerCase() !== "transparent" && !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/iu.test(backgroundColor)
+  );
+}
+function setCaptionBackgroundEnabled(project2, enabled) {
+  const currentPresetId = normalizeCaptionStylePresetId(
+    project2.subtitleDefaults.stylePresetId
+  );
+  const nextPresetId = enabled && currentPresetId === DEFAULT_CAPTION_STYLE_PRESET_ID ? BLACK_BOX_CAPTION_STYLE_PRESET_ID : !enabled && currentPresetId === BLACK_BOX_CAPTION_STYLE_PRESET_ID ? DEFAULT_CAPTION_STYLE_PRESET_ID : currentPresetId;
+  const blackBoxDefaults = normalizedCaptionStyleDefaults(
+    BLACK_BOX_CAPTION_STYLE_PRESET_ID
+  );
+  return {
+    ...project2,
+    subtitleDefaults: {
+      ...project2.subtitleDefaults,
+      stylePresetId: nextPresetId,
+      backgroundColor: enabled ? blackBoxDefaults.backgroundColor : "transparent",
+      backgroundRadiusEm: enabled ? blackBoxDefaults.backgroundRadiusEm : project2.subtitleDefaults.backgroundRadiusEm
+    },
+    updatedAt: nowIso()
+  };
+}
 function mergeCaptureIntoEditorProject(project2, captureState = {}) {
   const normalized = normalizeEditorProject(project2) || createEditorProjectFromCapture(captureState);
   const alignmentOffsetMs = Math.round(finiteNumber(normalized.broadcastSession?.alignmentOffsetMs));
@@ -33464,7 +33489,7 @@ function drawCaption(context, canvas, project2, cue) {
     safeInset
   });
   const backgroundColor = String(defaults.backgroundColor || "transparent").trim();
-  if (backgroundColor && backgroundColor !== "transparent" && !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/iu.test(backgroundColor)) {
+  if (captionBackgroundEnabled(defaults)) {
     context.fillStyle = backgroundColor;
     const rawBackgroundRadiusEm = Number(defaults.backgroundRadiusEm);
     const backgroundRadiusEm = Number.isFinite(rawBackgroundRadiusEm) ? Math.max(0, rawBackgroundRadiusEm) : 0.14;
@@ -36473,6 +36498,8 @@ var elements = Object.fromEntries([
   "caption-agent-endpoint",
   "caption-agent-token",
   "caption-style-preset",
+  "toggle-caption-background",
+  "caption-background-label",
   "caption-model",
   "caption-local-status",
   "caption-advanced-settings",
@@ -36657,6 +36684,7 @@ var undoStack = [];
 var redoStack = [];
 var activeJobController = null;
 var pointerEditActive = false;
+var pointerEditPreservePreviewClock = false;
 var inspectorMode = "selected";
 var fieldEditSession = null;
 var focusBeforeJob = null;
@@ -37716,6 +37744,13 @@ function renderHeader() {
       project.subtitleDefaults?.stylePresetId || DEFAULT_CAPTION_STYLE_PRESET_ID
     );
   }
+  const backgroundEnabled = captionBackgroundEnabled(project.subtitleDefaults);
+  elements.toggle_caption_background.classList.toggle("active", backgroundEnabled);
+  elements.toggle_caption_background.setAttribute(
+    "aria-pressed",
+    String(backgroundEnabled)
+  );
+  elements.caption_background_label.textContent = backgroundEnabled ? "\uAC80\uC740 \uC0AC\uAC01 \uBC30\uACBD \uB044\uAE30" : "\uAC80\uC740 \uC0AC\uAC01 \uBC30\uACBD \uCF1C\uAE30";
   const warnings = Array.isArray(project.ai?.warnings) ? project.ai.warnings.filter((warning) => warning && typeof warning.code === "string" && warning.code.trim()) : [];
   elements.caption_agent_warning.hidden = warnings.length === 0;
   if (warnings.length > 0) {
@@ -38372,6 +38407,10 @@ function bindTimelineRangeHandle(handle, side, event) {
     if (moveEvent.pointerId !== pointerId) {
       return;
     }
+    if ((moveEvent.buttons & 1) === 0) {
+      finish(moveEvent);
+      return;
+    }
     const rect = elements.timeline_content.getBoundingClientRect();
     const timelineMs = (moveEvent.clientX - rect.left) / pixelsPerSecond * 1e3;
     setTimelineRangeBoundary(side, timelineMs, { constrain: true });
@@ -38383,6 +38422,7 @@ function bindTimelineRangeHandle(handle, side, event) {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", finish);
     window.removeEventListener("pointercancel", finish);
+    handle.removeEventListener("lostpointercapture", finish);
     if (handle.hasPointerCapture(pointerId)) {
       handle.releasePointerCapture(pointerId);
     }
@@ -38392,6 +38432,7 @@ function bindTimelineRangeHandle(handle, side, event) {
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", finish);
   window.addEventListener("pointercancel", finish);
+  handle.addEventListener("lostpointercapture", finish);
 }
 function deleteSelectedTimelineRange() {
   const range = selectedTimelineRange();
@@ -38577,6 +38618,8 @@ function makeHandle(side, onStart, onNudge, {
 }
 function beginPointerHistory() {
   if (!pointerEditActive) {
+    pointerEditPreservePreviewClock = previewPlaybackIsActive();
+    syncProjectPlayheadToPreviewClock();
     pushUndo(cloneProject(project));
     pointerEditActive = true;
     renderTimelineRange();
@@ -38592,30 +38635,58 @@ function endPointerHistory({ clipStructureChanged = false } = {}) {
   if (clipStructureChanged) {
     clearTimelineRangeSelection({ render: false });
   }
+  const preservePreviewClock = pointerEditPreservePreviewClock || previewPlaybackIsActive();
+  pointerEditPreservePreviewClock = false;
+  if (preservePreviewClock) {
+    syncProjectPlayheadToPreviewClock({ allowPaused: true });
+  }
   renderAll({ keepScroll: true });
   scheduleSave();
-  void syncPreviewToPlayhead();
+  if (clipStructureChanged) {
+    void syncPreviewToPlayhead();
+  }
 }
 function bindClipTrim(handle, clip, side, event) {
+  if (event.button !== 0 || !event.isPrimary) {
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
-  const originalProject = project;
-  beginPointerHistory();
   const startX = event.clientX;
   const originalStart = clip.sourceStartMs;
   const originalEnd = clip.sourceEndMs;
   const maxDuration = project.mediaAsset?.durationMs || Infinity;
   const pointerId = event.pointerId;
   const block = handle.closest(".clip-block");
+  let originalProject = null;
+  let dragging = false;
   handle.setPointerCapture(event.pointerId);
   const move = (moveEvent) => {
     if (moveEvent.pointerId !== pointerId) {
       return;
     }
-    const delta = Math.round((moveEvent.clientX - startX) / pixelsPerSecond * 1e3);
+    if ((moveEvent.buttons & 1) === 0) {
+      finish(moveEvent);
+      return;
+    }
+    const deltaX = moveEvent.clientX - startX;
+    if (!dragging && Math.abs(deltaX) < TIMED_BLOCK_DRAG_ACTIVATION_PX) {
+      return;
+    }
+    const delta = Math.round(deltaX / pixelsPerSecond * 1e3);
     const start = side === "left" ? Math.max(0, Math.min(originalEnd - 100, originalStart + delta)) : originalStart;
     const end = side === "right" ? Math.min(maxDuration, Math.max(originalStart + 100, originalEnd + delta)) : originalEnd;
-    project = updateClipTrim(originalProject, clip.id, { sourceStartMs: start, sourceEndMs: end });
+    if (!dragging && start === originalStart && end === originalEnd) {
+      return;
+    }
+    if (!dragging) {
+      dragging = true;
+      beginPointerHistory();
+      originalProject = project;
+    }
+    project = withCurrentTimelinePlayhead(
+      updateClipTrim(originalProject, clip.id, { sourceStartMs: start, sourceEndMs: end })
+    );
     const nextClip = project.clips.find((candidate) => candidate.id === clip.id);
     if (block && nextClip) {
       block.style.left = `${timelineX(nextClip.timelineStartMs)}px`;
@@ -38630,16 +38701,24 @@ function bindClipTrim(handle, clip, side, event) {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", finish);
     window.removeEventListener("pointercancel", finish);
+    handle.removeEventListener("lostpointercapture", finish);
     if (handle.hasPointerCapture(pointerId)) {
       handle.releasePointerCapture(pointerId);
+    }
+    if (!dragging) {
+      return;
     }
     endPointerHistory({ clipStructureChanged: true });
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", finish);
   window.addEventListener("pointercancel", finish);
+  handle.addEventListener("lostpointercapture", finish);
 }
 function bindCueTrim(handle, cue, side, event) {
+  if (event.button !== 0 || !event.isPrimary) {
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   beginPointerHistory();
@@ -38663,6 +38742,10 @@ function bindCueTrim(handle, cue, side, event) {
   handle.setPointerCapture(event.pointerId);
   const move = (moveEvent) => {
     if (moveEvent.pointerId !== pointerId) {
+      return;
+    }
+    if ((moveEvent.buttons & 1) === 0) {
+      finish(moveEvent);
       return;
     }
     const delta = Math.round((moveEvent.clientX - startX) / pixelsPerSecond * 1e3);
@@ -38709,7 +38792,7 @@ function bindCueTrim(handle, cue, side, event) {
       return;
     }
     overlapBlocked = false;
-    project = nextProject;
+    project = withCurrentTimelinePlayhead(nextProject);
     const nextCue = project.subtitles.find((candidate) => candidate.id === cue.id);
     const range = nextCue ? cueTimelineRange(project, nextCue) : null;
     if (block && range) {
@@ -38725,6 +38808,7 @@ function bindCueTrim(handle, cue, side, event) {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", finish);
     window.removeEventListener("pointercancel", finish);
+    handle.removeEventListener("lostpointercapture", finish);
     if (handle.hasPointerCapture(pointerId)) {
       handle.releasePointerCapture(pointerId);
     }
@@ -38736,8 +38820,12 @@ function bindCueTrim(handle, cue, side, event) {
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", finish);
   window.addEventListener("pointercancel", finish);
+  handle.addEventListener("lostpointercapture", finish);
 }
 function bindImageAssetTrim(handle, asset, side, event) {
+  if (event.button !== 0 || !event.isPrimary) {
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   beginPointerHistory();
@@ -38761,6 +38849,10 @@ function bindImageAssetTrim(handle, asset, side, event) {
     if (moveEvent.pointerId !== pointerId) {
       return;
     }
+    if ((moveEvent.buttons & 1) === 0) {
+      finish(moveEvent);
+      return;
+    }
     const delta = Math.round((moveEvent.clientX - startX) / pixelsPerSecond * 1e3);
     const rawStartOffsetMs = side === "left" ? Math.max(0, Math.min(originalEnd - 100, originalStart + delta)) : originalStart;
     const rawEndOffsetMs = side === "right" ? Math.min(duration, Math.max(originalStart + 100, originalEnd + delta)) : originalEnd;
@@ -38778,7 +38870,9 @@ function bindImageAssetTrim(handle, asset, side, event) {
     );
     const startOffsetMs = side === "left" ? snappedBoundaryTimelineMs - clip.timelineStartMs : originalStart;
     const endOffsetMs = side === "right" ? snappedBoundaryTimelineMs - clip.timelineStartMs : originalEnd;
-    project = updateImageAsset(originalProject, asset.id, { startOffsetMs, endOffsetMs });
+    project = withCurrentTimelinePlayhead(
+      updateImageAsset(originalProject, asset.id, { startOffsetMs, endOffsetMs })
+    );
     const nextAsset = selectedImageAsset();
     const range = nextAsset ? imageAssetTimelineRange(project, nextAsset) : null;
     if (block && range) {
@@ -38794,6 +38888,7 @@ function bindImageAssetTrim(handle, asset, side, event) {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", finish);
     window.removeEventListener("pointercancel", finish);
+    handle.removeEventListener("lostpointercapture", finish);
     if (handle.hasPointerCapture(pointerId)) {
       handle.releasePointerCapture(pointerId);
     }
@@ -38802,9 +38897,10 @@ function bindImageAssetTrim(handle, asset, side, event) {
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", finish);
   window.addEventListener("pointercancel", finish);
+  handle.addEventListener("lostpointercapture", finish);
 }
 function bindTimedBlockMove(body, item, kind, event) {
-  if (event.button !== 0) {
+  if (event.button !== 0 || !event.isPrimary) {
     return;
   }
   event.stopPropagation();
@@ -38825,6 +38921,10 @@ function bindTimedBlockMove(body, item, kind, event) {
   body.setPointerCapture(pointerId);
   const move = (moveEvent) => {
     if (moveEvent.pointerId !== pointerId) {
+      return;
+    }
+    if ((moveEvent.buttons & 1) === 0) {
+      finish(moveEvent);
       return;
     }
     const deltaX = moveEvent.clientX - startX;
@@ -38905,7 +39005,7 @@ function bindTimedBlockMove(body, item, kind, event) {
       return;
     }
     overlapBlocked = false;
-    project = nextProject;
+    project = withCurrentTimelinePlayhead(nextProject);
     const range = kind === "subtitle" ? cueTimelineRange(
       project,
       project.subtitles.find((candidate) => candidate.id === item.id)
@@ -38930,6 +39030,7 @@ function bindTimedBlockMove(body, item, kind, event) {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", finish);
     window.removeEventListener("pointercancel", finish);
+    body.removeEventListener("lostpointercapture", finish);
     if (body.hasPointerCapture(pointerId)) {
       body.releasePointerCapture(pointerId);
     }
@@ -38947,11 +39048,15 @@ function bindTimedBlockMove(body, item, kind, event) {
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", finish);
   window.addEventListener("pointercancel", finish);
+  body.addEventListener("lostpointercapture", finish);
 }
 function audioRegionHasOverlap(candidateProject, regionId) {
   return findAudioRegionOverlaps(candidateProject).some((overlap) => overlap.firstRegionId === regionId || overlap.secondRegionId === regionId);
 }
 function bindAudioTrim(handle, region, side, event) {
+  if (event.button !== 0 || !event.isPrimary) {
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   beginPointerHistory();
@@ -38966,6 +39071,10 @@ function bindAudioTrim(handle, region, side, event) {
   handle.setPointerCapture(pointerId);
   const move = (moveEvent) => {
     if (moveEvent.pointerId !== pointerId) {
+      return;
+    }
+    if ((moveEvent.buttons & 1) === 0) {
+      finish(moveEvent);
       return;
     }
     const delta = Math.round((moveEvent.clientX - startX) / pixelsPerSecond * 1e3);
@@ -38994,6 +39103,7 @@ function bindAudioTrim(handle, region, side, event) {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", finish);
     window.removeEventListener("pointercancel", finish);
+    handle.removeEventListener("lostpointercapture", finish);
     if (handle.hasPointerCapture(pointerId)) {
       handle.releasePointerCapture(pointerId);
     }
@@ -39005,6 +39115,7 @@ function bindAudioTrim(handle, region, side, event) {
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", finish);
   window.addEventListener("pointercancel", finish);
+  handle.addEventListener("lostpointercapture", finish);
 }
 function renderTimeline({ keepScroll = false } = {}) {
   const scrollLeft = elements.timeline_scroll.scrollLeft;
@@ -39050,8 +39161,11 @@ function renderTimeline({ keepScroll = false } = {}) {
     body.className = "clip-block-body";
     body.textContent = `${index + 1} \xB7 ${clip.note || "\uC0AC\uC6A9\uC790 \uC120\uD0DD"}`;
     body.addEventListener("click", () => {
+      const seekSelection = shouldSeekTimelineItemSelection();
       project = { ...project, selectedClipId: clip.id };
-      void seekTimeline(clip.timelineStartMs);
+      if (seekSelection) {
+        void seekTimeline(clip.timelineStartMs);
+      }
       renderAll({ keepScroll: true });
       const nextBlock = [...elements.video_track.querySelectorAll(".clip-block")].find((candidate) => candidate.dataset.id === clip.id);
       nextBlock?.querySelector(".clip-block-body")?.focus({ preventScroll: true });
@@ -39553,6 +39667,62 @@ function previewTimelineMsFromVideoClock() {
     )
   );
 }
+function previewPlaybackIsActive() {
+  const video = elements.preview_video;
+  return Boolean(
+    mediaFile && video && !video.paused && !video.ended
+  );
+}
+function previewTimelineMsForProject(candidateProject) {
+  if (!mediaFile || !activeClipId) {
+    return null;
+  }
+  const clip = candidateProject.clips.find(
+    (candidate) => candidate.id === activeClipId && candidate.enabled !== false
+  );
+  if (!clip) {
+    return null;
+  }
+  const pendingSourceMs = Number(pendingPreviewSeek?.sourceMs);
+  const sourceMs = Number.isFinite(pendingSourceMs) ? pendingSourceMs : previewSecondsToSourceMs(elements.preview_video.currentTime);
+  if (!Number.isFinite(sourceMs)) {
+    return null;
+  }
+  return Math.max(
+    clip.timelineStartMs,
+    Math.min(
+      clip.timelineStartMs + clipDurationMs(clip),
+      clip.timelineStartMs + sourceMs - clip.sourceStartMs
+    )
+  );
+}
+function syncProjectPlayheadToPreviewClock({ allowPaused = false } = {}) {
+  if (!allowPaused && !previewPlaybackIsActive()) {
+    return false;
+  }
+  const playheadMs = previewTimelineMsForProject(project);
+  if (playheadMs === null) {
+    return false;
+  }
+  project = {
+    ...project,
+    playheadMs
+  };
+  return true;
+}
+function withCurrentTimelinePlayhead(nextProject) {
+  return nextProject.playheadMs === project.playheadMs ? nextProject : {
+    ...nextProject,
+    playheadMs: project.playheadMs
+  };
+}
+function shouldSeekTimelineItemSelection() {
+  const previewIsPlaying = previewPlaybackIsActive();
+  if (previewIsPlaying) {
+    syncProjectPlayheadToPreviewClock();
+  }
+  return !previewIsPlaying;
+}
 function applyPreviewAudioSettings(timelineMs = project?.playheadMs || 0) {
   const video = elements.preview_video;
   if (!video || !project) {
@@ -39628,7 +39798,10 @@ function updatePlayhead() {
 function renderTransport() {
   const clip = mapTimelineToSource(project, project.playheadMs);
   elements.preview_video.style.visibility = clip && mediaFile ? "" : "hidden";
-  activeClipId = clip?.clipId || project.clips[0]?.id || null;
+  const activeClipStillExists = project.clips.some((candidate) => candidate.id === activeClipId && candidate.enabled !== false);
+  if (!activeClipStillExists || !previewPlaybackIsActive() && !previewBoundaryTransitioning) {
+    activeClipId = clip?.clipId || project.clips[0]?.id || null;
+  }
   elements.previous_clip.disabled = project.clips.length === 0;
   elements.next_clip.disabled = project.clips.length === 0;
   elements.play_toggle.disabled = !mediaFile || project.clips.length === 0;
@@ -40080,6 +40253,7 @@ function selectCue(cueId, { seek = false } = {}) {
   if (!cue) {
     return;
   }
+  const seekSelection = seek && shouldSeekTimelineItemSelection();
   project = {
     ...project,
     selectedCueId: cue.id,
@@ -40088,7 +40262,7 @@ function selectCue(cueId, { seek = false } = {}) {
   inspectorMode = "selected";
   propertyInspectorMode = "caption";
   const range = cueTimelineRange(project, cue);
-  if (seek && range) {
+  if (seekSelection && range) {
     void seekTimeline(range.startMs);
   }
   renderAll({ keepScroll: true });
@@ -40102,6 +40276,7 @@ function selectAudioRegion(regionId, { seek = false } = {}) {
   if (!region) {
     return;
   }
+  const seekSelection = seek && shouldSeekTimelineItemSelection();
   project = {
     ...project,
     selectedAudioRegionId: region.id,
@@ -40109,7 +40284,7 @@ function selectAudioRegion(regionId, { seek = false } = {}) {
   };
   propertyInspectorMode = "audio";
   const range = audioRegionTimelineRange(project, region);
-  if (seek && range) {
+  if (seekSelection && range) {
     void seekTimeline(range.startMs);
   }
   renderAll({ keepScroll: true });
@@ -40120,6 +40295,7 @@ function selectImageAsset(assetId, { seek = false } = {}) {
   if (!asset) {
     return;
   }
+  const seekSelection = seek && shouldSeekTimelineItemSelection();
   project = {
     ...project,
     selectedImageAssetId: asset.id,
@@ -40127,7 +40303,7 @@ function selectImageAsset(assetId, { seek = false } = {}) {
   };
   propertyInspectorMode = "asset";
   const range = imageAssetTimelineRange(project, asset);
-  if (seek && range) {
+  if (seekSelection && range) {
     void seekTimeline(range.startMs);
   }
   renderAll({ keepScroll: true });
@@ -41617,6 +41793,9 @@ async function focusSourceTab({ seek = false } = {}) {
 }
 function bindOverlayDrag() {
   elements.subtitle_overlays.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !event.isPrimary) {
+      return;
+    }
     const overlay = event.target.closest(
       ".subtitle-overlay"
     );
@@ -41648,6 +41827,10 @@ function bindOverlayDrag() {
       if (moveEvent.pointerId !== pointerId) {
         return;
       }
+      if ((moveEvent.buttons & 1) === 0) {
+        finish(moveEvent);
+        return;
+      }
       const layerRect = elements.subtitle_overlays.getBoundingClientRect();
       const content = videoContentRect(elements.subtitle_overlays);
       const x = Math.max(0.05, Math.min(0.95, (moveEvent.clientX - layerRect.left - content.left) / content.width));
@@ -41664,6 +41847,7 @@ function bindOverlayDrag() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);
       window.removeEventListener("pointercancel", finish);
+      overlay.removeEventListener("lostpointercapture", finish);
       if (overlay.hasPointerCapture(pointerId)) {
         overlay.releasePointerCapture(pointerId);
       }
@@ -41673,10 +41857,14 @@ function bindOverlayDrag() {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
+    overlay.addEventListener("lostpointercapture", finish);
   });
 }
 function bindImageAssetOverlayDrag() {
   elements.image_asset_overlays.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !event.isPrimary) {
+      return;
+    }
     const overlay = event.target.closest(
       ".image-asset-overlay"
     );
@@ -41707,6 +41895,10 @@ function bindImageAssetOverlayDrag() {
       if (moveEvent.pointerId !== pointerId) {
         return;
       }
+      if ((moveEvent.buttons & 1) === 0) {
+        finish(moveEvent);
+        return;
+      }
       const layerRect = elements.image_asset_overlays.getBoundingClientRect();
       const content = videoContentRect(elements.image_asset_overlays);
       const x = Math.max(0, Math.min(1, (moveEvent.clientX - layerRect.left - content.left) / content.width));
@@ -41723,6 +41915,7 @@ function bindImageAssetOverlayDrag() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);
       window.removeEventListener("pointercancel", finish);
+      overlay.removeEventListener("lostpointercapture", finish);
       if (overlay.hasPointerCapture(pointerId)) {
         overlay.releasePointerCapture(pointerId);
       }
@@ -41732,6 +41925,7 @@ function bindImageAssetOverlayDrag() {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
+    overlay.addEventListener("lostpointercapture", finish);
   });
 }
 function closeTimelineContextMenu() {
@@ -41799,28 +41993,75 @@ function bindTimelineSeeking() {
     void seekTimeline(x / pixelsPerSecond * 1e3);
   };
   elements.timeline_ruler.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !event.isPrimary) {
+      return;
+    }
+    event.preventDefault();
+    const pointerId = event.pointerId;
     seekFromEvent(event);
-    elements.timeline_ruler.setPointerCapture(event.pointerId);
-    const move = (moveEvent) => seekFromEvent(moveEvent);
-    const finish = () => {
+    elements.timeline_ruler.setPointerCapture(pointerId);
+    const move = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId || (moveEvent.buttons & 1) === 0) {
+        return;
+      }
+      seekFromEvent(moveEvent);
+    };
+    const finish = (finishEvent) => {
+      if (finishEvent.pointerId !== pointerId) {
+        return;
+      }
       elements.timeline_ruler.removeEventListener("pointermove", move);
       elements.timeline_ruler.removeEventListener("pointerup", finish);
+      elements.timeline_ruler.removeEventListener("pointercancel", finish);
+      elements.timeline_ruler.removeEventListener("lostpointercapture", finish);
+      if (elements.timeline_ruler.hasPointerCapture(pointerId)) {
+        elements.timeline_ruler.releasePointerCapture(pointerId);
+      }
       scheduleSave();
     };
     elements.timeline_ruler.addEventListener("pointermove", move);
     elements.timeline_ruler.addEventListener("pointerup", finish);
+    elements.timeline_ruler.addEventListener("pointercancel", finish);
+    elements.timeline_ruler.addEventListener("lostpointercapture", finish);
   });
   elements.playhead.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !event.isPrimary) {
+      return;
+    }
     event.preventDefault();
-    elements.playhead.setPointerCapture(event.pointerId);
-    const move = (moveEvent) => seekFromEvent(moveEvent);
-    const finish = () => {
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    let dragging = false;
+    elements.playhead.setPointerCapture(pointerId);
+    const move = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId || (moveEvent.buttons & 1) === 0) {
+        return;
+      }
+      if (!dragging && Math.abs(moveEvent.clientX - startX) < TIMED_BLOCK_DRAG_ACTIVATION_PX) {
+        return;
+      }
+      dragging = true;
+      seekFromEvent(moveEvent);
+    };
+    const finish = (finishEvent) => {
+      if (finishEvent.pointerId !== pointerId) {
+        return;
+      }
       elements.playhead.removeEventListener("pointermove", move);
       elements.playhead.removeEventListener("pointerup", finish);
-      scheduleSave();
+      elements.playhead.removeEventListener("pointercancel", finish);
+      elements.playhead.removeEventListener("lostpointercapture", finish);
+      if (elements.playhead.hasPointerCapture(pointerId)) {
+        elements.playhead.releasePointerCapture(pointerId);
+      }
+      if (dragging) {
+        scheduleSave();
+      }
     };
     elements.playhead.addEventListener("pointermove", move);
     elements.playhead.addEventListener("pointerup", finish);
+    elements.playhead.addEventListener("pointercancel", finish);
+    elements.playhead.addEventListener("lostpointercapture", finish);
   });
   elements.playhead.addEventListener("keydown", (event) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
@@ -42024,6 +42265,7 @@ function bindActions() {
     if (!clip) {
       return;
     }
+    const seekSelection = shouldSeekTimelineItemSelection();
     const action = event.target.closest("[data-action]")?.dataset.action;
     if (action) {
       const index = project.clips.findIndex((candidate) => candidate.id === clip.id);
@@ -42039,7 +42281,9 @@ function bindActions() {
       return;
     }
     project.selectedClipId = clip.id;
-    void seekTimeline(clip.timelineStartMs);
+    if (seekSelection) {
+      void seekTimeline(clip.timelineStartMs);
+    }
     renderAll({ keepScroll: true });
     const nextItem = [...elements.clip_list.querySelectorAll(".clip-item")].find((candidate) => candidate.dataset.id === clip.id);
     nextItem?.querySelector(".clip-select")?.focus({ preventScroll: true });
@@ -42446,6 +42690,14 @@ function bindActions() {
     });
   });
   elements.test_caption_agent.addEventListener("click", () => void testCaptionAgentConnection());
+  elements.toggle_caption_background.addEventListener("click", () => {
+    const enabled = !captionBackgroundEnabled(project.subtitleDefaults);
+    applyProject(setCaptionBackgroundEnabled(project, enabled));
+    showToast(
+      enabled ? "\uAC80\uC740 \uC0AC\uAC01 \uC790\uB9C9 \uBC30\uACBD\uC744 \uCF30\uC2B5\uB2C8\uB2E4." : "\uC790\uB9C9 \uBC30\uACBD\uC744 \uAED0\uC2B5\uB2C8\uB2E4.",
+      "success"
+    );
+  });
   elements.caption_style_preset.addEventListener("change", () => {
     const preset = captionStylePreset(elements.caption_style_preset.value);
     const styledProject = applyCaptionStylePreset(project, preset.id);

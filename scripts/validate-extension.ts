@@ -388,6 +388,8 @@ for (const id of [
   "caption-agent-endpoint",
   "caption-agent-token",
   "caption-style-preset",
+  "toggle-caption-background",
+  "caption-background-label",
   "caption-model",
   "caption-mode-description",
   "caption-advanced-settings",
@@ -415,8 +417,21 @@ assert(
   editorHtml.includes('value="kr-vtuber-black-box-v1"'),
   "흰 자막·검은 사각 배경 프리셋 선택지가 없습니다."
 );
+assert(
+  /id="toggle-caption-background"[^>]*aria-pressed="false"/u.test(editorHtml),
+  "검은 자막 배경을 직접 켜고 끄는 접근 가능한 버튼이 없습니다."
+);
+assert(
+  /id="toggle-caption-background"[^>]*aria-label="검은 사각 자막 배경"/u.test(editorHtml),
+  "자막 배경 토글의 접근 가능한 이름은 상태와 무관하게 고정되어야 합니다."
+);
 assert(editorScript.includes("renderProjectVideo"), "편집기 번들에 영상 렌더 경로가 없습니다.");
 assert(editorScript.includes("backgroundRadiusEm"), "자막 배경 곡률의 미리보기·렌더 경로가 없습니다.");
+assert(
+  editorScript.includes("setCaptionBackgroundEnabled")
+    && editorScript.includes("captionBackgroundEnabled"),
+  "자막 배경 토글이 프로젝트 모델과 연결되지 않았습니다."
+);
 assert(editorScript.includes("EDITOR_SHORTCUT_BINDINGS"), "편집기 안전 단축키 정책을 설치하지 않습니다.");
 assert(
   keyboardShortcutScript.includes("playback-rate-quarter")

@@ -1,5 +1,6 @@
 // Generated from TypeScript sources. Do not edit directly.
 import {
+  BLACK_BOX_CAPTION_STYLE_PRESET_ID,
   CAPTION_STYLE_PRESETS,
   DEFAULT_CAPTION_STYLE_PRESET_ID,
   LEGACY_CAPTION_STYLE_PRESET_ID,
@@ -761,6 +762,31 @@ function applyCaptionStylePreset(project, presetId) {
     subtitleDefaults: {
       ...project.subtitleDefaults || {},
       ...normalizedCaptionStyleDefaults(normalizedPresetId)
+    },
+    updatedAt: nowIso()
+  };
+}
+function captionBackgroundEnabled(defaults) {
+  const backgroundColor = String(defaults?.backgroundColor || "").trim();
+  return Boolean(
+    backgroundColor && backgroundColor.toLowerCase() !== "transparent" && !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/iu.test(backgroundColor)
+  );
+}
+function setCaptionBackgroundEnabled(project, enabled) {
+  const currentPresetId = normalizeCaptionStylePresetId(
+    project.subtitleDefaults.stylePresetId
+  );
+  const nextPresetId = enabled && currentPresetId === DEFAULT_CAPTION_STYLE_PRESET_ID ? BLACK_BOX_CAPTION_STYLE_PRESET_ID : !enabled && currentPresetId === BLACK_BOX_CAPTION_STYLE_PRESET_ID ? DEFAULT_CAPTION_STYLE_PRESET_ID : currentPresetId;
+  const blackBoxDefaults = normalizedCaptionStyleDefaults(
+    BLACK_BOX_CAPTION_STYLE_PRESET_ID
+  );
+  return {
+    ...project,
+    subtitleDefaults: {
+      ...project.subtitleDefaults,
+      stylePresetId: nextPresetId,
+      backgroundColor: enabled ? blackBoxDefaults.backgroundColor : "transparent",
+      backgroundRadiusEm: enabled ? blackBoxDefaults.backgroundRadiusEm : project.subtitleDefaults.backgroundRadiusEm
     },
     updatedAt: nowIso()
   };
@@ -2413,6 +2439,7 @@ export {
   audioRegionAtTimeline,
   audioRegionTimelineRange,
   canReorderClipGroup,
+  captionBackgroundEnabled,
   captureProjectId,
   captureStateSourceConflict,
   clamp,
@@ -2462,6 +2489,7 @@ export {
   sameSourceSession,
   secondsToMilliseconds,
   serializeSrt,
+  setCaptionBackgroundEnabled,
   sourceSessionIdentity,
   subtitleCueNeedsReview,
   timelineSnapCandidates,

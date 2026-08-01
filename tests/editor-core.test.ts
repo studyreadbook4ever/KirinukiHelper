@@ -17,6 +17,7 @@ import {
   audioRegionAtTimeline,
   audioRegionTimelineRange,
   canReorderClipGroup,
+  captionBackgroundEnabled,
   captureStateSourceConflict,
   captureProjectId,
   createAudioRegion,
@@ -51,6 +52,7 @@ import {
   resolveTimelineSnap,
   rippleDeleteTimelineRange,
   serializeSrt,
+  setCaptionBackgroundEnabled,
   sameSourceSession,
   sourceSessionIdentity,
   transcriptChunksToCueDrafts,
@@ -433,6 +435,71 @@ test("검은 직사각형 프리셋은 각진 배경을 저장 왕복하고 사�
   });
   assert.ok(customizedRadius);
   assert.equal(customizedRadius.subtitleDefaults.backgroundRadiusEm, 0.35);
+});
+
+test("검은 자막 배경 토글은 배경만 바꾸고 사용자 컷·cue·글꼴을 보존한다", () => {
+  const original = createEditorProjectFromCapture(captureState);
+  const cue = createSubtitleCue(original, {
+    id: "background-toggle-cue",
+    clipId: original.clips[0].id,
+    startOffsetMs: 250,
+    endOffsetMs: 1_750,
+    text: "그대로 남는 자막",
+    color: "#F06088"
+  });
+  const customized = {
+    ...original,
+    subtitles: [cue],
+    subtitleDefaults: {
+      ...original.subtitleDefaults,
+      fontScale: 0.055
+    }
+  };
+  const originalClips = structuredClone(customized.clips);
+  const originalSubtitles = structuredClone(customized.subtitles);
+
+  assert.equal(captionBackgroundEnabled(customized.subtitleDefaults), false);
+  const enabled = setCaptionBackgroundEnabled(customized, true);
+  assert.equal(captionBackgroundEnabled(enabled.subtitleDefaults), true);
+  assert.equal(enabled.subtitleDefaults.stylePresetId, BLACK_BOX_CAPTION_STYLE_PRESET_ID);
+  assert.equal(enabled.subtitleDefaults.backgroundColor, "#000000");
+  assert.equal(enabled.subtitleDefaults.backgroundRadiusEm, 0);
+  assert.equal(enabled.subtitleDefaults.fontScale, 0.055);
+  assert.deepEqual(enabled.clips, originalClips);
+  assert.deepEqual(enabled.subtitles, originalSubtitles);
+
+  const disabled = setCaptionBackgroundEnabled(enabled, false);
+  assert.equal(captionBackgroundEnabled(disabled.subtitleDefaults), false);
+  assert.equal(disabled.subtitleDefaults.stylePresetId, "kr-vtuber-clean-v1");
+  assert.equal(disabled.subtitleDefaults.backgroundColor, "transparent");
+  assert.equal(disabled.subtitleDefaults.fontScale, 0.055);
+  assert.deepEqual(disabled.clips, originalClips);
+  assert.deepEqual(disabled.subtitles, originalSubtitles);
+
+  const normalized = normalizeEditorProject(
+    JSON.parse(JSON.stringify(enabled))
+  );
+  assert.ok(normalized);
+  assert.equal(captionBackgroundEnabled(normalized.subtitleDefaults), true);
+  assert.equal(normalized.subtitleDefaults.backgroundRadiusEm, 0);
+  assert.deepEqual(normalized.clips, originalClips);
+  assert.deepEqual(normalized.subtitles, originalSubtitles);
+});
+
+test("검은 배경 토글은 선택한 글꼴 프리셋을 검은 배경 프리셋으로 대체하지 않는다", () => {
+  const paperlogy = required(applyCaptionStylePreset(
+    createEditorProjectFromCapture(captureState),
+    "kr-vtuber-paperlogy-v1"
+  ));
+  const enabled = setCaptionBackgroundEnabled(paperlogy, true);
+  assert.equal(enabled.subtitleDefaults.stylePresetId, "kr-vtuber-paperlogy-v1");
+  assert.equal(enabled.subtitleDefaults.fontFamily, "Paperlogy");
+  assert.equal(enabled.subtitleDefaults.backgroundColor, "#000000");
+
+  const disabled = setCaptionBackgroundEnabled(enabled, false);
+  assert.equal(disabled.subtitleDefaults.stylePresetId, "kr-vtuber-paperlogy-v1");
+  assert.equal(disabled.subtitleDefaults.fontFamily, "Paperlogy");
+  assert.equal(disabled.subtitleDefaults.backgroundColor, "transparent");
 });
 
 test("배경 곡률 필드가 없는 기존 프로젝트는 기존 둥근 배경값으로 호환된다", () => {

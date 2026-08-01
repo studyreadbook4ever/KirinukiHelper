@@ -134,9 +134,17 @@ interface ExternalProject extends ExternalRecord {
   ai: AiState;
   recentSubtitleColors: string[];
   subtitleLaneCount: number;
+  subtitleDefaults: {
+    stylePresetId: string;
+    fontFamily: string;
+    fontScale: number;
+    backgroundColor: string;
+    backgroundRadiusEm: number;
+  };
   selectedImageAssetId?: string;
   selectedAudioRegionId?: string;
   selectedClipId?: string;
+  selectedCueId?: string;
   playheadMs: number;
   broadcastSession?: {
     alignmentOffsetMs: number;
@@ -189,8 +197,24 @@ type DragResult = {
     target?: string;
     snapGuideVisible?: boolean;
     snapGuideLabel?: string | null;
+    previewCurrentTime?: number;
+    playheadSeconds?: number;
   }>;
 };
+
+type PreviewState = {
+  paused: boolean;
+  seeking: boolean;
+  currentTime: number;
+  playheadMs: number;
+  playheadText: string;
+};
+
+type ProjectSelectionKey =
+  | "selectedClipId"
+  | "selectedCueId"
+  | "selectedImageAssetId"
+  | "selectedAudioRegionId";
 
 function isExternalRecord(value: unknown): value is ExternalRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -637,7 +661,7 @@ async function setFileInput(selector: string, filePath: string) {
 async function pointerDragOnce(
   selector: string,
   moves: PointerMove[],
-  { altKey = false }: { altKey?: boolean } = {}
+  { altKey = false, button = 0 }: { altKey?: boolean; button?: number } = {}
 ): Promise<DragResult> {
   const element = await findElement(selector);
   await executeSync(`
@@ -669,7 +693,11 @@ async function pointerDragOnce(
             trusted: event.isTrusted,
             target: event.target?.className || event.target?.id || event.target?.tagName,
             snapGuideVisible: document.querySelector("#timeline-snap-guide")?.hidden === false,
-            snapGuideLabel: document.querySelector("#timeline-snap-guide")?.dataset.label || null
+            snapGuideLabel: document.querySelector("#timeline-snap-guide")?.dataset.label || null,
+            previewCurrentTime: document.querySelector("#preview-video")?.currentTime || 0,
+            playheadSeconds: Number(
+              document.querySelector("#playhead")?.getAttribute("aria-valuenow") || 0
+            )
           });
         }
       }, true);
@@ -691,7 +719,7 @@ async function pointerDragOnce(
   `, [element]);
   const actions = [
     { type: "pointerMove", duration: 0, origin: element, x: 0, y: 0 },
-    { type: "pointerDown", button: 0 },
+    { type: "pointerDown", button },
     ...moves.map(({ x, y, duration = 90 }) => ({
       type: "pointerMove",
       duration,
@@ -699,7 +727,7 @@ async function pointerDragOnce(
       x,
       y
     })),
-    { type: "pointerUp", button: 0 }
+    { type: "pointerUp", button }
   ];
   try {
     const sources: ExternalRecord[] = [{
@@ -739,7 +767,7 @@ async function pointerDragOnce(
 async function pointerDrag(
   selector: string,
   moves: PointerMove[],
-  options?: { altKey?: boolean }
+  options?: { altKey?: boolean; button?: number }
 ): Promise<DragResult> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
@@ -755,6 +783,329 @@ async function pointerDrag(
     }
   }
   throw new Error(`drag 대상을 안정적으로 찾지 못했습니다: ${selector}`);
+}
+
+async function readPreviewState(): Promise<PreviewState> {
+  return executeSync<PreviewState>(`
+    const video = document.querySelector("#preview-video");
+    const playhead = document.querySelector("#playhead");
+    return {
+      paused: Boolean(video?.paused),
+      seeking: Boolean(video?.seeking),
+      currentTime: Number(video?.currentTime || 0),
+      playheadMs: Number(playhead?.getAttribute("aria-valuenow") || 0) * 1000,
+      playheadText: playhead?.getAttribute("aria-valuetext") || ""
+    };
+  `);
+}
+
+async function pausePreviewForPointerTest() {
+  await executeSync(`
+    const video = document.querySelector("#preview-video");
+    video?.pause();
+    return Boolean(video?.paused);
+  `);
+  return waitUntil(async () => {
+    const state = await readPreviewState();
+    return state.paused ? state : false;
+  }, "포인터 회귀 검증용 미리보기 정지");
+}
+
+async function clickTimelineRulerAtTimelineMs(timelineMs: number) {
+  const target = await executeSync<{
+    clientX: number;
+    clientY: number;
+    visible: boolean;
+    pixelsPerSecond: number;
+  }>(`
+    const timelineMs = Number(arguments[0]);
+    const scroll = document.querySelector("#timeline-scroll");
+    const content = document.querySelector("#timeline-content");
+    const ruler = document.querySelector("#timeline-ruler");
+    const pixelsPerSecond = Number(document.querySelector("#timeline-zoom")?.value || 70);
+    const contentX = timelineMs / 1000 * pixelsPerSecond;
+    const maximumScroll = Math.max(0, content.scrollWidth - scroll.clientWidth);
+    scroll.scrollLeft = Math.max(
+      0,
+      Math.min(maximumScroll, contentX - scroll.clientWidth / 2)
+    );
+    const contentRect = content.getBoundingClientRect();
+    const rulerRect = ruler.getBoundingClientRect();
+    const scrollRect = scroll.getBoundingClientRect();
+    const clientX = contentRect.left + contentX;
+    const clientY = rulerRect.top + rulerRect.height / 2;
+    return {
+      clientX,
+      clientY,
+      pixelsPerSecond,
+      visible:
+        clientX >= scrollRect.left &&
+        clientX <= scrollRect.right &&
+        clientY >= scrollRect.top &&
+        clientY <= scrollRect.bottom
+    };
+  `, [timelineMs]);
+  assert(
+    target.visible && Number.isFinite(target.clientX) && Number.isFinite(target.clientY),
+    `타임라인 ${timelineMs}ms ruler 좌표가 viewport 밖입니다: ${JSON.stringify(target)}`
+  );
+  try {
+    await webdriver("POST", `/session/${sessionId}/actions`, {
+      actions: [{
+        type: "pointer",
+        id: `timeline-ruler-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        parameters: { pointerType: "mouse" },
+        actions: [
+          {
+            type: "pointerMove",
+            duration: 0,
+            origin: "viewport",
+            x: Math.round(target.clientX),
+            y: Math.round(target.clientY)
+          },
+          { type: "pointerDown", button: 0 },
+          { type: "pointerUp", button: 0 }
+        ]
+      }]
+    });
+  } finally {
+    await webdriver("DELETE", `/session/${sessionId}/actions`).catch(() => {});
+  }
+  return target;
+}
+
+async function seekPausedPreviewWithRuler(timelineMs: number) {
+  await pausePreviewForPointerTest();
+  const pointer = await clickTimelineRulerAtTimelineMs(timelineMs);
+  let lastObserved: PreviewState | null = null;
+  let state: PreviewState;
+  try {
+    state = await waitUntil(async () => {
+      const observed = await readPreviewState();
+      lastObserved = observed;
+      return (
+        observed.paused
+        && !observed.seeking
+        && Math.abs(observed.playheadMs - timelineMs) <= 45
+      ) ? observed : false;
+    }, `ruler로 ${timelineMs}ms 명시 seek`);
+  } catch (error) {
+    throw new Error(
+      `ruler로 ${timelineMs}ms 명시 seek 실패: ${JSON.stringify({ pointer, lastObserved })}`,
+      { cause: error }
+    );
+  }
+  return { pointer, state };
+}
+
+async function startPreviewAtTimeline(timelineMs: number) {
+  const seek = await seekPausedPreviewWithRuler(timelineMs);
+  await clickElement("#play-toggle");
+  const playing = await waitUntil(async () => {
+    const state = await readPreviewState();
+    return (
+      !state.paused
+      && !state.seeking
+      && state.playheadMs >= timelineMs + 80
+    ) ? state : false;
+  }, `${timelineMs}ms부터 미리보기 재생 시작`);
+  return { seek, playing };
+}
+
+async function setTimelineSnapForTest(enabled: boolean) {
+  const current = await executeSync<boolean>(`
+    return document.querySelector("#toggle-timeline-snap")?.getAttribute("aria-pressed") === "true";
+  `);
+  if (current !== enabled) {
+    await clickElement("#toggle-timeline-snap");
+  }
+  return waitUntil(async () => {
+    const state = await executeSync<boolean>(`
+      return document.querySelector("#toggle-timeline-snap")?.getAttribute("aria-pressed") === "true";
+    `);
+    return state === enabled ? state || "disabled" : false;
+  }, `타임라인 자석 ${enabled ? "켜기" : "끄기"}`);
+}
+
+async function assertPlayingSelectionDoesNotSeek({
+  selector,
+  selectionKey,
+  selectionId,
+  itemStartMs,
+  playbackTimelineMs,
+  expectedInspectorTab,
+  label
+}: {
+  selector: string;
+  selectionKey: ProjectSelectionKey;
+  selectionId: string;
+  itemStartMs: number;
+  playbackTimelineMs: number;
+  expectedInspectorTab?: string;
+  label: string;
+}) {
+  assert(
+    Math.abs(playbackTimelineMs - itemStartMs) >= 600,
+    `${label} 재생 위치와 항목 시작점이 충분히 떨어져 있지 않습니다.`
+  );
+  const start = await startPreviewAtTimeline(playbackTimelineMs);
+  const beforeClick = await readPreviewState();
+  await clickElement(selector);
+  const selected = await waitForStoredProject(
+    (candidate) => candidate[selectionKey] === selectionId,
+    `${label} 재생 중 선택 autosave`
+  );
+  if (expectedInspectorTab) {
+    await waitUntil(
+      () => executeSync(
+        `return document.querySelector(arguments[0])?.getAttribute("aria-selected") === "true";`,
+        [expectedInspectorTab]
+      ),
+      `${label} 재생 중 inspector 선택`
+    );
+  }
+  await delay(180);
+  const afterClick = await readPreviewState();
+  assert(
+    !afterClick.paused
+      && afterClick.currentTime >= beforeClick.currentTime - 0.12
+      && afterClick.playheadMs >= beforeClick.playheadMs - 120
+      && Math.abs(afterClick.playheadMs - itemStartMs) >= 400,
+    `${label} 재생 중 선택이 과거 시작점으로 seek하거나 재생을 멈췄습니다: ${JSON.stringify({
+      itemStartMs,
+      playbackTimelineMs,
+      beforeClick,
+      afterClick
+    })}`
+  );
+  await pausePreviewForPointerTest();
+  return { start, beforeClick, afterClick, selectedId: selected[selectionKey] };
+}
+
+async function assertPausedSelectionSeeks({
+  selector,
+  selectionKey,
+  selectionId,
+  itemStartMs,
+  itemClipId,
+  playbackTimelineMs,
+  expectedInspectorTab,
+  label
+}: {
+  selector: string;
+  selectionKey: ProjectSelectionKey;
+  selectionId: string;
+  itemStartMs: number;
+  itemClipId: string;
+  playbackTimelineMs: number;
+  expectedInspectorTab?: string;
+  label: string;
+}) {
+  await seekPausedPreviewWithRuler(playbackTimelineMs);
+  const beforeClick = await readPreviewState();
+  await clickElement(selector);
+  const selected = await waitForStoredProject(
+    (candidate) => candidate[selectionKey] === selectionId,
+    `${label} 정지 중 선택 autosave`
+  );
+  if (expectedInspectorTab) {
+    await waitUntil(
+      () => executeSync(
+        `return document.querySelector(arguments[0])?.getAttribute("aria-selected") === "true";`,
+        [expectedInspectorTab]
+      ),
+      `${label} 정지 중 inspector 선택`
+    );
+  }
+  const itemClip = selected.clips.find((clip) => clip.id === itemClipId);
+  assert(itemClip, `${label} 정지 중 실제 media seek를 검증할 컷이 없습니다.`);
+  const expectedPreviewSeconds = (
+    (Number(selected.mediaAsset?.mediaOriginMs) || 0)
+    + itemClip.sourceStartMs
+    + itemStartMs
+    - itemClip.timelineStartMs
+  ) / 1000;
+  const afterClick = await waitUntil(async () => {
+    const state = await readPreviewState();
+    return (
+      state.paused
+      && !state.seeking
+      && Math.abs(state.playheadMs - itemStartMs) <= 45
+      && Math.abs(state.currentTime - expectedPreviewSeconds) <= 0.06
+    ) ? state : false;
+  }, `${label} 정지 중 항목 시작점 media seek`);
+  assert(
+    Math.abs(beforeClick.playheadMs - itemStartMs) >= 600,
+    `${label} 정지 중 seek 사전 위치가 항목 시작점과 너무 가깝습니다.`
+  );
+  return { beforeClick, afterClick, selectedId: selected[selectionKey] };
+}
+
+async function cancelPlayheadPointerAndProbeHover(moveAfterCancelPx = 18) {
+  const element = await findElement("#playhead");
+  await executeSync(`
+    arguments[0].scrollIntoView({ block: "center", inline: "center" });
+    globalThis.__kirinukiE2eCanceledPlayheadPointerId = null;
+    window.addEventListener("pointerdown", (event) => {
+      globalThis.__kirinukiE2eCanceledPlayheadPointerId = event.pointerId;
+    }, { capture: true, once: true });
+  `, [element]);
+  try {
+    await webdriver("POST", `/session/${sessionId}/actions`, {
+      actions: [{
+        type: "pointer",
+        id: `cancel-playhead-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        parameters: { pointerType: "mouse" },
+        actions: [
+          { type: "pointerMove", duration: 0, origin: element, x: 0, y: 0 },
+          { type: "pointerDown", button: 0 }
+        ]
+      }]
+    });
+    return executeSync<{
+      pointerId: number;
+      beforePlayheadMs: number;
+      afterPlayheadMs: number;
+      captureReleased: boolean;
+    }>(`
+      const playhead = arguments[0];
+      const moveAfterCancelPx = Number(arguments[1]);
+      const pointerId = Number(globalThis.__kirinukiE2eCanceledPlayheadPointerId);
+      const beforePlayheadMs = Number(playhead.getAttribute("aria-valuenow") || 0) * 1000;
+      playhead.dispatchEvent(new PointerEvent("pointercancel", {
+        bubbles: true,
+        cancelable: true,
+        pointerId,
+        pointerType: "mouse",
+        isPrimary: true,
+        button: 0,
+        buttons: 0
+      }));
+      if (playhead.hasPointerCapture(pointerId)) {
+        playhead.releasePointerCapture(pointerId);
+      }
+      const rect = playhead.getBoundingClientRect();
+      playhead.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        pointerId,
+        pointerType: "mouse",
+        isPrimary: true,
+        button: -1,
+        buttons: 0,
+        clientX: rect.left + rect.width / 2 + moveAfterCancelPx,
+        clientY: rect.top + rect.height / 2
+      }));
+      return {
+        pointerId,
+        beforePlayheadMs,
+        afterPlayheadMs: Number(playhead.getAttribute("aria-valuenow") || 0) * 1000,
+        captureReleased: !playhead.hasPointerCapture(pointerId)
+      };
+    `, [element, moveAfterCancelPx]);
+  } finally {
+    await webdriver("DELETE", `/session/${sessionId}/actions`).catch(() => {});
+  }
 }
 
 async function contextClickElement(
@@ -2202,6 +2553,88 @@ async function main() {
     return overlay.visible && overlay.cueId === cueId ? overlay : false;
   }, "자막 overlay 표시");
 
+  const captionBackgroundBefore = await readStoredProject();
+  assert(captionBackgroundBefore, "자막 배경 토글 전 저장 프로젝트가 없습니다.");
+  await clickElement("#toggle-caption-background");
+  const captionBackgroundEnabledProject = await waitForStoredProject(
+    (project) => (
+      project.subtitleDefaults.backgroundColor === "#000000"
+      && project.subtitleDefaults.backgroundRadiusEm === 0
+      && project.subtitleDefaults.stylePresetId === "kr-vtuber-black-box-v1"
+    ),
+    "검은 사각 자막 배경 켜기 autosave"
+  );
+  assert(
+    JSON.stringify(captionBackgroundEnabledProject.clips)
+      === JSON.stringify(captionBackgroundBefore.clips)
+      && JSON.stringify(captionBackgroundEnabledProject.subtitles)
+        === JSON.stringify(captionBackgroundBefore.subtitles)
+      && captionBackgroundEnabledProject.subtitleDefaults.fontFamily
+        === captionBackgroundBefore.subtitleDefaults.fontFamily
+      && captionBackgroundEnabledProject.subtitleDefaults.fontScale
+        === captionBackgroundBefore.subtitleDefaults.fontScale,
+    "검은 자막 배경을 켜면서 컷·cue·글꼴이 바뀌었습니다."
+  );
+  const captionBackgroundEnabledUi = await waitUntil(async () => {
+    const state = await executeSync<{
+      pressed: string | null;
+      label: string;
+      overlayBackground: string;
+      overlayRadius: string;
+    }>(`
+      const button = document.querySelector("#toggle-caption-background");
+      const overlay = document.querySelector("#subtitle-overlays .subtitle-overlay");
+      const style = overlay ? getComputedStyle(overlay) : null;
+      return {
+        pressed: button?.getAttribute("aria-pressed") || null,
+        label: document.querySelector("#caption-background-label")?.textContent || "",
+        overlayBackground: style?.backgroundColor || "",
+        overlayRadius: style?.borderRadius || ""
+      };
+    `);
+    return (
+      state.pressed === "true"
+      && state.label === "검은 사각 배경 끄기"
+      && state.overlayBackground === "rgb(0, 0, 0)"
+      && state.overlayRadius === "0px"
+    ) ? state : false;
+  }, "검은 사각 자막 배경 미리보기와 접근성 상태");
+
+  await clickElement("#toggle-caption-background");
+  const captionBackgroundDisabledProject = await waitForStoredProject(
+    (project) => (
+      project.subtitleDefaults.backgroundColor === "transparent"
+      && project.subtitleDefaults.stylePresetId === "kr-vtuber-clean-v1"
+    ),
+    "검은 사각 자막 배경 끄기 autosave"
+  );
+  const captionBackgroundDisabledUi = await waitUntil(async () => {
+    const state = await executeSync<{
+      pressed: string | null;
+      label: string;
+      overlayBackground: string;
+    }>(`
+      const button = document.querySelector("#toggle-caption-background");
+      const overlay = document.querySelector("#subtitle-overlays .subtitle-overlay");
+      return {
+        pressed: button?.getAttribute("aria-pressed") || null,
+        label: document.querySelector("#caption-background-label")?.textContent || "",
+        overlayBackground: overlay ? getComputedStyle(overlay).backgroundColor : ""
+      };
+    `);
+    return (
+      state.pressed === "false"
+      && state.label === "검은 사각 배경 켜기"
+      && state.overlayBackground === "rgba(0, 0, 0, 0)"
+    ) ? state : false;
+  }, "검은 사각 자막 배경 끄기 미리보기와 접근성 상태");
+  const captionBackgroundToggle = {
+    enabledProject: captionBackgroundEnabledProject.subtitleDefaults,
+    enabledUi: captionBackgroundEnabledUi,
+    disabledProject: captionBackgroundDisabledProject.subtitleDefaults,
+    disabledUi: captionBackgroundDisabledUi
+  };
+
   const overlayDrag = await pointerDrag(
     "#subtitle-overlays .subtitle-overlay",
     [{ x: 20, y: -16 }, { x: 20, y: -16 }, { x: 20, y: -16 }]
@@ -3236,6 +3669,407 @@ async function main() {
       state.audioTabSelected === "true"
     ) ? state : false;
   }, "음성 설정 선택 UI");
+
+  const playbackPointerProject = await readStoredProject();
+  assert(playbackPointerProject, "재생 중 포인터 회귀 검증 프로젝트가 없습니다.");
+  const playbackPointerCue = playbackPointerProject.subtitles.find(
+    (cue) => cue.id === cueId
+  );
+  const playbackPointerAsset = playbackPointerProject.imageAssets.find(
+    (asset) => asset.id === imageAssetId
+  );
+  const playbackPointerAudio = playbackPointerProject.audioRegions.find(
+    (region) => region.id === audioRegionId
+  );
+  assert(playbackPointerCue, "재생 중 선택 검증 자막이 없습니다.");
+  assert(playbackPointerAsset, "재생 중 선택 검증 에셋이 없습니다.");
+  assert(playbackPointerAudio, "재생 중 선택 검증 음성 구간이 없습니다.");
+  const clipById = new Map(
+    playbackPointerProject.clips.map((clip) => [clip.id, clip])
+  );
+  const cueClipForPointer = clipById.get(playbackPointerCue.clipId);
+  const assetClipForPointer = clipById.get(playbackPointerAsset.clipId);
+  const audioClipForPointer = clipById.get(playbackPointerAudio.clipId);
+  assert(cueClipForPointer, "자막의 포인터 회귀 검증 컷이 없습니다.");
+  assert(assetClipForPointer, "에셋의 포인터 회귀 검증 컷이 없습니다.");
+  assert(audioClipForPointer, "음성 구간의 포인터 회귀 검증 컷이 없습니다.");
+  const timelineStartForOffset = (clip: EditorClip, offsetMs: number) => (
+    clip.timelineStartMs + offsetMs
+  );
+  const playbackTimelineAwayFrom = (clipId: string) => {
+    const awayClip = playbackPointerProject.clips.find((clip) => (
+      clip.enabled !== false && clip.id !== clipId
+    ));
+    assert(awayClip, `${clipId}와 다른 재생 검증 컷이 없습니다.`);
+    const durationMs = awayClip.sourceEndMs - awayClip.sourceStartMs;
+    return awayClip.timelineStartMs + Math.min(
+      725,
+      Math.max(625, durationMs - 1_500)
+    );
+  };
+
+  const playheadTestClip = playbackPointerProject.clips.find(
+    (clip) => clip.enabled !== false && clip.id !== playbackPointerCue.clipId
+  ) || cueClipForPointer;
+  const playheadTestClipDuration = (
+    playheadTestClip.sourceEndMs - playheadTestClip.sourceStartMs
+  );
+  const playheadInitialTimelineMs = playheadTestClip.timelineStartMs + Math.min(
+    650,
+    Math.max(250, playheadTestClipDuration - 1_600)
+  );
+  const rulerExplicitTimelineMs = playheadTestClip.timelineStartMs + Math.min(
+    1_350,
+    Math.max(700, playheadTestClipDuration - 900)
+  );
+  const rulerInitialSeek = await seekPausedPreviewWithRuler(playheadInitialTimelineMs);
+  const playheadHitbox = await executeSync<{
+    playheadHeight: number;
+    rulerHeight: number;
+    lineHeight: number;
+    linePointerEvents: string;
+    rulerHitIsPlayhead: boolean;
+    trackHitIsPlayhead: boolean;
+    trackHitTarget: string | null;
+  }>(`
+    const playhead = document.querySelector("#playhead");
+    const ruler = document.querySelector("#timeline-ruler");
+    const line = playhead?.querySelector("span");
+    const captionTrack = document.querySelector(".caption-track-row");
+    const playheadRect = playhead.getBoundingClientRect();
+    const rulerRect = ruler.getBoundingClientRect();
+    const lineRect = line.getBoundingClientRect();
+    const captionRect = captionTrack.getBoundingClientRect();
+    const rulerHit = document.elementFromPoint(
+      playheadRect.left + playheadRect.width / 2,
+      playheadRect.top + playheadRect.height / 2
+    );
+    const trackHit = document.elementFromPoint(
+      playheadRect.left + playheadRect.width / 2,
+      captionRect.top + captionRect.height / 2
+    );
+    return {
+      playheadHeight: playheadRect.height,
+      rulerHeight: rulerRect.height,
+      lineHeight: lineRect.height,
+      linePointerEvents: getComputedStyle(line).pointerEvents,
+      rulerHitIsPlayhead: rulerHit?.closest("#playhead") === playhead,
+      trackHitIsPlayhead: trackHit?.closest("#playhead") === playhead,
+      trackHitTarget: trackHit?.className || trackHit?.id || trackHit?.tagName || null
+    };
+  `);
+  assert(
+    Math.abs(playheadHitbox.playheadHeight - playheadHitbox.rulerHeight) <= 0.5
+      && playheadHitbox.linePointerEvents === "none"
+      && playheadHitbox.rulerHitIsPlayhead
+      && !playheadHitbox.trackHitIsPlayhead,
+    `playhead ruler 전용 hitbox 계약 위반: ${JSON.stringify(playheadHitbox)}`
+  );
+
+  const playheadSimpleBefore = await readPreviewState();
+  await pointerDrag("#playhead", []);
+  await delay(100);
+  const playheadSimpleAfter = await readPreviewState();
+  assert(
+    playheadSimpleAfter.paused
+      && Math.abs(playheadSimpleAfter.playheadMs - playheadSimpleBefore.playheadMs) <= 5
+      && Math.abs(playheadSimpleAfter.currentTime - playheadSimpleBefore.currentTime) <= 0.02,
+    `playhead 단순 클릭이 seek했습니다: ${JSON.stringify({
+      before: playheadSimpleBefore,
+      after: playheadSimpleAfter
+    })}`
+  );
+
+  const playheadDeadzoneBefore = await readPreviewState();
+  await pointerDrag("#playhead", [{ x: 2, y: 0, duration: 120 }]);
+  await delay(100);
+  const playheadDeadzoneAfter = await readPreviewState();
+  assert(
+    Math.abs(playheadDeadzoneAfter.playheadMs - playheadDeadzoneBefore.playheadMs) <= 5
+      && Math.abs(playheadDeadzoneAfter.currentTime - playheadDeadzoneBefore.currentTime) <= 0.02,
+    `playhead 4px 미만 움직임이 scrub으로 처리됐습니다: ${JSON.stringify({
+      before: playheadDeadzoneBefore,
+      after: playheadDeadzoneAfter
+    })}`
+  );
+
+  const playheadRightBefore = await readPreviewState();
+  await pointerDrag(
+    "#playhead",
+    [{ x: 12, y: 0, duration: 120 }],
+    { button: 2 }
+  );
+  await delay(100);
+  const playheadRightAfter = await readPreviewState();
+  assert(
+    Math.abs(playheadRightAfter.playheadMs - playheadRightBefore.playheadMs) <= 5
+      && Math.abs(playheadRightAfter.currentTime - playheadRightBefore.currentTime) <= 0.02,
+    `playhead 우클릭 drag가 seek했습니다: ${JSON.stringify({
+      before: playheadRightBefore,
+      after: playheadRightAfter
+    })}`
+  );
+
+  const playheadCancelBefore = await readPreviewState();
+  const playheadCancelProbe = await cancelPlayheadPointerAndProbeHover();
+  await delay(100);
+  const playheadCancelAfter = await readPreviewState();
+  assert(
+    playheadCancelProbe.captureReleased
+      && Math.abs(
+        playheadCancelProbe.afterPlayheadMs - playheadCancelProbe.beforePlayheadMs
+      ) <= 5
+      && Math.abs(playheadCancelAfter.playheadMs - playheadCancelBefore.playheadMs) <= 5,
+    `취소된 playhead 포인터가 hover seek listener를 남겼습니다: ${JSON.stringify({
+      probe: playheadCancelProbe,
+      before: playheadCancelBefore,
+      after: playheadCancelAfter
+    })}`
+  );
+
+  const playheadDragBefore = await readPreviewState();
+  const playheadPrimaryDrag = await pointerDrag(
+    "#playhead",
+    [{ x: 12, y: 0, duration: 180 }]
+  );
+  const playheadDragAfter = await waitUntil(async () => {
+    const state = await readPreviewState();
+    return (
+      state.paused
+      && !state.seeking
+      && state.playheadMs >= playheadDragBefore.playheadMs + 100
+    ) ? state : false;
+  }, "primary 좌클릭 playhead 실제 drag scrub");
+  const rulerExplicitSeek = await seekPausedPreviewWithRuler(rulerExplicitTimelineMs);
+  assert(
+    Math.abs(rulerExplicitSeek.state.playheadMs - rulerExplicitTimelineMs) <= 45,
+    `ruler 명시 seek가 유지되지 않았습니다: ${JSON.stringify(rulerExplicitSeek)}`
+  );
+  const playheadPointerContract = {
+    rulerInitialSeek,
+    hitbox: playheadHitbox,
+    simpleClick: { before: playheadSimpleBefore, after: playheadSimpleAfter },
+    deadzone: { before: playheadDeadzoneBefore, after: playheadDeadzoneAfter },
+    rightDrag: { before: playheadRightBefore, after: playheadRightAfter },
+    canceled: { before: playheadCancelBefore, probe: playheadCancelProbe, after: playheadCancelAfter },
+    primaryDrag: { before: playheadDragBefore, drag: playheadPrimaryDrag, after: playheadDragAfter },
+    rulerExplicitSeek
+  };
+
+  const selectionCases = [
+    {
+      selector: `.clip-block[data-id="${playbackPointerProject.clips[0].id}"] .clip-block-body`,
+      selectionKey: "selectedClipId" as const,
+      selectionId: playbackPointerProject.clips[0].id,
+      itemStartMs: playbackPointerProject.clips[0].timelineStartMs,
+      itemClipId: playbackPointerProject.clips[0].id,
+      label: "영상 컷"
+    },
+    {
+      selector: `.cue-block[data-id="${cueId}"] .cue-block-body`,
+      selectionKey: "selectedCueId" as const,
+      selectionId: cueId,
+      itemStartMs: timelineStartForOffset(
+        cueClipForPointer,
+        playbackPointerCue.startOffsetMs
+      ),
+      itemClipId: playbackPointerCue.clipId,
+      expectedInspectorTab: "#caption-mode-tab",
+      label: "자막 블록"
+    },
+    {
+      selector: `.asset-block[data-id="${imageAssetId}"] .asset-block-body`,
+      selectionKey: "selectedImageAssetId" as const,
+      selectionId: imageAssetId,
+      itemStartMs: timelineStartForOffset(
+        assetClipForPointer,
+        playbackPointerAsset.startOffsetMs
+      ),
+      itemClipId: playbackPointerAsset.clipId,
+      expectedInspectorTab: "#asset-mode-tab",
+      label: "에셋 블록"
+    },
+    {
+      selector: `.audio-block[data-id="${audioRegionId}"] .audio-block-body`,
+      selectionKey: "selectedAudioRegionId" as const,
+      selectionId: audioRegionId,
+      itemStartMs: timelineStartForOffset(
+        audioClipForPointer,
+        playbackPointerAudio.startOffsetMs
+      ),
+      itemClipId: playbackPointerAudio.clipId,
+      expectedInspectorTab: "#audio-mode-tab",
+      label: "음성 블록"
+    }
+  ];
+  const playingSelectionResults = [];
+  for (const selectionCase of selectionCases) {
+    playingSelectionResults.push({
+      label: selectionCase.label,
+      result: await assertPlayingSelectionDoesNotSeek({
+        ...selectionCase,
+        playbackTimelineMs: playbackTimelineAwayFrom(selectionCase.itemClipId)
+      })
+    });
+  }
+
+  await clickElement(`.cue-block[data-id="${cueId}"] .cue-block-body`);
+  await clickElement("#cue-list-tab");
+  const cueListStartMs = timelineStartForOffset(
+    cueClipForPointer,
+    playbackPointerCue.startOffsetMs
+  );
+  const playingCueListSelection = await assertPlayingSelectionDoesNotSeek({
+    selector: `.cue-list-item[data-id="${cueId}"]`,
+    selectionKey: "selectedCueId",
+    selectionId: cueId,
+    itemStartMs: cueListStartMs,
+    playbackTimelineMs: playbackTimelineAwayFrom(playbackPointerCue.clipId),
+    expectedInspectorTab: "#caption-mode-tab",
+    label: "자막 목록"
+  });
+
+  const pausedSelectionResults = [];
+  for (const selectionCase of selectionCases) {
+    pausedSelectionResults.push({
+      label: selectionCase.label,
+      result: await assertPausedSelectionSeeks({
+        ...selectionCase,
+        playbackTimelineMs: playbackTimelineAwayFrom(selectionCase.itemClipId)
+      })
+    });
+  }
+  await clickElement(`.cue-block[data-id="${cueId}"] .cue-block-body`);
+  await clickElement("#cue-list-tab");
+  const pausedCueListSelection = await assertPausedSelectionSeeks({
+    selector: `.cue-list-item[data-id="${cueId}"]`,
+    selectionKey: "selectedCueId",
+    selectionId: cueId,
+    itemStartMs: cueListStartMs,
+    itemClipId: playbackPointerCue.clipId,
+    playbackTimelineMs: playbackTimelineAwayFrom(playbackPointerCue.clipId),
+    expectedInspectorTab: "#caption-mode-tab",
+    label: "자막 목록"
+  });
+
+  const timedBlockPlaybackDrags = [];
+  for (const snapEnabled of [true, false]) {
+    await setTimelineSnapForTest(snapEnabled);
+    const beforeProject = await readStoredProject();
+    const beforeCue = beforeProject?.subtitles.find((cue) => cue.id === cueId);
+    const beforeCueClip = beforeProject?.clips.find(
+      (clip) => clip.id === beforeCue?.clipId
+    );
+    assert(beforeProject && beforeCue && beforeCueClip, "재생 중 자막 drag 사전 cue가 없습니다.");
+    const beforeDurationMs = beforeCue.endOffsetMs - beforeCue.startOffsetMs;
+    const cueClipDurationMs = beforeCueClip.sourceEndMs - beforeCueClip.sourceStartMs;
+    const direction = beforeCue.startOffsetMs >= 350
+      ? -1
+      : beforeCue.endOffsetMs <= cueClipDurationMs - 350
+        ? 1
+        : 0;
+    assert(direction !== 0, "재생 중 자막 drag를 검증할 이동 여유가 없습니다.");
+    const cueTimelineStartMs = beforeCueClip.timelineStartMs + beforeCue.startOffsetMs;
+    const cuePreviewStartSeconds = (
+      (Number(beforeProject.mediaAsset?.mediaOriginMs) || 0)
+      + beforeCueClip.sourceStartMs
+      + beforeCue.startOffsetMs
+    ) / 1000;
+    await pausePreviewForPointerTest();
+    await clickElement(`.cue-block[data-id="${cueId}"] .cue-block-body`);
+    const selectedCueStart = await waitUntil(async () => {
+      const state = await readPreviewState();
+      return (
+        state.paused
+        && !state.seeking
+        && Math.abs(state.playheadMs - cueTimelineStartMs) <= 45
+        && Math.abs(state.currentTime - cuePreviewStartSeconds) <= 0.06
+      ) ? state : false;
+    }, `자석 ${snapEnabled ? "ON" : "OFF"} timed block 재생 시작점`);
+    await clickElement("#play-toggle");
+    const playbackStart = await waitUntil(async () => {
+      const state = await readPreviewState();
+      return (
+        !state.paused
+        && !state.seeking
+        && state.playheadMs >= cueTimelineStartMs + 300
+      ) ? state : false;
+    }, `자석 ${snapEnabled ? "ON" : "OFF"} timed block 재생 진행`);
+    const beforeDrag = await readPreviewState();
+    const drag = await pointerDrag(
+      `.cue-block[data-id="${cueId}"] .cue-block-body`,
+      [
+        { x: direction * 6, y: 0, duration: 280 },
+        { x: direction * 6, y: 0, duration: 280 },
+        { x: direction * 6, y: 0, duration: 280 }
+      ]
+    );
+    const movedProject = await waitForStoredProject(
+      (candidate) => {
+        const moved = candidate.subtitles.find((cue) => cue.id === cueId);
+        return Boolean(
+          moved
+          && (
+            moved.startOffsetMs !== beforeCue.startOffsetMs
+            || moved.endOffsetMs !== beforeCue.endOffsetMs
+          )
+        );
+      },
+      `자석 ${snapEnabled ? "ON" : "OFF"} 재생 중 timed block drag 저장`
+    );
+    const movedCue = movedProject.subtitles.find((cue) => cue.id === cueId)!;
+    const lastMoveVideoTime = Math.max(
+      ...drag.trace
+        .map((entry) => Number(entry.previewCurrentTime))
+        .filter(Number.isFinite)
+    );
+    const lastMovePlayheadMs = Math.max(
+      ...drag.trace
+        .map((entry) => Number(entry.playheadSeconds) * 1000)
+        .filter(Number.isFinite)
+    );
+    await delay(180);
+    const afterDrag = await readPreviewState();
+    assert(
+      drag.moves >= 3
+        && !afterDrag.paused
+        && movedCue.endOffsetMs - movedCue.startOffsetMs === beforeDurationMs
+        && Number.isFinite(lastMoveVideoTime)
+        && Number.isFinite(lastMovePlayheadMs)
+        && afterDrag.currentTime >= lastMoveVideoTime - 0.12
+        && afterDrag.playheadMs >= lastMovePlayheadMs - 150,
+      `자석 ${snapEnabled ? "ON" : "OFF"} timed block drag 뒤 영상이 과거로 되감겼습니다: ${JSON.stringify({
+        beforeDrag,
+        drag,
+        lastMoveVideoTime,
+        lastMovePlayheadMs,
+        afterDrag,
+        beforeCue,
+        movedCue
+      })}`
+    );
+    await pausePreviewForPointerTest();
+    timedBlockPlaybackDrags.push({
+      snapEnabled,
+      selectedCueStart,
+      playbackStart,
+      beforeDrag,
+      drag,
+      afterDrag,
+      beforeCue,
+      movedCue
+    });
+  }
+  await setTimelineSnapForTest(true);
+  const playbackPointerSafety = {
+    playhead: playheadPointerContract,
+    playingSelections: playingSelectionResults,
+    playingCueListSelection,
+    pausedSelections: pausedSelectionResults,
+    pausedCueListSelection,
+    timedBlockPlaybackDrags
+  };
+
   await executeSync(`
     const input = document.querySelector("#audio-volume");
     input.value = "35";
@@ -5312,6 +6146,8 @@ async function main() {
         after: cueHandleNudgeAfter
       },
       cueTextHotReload,
+      captionBackgroundToggle,
+      playbackPointerSafety,
       reorderKeyboardFocus,
       clipGroupMove: clipGroupMoveSmoke,
       rippleRange: {
