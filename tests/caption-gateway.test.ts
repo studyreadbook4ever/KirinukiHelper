@@ -89,6 +89,23 @@ function hasErrorCode(error: unknown, code: string): boolean {
   );
 }
 
+async function withReferencedDeadline<T>(
+  operation: Promise<T>,
+  timeoutMs = 1_000
+): Promise<T> {
+  let watchdog: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    watchdog = setTimeout(() => {
+      reject(new Error(`테스트 작업이 ${timeoutMs}ms 안에 끝나지 않았습니다.`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    clearTimeout(watchdog);
+  }
+}
+
 function testWavBase64() {
   const wav = Buffer.alloc(44);
   wav.write("RIFF", 0, "ascii");
@@ -446,7 +463,7 @@ test("로컬 Whisper 응답 오류·큰 본문·timeout을 안전한 코드로 �
     (error) => hasErrorCode(error, "STT_RESPONSE_TOO_LARGE")
   );
   await assert.rejects(
-    requestLocalWhisperTranscription(request, {
+    withReferencedDeadline(requestLocalWhisperTranscription(request, {
       sttEndpoint: LOCAL_STT_ENDPOINT,
       timeoutMs: 5,
       fetchImpl: async (_url, init) => new Promise((_resolve, reject) => {
@@ -456,7 +473,7 @@ test("로컬 Whisper 응답 오류·큰 본문·timeout을 안전한 코드로 �
           reject(signal.reason);
         }, { once: true });
       })
-    }),
+    })),
     (error) => hasErrorCode(error, "STT_TIMEOUT")
   );
 });
@@ -565,7 +582,7 @@ test("잘못된 모델은 전사 전에 막고 전체 deadline은 진행 중 전
 
   const transcribeSignal: { current?: AbortSignal } = {};
   await assert.rejects(
-    runCaptionPipeline(captionRequest(), {
+    withReferencedDeadline(runCaptionPipeline(captionRequest(), {
       pipelineTimeoutMs: 5,
       transcribeAudio: async (_request, options) => {
         const { signal } = options;
@@ -577,7 +594,7 @@ test("잘못된 모델은 전사 전에 막고 전체 deadline은 진행 중 전
           }, { once: true });
         });
       }
-    }),
+    })),
     (error) => hasErrorCode(error, "PIPELINE_TIMEOUT")
   );
   assert.equal(transcribeSignal.current?.aborted, true);
