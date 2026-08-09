@@ -183,7 +183,7 @@ const SPEAKER_COLORS = Object.freeze([
   "#b18cfa",
   "#e4a478",
   "#38f45c"
-]);
+] as const);
 const WHITE_SPEAKER_IDS = new Set([
   "",
   "0",
@@ -202,6 +202,10 @@ const WHITE_SPEAKER_IDS = new Set([
 
 type CaptionPresetId = keyof typeof CAPTION_STYLE_PRESETS;
 type SpeakerColorAssignments = Record<string, string>;
+
+function speakerColorAt(index: number): string {
+  return SPEAKER_COLORS[index] ?? SPEAKER_COLORS[0];
+}
 
 function normalizedSpeakerId(speakerId: unknown): string {
   return String(speakerId || "").trim().toLowerCase();
@@ -242,7 +246,7 @@ export function captionSpeakerColor(speakerId: unknown): string {
   const numberedSpeaker = normalized.match(/^(?:speaker|화자)[\s_-]?(\d+)$/u);
   if (numberedSpeaker) {
     const ordinal = Math.max(1, Number.parseInt(numberedSpeaker[1] ?? "1", 10));
-    return SPEAKER_COLORS[(ordinal - 1) % SPEAKER_COLORS.length];
+    return speakerColorAt((ordinal - 1) % SPEAKER_COLORS.length);
   }
 
   let hash = 2166136261;
@@ -250,7 +254,7 @@ export function captionSpeakerColor(speakerId: unknown): string {
     hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 16777619);
   }
-  return SPEAKER_COLORS[(hash >>> 0) % SPEAKER_COLORS.length];
+  return speakerColorAt((hash >>> 0) % SPEAKER_COLORS.length);
 }
 
 export function captionSpeakerColorAssignments(

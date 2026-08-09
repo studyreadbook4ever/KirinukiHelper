@@ -196,6 +196,9 @@ const WHITE_SPEAKER_IDS = /* @__PURE__ */ new Set([
   "\uD654\uC790_0",
   "unknown"
 ]);
+function speakerColorAt(index) {
+  return SPEAKER_COLORS[index] ?? SPEAKER_COLORS[0];
+}
 function normalizedSpeakerId(speakerId) {
   return String(speakerId || "").trim().toLowerCase();
 }
@@ -227,14 +230,14 @@ function captionSpeakerColor(speakerId) {
   const numberedSpeaker = normalized.match(/^(?:speaker|화자)[\s_-]?(\d+)$/u);
   if (numberedSpeaker) {
     const ordinal = Math.max(1, Number.parseInt(numberedSpeaker[1] ?? "1", 10));
-    return SPEAKER_COLORS[(ordinal - 1) % SPEAKER_COLORS.length];
+    return speakerColorAt((ordinal - 1) % SPEAKER_COLORS.length);
   }
   let hash = 2166136261;
   for (const character of normalized) {
     hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 16777619);
   }
-  return SPEAKER_COLORS[(hash >>> 0) % SPEAKER_COLORS.length];
+  return speakerColorAt((hash >>> 0) % SPEAKER_COLORS.length);
 }
 function captionSpeakerColorAssignments(speakerIds, existingAssignments = {}) {
   const assignments = {};

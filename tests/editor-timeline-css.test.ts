@@ -7,13 +7,23 @@ const editorCss = await readFile(
   "utf8"
 );
 
+function ruleBody(match: RegExpMatchArray | null, label: string): string {
+  assert.ok(match, `${label} CSS 규칙이 필요합니다.`);
+  const body = match[1];
+  assert.ok(body, `${label} CSS 규칙 본문이 비어 있습니다.`);
+  return body;
+}
+
 test("짧은 자막·에셋 블록도 양쪽 손잡이 사이에 몸체 drag 영역을 남긴다", () => {
   const adaptiveHandleRule = editorCss.match(
     /\.asset-block \.trim-handle,\s*\.cue-block \.trim-handle\s*\{([^}]*)\}/u
   );
-  assert.ok(adaptiveHandleRule, "자막·에셋 전용 손잡이 규칙이 필요합니다.");
+  const adaptiveHandleBody = ruleBody(
+    adaptiveHandleRule,
+    "자막·에셋 전용 손잡이"
+  );
   const percentage = Number(
-    adaptiveHandleRule[1].match(/width:\s*min\(\s*14px,\s*(\d+)%\s*\)/u)?.[1]
+    adaptiveHandleBody.match(/width:\s*min\(\s*14px,\s*(\d+)%\s*\)/u)?.[1]
   );
   assert.ok(
     Number.isFinite(percentage) && percentage > 0 && percentage < 50,
@@ -31,22 +41,22 @@ test("짧은 자막·에셋 블록도 양쪽 손잡이 사이에 몸체 drag 영
 
 test("재생 playhead의 포인터 hitbox는 ruler에만 있고 세로선은 클릭을 가로채지 않는다", () => {
   const playheadRule = editorCss.match(/\.playhead\s*\{([^}]*)\}/u);
-  assert.ok(playheadRule, "playhead 본체 CSS 규칙이 필요합니다.");
+  const playheadBody = ruleBody(playheadRule, "playhead 본체");
   assert.match(
-    playheadRule[1],
+    playheadBody,
     /height:\s*var\(--ruler-height\)\s*;/u,
     "움직이는 playhead 버튼의 hitbox는 ruler 높이에만 머물러야 합니다."
   );
   assert.doesNotMatch(
-    playheadRule[1],
+    playheadBody,
     /height:\s*calc\(\s*100%/u,
     "playhead 버튼이 자막·에셋·음성 트랙 전체를 덮으면 안 됩니다."
   );
 
   const verticalLineRule = editorCss.match(/\.playhead span\s*\{([^}]*)\}/u);
-  assert.ok(verticalLineRule, "playhead 세로선 CSS 규칙이 필요합니다.");
+  const verticalLineBody = ruleBody(verticalLineRule, "playhead 세로선");
   assert.match(
-    verticalLineRule[1],
+    verticalLineBody,
     /pointer-events:\s*none\s*;/u,
     "시각적 playhead 세로선은 아래 타임라인 항목의 포인터 입력을 가로채면 안 됩니다."
   );

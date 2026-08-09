@@ -263,7 +263,7 @@ export function parseLocalCaptionStackArgs(
     if (raw === undefined) {
       break;
     }
-    const [flag, inlineValue] = raw.split("=", 2);
+    const [flag = "", inlineValue] = raw.split("=", 2);
     if (/api[-_]?key|token|secret/iu.test(flag)) {
       throw new TypeError(
         "API 키는 지원하지 않고 연결 토큰은 로컬 companion이 자동 발급되므로 명령행 인자로 받을 수 없습니다."

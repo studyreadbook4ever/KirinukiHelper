@@ -175,8 +175,7 @@ function validateSamples(samples: Float32Array, sampleRateHz: number): void {
   if (!Number.isInteger(sampleRateHz) || sampleRateHz <= 0) {
     throw new RangeError("AudSeg sample rate는 양의 정수여야 합니다.");
   }
-  for (let index = 0; index < samples.length; index += 1) {
-    const sample = samples[index];
+  for (const [index, sample] of samples.entries()) {
     if (
       !Number.isFinite(sample)
       || sample < -1.000_001
@@ -212,8 +211,7 @@ export function extractAudSegFrameLevels(
     let sampleSum = 0;
     let squareSum = 0;
     const frameEnd = frameStart + frameSamples;
-    for (let index = frameStart; index < frameEnd; index += 1) {
-      const sample = samples[index];
+    for (const sample of samples.subarray(frameStart, frameEnd)) {
       sampleSum += sample;
       squareSum += sample * sample;
     }
@@ -229,8 +227,7 @@ export function extractAudSegFrameLevels(
   if (frameStart < samples.length && lastEmittedEnd < samples.length) {
     let sampleSum = 0;
     let squareSum = 0;
-    for (let index = frameStart; index < samples.length; index += 1) {
-      const sample = samples[index];
+    for (const sample of samples.subarray(frameStart)) {
       sampleSum += sample;
       squareSum += sample * sample;
     }
@@ -259,11 +256,16 @@ function percentile(values: readonly number[], fraction: number): number {
   const position = (ordered.length - 1) * fraction;
   const lower = Math.floor(position);
   const upper = Math.ceil(position);
+  const lowerValue = ordered[lower];
+  const upperValue = ordered[upper];
+  if (lowerValue === undefined || upperValue === undefined) {
+    throw new RangeError("AudSeg 백분위수 위치가 표본 범위를 벗어났습니다.");
+  }
   if (lower === upper) {
-    return ordered[lower];
+    return lowerValue;
   }
   const weight = position - lower;
-  return ordered[lower] * (1 - weight) + ordered[upper] * weight;
+  return lowerValue * (1 - weight) + upperValue * weight;
 }
 
 function thresholds(
@@ -471,6 +473,9 @@ function padRegions(
   for (let index = 1; index < padded.length; index += 1) {
     const previous = padded[index - 1];
     const current = padded[index];
+    if (!previous || !current) {
+      throw new RangeError("AudSeg 패딩 영역 인덱스가 범위를 벗어났습니다.");
+    }
     if (previous.endSample <= current.startSample) {
       continue;
     }
@@ -488,19 +493,21 @@ function padRegions(
     if (region.endSample <= region.startSample) {
       return [];
     }
-    while (
-      firstLevel < levels.length
-      && levels[firstLevel].endSample <= region.startSample
-    ) {
+    while (firstLevel < levels.length) {
+      const level = levels[firstLevel];
+      if (!level || level.endSample > region.startSample) {
+        break;
+      }
       firstLevel += 1;
     }
     let lastLevel = firstLevel;
-    const values = [];
-    while (
-      lastLevel < levels.length
-      && levels[lastLevel].startSample < region.endSample
-    ) {
-      values.push(levels[lastLevel].dbfs);
+    const values: number[] = [];
+    while (lastLevel < levels.length) {
+      const level = levels[lastLevel];
+      if (!level || level.startSample >= region.endSample) {
+        break;
+      }
+      values.push(level.dbfs);
       lastLevel += 1;
     }
     return [{
@@ -517,7 +524,11 @@ function lowerBound(values: readonly number[], target: number): number {
   let high = values.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (values[middle] < target) {
+    const value = values[middle];
+    if (value === undefined) {
+      throw new RangeError("AudSeg lower-bound 인덱스가 범위를 벗어났습니다.");
+    }
+    if (value < target) {
       low = middle + 1;
     } else {
       high = middle;
@@ -531,7 +542,11 @@ function upperBound(values: readonly number[], target: number): number {
   let high = values.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (values[middle] <= target) {
+    const value = values[middle];
+    if (value === undefined) {
+      throw new RangeError("AudSeg upper-bound 인덱스가 범위를 벗어났습니다.");
+    }
+    if (value <= target) {
       low = middle + 1;
     } else {
       high = middle;
@@ -542,10 +557,22 @@ function upperBound(values: readonly number[], target: number): number {
 
 function median(values: readonly number[]): number {
   const ordered = [...values].sort((left, right) => left - right);
+  if (ordered.length === 0) {
+    throw new RangeError("AudSeg 중앙값에는 하나 이상의 표본이 필요합니다.");
+  }
   const middle = Math.floor(ordered.length / 2);
-  return ordered.length % 2 === 0
-    ? (ordered[middle - 1] + ordered[middle]) / 2
-    : ordered[middle];
+  const upperMiddle = ordered[middle];
+  if (upperMiddle === undefined) {
+    throw new RangeError("AudSeg 중앙값 위치가 표본 범위를 벗어났습니다.");
+  }
+  if (ordered.length % 2 !== 0) {
+    return upperMiddle;
+  }
+  const lowerMiddle = ordered[middle - 1];
+  if (lowerMiddle === undefined) {
+    throw new RangeError("AudSeg 중앙값 위치가 표본 범위를 벗어났습니다.");
+  }
+  return (lowerMiddle + upperMiddle) / 2;
 }
 
 interface AudSegSplitChoice {
@@ -660,15 +687,22 @@ function splitRegion(
     ...boundaries.map(({ boundary }) => boundary),
     region.endSample
   ];
-  return points.slice(0, -1).map((startSample, index) => ({
-    startSample,
-    endSample: points[index + 1],
-    sourceRegion,
-    forcedSplit: true,
-    splitMethod: boundaries[
+  return points.slice(0, -1).map((startSample, index) => {
+    const endSample = points[index + 1];
+    const boundary = boundaries[
       Math.min(index, boundaries.length - 1)
-    ].method
-  }));
+    ];
+    if (endSample === undefined || !boundary) {
+      throw new RangeError("AudSeg 분할 경계가 영역 범위를 벗어났습니다.");
+    }
+    return {
+      startSample,
+      endSample,
+      sourceRegion,
+      forcedSplit: true,
+      splitMethod: boundary.method
+    };
+  });
 }
 
 export function segmentAudSegPcm(

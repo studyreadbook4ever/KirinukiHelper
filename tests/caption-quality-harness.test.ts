@@ -251,10 +251,13 @@ test("긴 cue 분할 시 균등 나눗셈 대신 실제 STT word 경계를 사�
 
   assert.equal(repaired.harnessFingerprint, CAPTION_HARNESS_FINGERPRINT);
   assert.equal(repaired.cues.length, 2);
-  assert.equal(repaired.cues[0].startMs, 0);
-  assert.equal(repaired.cues[0].endMs, 2_350);
-  assert.equal(repaired.cues[1].startMs, 2_350);
-  assert.equal(repaired.cues[1].endMs, 6_000);
+  const [firstCue, secondCue] = repaired.cues;
+  assert.ok(firstCue);
+  assert.ok(secondCue);
+  assert.equal(firstCue.startMs, 0);
+  assert.equal(firstCue.endMs, 2_350);
+  assert.equal(secondCue.startMs, 2_350);
+  assert.equal(secondCue.endMs, 6_000);
   assert(repaired.cues.every(
     (cue) => cue.startMs >= 0 && cue.endMs <= 6_000
   ));
@@ -566,7 +569,9 @@ test("평가기는 transcript 누락·환각, 과속, 여러 줄과 같은 hard 
 
   assert.equal(report.valid, false);
   assert.equal(report.disposition, "rejected");
-  assert.equal(report.cueReviews[0].status, "rejected");
+  const [cueReview] = report.cueReviews;
+  assert.ok(cueReview);
+  assert.equal(cueReview.status, "rejected");
   assert(codes.has("HARNESS_TERMINAL_PERIOD"));
   assert(codes.has("HARNESS_TOO_MANY_LINES"));
   assert(codes.has("HARNESS_READING_RATE_EXCEEDED"));

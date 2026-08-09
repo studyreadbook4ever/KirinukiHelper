@@ -145,8 +145,11 @@ test("quality-first는 최고 영상·음성과 MKV stream-copy 병합을 선택
     args[args.indexOf("--merge-output-format") + 1],
     "mkv"
   );
+  const compatiblePostprocessorArgs =
+    args[args.indexOf("--postprocessor-args") + 1];
+  assert.ok(compatiblePostprocessorArgs);
   assert.match(
-    args[args.indexOf("--postprocessor-args") + 1],
+    compatiblePostprocessorArgs,
     /(?:^|[: ])-c copy(?: |$)/u
   );
   assert.deepEqual(args.slice(-2), ["--", CANONICAL_URL]);
@@ -167,8 +170,11 @@ test("editor-safe는 최고 H.264 MP4와 AAC M4A 및 단일 MP4 폴백을 선택
     args[args.indexOf("--merge-output-format") + 1],
     "mp4"
   );
+  const editorSafePostprocessorArgs =
+    args[args.indexOf("--postprocessor-args") + 1];
+  assert.ok(editorSafePostprocessorArgs);
   assert.match(
-    args[args.indexOf("--postprocessor-args") + 1],
+    editorSafePostprocessorArgs,
     /-movflags \+faststart/u
   );
 });
@@ -230,10 +236,12 @@ test("URL의 셸 문자는 제거되고 yt-dlp는 인자 배열과 shell:false�
   });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].command, "yt-dlp");
-  assert.equal(calls[0].options.shell, false);
-  assert.equal(calls[0].args.at(-1), CANONICAL_URL);
-  assert(!calls[0].args.some((argument) => argument.includes("touch")));
+  const [call] = calls;
+  assert.ok(call);
+  assert.equal(call.command, "yt-dlp");
+  assert.equal(call.options.shell, false);
+  assert.equal(call.args.at(-1), CANONICAL_URL);
+  assert(!call.args.some((argument) => argument.includes("touch")));
 });
 
 test("실행 파일 누락은 공식 설치 또는 환경 변수 설정을 안내한다", async () => {

@@ -321,7 +321,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-const elements = Object.fromEntries([
+const EDITOR_ELEMENT_IDS = [
   "project-name",
   "source-kind",
   "source-title",
@@ -497,13 +497,42 @@ const elements = Object.fromEntries([
   "restore-local-draft",
   "close-local-draft-dialog",
   "toast"
-].map((id) => {
+] as const;
+
+type EditorElementKey<Id extends string> =
+  Id extends `${infer Head}-${infer Tail}`
+    ? `${Head}_${EditorElementKey<Tail>}`
+    : Id;
+
+type EditorElementType<Id extends string> =
+  Id extends "preview-video" ? HTMLVideoElement : EditorControl;
+
+type EditorElementMap = {
+  [Id in typeof EDITOR_ELEMENT_IDS[number] as EditorElementKey<Id>]: EditorElementType<Id>;
+};
+
+function isEditorElementMap(value: unknown): value is EditorElementMap {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return EDITOR_ELEMENT_IDS.every((id) => {
+    const element = value[id.replaceAll("-", "_")];
+    return element instanceof HTMLElement
+      && (id !== "preview-video" || element instanceof HTMLVideoElement);
+  });
+}
+
+const elementCandidates = Object.fromEntries(EDITOR_ELEMENT_IDS.map((id) => {
   const element = document.querySelector<HTMLElement>(`#${id}`);
   if (!element) {
     throw new Error(`편집기 필수 UI 요소를 찾지 못했습니다: #${id}`);
   }
-  return [id.replaceAll("-", "_"), element as EditorControl];
-})) as Record<string, EditorControl>;
+  return [id.replaceAll("-", "_"), element];
+}));
+if (!isEditorElementMap(elementCandidates)) {
+  throw new Error("편집기 필수 UI 요소 타입이 올바르지 않습니다.");
+}
+const elements = elementCandidates;
 
 function shortcutTargetIds(
   binding: KeyboardShortcutBinding
@@ -1743,10 +1772,6 @@ function selectedAudioRegion() {
 
 function selectedImageAsset() {
   return (project.imageAssets || []).find((asset) => asset.id === project.selectedImageAssetId) || null;
-}
-
-function selectedClip() {
-  return project.clips.find((clip) => clip.id === project.selectedClipId) || project.clips[0] || null;
 }
 
 function formatFileSize(bytes: number) {
@@ -3888,7 +3913,11 @@ function renderTimeline({ keepScroll = false } = {}) {
         }
       )
     );
-    (captionRows[cue.lane] || captionRows[0]).append(block);
+    const captionRow = captionRows[cue.lane] ?? captionRows[0];
+    if (!captionRow) {
+      throw new Error("자막 타임라인 레인을 준비하지 못했습니다.");
+    }
+    captionRow.append(block);
   });
 
   renderTimelineRange();
@@ -4499,7 +4528,7 @@ function startPreviewPlaybackClock() {
 
 function transitionToPreparedPreview(next: PreviewClip) {
   const nextVideo = standbyPreviewVideo;
-  const previousVideo = elements.preview_video as unknown as HTMLVideoElement;
+  const previousVideo = elements.preview_video;
   const targetSeconds = sourceMsToPreviewSeconds(next.sourceStartMs);
   if (
     previewBoundaryTransitioning
@@ -4517,7 +4546,7 @@ function transitionToPreparedPreview(next: PreviewClip) {
   configurePreviewVideoLayer(previousVideo, { active: false });
   previousVideo.id = "preview-video-standby";
   nextVideo.id = "preview-video";
-  elements.preview_video = nextVideo as unknown as EditorControl;
+  elements.preview_video = nextVideo;
   standbyPreviewVideo = previousVideo;
   activeClipId = next.id;
   project.selectedClipId = next.id;
@@ -5184,6 +5213,10 @@ async function chooseMediaFile() {
           }
         }]
       });
+      if (!handle) {
+        showToast("선택한 원본 파일을 불러오지 못했습니다.", "error");
+        return;
+      }
       const file = await handle.getFile();
       const attached = await attachMediaFile(file);
       if (attached) {
@@ -5395,13 +5428,13 @@ async function ensureLocalCaptionSession(
   const token = await ensureCaptionAgentSession({
     endpoint: config.endpoint,
     token: config.token,
-    signal
+    ...(signal === undefined ? {} : { signal })
   });
   elements.caption_agent_token.value = token;
   const capability = await probeCaptionAgent({
     endpoint: config.endpoint,
     token,
-    signal
+    ...(signal === undefined ? {} : { signal })
   }) as CaptionCapability;
   const runtime = captionAgentRuntimeIdentity(capability, {
     model: config.model
@@ -5449,7 +5482,9 @@ async function prepareCaptionAgentConfig(): Promise<PreparedCaptionUiConfig> {
   const capability = sessionConfig.capability || await probeCaptionAgent({
     endpoint: sessionConfig.endpoint,
     token: sessionConfig.token,
-    signal: activeJobController?.signal
+    ...(activeJobController?.signal === undefined
+      ? {}
+      : { signal: activeJobController.signal })
   }) as CaptionCapability;
   const runtime = sessionConfig.runtime || captionAgentRuntimeIdentity(capability, {
     model: sessionConfig.model
@@ -5772,8 +5807,7 @@ async function generateCaptions() {
   try {
     await saveProject(project);
     const clips = enabledClips as EditorClip[];
-    for (let index = 0; index < clips.length; index += 1) {
-      const clip = clips[index];
+    for (const [index, clip] of clips.entries()) {
       const base = index / clips.length;
       const span = 1 / clips.length;
       setAiProgress(
@@ -7134,6 +7168,9 @@ function bindActions() {
           ? propertyTabs.length - 1
           : (tabIndex + (event.key === "ArrowLeft" ? -1 : 1) + propertyTabs.length) % propertyTabs.length;
       const next = propertyTabs[nextIndex];
+      if (!next) {
+        return;
+      }
       next.click();
       next.focus();
     });

@@ -561,12 +561,12 @@ function renderPolicyMatch() {
     return;
   }
   const { resolvedPolicies } = currentPolicyBundle();
-  if (resolvedPolicies.length === 0) {
+  const [policy] = resolvedPolicies;
+  if (!policy) {
     elements.policyMatchBadge.textContent = "\uAE30\uBCF8 MD \uC801\uC6A9";
     elements.policyMatchBadge.title = "\uB4F1\uB85D\uB41C \uBC29\uC1A1\uC778 \uC815\uCC45\uACFC \uC815\uD655\uD788 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.";
     return;
   }
-  const policy = resolvedPolicies[0];
   elements.policyMatchBadge.textContent = `${policy.group} \xB7 \uB9C1\uD06C \uB9E4\uCE6D`;
   elements.policyMatchBadge.title = `${policy.matchedBy.value} \u2192 ${policy.sourceUrl}`;
 }
@@ -885,13 +885,15 @@ async function seekSourceBy(deltaSeconds) {
         previousPlayer.liveEdgeOffsetSeconds
       );
       const chzzkLiveMediaDelta = currentContext.platform === SOURCE_PLATFORM_CHZZK && currentContext.contentType === "live" && Number.isFinite(previousPosition) && Number.isFinite(previousRawPosition) ? mediaTime - previousRawPosition : null;
+      const rawMediaPositionSeconds = chzzkLiveMediaDelta === null ? previousPlayer.rawMediaPositionSeconds : mediaTime;
+      const liveEdgeOffsetSeconds = chzzkLiveMediaDelta !== null && Number.isFinite(previousLiveEdgeOffset) ? Math.max(0, previousLiveEdgeOffset - chzzkLiveMediaDelta) : previousPlayer.liveEdgeOffsetSeconds;
       currentContext = {
         ...currentContext,
         player: {
           ...previousPlayer,
           positionSeconds: chzzkLiveMediaDelta === null ? mediaTime : Math.max(0, previousPosition + chzzkLiveMediaDelta),
-          rawMediaPositionSeconds: chzzkLiveMediaDelta === null ? previousPlayer.rawMediaPositionSeconds : mediaTime,
-          liveEdgeOffsetSeconds: chzzkLiveMediaDelta !== null && Number.isFinite(previousLiveEdgeOffset) ? Math.max(0, previousLiveEdgeOffset - chzzkLiveMediaDelta) : previousPlayer.liveEdgeOffsetSeconds
+          ...rawMediaPositionSeconds === void 0 ? {} : { rawMediaPositionSeconds },
+          ...liveEdgeOffsetSeconds === void 0 ? {} : { liveEdgeOffsetSeconds }
         }
       };
       renderSource();
@@ -1021,12 +1023,12 @@ async function captureCurrentPosition(kind) {
     }
     const rounded = Math.round(position * 1e3) / 1e3;
     const capture = {
-      method: context.player?.positionSource,
-      confidence: context.player?.confidence,
+      ...context.player?.positionSource === void 0 ? {} : { method: context.player.positionSource },
+      ...context.player?.confidence === void 0 ? {} : { confidence: context.player.confidence },
       rawSeconds: position,
-      rawMediaSeconds: context.player?.rawMediaPositionSeconds,
-      observedAt: context.capturedAt,
-      liveEdgeOffsetSeconds: context.player?.liveEdgeOffsetSeconds,
+      ...context.player?.rawMediaPositionSeconds === void 0 ? {} : { rawMediaSeconds: context.player.rawMediaPositionSeconds },
+      ...context.capturedAt === void 0 ? {} : { observedAt: context.capturedAt },
+      ...context.player?.liveEdgeOffsetSeconds === void 0 ? {} : { liveEdgeOffsetSeconds: context.player.liveEdgeOffsetSeconds },
       broadcastStartedAt: context.broadcastStartedAt,
       pageUrl: context.canonicalUrl || context.url,
       sourceSessionId: sourceIdentity(contextAsSource(context))
@@ -1132,13 +1134,13 @@ async function saveSegment() {
     const editingIndex = state.draft.editingId ? state.segments.findIndex((segment2) => segment2.id === state.draft.editingId) : -1;
     const existing = editingIndex >= 0 ? state.segments[editingIndex] : null;
     const segment = createSegment({
-      id: existing?.id,
+      ...existing?.id === void 0 ? {} : { id: existing.id },
       startText: state.draft.startText,
       endText: state.draft.endText,
       description: state.draft.description,
       startCapture: state.draft.startCapture,
       endCapture: state.draft.endCapture,
-      createdAt: existing?.createdAt
+      ...existing?.createdAt === void 0 ? {} : { createdAt: existing.createdAt }
     });
     segment.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     if (editingIndex >= 0) {
@@ -1213,12 +1215,18 @@ async function moveSegment(id, direction) {
     return;
   }
   const operationGeneration = stateGeneration;
-  const index = state.segments.findIndex((segment) => segment.id === id);
+  const index = state.segments.findIndex((segment2) => segment2.id === id);
   const nextIndex = index + direction;
   if (index < 0 || nextIndex < 0 || nextIndex >= state.segments.length) {
     return;
   }
-  [state.segments[index], state.segments[nextIndex]] = [state.segments[nextIndex], state.segments[index]];
+  const segment = state.segments[index];
+  const adjacentSegment = state.segments[nextIndex];
+  if (!segment || !adjacentSegment) {
+    return;
+  }
+  state.segments[index] = adjacentSegment;
+  state.segments[nextIndex] = segment;
   renderSegments();
   try {
     await persistState();

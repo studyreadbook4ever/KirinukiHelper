@@ -198,6 +198,9 @@ var WHITE_SPEAKER_IDS = /* @__PURE__ */ new Set([
   "\uD654\uC790_0",
   "unknown"
 ]);
+function speakerColorAt(index) {
+  return SPEAKER_COLORS[index] ?? SPEAKER_COLORS[0];
+}
 function normalizedSpeakerId(speakerId) {
   return String(speakerId || "").trim().toLowerCase();
 }
@@ -229,14 +232,14 @@ function captionSpeakerColor(speakerId) {
   const numberedSpeaker = normalized.match(/^(?:speaker|화자)[\s_-]?(\d+)$/u);
   if (numberedSpeaker) {
     const ordinal = Math.max(1, Number.parseInt(numberedSpeaker[1] ?? "1", 10));
-    return SPEAKER_COLORS[(ordinal - 1) % SPEAKER_COLORS.length];
+    return speakerColorAt((ordinal - 1) % SPEAKER_COLORS.length);
   }
   let hash = 2166136261;
   for (const character of normalized) {
     hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 16777619);
   }
-  return SPEAKER_COLORS[(hash >>> 0) % SPEAKER_COLORS.length];
+  return speakerColorAt((hash >>> 0) % SPEAKER_COLORS.length);
 }
 function captionSpeakerColorAssignments(speakerIds, existingAssignments = {}) {
   const assignments = {};
@@ -733,9 +736,12 @@ function normalizeEditorProject(raw) {
   }
   const migratingLegacyProject = raw.schema === LEGACY_EDITOR_SCHEMA_V1;
   const clips = reflowClips(Array.isArray(raw.clips) ? raw.clips : []);
+  const rawProjectId = typeof raw.id === "string" || typeof raw.id === "number" && Number.isFinite(raw.id) ? String(raw.id).trim() : "";
+  const projectId = rawProjectId || makeId("project");
+  const createdAt = typeof raw.createdAt === "string" && raw.createdAt.trim() ? raw.createdAt : nowIso();
   const defaults = createEditorProjectFromCapture({}, {
-    id: String(raw.id || makeId("project")),
-    createdAt: String(raw.createdAt || nowIso())
+    id: projectId,
+    createdAt
   });
   const clipIds = new Set(clips.map((clip) => clip.id));
   const clipSelectionIds = new Set(clips.map((clip) => clip.selectionId));
@@ -896,9 +902,13 @@ function normalizeEditorProject(raw) {
   };
   const rawAi = recordOrEmpty(raw.ai);
   const legacyBrowserWhisperMetadata = rawAi.provider === "transformers.js";
+  const {
+    resolvedModel: rawResolvedModel,
+    ...rawAiExtensions
+  } = rawAi;
   const ai = {
     ...defaults.ai,
-    ...rawAi,
+    ...rawAiExtensions,
     ...legacyBrowserWhisperMetadata ? {
       provider: defaults.ai.provider,
       model: defaults.ai.model,
@@ -928,21 +938,26 @@ function normalizeEditorProject(raw) {
     captionCheckpoints: normalizeAiCaptionCheckpoints(
       rawAi.captionCheckpoints,
       clips
-    )
+    ),
+    ...typeof rawResolvedModel === "string" && rawResolvedModel.trim() ? { resolvedModel: rawResolvedModel } : {}
   };
   const rawHistory = recordOrEmpty(raw.history);
   const rawSource = recordOrEmpty(raw.source);
   const rawBroadcastSession = recordOrEmpty(
     raw.broadcastSession
   );
-  return {
+  const selectedClipId = typeof raw.selectedClipId === "string" && clipIds.has(raw.selectedClipId) ? raw.selectedClipId : null;
+  const selectedCueId = typeof raw.selectedCueId === "string" && subtitles.some((cue) => cue.id === raw.selectedCueId) ? raw.selectedCueId : null;
+  const normalizedProject = {
     ...defaults,
-    ...raw,
     schema: EDITOR_SCHEMA,
+    id: projectId,
+    name: typeof raw.name === "string" && raw.name.trim() ? raw.name : defaults.name,
     source: { ...defaults.source, ...rawSource },
     broadcastSession: {
       ...defaults.broadcastSession,
-      ...rawBroadcastSession
+      ...rawBroadcastSession,
+      id: typeof rawBroadcastSession.id === "string" ? rawBroadcastSession.id : String(defaults.broadcastSession.id || "")
     },
     mediaAsset: normalizeMediaAsset(raw.mediaAsset),
     subtitleDefaults,
@@ -958,9 +973,19 @@ function normalizeEditorProject(raw) {
     recentSubtitleColors: normalizeRecentSubtitleColors(raw.recentSubtitleColors),
     audioRegions,
     imageAssets,
+    selectedClipId,
     selectedImageAssetId: imageAssets.some((asset) => asset.id === raw.selectedImageAssetId) && typeof raw.selectedImageAssetId === "string" ? raw.selectedImageAssetId : null,
-    selectedAudioRegionId: audioRegions.some((region) => region.id === raw.selectedAudioRegionId) && typeof raw.selectedAudioRegionId === "string" ? raw.selectedAudioRegionId : null
+    selectedCueId,
+    selectedAudioRegionId: audioRegions.some((region) => region.id === raw.selectedAudioRegionId) && typeof raw.selectedAudioRegionId === "string" ? raw.selectedAudioRegionId : null,
+    playheadMs: clamp(
+      Math.round(finiteNumber(raw.playheadMs, defaults.playheadMs)),
+      0,
+      projectDurationMs({ clips })
+    ),
+    createdAt,
+    updatedAt: typeof raw.updatedAt === "string" && raw.updatedAt.trim() ? raw.updatedAt : createdAt
   };
+  return { ...raw, ...normalizedProject };
 }
 function applyCaptionStylePreset(project2, presetId) {
   if (!project2 || typeof project2 !== "object") {
@@ -1077,14 +1102,14 @@ function mergeCaptureIntoEditorProject(project2, captureState = {}) {
       if (!capturedBoundaryUnchanged && !canPreserveTrim) {
         return [];
       }
+      const { note: _previousNote2, ...existingWithoutNote } = existing;
       return [{
         ...incoming,
-        ...existing,
+        ...existingWithoutNote,
         sourceStartMs: capturedBoundaryUnchanged ? existing.sourceStartMs : overlapStartMs,
         sourceEndMs: capturedBoundaryUnchanged ? existing.sourceEndMs : overlapEndMs,
         selectionStartMs: incoming.selectionStartMs,
         selectionEndMs: incoming.selectionEndMs,
-        note: incoming.note,
         capture: incoming.capture,
         updatedAt: nowIso()
       }];
@@ -1094,14 +1119,17 @@ function mergeCaptureIntoEditorProject(project2, captureState = {}) {
       return;
     }
     const [firstExisting] = existingGroup;
+    const {
+      note: _previousNote,
+      ...firstExistingWithoutNote
+    } = firstExisting || {};
     replacementBySelection.set(selectionId, {
       ...incoming,
-      ...firstExisting,
+      ...firstExistingWithoutNote,
       sourceStartMs: incoming.sourceStartMs,
       sourceEndMs: incoming.sourceEndMs,
       selectionStartMs: incoming.selectionStartMs,
       selectionEndMs: incoming.selectionEndMs,
-      note: incoming.note,
       capture: incoming.capture,
       updatedAt: nowIso()
     });
@@ -1212,9 +1240,9 @@ function mergeCaptureIntoEditorProject(project2, captureState = {}) {
     audioRegions,
     imageAssets,
     selectedClipId: nextSelectedClipId,
-    selectedCueId: subtitles.some((cue) => cue.id === normalized.selectedCueId) ? normalized.selectedCueId : null,
-    selectedImageAssetId: imageAssets.some((asset) => asset.id === normalized.selectedImageAssetId) ? normalized.selectedImageAssetId : null,
-    selectedAudioRegionId: audioRegions.some((region) => region.id === normalized.selectedAudioRegionId) ? normalized.selectedAudioRegionId : null,
+    selectedCueId: subtitles.some((cue) => cue.id === normalized.selectedCueId) ? normalized.selectedCueId ?? null : null,
+    selectedImageAssetId: imageAssets.some((asset) => asset.id === normalized.selectedImageAssetId) ? normalized.selectedImageAssetId ?? null : null,
+    selectedAudioRegionId: audioRegions.some((region) => region.id === normalized.selectedAudioRegionId) ? normalized.selectedAudioRegionId ?? null : null,
     updatedAt: nowIso()
   };
 }
@@ -1475,7 +1503,13 @@ function updateImageAsset(project2, assetId, patch = {}) {
     return project2;
   }
   const current = project2.imageAssets[index];
+  if (!current) {
+    return project2;
+  }
   const clip = project2.clips.find((candidate) => candidate.id === current.clipId);
+  if (!clip) {
+    throw new Error("\uC774\uBBF8\uC9C0 \uC5D0\uC14B\uC774 \uCC38\uC870\uD558\uB294 \uC601\uC0C1 \uAD6C\uAC04\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+  }
   const next = normalizeImageAsset({
     ...current,
     ...patch,
@@ -1497,7 +1531,7 @@ function deleteImageAsset(project2, assetId) {
   return {
     ...project2,
     imageAssets: (project2.imageAssets || []).filter((asset) => asset.id !== assetId),
-    selectedImageAssetId: project2.selectedImageAssetId === assetId ? null : project2.selectedImageAssetId,
+    selectedImageAssetId: project2.selectedImageAssetId === assetId ? null : project2.selectedImageAssetId ?? null,
     updatedAt: nowIso()
   };
 }
@@ -1569,7 +1603,13 @@ function updateAudioRegion(project2, regionId, patch = {}) {
     return project2;
   }
   const current = project2.audioRegions[index];
+  if (!current) {
+    return project2;
+  }
   const clip = project2.clips.find((candidate) => candidate.id === current.clipId);
+  if (!clip) {
+    throw new Error("\uC74C\uC131 \uAD6C\uAC04\uC774 \uCC38\uC870\uD558\uB294 \uC601\uC0C1 \uAD6C\uAC04\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+  }
   const next = normalizeAudioRegion({
     ...current,
     ...patch,
@@ -1588,7 +1628,7 @@ function deleteAudioRegion(project2, regionId) {
   return {
     ...project2,
     audioRegions: project2.audioRegions.filter((region) => region.id !== regionId),
-    selectedAudioRegionId: project2.selectedAudioRegionId === regionId ? null : project2.selectedAudioRegionId,
+    selectedAudioRegionId: project2.selectedAudioRegionId === regionId ? null : project2.selectedAudioRegionId ?? null,
     updatedAt: nowIso()
   };
 }
@@ -1823,8 +1863,14 @@ function findSubtitleOverlaps(project2) {
   const overlaps = [];
   for (let leftIndex = 0; leftIndex < cues.length; leftIndex += 1) {
     const left = cues[leftIndex];
+    if (!left) {
+      continue;
+    }
     for (let rightIndex = leftIndex + 1; rightIndex < cues.length; rightIndex += 1) {
       const right = cues[rightIndex];
+      if (!right) {
+        continue;
+      }
       if (right.range.startMs >= left.range.endMs) {
         break;
       }
@@ -1849,8 +1895,14 @@ function findAudioRegionOverlaps(project2) {
   const overlaps = [];
   for (let leftIndex = 0; leftIndex < regions.length; leftIndex += 1) {
     const left = regions[leftIndex];
+    if (!left) {
+      continue;
+    }
     for (let rightIndex = leftIndex + 1; rightIndex < regions.length; rightIndex += 1) {
       const right = regions[rightIndex];
+      if (!right) {
+        continue;
+      }
       if (right.range.startMs >= left.range.endMs) {
         break;
       }
@@ -1883,7 +1935,13 @@ function updateSubtitleCue(project2, cueId, patch = {}, { markHuman = true } = {
     return project2;
   }
   const current = project2.subtitles[index];
+  if (!current) {
+    return project2;
+  }
   const clip = project2.clips.find((candidate) => candidate.id === current.clipId);
+  if (!clip) {
+    throw new Error("\uC790\uB9C9\uC774 \uCC38\uC870\uD558\uB294 \uC601\uC0C1 \uAD6C\uAC04\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+  }
   const next = normalizeSubtitleCue({
     ...current,
     ...patch,
@@ -1903,7 +1961,7 @@ function deleteSubtitleCue(project2, cueId) {
   return {
     ...project2,
     subtitles: project2.subtitles.filter((cue) => cue.id !== cueId),
-    selectedCueId: project2.selectedCueId === cueId ? null : project2.selectedCueId,
+    selectedCueId: project2.selectedCueId === cueId ? null : project2.selectedCueId ?? null,
     updatedAt: nowIso()
   };
 }
@@ -1986,7 +2044,11 @@ function replaceAiSubtitleDraft(project2, clipId, drafts = []) {
     }
     const assigned = { ...candidate, lane };
     aiCues.push(assigned);
-    laneCues[lane].push(assigned);
+    const assignedLane = laneCues[lane];
+    if (!assignedLane) {
+      throw new RangeError("\uC790\uB9C9 \uB808\uC778\uC774 \uD5C8\uC6A9 \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4.");
+    }
+    assignedLane.push(assigned);
     if (speakerId && speakerId !== "unknown" && !speakerLanes.has(speakerId)) {
       speakerLanes.set(speakerId, lane);
     }
@@ -2000,7 +2062,7 @@ function replaceAiSubtitleDraft(project2, clipId, drafts = []) {
     ...project2,
     subtitleLaneCount,
     subtitles,
-    selectedCueId: subtitles.some((cue) => cue.id === project2.selectedCueId) ? project2.selectedCueId : aiCues[0]?.id || protectedInClip[0]?.id || null,
+    selectedCueId: subtitles.some((cue) => cue.id === project2.selectedCueId) ? project2.selectedCueId ?? null : aiCues[0]?.id || protectedInClip[0]?.id || null,
     updatedAt: nowIso()
   };
 }
@@ -2073,7 +2135,7 @@ function appendAiSubtitleDrafts(project2, drafts = []) {
   return {
     ...next,
     subtitles,
-    selectedCueId: subtitles.some((cue) => cue.id === selectedCueId) ? selectedCueId : next.selectedCueId,
+    selectedCueId: subtitles.some((cue) => cue.id === selectedCueId) ? selectedCueId ?? null : next.selectedCueId ?? null,
     updatedAt: nowIso()
   };
 }
@@ -2086,6 +2148,9 @@ function updateClipTrim(project2, clipId, {
     return project2;
   }
   const current = project2.clips[index];
+  if (!current) {
+    return project2;
+  }
   const start = Math.max(0, Math.round(finiteNumber(sourceStartMs, current.sourceStartMs)));
   const end = Math.max(start + MIN_CLIP_DURATION_MS, Math.round(finiteNumber(sourceEndMs, current.sourceEndMs)));
   const nextClips = [...project2.clips];
@@ -2144,9 +2209,9 @@ function updateClipTrim(project2, clipId, {
     }, nextClip);
     return next ? [next] : [];
   });
-  const selectedCueId = subtitles.some((cue) => cue.id === project2.selectedCueId) ? project2.selectedCueId : null;
-  const selectedAudioRegionId = audioRegions.some((region) => region.id === project2.selectedAudioRegionId) ? project2.selectedAudioRegionId : null;
-  const selectedImageAssetId = imageAssets.some((asset) => asset.id === project2.selectedImageAssetId) ? project2.selectedImageAssetId : null;
+  const selectedCueId = subtitles.some((cue) => cue.id === project2.selectedCueId) ? project2.selectedCueId ?? null : null;
+  const selectedAudioRegionId = audioRegions.some((region) => region.id === project2.selectedAudioRegionId) ? project2.selectedAudioRegionId ?? null : null;
+  const selectedImageAssetId = imageAssets.some((asset) => asset.id === project2.selectedImageAssetId) ? project2.selectedImageAssetId ?? null : null;
   return {
     ...project2,
     clips,
@@ -2227,10 +2292,13 @@ function rippleDeleteTimelineRange(project2, {
     }
     const localDeleteStartMs = overlapStartMs - clipTimelineStartMs;
     const localDeleteEndMs = overlapEndMs - clipTimelineStartMs;
-    const keptRanges = [
+    const candidateRanges = [
       [0, localDeleteStartMs],
       [localDeleteEndMs, clipDuration]
-    ].filter(([rangeStartMs2, rangeEndMs2]) => rangeEndMs2 > rangeStartMs2);
+    ];
+    const keptRanges = candidateRanges.filter(
+      ([rangeStartMs2, rangeEndMs2]) => rangeEndMs2 > rangeStartMs2
+    );
     const tooShort = keptRanges.find(([rangeStartMs2, rangeEndMs2]) => rangeEndMs2 - rangeStartMs2 < MIN_CLIP_DURATION_MS);
     if (tooShort) {
       throw new RangeError(
@@ -2246,7 +2314,11 @@ function rippleDeleteTimelineRange(project2, {
   const reflowedByClipId = new Map(clips.map((clip) => [clip.id, clip]));
   slicesByClipId.forEach((slices) => {
     slices.forEach((slice) => {
-      slice.nextClip = reflowedByClipId.get(slice.nextClip.id);
+      const reflowed = reflowedByClipId.get(slice.nextClip.id);
+      if (!reflowed) {
+        throw new Error("\uB9AC\uD50C \uC0AD\uC81C \uD6C4 \uC601\uC0C1 \uAD6C\uAC04\uC744 \uB2E4\uC2DC \uC5F0\uACB0\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      }
+      slice.nextClip = reflowed;
     });
   });
   const remapTimedItems = (items, {
@@ -2349,6 +2421,9 @@ function rippleDeleteTimelineRange(project2, {
       return;
     }
     const [representative] = previousClips;
+    if (!representative) {
+      return;
+    }
     const previous = suppressedBySelectionId.get(selectionId);
     const suppressed = normalizeSuppressedSelection({
       ...previous,
@@ -2378,9 +2453,9 @@ function rippleDeleteTimelineRange(project2, {
     imageAssets,
     audioRegions,
     selectedClipId,
-    selectedCueId: subtitles.some((cue) => cue.id === project2.selectedCueId) ? project2.selectedCueId : null,
-    selectedImageAssetId: imageAssets.some((asset) => asset.id === project2.selectedImageAssetId) ? project2.selectedImageAssetId : null,
-    selectedAudioRegionId: audioRegions.some((region) => region.id === project2.selectedAudioRegionId) ? project2.selectedAudioRegionId : null,
+    selectedCueId: subtitles.some((cue) => cue.id === project2.selectedCueId) ? project2.selectedCueId ?? null : null,
+    selectedImageAssetId: imageAssets.some((asset) => asset.id === project2.selectedImageAssetId) ? project2.selectedImageAssetId ?? null : null,
+    selectedAudioRegionId: audioRegions.some((region) => region.id === project2.selectedAudioRegionId) ? project2.selectedAudioRegionId ?? null : null,
     playheadMs,
     updatedAt: timestamp
   };
@@ -2393,6 +2468,9 @@ function reorderClip(project2, clipId, toIndex) {
   }
   const clips = [...project2.clips];
   const [moved] = clips.splice(fromIndex, 1);
+  if (!moved) {
+    return project2;
+  }
   clips.splice(target, 0, moved);
   return { ...project2, clips: reflowClips(clips), updatedAt: nowIso() };
 }
@@ -2408,9 +2486,19 @@ function canReorderClipGroup(clips = [], selectedClipIds = [], direction = 0) {
     return false;
   }
   if (direction < 0) {
-    return clips.some((clip, index) => index > 0 && selected.has(clip.id) && !selected.has(clips[index - 1].id));
+    return clips.some((clip, index) => {
+      const previous = clips[index - 1];
+      return Boolean(
+        previous && selected.has(clip.id) && !selected.has(previous.id)
+      );
+    });
   }
-  return clips.some((clip, index) => index < clips.length - 1 && selected.has(clip.id) && !selected.has(clips[index + 1].id));
+  return clips.some((clip, index) => {
+    const next = clips[index + 1];
+    return Boolean(
+      next && selected.has(clip.id) && !selected.has(next.id)
+    );
+  });
 }
 function reorderClipGroup(project2, selectedClipIds = [], direction = 0) {
   const clips = [...project2?.clips || []];
@@ -2420,14 +2508,26 @@ function reorderClipGroup(project2, selectedClipIds = [], direction = 0) {
   }
   if (direction < 0) {
     for (let index = 1; index < clips.length; index += 1) {
-      if (selected.has(clips[index].id) && !selected.has(clips[index - 1].id)) {
-        [clips[index - 1], clips[index]] = [clips[index], clips[index - 1]];
+      const current = clips[index];
+      const previous = clips[index - 1];
+      if (!current || !previous) {
+        continue;
+      }
+      if (selected.has(current.id) && !selected.has(previous.id)) {
+        clips[index - 1] = current;
+        clips[index] = previous;
       }
     }
   } else {
     for (let index = clips.length - 2; index >= 0; index -= 1) {
-      if (selected.has(clips[index].id) && !selected.has(clips[index + 1].id)) {
-        [clips[index], clips[index + 1]] = [clips[index + 1], clips[index]];
+      const current = clips[index];
+      const next = clips[index + 1];
+      if (!current || !next) {
+        continue;
+      }
+      if (selected.has(current.id) && !selected.has(next.id)) {
+        clips[index] = next;
+        clips[index + 1] = current;
       }
     }
   }
@@ -33136,10 +33236,11 @@ function mixAudioChannelSamples(channels, left, right, mix, channelMix = "averag
   if (!Array.isArray(channels) || channels.length === 0) {
     return 0;
   }
+  const interpolatedSample = (channel) => (channel[left] ?? 0) * (1 - mix) + (channel[right] ?? 0) * mix;
   if (channelMix === "strongest") {
     let strongest = 0;
     for (const channel of channels) {
-      const value = channel[left] * (1 - mix) + channel[right] * mix;
+      const value = interpolatedSample(channel);
       if (Math.abs(value) > Math.abs(strongest)) {
         strongest = value;
       }
@@ -33151,7 +33252,7 @@ function mixAudioChannelSamples(channels, left, right, mix, channelMix = "averag
   }
   let mono = 0;
   for (const channel of channels) {
-    mono += channel[left] * (1 - mix) + channel[right] * mix;
+    mono += interpolatedSample(channel);
   }
   return mono / channels.length;
 }
@@ -33861,7 +33962,8 @@ function applyAudioAutomationToSample(sample, automation) {
     const gain = audioAutomationGainAt(relevantAutomation, outputSeconds);
     const frameOffset = frameIndex * sample.numberOfChannels;
     for (let channel = 0; channel < sample.numberOfChannels; channel += 1) {
-      data[frameOffset + channel] *= gain;
+      const sampleIndex = frameOffset + channel;
+      data[sampleIndex] = (data[sampleIndex] ?? 0) * gain;
     }
   }
   return new AudioSample({
@@ -33902,7 +34004,7 @@ async function renderProjectVideo(file, project2, {
     } = settings;
     const activeImageAssetCache = createImageAssetRenderCache(project2, {
       resolveImageAsset,
-      signal
+      ...signal === void 0 ? {} : { signal }
     });
     imageAssetCache = activeImageAssetCache;
     const outputCodecs = await chooseOutputCodecs(settings);
@@ -34138,6 +34240,13 @@ var LOCAL_DRAFT_PROJECT_INDEX = "projectId";
 var LOCAL_DRAFT_SCHEMA = "chzzk-kirinuki-local-draft/v1";
 var MAX_LOCAL_DRAFTS = 5;
 var LOCAL_DRAFT_REASONS = /* @__PURE__ */ new Set(["manual", "auto", "pre-restore"]);
+function requiredStore(stores, storeName) {
+  const store = stores[storeName];
+  if (!store) {
+    throw new Error(`IndexedDB \uC2A4\uD1A0\uC5B4\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${storeName}`);
+  }
+  return store;
+}
 var databasePromise = null;
 var activeDatabase = null;
 function clearCachedDatabase(database, attempt) {
@@ -34248,7 +34357,7 @@ function runTransaction(database, storeNames, mode, operation) {
     const stores = Object.fromEntries(
       names.map((storeName) => [storeName, tx.objectStore(storeName)])
     );
-    const operationTarget = Array.isArray(storeNames) ? stores : stores[storeNames];
+    const operationTarget = Array.isArray(storeNames) ? stores : tx.objectStore(storeNames);
     let result;
     try {
       result = operation(operationTarget, tx);
@@ -34272,7 +34381,13 @@ async function transaction(storeNames, mode, operation, retryClosedDatabase = tr
       database,
       storeNames,
       mode,
-      operation
+      (target, activeTransaction) => Array.isArray(storeNames) ? operation(
+        target,
+        activeTransaction
+      ) : operation(
+        target,
+        activeTransaction
+      )
     );
   } catch (error) {
     if (retryClosedDatabase && isClosedDatabaseError(error)) {
@@ -34413,9 +34528,11 @@ async function saveLocalDraft(project2, {
     [PROJECTS, LOCAL_DRAFTS],
     "readwrite",
     (stores) => {
-      stores[PROJECTS].put(storedProject);
-      stores[LOCAL_DRAFTS].put(draft);
-      trimLocalDrafts(stores[LOCAL_DRAFTS], draft.projectId, removedIds);
+      const projectStore = requiredStore(stores, PROJECTS);
+      const draftStore = requiredStore(stores, LOCAL_DRAFTS);
+      projectStore.put(storedProject);
+      draftStore.put(draft);
+      trimLocalDrafts(draftStore, draft.projectId, removedIds);
       return {
         get result() {
           return {
@@ -34452,9 +34569,11 @@ async function restoreLocalDraft(currentProject, draftRecord, {
     [PROJECTS, LOCAL_DRAFTS],
     "readwrite",
     (stores) => {
-      stores[PROJECTS].put(restoredProject);
-      stores[LOCAL_DRAFTS].put(preRestoreDraft);
-      trimLocalDrafts(stores[LOCAL_DRAFTS], projectId, removedIds);
+      const projectStore = requiredStore(stores, PROJECTS);
+      const draftStore = requiredStore(stores, LOCAL_DRAFTS);
+      projectStore.put(restoredProject);
+      draftStore.put(preRestoreDraft);
+      trimLocalDrafts(draftStore, projectId, removedIds);
       return {
         get result() {
           return {
@@ -34530,8 +34649,11 @@ async function saveProjectWithImageAssetBlob(project2, assetId, blob) {
     [PROJECTS, IMAGE_ASSETS],
     "readwrite",
     (stores) => {
-      stores[PROJECTS].put(project2);
-      stores[IMAGE_ASSETS].put(blob, imageAssetKey(project2?.id, assetId));
+      requiredStore(stores, PROJECTS).put(project2);
+      requiredStore(stores, IMAGE_ASSETS).put(
+        blob,
+        imageAssetKey(project2?.id, assetId)
+      );
       return {
         get result() {
           return project2;
@@ -34558,6 +34680,9 @@ async function pruneImageAssetBlobs(projectId, keepAssetIds = []) {
     [PROJECTS, LOCAL_DRAFTS, IMAGE_ASSETS],
     "readwrite",
     (stores) => {
+      const projectStore = requiredStore(stores, PROJECTS);
+      const draftStore = requiredStore(stores, LOCAL_DRAFTS);
+      const imageAssetStore = requiredStore(stores, IMAGE_ASSETS);
       let count = 0;
       let pendingReferenceReads = 2;
       const keep = new Set(requestedKeep);
@@ -34577,7 +34702,7 @@ async function pruneImageAssetBlobs(projectId, keepAssetIds = []) {
         if (pendingReferenceReads > 0) {
           return;
         }
-        const request = stores[IMAGE_ASSETS].openKeyCursor();
+        const request = imageAssetStore.openKeyCursor();
         request.onsuccess = () => {
           const cursor = request.result;
           if (!cursor) {
@@ -34585,18 +34710,18 @@ async function pruneImageAssetBlobs(projectId, keepAssetIds = []) {
           }
           const key = cursor.primaryKey ?? cursor.key;
           if (Array.isArray(key) && key.length >= 2 && String(key[0]) === targetProjectId && !keep.has(String(key[1]))) {
-            stores[IMAGE_ASSETS].delete(key);
+            imageAssetStore.delete(key);
             count += 1;
           }
           cursor.continue();
         };
       };
-      const projectRequest = stores[PROJECTS].get(targetProjectId);
+      const projectRequest = projectStore.get(targetProjectId);
       projectRequest.onsuccess = () => {
         collectReferencedAssets(projectRequest.result);
         scanImageAssetsAfterReferences();
       };
-      const draftsRequest = stores[LOCAL_DRAFTS].index(LOCAL_DRAFT_PROJECT_INDEX).getAll(targetProjectId);
+      const draftsRequest = draftStore.index(LOCAL_DRAFT_PROJECT_INDEX).getAll(targetProjectId);
       draftsRequest.onsuccess = () => {
         for (const draft of draftsRequest.result || []) {
           if (isLocalDraftRecord(draft, targetProjectId)) {
@@ -35171,10 +35296,11 @@ function buildProjectCaptionEditorialContext(project2, {
       speakerCounts.set(speakerId, (speakerCounts.get(speakerId) || 0) + 1);
     }
   }
-  const speakers = [{
+  const primarySpeaker = {
     id: "main",
     aliases: primaryAliases
-  }];
+  };
+  const speakers = [primarySpeaker];
   const explicitNonPrimary = explicit.speakers.filter(({ id }) => id !== "main");
   for (const speaker of explicitNonPrimary) {
     if (!aliasesIntersect(speaker.aliases, primaryAliases)) {
@@ -35188,8 +35314,8 @@ function buildProjectCaptionEditorialContext(project2, {
       continue;
     }
     if (aliasesIntersect([speakerId], primaryAliases)) {
-      speakers[0].aliases = uniqueBoundedStrings(
-        [...speakers[0].aliases, speakerId],
+      primarySpeaker.aliases = uniqueBoundedStrings(
+        [...primarySpeaker.aliases, speakerId],
         MAX_CAPTION_SPEAKER_ALIASES,
         80
       );
@@ -35761,7 +35887,7 @@ function encodePcm16WavBase64(audio, sampleRateHz = CAPTION_AGENT_SAMPLE_RATE_HZ
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let output = "";
   for (let index = 0; index < bytes2.length; index += 3) {
-    const first = bytes2[index];
+    const first = bytes2[index] ?? 0;
     const second = bytes2[index + 1];
     const third = bytes2[index + 2];
     const packed = first << 16 | (second || 0) << 8 | (third || 0);
@@ -36349,7 +36475,7 @@ async function ensureCaptionAgentSession({
       await probeCaptionAgent({
         endpoint,
         token: currentToken,
-        signal,
+        ...signal === void 0 ? {} : { signal },
         fetchImpl,
         timeoutMs
       });
@@ -36362,7 +36488,7 @@ async function ensureCaptionAgentSession({
   }
   return pairCaptionAgent({
     endpoint,
-    signal,
+    ...signal === void 0 ? {} : { signal },
     fetchImpl,
     timeoutMs
   });
@@ -36384,7 +36510,7 @@ async function requestCaptionAgentWithSessionRetry({
     }
     const token = await pairCaptionAgent({
       endpoint: options.endpoint,
-      signal: options.signal,
+      ...options.signal === void 0 ? {} : { signal: options.signal },
       fetchImpl
     });
     onSessionToken(token);
@@ -36528,7 +36654,7 @@ function errorDetails(error) {
 function isRecord2(value) {
   return typeof value === "object" && value !== null;
 }
-var elements = Object.fromEntries([
+var EDITOR_ELEMENT_IDS = [
   "project-name",
   "source-kind",
   "source-title",
@@ -36704,13 +36830,27 @@ var elements = Object.fromEntries([
   "restore-local-draft",
   "close-local-draft-dialog",
   "toast"
-].map((id) => {
+];
+function isEditorElementMap(value) {
+  if (!isRecord2(value)) {
+    return false;
+  }
+  return EDITOR_ELEMENT_IDS.every((id) => {
+    const element = value[id.replaceAll("-", "_")];
+    return element instanceof HTMLElement && (id !== "preview-video" || element instanceof HTMLVideoElement);
+  });
+}
+var elementCandidates = Object.fromEntries(EDITOR_ELEMENT_IDS.map((id) => {
   const element = document.querySelector(`#${id}`);
   if (!element) {
     throw new Error(`\uD3B8\uC9D1\uAE30 \uD544\uC218 UI \uC694\uC18C\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: #${id}`);
   }
   return [id.replaceAll("-", "_"), element];
 }));
+if (!isEditorElementMap(elementCandidates)) {
+  throw new Error("\uD3B8\uC9D1\uAE30 \uD544\uC218 UI \uC694\uC18C \uD0C0\uC785\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+}
+var elements = elementCandidates;
 function shortcutTargetIds(binding) {
   return [binding.targetId, ...binding.alternateTargetIds || []];
 }
@@ -39567,7 +39707,11 @@ function renderTimeline({ keepScroll = false } = {}) {
         }
       )
     );
-    (captionRows[cue.lane] || captionRows[0]).append(block);
+    const captionRow = captionRows[cue.lane] ?? captionRows[0];
+    if (!captionRow) {
+      throw new Error("\uC790\uB9C9 \uD0C0\uC784\uB77C\uC778 \uB808\uC778\uC744 \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+    }
+    captionRow.append(block);
   });
   renderTimelineRange();
   updatePlayhead();
@@ -40705,6 +40849,10 @@ async function chooseMediaFile() {
           }
         }]
       });
+      if (!handle) {
+        showToast("\uC120\uD0DD\uD55C \uC6D0\uBCF8 \uD30C\uC77C\uC744 \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.", "error");
+        return;
+      }
       const file = await handle.getFile();
       const attached = await attachMediaFile(file);
       if (attached) {
@@ -40893,13 +41041,13 @@ async function ensureLocalCaptionSession(config, signal) {
   const token = await ensureCaptionAgentSession({
     endpoint: config.endpoint,
     token: config.token,
-    signal
+    ...signal === void 0 ? {} : { signal }
   });
   elements.caption_agent_token.value = token;
   const capability = await probeCaptionAgent({
     endpoint: config.endpoint,
     token,
-    signal
+    ...signal === void 0 ? {} : { signal }
   });
   const runtime = captionAgentRuntimeIdentity(capability, {
     model: config.model
@@ -40946,7 +41094,7 @@ async function prepareCaptionAgentConfig() {
   const capability = sessionConfig.capability || await probeCaptionAgent({
     endpoint: sessionConfig.endpoint,
     token: sessionConfig.token,
-    signal: activeJobController?.signal
+    ...activeJobController?.signal === void 0 ? {} : { signal: activeJobController.signal }
   });
   const runtime = sessionConfig.runtime || captionAgentRuntimeIdentity(capability, {
     model: sessionConfig.model
@@ -41226,8 +41374,7 @@ async function generateCaptions() {
   try {
     await saveProject(project);
     const clips = enabledClips;
-    for (let index = 0; index < clips.length; index += 1) {
-      const clip = clips[index];
+    for (const [index, clip] of clips.entries()) {
       const base = index / clips.length;
       const span = 1 / clips.length;
       setAiProgress(
@@ -42432,6 +42579,9 @@ function bindActions() {
       event.preventDefault();
       const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? propertyTabs.length - 1 : (tabIndex + (event.key === "ArrowLeft" ? -1 : 1) + propertyTabs.length) % propertyTabs.length;
       const next = propertyTabs[nextIndex];
+      if (!next) {
+        return;
+      }
       next.click();
       next.focus();
     });

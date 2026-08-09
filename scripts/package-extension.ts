@@ -26,7 +26,9 @@ const devRunnerLockPath = path.join(root, ".dev-editor.lock");
 const devRunnerLockLease = await acquireDevRunnerLock(devRunnerLockPath, {
   pid: process.pid,
   role: "package",
-  inheritedToken: process.env.KIRINUKI_RELEASE_LOCK_TOKEN,
+  ...(process.env.KIRINUKI_RELEASE_LOCK_TOKEN === undefined
+    ? {}
+    : { inheritedToken: process.env.KIRINUKI_RELEASE_LOCK_TOKEN }),
   onOwnerLost: failClosedOnDevRunnerOwnerLoss("package")
 });
 

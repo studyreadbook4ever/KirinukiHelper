@@ -739,7 +739,7 @@ export function encodePcm16WavBase64(
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let output = "";
   for (let index = 0; index < bytes.length; index += 3) {
-    const first = bytes[index];
+    const first = bytes[index] ?? 0;
     const second = bytes[index + 1];
     const third = bytes[index + 2];
     const packed = (first << 16) | ((second || 0) << 8) | (third || 0);
@@ -1535,7 +1535,7 @@ export async function ensureCaptionAgentSession({
       await probeCaptionAgent({
         endpoint,
         token: currentToken,
-        signal,
+        ...(signal === undefined ? {} : { signal }),
         fetchImpl,
         timeoutMs
       });
@@ -1548,7 +1548,7 @@ export async function ensureCaptionAgentSession({
   }
   return pairCaptionAgent({
     endpoint,
-    signal,
+    ...(signal === undefined ? {} : { signal }),
     fetchImpl,
     timeoutMs
   });
@@ -1575,7 +1575,7 @@ export async function requestCaptionAgentWithSessionRetry({
     }
     const token = await pairCaptionAgent({
       endpoint: options.endpoint,
-      signal: options.signal,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
       fetchImpl
     });
     onSessionToken(token);

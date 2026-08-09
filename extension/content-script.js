@@ -50,8 +50,9 @@
       }
       const parts = url.pathname.split("/").filter(Boolean);
       const channelIndex = parts.indexOf("channel");
-      if (channelIndex >= 0 && parts[channelIndex + 1]) {
-        return parts[channelIndex + 1].slice(0, 128);
+      const channelId = parts[channelIndex + 1];
+      if (channelIndex >= 0 && channelId) {
+        return channelId.slice(0, 128);
       }
       const handle = parts.find((part) => part.startsWith("@"));
       if (handle) {
@@ -68,7 +69,7 @@
       contentId = youtubeVideoId(parts[0]);
     } else if (url.pathname === "/watch") {
       contentId = youtubeVideoId(url.searchParams.get("v"));
-    } else if (["shorts", "embed", "live"].includes(parts[0])) {
+    } else if (["shorts", "embed", "live"].includes(parts[0] ?? "")) {
       contentId = youtubeVideoId(parts[1]);
     }
     return {

@@ -256,11 +256,12 @@ test("XDG 경로는 repository 밖의 안정적인 사용자 profile을 고른�
     paths.legacyDesktopEntryPath,
     "/tmp/data root/applications/chromium-kirinuki.desktop"
   );
-  for (const [name, value] of [
+  const invalidOverrides: ReadonlyArray<readonly [string, string]> = [
     ["KIRINUKI_EXTENSION_ROOT", "relative/extension"],
     ["KIRINUKI_EXTENSION_ROOT", ""],
     ["KIRINUKI_BROWSER_PROFILE_ROOT", "/tmp/profile\nother"]
-  ]) {
+  ];
+  for (const [name, value] of invalidOverrides) {
     assert.throws(
       () => resolveLinuxHelperPaths({
         env: { [name]: value },
@@ -425,8 +426,10 @@ test("setup용 사용자 명령과 desktop entry는 원자적으로 최신 경�
     "/opt/Kirinuki Helper"
   );
   assert.equal(migratedLegacy.replacedEntrypointBackups.length, 1);
+  const [backupPath] = migratedLegacy.replacedEntrypointBackups;
+  assert.ok(backupPath);
   assert.equal(
-    await readFile(migratedLegacy.replacedEntrypointBackups[0], "utf8"),
+    await readFile(backupPath, "utf8"),
     knownLegacyLauncher
   );
   assert.equal(

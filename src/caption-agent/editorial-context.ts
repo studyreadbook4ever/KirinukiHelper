@@ -488,10 +488,11 @@ export function buildProjectCaptionEditorialContext(
       speakerCounts.set(speakerId, (speakerCounts.get(speakerId) || 0) + 1);
     }
   }
-  const speakers: CaptionEditorialContext["speakers"] = [{
+  const primarySpeaker: CaptionEditorialContext["speakers"][number] = {
     id: "main",
     aliases: primaryAliases
-  }];
+  };
+  const speakers: CaptionEditorialContext["speakers"] = [primarySpeaker];
   const explicitNonPrimary = explicit.speakers.filter(({ id }) => id !== "main");
   for (const speaker of explicitNonPrimary) {
     if (!aliasesIntersect(speaker.aliases, primaryAliases)) {
@@ -510,8 +511,8 @@ export function buildProjectCaptionEditorialContext(
       continue;
     }
     if (aliasesIntersect([speakerId], primaryAliases)) {
-      speakers[0].aliases = uniqueBoundedStrings(
-        [...speakers[0].aliases, speakerId],
+      primarySpeaker.aliases = uniqueBoundedStrings(
+        [...primarySpeaker.aliases, speakerId],
         MAX_CAPTION_SPEAKER_ALIASES,
         80
       );

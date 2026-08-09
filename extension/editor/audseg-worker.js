@@ -57,8 +57,7 @@ function validateSamples(samples, sampleRateHz) {
   if (!Number.isInteger(sampleRateHz) || sampleRateHz <= 0) {
     throw new RangeError("AudSeg sample rate\uB294 \uC591\uC758 \uC815\uC218\uC5EC\uC57C \uD569\uB2C8\uB2E4.");
   }
-  for (let index = 0; index < samples.length; index += 1) {
-    const sample = samples[index];
+  for (const [index, sample] of samples.entries()) {
     if (!Number.isFinite(sample) || sample < -1.000001 || sample > 1.000001) {
       throw new RangeError("AudSeg PCM \uD45C\uBCF8\uC740 -1\uBD80\uD130 1 \uC0AC\uC774\uC758 \uC720\uD55C\uD55C \uAC12\uC774\uC5B4\uC57C \uD569\uB2C8\uB2E4.");
     }
@@ -84,8 +83,7 @@ function extractAudSegFrameLevels(samples, sampleRateHz = AUDSEG_SAMPLE_RATE_HZ,
     let sampleSum = 0;
     let squareSum = 0;
     const frameEnd = frameStart + frameSamples;
-    for (let index = frameStart; index < frameEnd; index += 1) {
-      const sample = samples[index];
+    for (const sample of samples.subarray(frameStart, frameEnd)) {
       sampleSum += sample;
       squareSum += sample * sample;
     }
@@ -100,8 +98,7 @@ function extractAudSegFrameLevels(samples, sampleRateHz = AUDSEG_SAMPLE_RATE_HZ,
   if (frameStart < samples.length && lastEmittedEnd < samples.length) {
     let sampleSum = 0;
     let squareSum = 0;
-    for (let index = frameStart; index < samples.length; index += 1) {
-      const sample = samples[index];
+    for (const sample of samples.subarray(frameStart)) {
       sampleSum += sample;
       squareSum += sample * sample;
     }
@@ -128,11 +125,16 @@ function percentile(values, fraction) {
   const position = (ordered.length - 1) * fraction;
   const lower = Math.floor(position);
   const upper = Math.ceil(position);
+  const lowerValue = ordered[lower];
+  const upperValue = ordered[upper];
+  if (lowerValue === void 0 || upperValue === void 0) {
+    throw new RangeError("AudSeg \uBC31\uBD84\uC704\uC218 \uC704\uCE58\uAC00 \uD45C\uBCF8 \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4.");
+  }
   if (lower === upper) {
-    return ordered[lower];
+    return lowerValue;
   }
   const weight = position - lower;
-  return ordered[lower] * (1 - weight) + ordered[upper] * weight;
+  return lowerValue * (1 - weight) + upperValue * weight;
 }
 function thresholds(levels, detector) {
   const values = levels.map((frame) => frame.dbfs);
@@ -295,6 +297,9 @@ function padRegions(regions, levels, totalSamples, sampleRateHz, detector) {
   for (let index = 1; index < padded.length; index += 1) {
     const previous = padded[index - 1];
     const current = padded[index];
+    if (!previous || !current) {
+      throw new RangeError("AudSeg \uD328\uB529 \uC601\uC5ED \uC778\uB371\uC2A4\uAC00 \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4.");
+    }
     if (previous.endSample <= current.startSample) {
       continue;
     }
@@ -311,13 +316,21 @@ function padRegions(regions, levels, totalSamples, sampleRateHz, detector) {
     if (region.endSample <= region.startSample) {
       return [];
     }
-    while (firstLevel < levels.length && levels[firstLevel].endSample <= region.startSample) {
+    while (firstLevel < levels.length) {
+      const level = levels[firstLevel];
+      if (!level || level.endSample > region.startSample) {
+        break;
+      }
       firstLevel += 1;
     }
     let lastLevel = firstLevel;
     const values = [];
-    while (lastLevel < levels.length && levels[lastLevel].startSample < region.endSample) {
-      values.push(levels[lastLevel].dbfs);
+    while (lastLevel < levels.length) {
+      const level = levels[lastLevel];
+      if (!level || level.startSample >= region.endSample) {
+        break;
+      }
+      values.push(level.dbfs);
       lastLevel += 1;
     }
     return [{
@@ -333,7 +346,11 @@ function lowerBound(values, target) {
   let high = values.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (values[middle] < target) {
+    const value = values[middle];
+    if (value === void 0) {
+      throw new RangeError("AudSeg lower-bound \uC778\uB371\uC2A4\uAC00 \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4.");
+    }
+    if (value < target) {
       low = middle + 1;
     } else {
       high = middle;
@@ -346,7 +363,11 @@ function upperBound(values, target) {
   let high = values.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (values[middle] <= target) {
+    const value = values[middle];
+    if (value === void 0) {
+      throw new RangeError("AudSeg upper-bound \uC778\uB371\uC2A4\uAC00 \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4.");
+    }
+    if (value <= target) {
       low = middle + 1;
     } else {
       high = middle;
@@ -356,8 +377,22 @@ function upperBound(values, target) {
 }
 function median(values) {
   const ordered = [...values].sort((left, right) => left - right);
+  if (ordered.length === 0) {
+    throw new RangeError("AudSeg \uC911\uC559\uAC12\uC5D0\uB294 \uD558\uB098 \uC774\uC0C1\uC758 \uD45C\uBCF8\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
+  }
   const middle = Math.floor(ordered.length / 2);
-  return ordered.length % 2 === 0 ? (ordered[middle - 1] + ordered[middle]) / 2 : ordered[middle];
+  const upperMiddle = ordered[middle];
+  if (upperMiddle === void 0) {
+    throw new RangeError("AudSeg \uC911\uC559\uAC12 \uC704\uCE58\uAC00 \uD45C\uBCF8 \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4.");
+  }
+  if (ordered.length % 2 !== 0) {
+    return upperMiddle;
+  }
+  const lowerMiddle = ordered[middle - 1];
+  if (lowerMiddle === void 0) {
+    throw new RangeError("AudSeg \uC911\uC559\uAC12 \uC704\uCE58\uAC00 \uD45C\uBCF8 \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4.");
+  }
+  return (lowerMiddle + upperMiddle) / 2;
 }
 function chooseSplit(levels, starts, { lower, upper, ideal }) {
   const hardBoundary = Math.min(Math.max(ideal, lower), upper);
@@ -440,13 +475,20 @@ function splitRegion(region, sourceRegion, levels, levelStarts, sampleRateHz, cu
     ...boundaries.map(({ boundary }) => boundary),
     region.endSample
   ];
-  return points.slice(0, -1).map((startSample, index) => ({
-    startSample,
-    endSample: points[index + 1],
-    sourceRegion,
-    forcedSplit: true,
-    splitMethod: boundaries[Math.min(index, boundaries.length - 1)].method
-  }));
+  return points.slice(0, -1).map((startSample, index) => {
+    const endSample = points[index + 1];
+    const boundary = boundaries[Math.min(index, boundaries.length - 1)];
+    if (endSample === void 0 || !boundary) {
+      throw new RangeError("AudSeg \uBD84\uD560 \uACBD\uACC4\uAC00 \uC601\uC5ED \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4.");
+    }
+    return {
+      startSample,
+      endSample,
+      sourceRegion,
+      forcedSplit: true,
+      splitMethod: boundary.method
+    };
+  });
 }
 function segmentAudSegPcm(samples, {
   sampleRateHz = AUDSEG_SAMPLE_RATE_HZ,

@@ -72,14 +72,16 @@ test("최근 편집은 projectId별 현재본과 임시저장 메타데이터만
     latestDraftReason: "auto",
     latestDraftAt: "2026-07-29T03:00:00.000Z"
   });
-  assert.equal(sessions[1].title, "오래된 프로젝트");
-  assert.deepEqual(sessions[1].counts, {
+  const oldSession = sessions.at(1);
+  assert.ok(oldSession);
+  assert.equal(oldSession.title, "오래된 프로젝트");
+  assert.deepEqual(oldSession.counts, {
     clips: 2,
     subtitles: 1,
     assets: 0,
     audio: 1
   });
-  assert.equal(sessions[1].draftCount, 0);
+  assert.equal(oldSession.draftCount, 0);
   assert.equal(
     JSON.stringify(sessions).includes("must-not-leak"),
     false

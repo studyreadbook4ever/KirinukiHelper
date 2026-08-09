@@ -137,8 +137,8 @@ function createLocalDraftDatabase({
     ) {
       const requestedStores = Array.isArray(storeNames) ? storeNames : [storeNames];
       const tx: MockTransaction = {
-        mode,
-        error: null
+        error: null,
+        ...(mode === undefined ? {} : { mode })
       };
       let pendingRequests = 0;
       let completionQueued = false;
@@ -268,7 +268,11 @@ test("IndexedDB v3 업그레이드는 local-drafts와 projectId 인덱스를 만
       keyPath: string | string[],
       options?: IDBIndexParameters
     ) {
-      createdIndexes.push({ name, keyPath, options });
+      createdIndexes.push({
+        name,
+        keyPath,
+        ...(options === undefined ? {} : { options })
+      });
       return {};
     }
   };
@@ -279,7 +283,10 @@ test("IndexedDB v3 업그레이드는 local-drafts와 projectId 인덱스를 만
     }
   };
   database.createObjectStore = (name, options) => {
-    createdStores.push({ name, options });
+    createdStores.push({
+      name,
+      ...(options === undefined ? {} : { options })
+    });
     existingStores.add(name);
     return name === "local-drafts" ? localDraftStore : {};
   };

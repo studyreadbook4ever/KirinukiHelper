@@ -522,8 +522,10 @@ test("pairing은 process-memory session 응답만 받는다", async () => {
     }
   });
   assert.equal(token, "local-session-token");
-  assert.equal(calls[0].url, "http://127.0.0.1:4319/v1/session");
-  assert.equal(calls[0].options.method, "POST");
+  const [pairCall] = calls;
+  assert.ok(pairCall);
+  assert.equal(pairCall.url, "http://127.0.0.1:4319/v1/session");
+  assert.equal(pairCall.options.method, "POST");
 });
 
 test("Whisper 요청은 session bearer만 보내고 완료 응답을 검증한다", async () => {
@@ -540,12 +542,14 @@ test("Whisper 요청은 session bearer만 보내고 완료 응답을 검증한�
     }
   });
   assert.equal(payload.provider, "local-whispercpp");
+  const [captionCall] = calls;
+  assert.ok(captionCall);
   assert.equal(
-    new Headers(calls[0].options.headers).get("Authorization"),
+    new Headers(captionCall.options.headers).get("Authorization"),
     "Bearer local-session-token"
   );
   assert.equal(
-    [...new Headers(calls[0].options.headers).keys()].some(
+    [...new Headers(captionCall.options.headers).keys()].some(
       (name) => /key|credential/iu.test(name)
     ),
     false

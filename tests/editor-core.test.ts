@@ -75,6 +75,10 @@ function required<T>(value: T | null | undefined): T {
   return value;
 }
 
+function itemAt<T>(values: readonly T[], index: number): T {
+  return required(values[index]);
+}
+
 const captureState = {
   projectName: "7월 방송",
   source: {
@@ -138,19 +142,19 @@ test("AI 자막 체크포인트는 현재 컷·범위·지원 모델만 제한 �
     }
   ], clips);
   assert.equal(normalized.length, 2);
-  assert.equal(normalized[0].requestId, "request-latest");
+  assert.equal(itemAt(normalized, 0).requestId, "request-latest");
   assert.equal(
-    normalized[0].pipelineFingerprint,
+    itemAt(normalized, 0).pipelineFingerprint,
     "legacy-caption-pipeline-v0"
   );
-  assert.equal(normalized[1].requestId, "request-local");
+  assert.equal(itemAt(normalized, 1).requestId, "request-local");
   const currentPipeline = normalizeAiCaptionCheckpoints([{
     ...valid,
     model: "whisper-tiny",
     pipelineFingerprint: "caption-pipeline-v1-1234567890abcdef"
   }], clips);
   assert.equal(
-    currentPipeline[0].pipelineFingerprint,
+    itemAt(currentPipeline, 0).pipelineFingerprint,
     "caption-pipeline-v1-1234567890abcdef"
   );
   assert.equal(MAX_AI_CAPTION_CHECKPOINTS, 500);
@@ -312,10 +316,10 @@ test("캡처 상태를 사용자 권위 컷이 있는 편집 프로젝트로 만
   assert.equal(project.schema, EDITOR_SCHEMA);
   assert.equal(project.id, "project-test");
   assert.equal(project.clips.length, 2);
-  assert.equal(project.clips[0].authority, "USER");
-  assert.equal(project.clips[0].sourceStartMs, 10_125);
-  assert.equal(project.clips[0].sourceEndMs, 15_750);
-  assert.equal(project.clips[1].timelineStartMs, 5_625);
+  assert.equal(itemAt(project.clips, 0).authority, "USER");
+  assert.equal(itemAt(project.clips, 0).sourceStartMs, 10_125);
+  assert.equal(itemAt(project.clips, 0).sourceEndMs, 15_750);
+  assert.equal(itemAt(project.clips, 1).timelineStartMs, 5_625);
   assert.equal(projectDurationMs(project), 12_125);
   assert.equal(captureProjectId(captureState), captureProjectId(captureState));
 });
@@ -337,11 +341,92 @@ test("새 프로젝트는 에셋·자막 2개 레인과 고정 음성 레인 데
   assert.deepEqual(project.ai.speakerColors, {});
 });
 
+test("손상된 저장 프로젝트의 알려진 필드는 정규화하고 확장 필드는 보존한다", () => {
+  const normalized = required(normalizeEditorProject({
+    schema: EDITOR_SCHEMA,
+    id: 123,
+    name: null,
+    source: "broken-source",
+    broadcastSession: {
+      id: 456,
+      extensionSessionValue: "keep-session"
+    },
+    mediaAsset: "broken-media",
+    clips: "broken-clips",
+    suppressedSelections: "broken-suppressed-selections",
+    imageAssets: "broken-image-assets",
+    subtitles: "broken-subtitles",
+    subtitleLaneCount: "broken-lane-count",
+    recentSubtitleColors: "broken-colors",
+    audioRegions: "broken-audio-regions",
+    subtitleDefaults: "broken-subtitle-defaults",
+    ai: {
+      provider: 17,
+      model: null,
+      status: false,
+      progress: "broken-progress",
+      warnings: "broken-warnings",
+      speakerColors: "broken-speaker-colors",
+      captionCheckpoints: "broken-checkpoints",
+      resolvedModel: 99,
+      extensionAiValue: "keep-ai"
+    },
+    history: {
+      undo: "broken-undo",
+      redo: null
+    },
+    selectedClipId: 1,
+    selectedImageAssetId: {},
+    selectedCueId: [],
+    selectedAudioRegionId: true,
+    playheadMs: "oops",
+    createdAt: 123,
+    updatedAt: false,
+    extensionProjectValue: {
+      preserved: true
+    }
+  }));
+
+  assert.equal(normalized.schema, EDITOR_SCHEMA);
+  assert.equal(normalized.id, "123");
+  assert.equal(normalized.name, "새 키리누키 프로젝트");
+  assert.equal(normalized.playheadMs, 0);
+  assert.deepEqual(normalized.source, {});
+  assert.equal(normalized.broadcastSession.id, "");
+  assert.equal(normalized.broadcastSession.extensionSessionValue, "keep-session");
+  assert.equal(normalized.mediaAsset, null);
+  assert.deepEqual(normalized.clips, []);
+  assert.deepEqual(normalized.suppressedSelections, []);
+  assert.deepEqual(normalized.imageAssets, []);
+  assert.deepEqual(normalized.subtitles, []);
+  assert.equal(normalized.subtitleLaneCount, MIN_SUBTITLE_LANES);
+  assert.deepEqual(normalized.recentSubtitleColors, []);
+  assert.deepEqual(normalized.audioRegions, []);
+  assert.equal(normalized.subtitleDefaults.fontScale, 0.0675);
+  assert.equal(normalized.ai.provider, "17");
+  assert.equal(normalized.ai.model, "whisper-tiny");
+  assert.equal(normalized.ai.status, "idle");
+  assert.equal(normalized.ai.progress, 0);
+  assert.deepEqual(normalized.ai.warnings, []);
+  assert.deepEqual(normalized.ai.speakerColors, {});
+  assert.deepEqual(normalized.ai.captionCheckpoints, []);
+  assert.equal(Object.hasOwn(normalized.ai, "resolvedModel"), false);
+  assert.equal(normalized.ai.extensionAiValue, "keep-ai");
+  assert.deepEqual(normalized.history, { undo: [], redo: [] });
+  assert.equal(normalized.selectedClipId, null);
+  assert.equal(normalized.selectedImageAssetId, null);
+  assert.equal(normalized.selectedCueId, null);
+  assert.equal(normalized.selectedAudioRegionId, null);
+  assert.equal(typeof normalized.createdAt, "string");
+  assert.equal(normalized.updatedAt, normalized.createdAt);
+  assert.deepEqual(normalized.extensionProjectValue, { preserved: true });
+});
+
 test("새 자막은 레인과 무관하게 50/84에서 시작하고 크기는 cue별로 저장한다", () => {
   const project = createEditorProjectFromCapture(captureState);
   const first = createSubtitleCue(project, {
     id: "first-size-cue",
-    clipId: project.clips[0].id,
+    clipId: itemAt(project.clips, 0).id,
     startOffsetMs: 0,
     endOffsetMs: 1_000,
     text: "첫 자막",
@@ -349,7 +434,7 @@ test("새 자막은 레인과 무관하게 50/84에서 시작하고 크기는 cu
   });
   const second = createSubtitleCue(project, {
     id: "second-size-cue",
-    clipId: project.clips[0].id,
+    clipId: itemAt(project.clips, 0).id,
     startOffsetMs: 1_000,
     endOffsetMs: 2_000,
     text: "둘째 자막",
@@ -365,14 +450,14 @@ test("새 자막은 레인과 무관하게 50/84에서 시작하고 크기는 cu
     subtitles: [first, second]
   }, second.id, { fontScale: 0.05 });
   assert.equal(resized.subtitleDefaults.fontScale, 0.0675);
-  assert.equal(resized.subtitles[0].fontScale, undefined);
-  assert.equal(resized.subtitles[1].fontScale, 0.05);
+  assert.equal(itemAt(resized.subtitles, 0).fontScale, undefined);
+  assert.equal(itemAt(resized.subtitles, 1).fontScale, 0.05);
 
   const restored = required(normalizeEditorProject(
     JSON.parse(JSON.stringify(resized))
   ));
-  assert.equal(restored.subtitles[0].fontScale, undefined);
-  assert.equal(restored.subtitles[1].fontScale, 0.05);
+  assert.equal(itemAt(restored.subtitles, 0).fontScale, undefined);
+  assert.equal(itemAt(restored.subtitles, 1).fontScale, 0.05);
 });
 
 test("현재 로컬 Whisper 실행 메타데이터는 저장 왕복에서 legacy로 오인하지 않는다", () => {
@@ -434,7 +519,7 @@ test("검은 직사각형 프리셋은 각진 배경을 저장 왕복하고 사�
   const original = createEditorProjectFromCapture(captureState);
   const cue = createSubtitleCue(original, {
     id: "custom-color-cue",
-    clipId: original.clips[0].id,
+    clipId: itemAt(original.clips, 0).id,
     startOffsetMs: 0,
     endOffsetMs: 1_000,
     text: "사용자 색",
@@ -457,14 +542,14 @@ test("검은 직사각형 프리셋은 각진 배경을 저장 왕복하고 사�
   assert.equal(styled.subtitleDefaults.color, "#ffffff");
   assert.equal(styled.subtitleDefaults.backgroundColor, "#000000");
   assert.equal(styled.subtitleDefaults.backgroundRadiusEm, 0);
-  assert.equal(styled.subtitles[0].color, "#f06088");
+  assert.equal(itemAt(styled.subtitles, 0).color, "#f06088");
 
   const normalized = normalizeEditorProject(
     JSON.parse(JSON.stringify(styled))
   );
   assert.ok(normalized);
   assert.equal(normalized.subtitleDefaults.backgroundRadiusEm, 0);
-  assert.equal(normalized.subtitles[0].color, "#f06088");
+  assert.equal(itemAt(normalized.subtitles, 0).color, "#f06088");
 
   const customizedRadius = normalizeEditorProject({
     ...normalized,
@@ -481,7 +566,7 @@ test("검은 자막 배경 토글은 배경만 바꾸고 사용자 컷·cue·글
   const original = createEditorProjectFromCapture(captureState);
   const cue = createSubtitleCue(original, {
     id: "background-toggle-cue",
-    clipId: original.clips[0].id,
+    clipId: itemAt(original.clips, 0).id,
     startOffsetMs: 250,
     endOffsetMs: 1_750,
     text: "그대로 남는 자막",
@@ -546,14 +631,14 @@ test("자막별 검은 배경 override는 다른 cue와 전역 스타일을 보�
   const original = createEditorProjectFromCapture(captureState);
   const first = createSubtitleCue(original, {
     id: "cue-background-first",
-    clipId: original.clips[0].id,
+    clipId: itemAt(original.clips, 0).id,
     startOffsetMs: 0,
     endOffsetMs: 1_000,
     text: "첫 자막"
   });
   const second = createSubtitleCue(original, {
     id: "cue-background-second",
-    clipId: original.clips[0].id,
+    clipId: itemAt(original.clips, 0).id,
     startOffsetMs: 1_000,
     endOffsetMs: 2_000,
     text: "둘째 자막"
@@ -568,14 +653,17 @@ test("자막별 검은 배경 override는 다른 cue와 전역 스타일을 보�
     backgroundEnabled: true
   });
   assert.deepEqual(enabled.subtitleDefaults, originalDefaults);
-  assert.equal(enabled.subtitles[0].backgroundEnabled, true);
-  assert.equal(enabled.subtitles[1].backgroundEnabled, undefined);
+  assert.equal(itemAt(enabled.subtitles, 0).backgroundEnabled, true);
+  assert.equal(itemAt(enabled.subtitles, 1).backgroundEnabled, undefined);
   assert.deepEqual(
-    resolveSubtitleCueBackground(enabled.subtitleDefaults, enabled.subtitles[0]),
+    resolveSubtitleCueBackground(enabled.subtitleDefaults, itemAt(enabled.subtitles, 0)),
     { enabled: true, color: "#000000", radiusEm: 0 }
   );
   assert.equal(
-    resolveSubtitleCueBackground(enabled.subtitleDefaults, enabled.subtitles[1]).enabled,
+    resolveSubtitleCueBackground(
+      enabled.subtitleDefaults,
+      itemAt(enabled.subtitles, 1)
+    ).enabled,
     false
   );
 
@@ -586,14 +674,14 @@ test("자막별 검은 배경 override는 다른 cue와 전역 스타일을 보�
   assert.deepEqual(
     resolveSubtitleCueBackground(
       disabledFirst.subtitleDefaults,
-      disabledFirst.subtitles[0]
+      itemAt(disabledFirst.subtitles, 0)
     ),
     { enabled: false, color: "transparent", radiusEm: 0 }
   );
   assert.deepEqual(
     resolveSubtitleCueBackground(
       disabledFirst.subtitleDefaults,
-      disabledFirst.subtitles[1]
+      itemAt(disabledFirst.subtitles, 1)
     ),
     { enabled: true, color: "#000000", radiusEm: 0 }
   );
@@ -602,8 +690,8 @@ test("자막별 검은 배경 override는 다른 cue와 전역 스타일을 보�
     JSON.parse(JSON.stringify(disabledFirst))
   );
   assert.ok(normalized);
-  assert.equal(normalized.subtitles[0].backgroundEnabled, false);
-  assert.equal(normalized.subtitles[1].backgroundEnabled, undefined);
+  assert.equal(itemAt(normalized.subtitles, 0).backgroundEnabled, false);
+  assert.equal(itemAt(normalized.subtitles, 1).backgroundEnabled, undefined);
   assert.deepEqual(normalized.subtitleDefaults, disabledFirst.subtitleDefaults);
 
   const invalidOverride = normalizeEditorProject({
@@ -615,11 +703,11 @@ test("자막별 검은 배경 override는 다른 cue와 전역 스타일을 보�
     ))
   });
   assert.ok(invalidOverride);
-  assert.equal(invalidOverride.subtitles[1].backgroundEnabled, undefined);
+  assert.equal(itemAt(invalidOverride.subtitles, 1).backgroundEnabled, undefined);
   assert.equal(
     resolveSubtitleCueBackground(
       invalidOverride.subtitleDefaults,
-      invalidOverride.subtitles[1]
+      itemAt(invalidOverride.subtitles, 1)
     ).enabled,
     true
   );
@@ -722,23 +810,23 @@ test("v1 프로젝트를 컷·자막 수정 상태를 잃지 않고 v3로 이관
   assert.equal(migrated.schema, EDITOR_SCHEMA);
   assert.equal(migrated.id, "legacy-project");
   assert.equal(migrated.name, "이어 편집할 프로젝트");
-  assert.equal(migrated.clips[0].sourceStartMs, 10_500);
-  assert.equal(migrated.clips[0].sourceEndMs, 15_000);
+  assert.equal(itemAt(migrated.clips, 0).sourceStartMs, 10_500);
+  assert.equal(itemAt(migrated.clips, 0).sourceEndMs, 15_000);
   assert.equal(migrated.subtitleLaneCount, 2);
   assert.deepEqual(migrated.imageAssets, []);
   assert.deepEqual(migrated.audioRegions, []);
   assert.equal(migrated.selectedCueId, "legacy-cue");
   assert.deepEqual(
     {
-      id: migrated.subtitles[0].id,
-      text: migrated.subtitles[0].text,
-      startOffsetMs: migrated.subtitles[0].startOffsetMs,
-      endOffsetMs: migrated.subtitles[0].endOffsetMs,
-      x: migrated.subtitles[0].x,
-      y: migrated.subtitles[0].y,
-      lane: migrated.subtitles[0].lane,
-      color: migrated.subtitles[0].color,
-      humanEdited: migrated.subtitles[0].humanEdited
+      id: itemAt(migrated.subtitles, 0).id,
+      text: itemAt(migrated.subtitles, 0).text,
+      startOffsetMs: itemAt(migrated.subtitles, 0).startOffsetMs,
+      endOffsetMs: itemAt(migrated.subtitles, 0).endOffsetMs,
+      x: itemAt(migrated.subtitles, 0).x,
+      y: itemAt(migrated.subtitles, 0).y,
+      lane: itemAt(migrated.subtitles, 0).lane,
+      color: itemAt(migrated.subtitles, 0).color,
+      humanEdited: itemAt(migrated.subtitles, 0).humanEdited
     },
     {
       id: "legacy-cue",
@@ -801,11 +889,11 @@ test("v2 프로젝트를 기존 자막·음성 선택 상태를 보존해 v3로 
   assert.ok(migrated);
   assert.equal(migrated.schema, EDITOR_SCHEMA);
   assert.equal(migrated.id, "v2-project");
-  assert.equal(migrated.subtitles[0].id, "v2-cue");
-  assert.equal(migrated.subtitles[0].lane, 1);
-  assert.equal(migrated.subtitles[0].color, "#44aaee");
-  assert.equal(migrated.audioRegions[0].id, "v2-audio");
-  assert.equal(migrated.audioRegions[0].gain, 0.4);
+  assert.equal(itemAt(migrated.subtitles, 0).id, "v2-cue");
+  assert.equal(itemAt(migrated.subtitles, 0).lane, 1);
+  assert.equal(itemAt(migrated.subtitles, 0).color, "#44aaee");
+  assert.equal(itemAt(migrated.audioRegions, 0).id, "v2-audio");
+  assert.equal(itemAt(migrated.audioRegions, 0).gain, 0.4);
   assert.equal(migrated.selectedCueId, "v2-cue");
   assert.equal(migrated.selectedAudioRegionId, "v2-audio");
   assert.deepEqual(migrated.imageAssets, []);
@@ -856,8 +944,8 @@ test("라이브 선택 시각과 로컬 VOD 사이의 정렬 오프셋을 모든
   project = applyMediaAlignmentOffset(project, -2_000);
   assert.equal(project.broadcastSession.alignmentOffsetMs, -2_000);
   assert.equal(project.broadcastSession.alignmentConfirmed, true);
-  assert.equal(project.clips[0].selectionStartMs, 10_125);
-  assert.equal(project.clips[0].sourceStartMs, 8_125);
+  assert.equal(itemAt(project.clips, 0).selectionStartMs, 10_125);
+  assert.equal(itemAt(project.clips, 0).sourceStartMs, 8_125);
   assert.equal(required(mapTimelineToSource(project, 0)).sourceMs, 8_125);
   assert.throws(
     () => applyMediaAlignmentOffset(project, -20_000),
@@ -884,11 +972,11 @@ test("자막 텍스트·표시 구간·위치는 사용자 수정 상태로 보�
     y: 0.2
   });
 
-  assert.equal(project.subtitles[0].text, "사람이 고친 자막");
-  assert.equal(project.subtitles[0].humanEdited, true);
-  assert.equal(project.subtitles[0].x, 0.25);
-  assert.equal(project.subtitles[0].y, 0.2);
-  assert.deepEqual(cueTimelineRange(project, project.subtitles[0]), {
+  assert.equal(itemAt(project.subtitles, 0).text, "사람이 고친 자막");
+  assert.equal(itemAt(project.subtitles, 0).humanEdited, true);
+  assert.equal(itemAt(project.subtitles, 0).x, 0.25);
+  assert.equal(itemAt(project.subtitles, 0).y, 0.2);
+  assert.deepEqual(cueTimelineRange(project, itemAt(project.subtitles, 0)), {
     startMs: 700,
     endMs: 2_900
   });
@@ -1175,12 +1263,12 @@ test("자막마다 색상을 따로 정규화하고 수정한다", () => {
   });
   project = { ...project, subtitles: [cue] };
 
-  assert.equal(project.subtitles[0].color, "#ff00aa");
+  assert.equal(itemAt(project.subtitles, 0).color, "#ff00aa");
   assert.equal(project.subtitleDefaults.color, "#ffffff");
 
   project = updateSubtitleCue(project, "colored-cue", { color: "#12AB34" });
-  assert.equal(project.subtitles[0].color, "#12ab34");
-  assert.equal(project.subtitles[0].humanEdited, true);
+  assert.equal(itemAt(project.subtitles, 0).color, "#12ab34");
+  assert.equal(itemAt(project.subtitles, 0).humanEdited, true);
   assert.equal(project.subtitleDefaults.color, "#ffffff");
 });
 
@@ -1356,7 +1444,7 @@ test("같은 컷의 선택 자막과 에셋은 양끝 시각을 손실 없이 �
     })),
     [{ startOffsetMs: 1_725, endOffsetMs: 3_125 }]
   );
-  assert.equal(cueMatched.subtitles[0].humanEdited, true);
+  assert.equal(itemAt(cueMatched.subtitles, 0).humanEdited, true);
   assert.equal(cueMatched.selectedImageAssetId, asset.id);
 
   const assetMatched = matchImageAssetToSubtitleCue(
@@ -1456,10 +1544,10 @@ test("투명 이미지 에셋을 만들고 위치·크기·불투명도를 수�
     scale: 9,
     opacity: 0.35
   });
-  assert.equal(project.imageAssets[0].x, 0);
-  assert.equal(project.imageAssets[0].y, 1);
-  assert.equal(project.imageAssets[0].scale, 5);
-  assert.equal(project.imageAssets[0].opacity, 0.35);
+  assert.equal(itemAt(project.imageAssets, 0).x, 0);
+  assert.equal(itemAt(project.imageAssets, 0).y, 1);
+  assert.equal(itemAt(project.imageAssets, 0).scale, 5);
+  assert.equal(itemAt(project.imageAssets, 0).opacity, 0.35);
   assert.equal(project.selectedImageAssetId, "logo");
 
   project = deleteImageAsset(project, asset.id);
@@ -1515,7 +1603,7 @@ test("자막 레인을 클릭으로 늘리고 프로젝트가 허용한 범위 �
   });
   project = { ...project, subtitles: [cue] };
   project = updateSubtitleCue(project, "third-lane", { lane: 99 });
-  assert.equal(project.subtitles[0].lane, 2);
+  assert.equal(itemAt(project.subtitles, 0).lane, 2);
 
   for (let index = project.subtitleLaneCount; index < MAX_SUBTITLE_LANES + 2; index += 1) {
     project = addSubtitleLane(project);
@@ -1540,7 +1628,7 @@ test("저장된 cue가 가리키는 레인을 정규화 중 잃지 않고 레인
   const normalized = normalizeEditorProject(raw);
   assert.ok(normalized);
   assert.equal(normalized.subtitleLaneCount, 5);
-  assert.equal(normalized.subtitles[0].lane, 4);
+  assert.equal(itemAt(normalized.subtitles, 0).lane, 4);
 });
 
 test("같은 시각의 자막은 다른 레인에서는 허용하고 같은 레인에서만 충돌시킨다", () => {
@@ -1678,10 +1766,10 @@ test("단어 타임스탬프를 읽기 쉬운 자막 cue 초안으로 묶는다"
     { text: "좋아요", timestamp: [3.5, 4.1] }
   ], 5_000);
   assert.equal(drafts.length, 2);
-  assert.equal(drafts[0].text, "안녕하세요 오늘은 게임합니다.");
-  assert.equal(drafts[0].startOffsetMs, 100);
-  assert.ok(drafts[0].endOffsetMs <= drafts[1].startOffsetMs);
-  assert.equal(drafts[1].text, "좋아요");
+  assert.equal(itemAt(drafts, 0).text, "안녕하세요 오늘은 게임합니다.");
+  assert.equal(itemAt(drafts, 0).startOffsetMs, 100);
+  assert.ok(itemAt(drafts, 0).endOffsetMs <= itemAt(drafts, 1).startOffsetMs);
+  assert.equal(itemAt(drafts, 1).text, "좋아요");
 });
 
 test("단일 transcript chunk가 길어도 모든 AI cue를 4초 이하로 나눈다", () => {
@@ -1697,7 +1785,9 @@ test("단일 transcript chunk가 길어도 모든 AI cue를 4초 이하로 나�
     draft.endOffsetMs - draft.startOffsetMs <= 4_000
   )));
   for (let index = 1; index < drafts.length; index += 1) {
-    assert.ok(drafts[index - 1].endOffsetMs <= drafts[index].startOffsetMs);
+    assert.ok(
+      itemAt(drafts, index - 1).endOffsetMs <= itemAt(drafts, index).startOffsetMs
+    );
   }
 
   const shortTextDrafts = transcriptChunksToCueDrafts([
@@ -1744,10 +1834,10 @@ test("원격 AI cue의 위치 요청은 무시하고 화자·검수·색상만 �
   ]);
 
   assert.equal(project.subtitles.every((cue) => cue.lane === 0), true);
-  assert.equal(project.subtitles[1].color, "#00ff88");
-  assert.equal(project.subtitles[1].x, 0.5);
-  assert.equal(project.subtitles[1].y, 0.84);
-  assert.deepEqual(project.subtitles[1].remoteMeta, {
+  assert.equal(itemAt(project.subtitles, 1).color, "#00ff88");
+  assert.equal(itemAt(project.subtitles, 1).x, 0.5);
+  assert.equal(itemAt(project.subtitles, 1).y, 0.84);
+  assert.deepEqual(itemAt(project.subtitles, 1).remoteMeta, {
     speakerId: "guest",
     reviewRequired: true,
     placement: "bottom"
@@ -1756,7 +1846,7 @@ test("원격 AI cue의 위치 요청은 무시하고 화자·검수·색상만 �
   project = required(
     normalizeEditorProject(JSON.parse(JSON.stringify(project)))
   );
-  assert.deepEqual(project.subtitles[1].remoteMeta, {
+  assert.deepEqual(itemAt(project.subtitles, 1).remoteMeta, {
     speakerId: "guest",
     reviewRequired: true,
     placement: "bottom"
@@ -1830,7 +1920,9 @@ test("겹쳐 들어온 AI 타임스탬프도 서로 겹치지 않는 cue로 정�
   ], 4_000);
   assert.ok(drafts.length >= 2);
   for (let index = 1; index < drafts.length; index += 1) {
-    assert.ok(drafts[index - 1].endOffsetMs <= drafts[index].startOffsetMs);
+    assert.ok(
+      itemAt(drafts, index - 1).endOffsetMs <= itemAt(drafts, index).startOffsetMs
+    );
   }
   assert.ok(drafts.every((draft) => draft.endOffsetMs <= 4_000));
 
@@ -1852,11 +1944,11 @@ test("컷 길이와 순서가 바뀌면 타임라인을 다시 흐르게 한다"
     sourceStartMs: 11_000,
     sourceEndMs: 14_000
   });
-  assert.equal(project.clips[1].timelineStartMs, 3_000);
+  assert.equal(itemAt(project.clips, 1).timelineStartMs, 3_000);
 
   project = reorderClip(project, "clip-second", 0);
-  assert.equal(project.clips[0].id, "clip-second");
-  assert.equal(project.clips[1].timelineStartMs, 6_500);
+  assert.equal(itemAt(project.clips, 0).id, "clip-second");
+  assert.equal(itemAt(project.clips, 1).timelineStartMs, 6_500);
 });
 
 test("체크한 여러 컷은 상대 순서를 유지하며 한 단계씩 위아래로 이동한다", () => {
@@ -2007,10 +2099,10 @@ test("음성 구간을 생성·선택·수정·삭제하고 타임라인 시각�
   });
   assert.deepEqual(
     {
-      gain: project.audioRegions[0].gain,
-      muted: project.audioRegions[0].muted,
-      fadeInMs: project.audioRegions[0].fadeInMs,
-      fadeOutMs: project.audioRegions[0].fadeOutMs,
+      gain: itemAt(project.audioRegions, 0).gain,
+      muted: itemAt(project.audioRegions, 0).muted,
+      fadeInMs: itemAt(project.audioRegions, 0).fadeInMs,
+      fadeOutMs: itemAt(project.audioRegions, 0).fadeOutMs,
       selectedAudioRegionId: project.selectedAudioRegionId
     },
     {
@@ -2162,11 +2254,11 @@ test("컷 trim은 영상과 같은 원본 시각을 유지하며 현재·후속 
       })
     ]
   };
-  const firstCueBefore = project.subtitles[0];
-  const secondCueBefore = project.subtitles[1];
+  const firstCueBefore = itemAt(project.subtitles, 0);
+  const secondCueBefore = itemAt(project.subtitles, 1);
   const firstSourceRangeBefore = {
-    startMs: project.clips[0].sourceStartMs + firstCueBefore.startOffsetMs,
-    endMs: project.clips[0].sourceStartMs + firstCueBefore.endOffsetMs
+    startMs: itemAt(project.clips, 0).sourceStartMs + firstCueBefore.startOffsetMs,
+    endMs: itemAt(project.clips, 0).sourceStartMs + firstCueBefore.endOffsetMs
   };
   assert.deepEqual(cueTimelineRange(project, secondCueBefore), {
     startMs: 6_125,
@@ -2266,7 +2358,8 @@ test("가운데 구간 삭제는 컷을 분할하고 자막·에셋·음성을 �
 
   const firstSelectionClips = project.clips.filter((clip) => clip.selectionId === "first");
   assert.equal(firstSelectionClips.length, 2);
-  const [beforeClip, afterClip] = firstSelectionClips;
+  const beforeClip = itemAt(firstSelectionClips, 0);
+  const afterClip = itemAt(firstSelectionClips, 1);
   assert.equal(beforeClip.id, "clip-first");
   assert.notEqual(afterClip.id, beforeClip.id);
   assert.deepEqual(firstSelectionClips.map((clip) => ({
@@ -2306,8 +2399,8 @@ test("가운데 구간 삭제는 컷을 분할하고 자막·에셋·음성을 �
 
   const splitCues = project.subtitles.filter((cue) => cue.text === "이어지는 자막");
   assert.equal(splitCues.length, 2);
-  assert.equal(splitCues[0].id, "spanning-cue");
-  assert.notEqual(splitCues[1].id, splitCues[0].id);
+  assert.equal(itemAt(splitCues, 0).id, "spanning-cue");
+  assert.notEqual(itemAt(splitCues, 1).id, itemAt(splitCues, 0).id);
   assert.deepEqual(splitCues.map((cue) => ({
     clipId: cue.clipId,
     startOffsetMs: cue.startOffsetMs,
@@ -2567,15 +2660,15 @@ test("전체 삭제한 선택은 같은 hot-seed에서 유지되고 경계 변�
   const changedSeed = mergeCaptureIntoEditorProject(deleted, {
     ...captureState,
     segments: [
-      { ...captureState.segments[0], startSeconds: 11, endSeconds: 14 },
+      { ...itemAt(captureState.segments, 0), startSeconds: 11, endSeconds: 14 },
       ...captureState.segments.slice(1)
     ]
   });
   const restoredFirst = changedSeed.clips.filter((clip) => clip.selectionId === "first");
   assert.equal(restoredFirst.length, 1);
   assert.deepEqual([
-    restoredFirst[0].sourceStartMs,
-    restoredFirst[0].sourceEndMs
+    itemAt(restoredFirst, 0).sourceStartMs,
+    itemAt(restoredFirst, 0).sourceEndMs
   ], [11_000, 14_000]);
   assert.deepEqual(changedSeed.suppressedSelections, []);
 });
@@ -2620,7 +2713,7 @@ test("분할 컷은 같은 선택 hot-seed에서 유지되고 변경된 선택�
       endMs: 2_500
     });
     const fragments = project.clips.filter((clip) => clip.selectionId === "first");
-    const afterFragment = fragments[1];
+    const afterFragment = itemAt(fragments, 1);
     project = {
       ...project,
       subtitles: [
@@ -2661,45 +2754,48 @@ test("분할 컷은 같은 선택 hot-seed에서 유지되고 변경된 선택�
     [[10_125, 11_625], [12_625, 15_750]]
   );
   assert.equal(unchanged.clips.filter((clip) => clip.id === "clip-third").length, 1);
-  assert.equal(unchanged.subtitles[0].id, "split-after-cue");
+  assert.equal(itemAt(unchanged.subtitles, 0).id, "split-after-cue");
 
   const oneSidedInput = createSplitProject();
-  const oneSidedAfterId = oneSidedInput.clips
-    .filter((clip) => clip.selectionId === "first")[1].id;
+  const oneSidedAfterId = itemAt(
+    oneSidedInput.clips.filter((clip) => clip.selectionId === "first"),
+    1
+  ).id;
   const oneSided = mergeCaptureIntoEditorProject(oneSidedInput, {
     ...captureState,
     segments: [
-      { ...captureState.segments[0], startSeconds: 13, endSeconds: 16 },
+      { ...itemAt(captureState.segments, 0), startSeconds: 13, endSeconds: 16 },
       ...captureState.segments.slice(1)
     ]
   });
   const oneSidedFragments = oneSided.clips.filter((clip) => clip.selectionId === "first");
   assert.equal(oneSidedFragments.length, 1);
-  assert.equal(oneSidedFragments[0].id, oneSidedAfterId);
+  assert.equal(itemAt(oneSidedFragments, 0).id, oneSidedAfterId);
   assert.deepEqual([
-    oneSidedFragments[0].sourceStartMs,
-    oneSidedFragments[0].sourceEndMs
+    itemAt(oneSidedFragments, 0).sourceStartMs,
+    itemAt(oneSidedFragments, 0).sourceEndMs
   ], [13_000, 15_750]);
   assert.equal(oneSided.selectedClipId, oneSidedAfterId);
-  assert.equal(oneSided.subtitles[0].id, "split-after-cue");
+  assert.equal(itemAt(oneSided.subtitles, 0).id, "split-after-cue");
   assert.equal(
-    oneSidedFragments[0].sourceStartMs + oneSided.subtitles[0].startOffsetMs,
+    itemAt(oneSidedFragments, 0).sourceStartMs
+      + itemAt(oneSided.subtitles, 0).startOffsetMs,
     13_125
   );
 
   const gapOnly = mergeCaptureIntoEditorProject(createSplitProject(), {
     ...captureState,
     segments: [
-      { ...captureState.segments[0], startSeconds: 11.8, endSeconds: 12.4 },
+      { ...itemAt(captureState.segments, 0), startSeconds: 11.8, endSeconds: 12.4 },
       ...captureState.segments.slice(1)
     ]
   });
   const gapReplacement = gapOnly.clips.filter((clip) => clip.selectionId === "first");
   assert.equal(gapReplacement.length, 1);
-  assert.equal(gapReplacement[0].id, "clip-first");
+  assert.equal(itemAt(gapReplacement, 0).id, "clip-first");
   assert.deepEqual([
-    gapReplacement[0].sourceStartMs,
-    gapReplacement[0].sourceEndMs
+    itemAt(gapReplacement, 0).sourceStartMs,
+    itemAt(gapReplacement, 0).sourceEndMs
   ], [11_800, 12_400]);
   assert.equal(gapOnly.subtitles.some((cue) => cue.id === "split-after-cue"), false);
   assert.equal(gapOnly.selectedCueId, null);
@@ -2708,7 +2804,7 @@ test("분할 컷은 같은 선택 hot-seed에서 유지되고 변경된 선택�
   const bothSides = mergeCaptureIntoEditorProject(createSplitProject(), {
     ...captureState,
     segments: [
-      { ...captureState.segments[0], startSeconds: 11, endSeconds: 14 },
+      { ...itemAt(captureState.segments, 0), startSeconds: 11, endSeconds: 14 },
       ...captureState.segments.slice(1)
     ]
   });
@@ -2723,7 +2819,11 @@ test("분할 컷은 같은 선택 hot-seed에서 유지되고 변경된 선택�
   const exactMinimum = mergeCaptureIntoEditorProject(createSplitProject(), {
     ...captureState,
     segments: [
-      { ...captureState.segments[0], startSeconds: 11.525, endSeconds: 12.725 },
+      {
+        ...itemAt(captureState.segments, 0),
+        startSeconds: 11.525,
+        endSeconds: 12.725
+      },
       ...captureState.segments.slice(1)
     ]
   });
@@ -2755,22 +2855,22 @@ test("기존 편집 순서와 trim을 유지하면서 새 사용자 선택을 �
   const merged = mergeCaptureIntoEditorProject(project, {
     ...captureState,
     segments: [
-      { ...captureState.segments[0], startSeconds: 9, endSeconds: 16 },
+      { ...itemAt(captureState.segments, 0), startSeconds: 9, endSeconds: 16 },
       ...captureState.segments.slice(1),
       { id: "third", startSeconds: 50, endSeconds: 52, description: "추가" }
     ]
   });
   assert.equal(merged.clips.length, 3);
-  assert.equal(merged.subtitles[0].text, "유지");
+  assert.equal(itemAt(merged.subtitles, 0).text, "유지");
   assert.deepEqual(merged.clips.map((clip) => clip.id), [
     "clip-second",
     "clip-first",
     "clip-third"
   ]);
-  assert.equal(merged.clips[1].sourceStartMs, 11_000);
-  assert.equal(merged.clips[1].sourceEndMs, 15_000);
-  assert.equal(merged.clips[1].selectionStartMs, 9_000);
-  assert.equal(merged.clips[1].selectionEndMs, 16_000);
+  assert.equal(itemAt(merged.clips, 1).sourceStartMs, 11_000);
+  assert.equal(itemAt(merged.clips, 1).sourceEndMs, 15_000);
+  assert.equal(itemAt(merged.clips, 1).selectionStartMs, 9_000);
+  assert.equal(itemAt(merged.clips, 1).selectionEndMs, 16_000);
 });
 
 test("캡처 구간 갱신은 음성 설정을 새 컷 경계로 자르고 선택 상태를 보존한다", () => {
@@ -2799,7 +2899,7 @@ test("캡처 구간 갱신은 음성 설정을 새 컷 경계로 자르고 선�
   const merged = mergeCaptureIntoEditorProject(project, {
     ...captureState,
     segments: [
-      { ...captureState.segments[0], startSeconds: 12, endSeconds: 14 },
+      { ...itemAt(captureState.segments, 0), startSeconds: 12, endSeconds: 14 },
       ...captureState.segments.slice(1)
     ]
   });
@@ -2847,7 +2947,7 @@ test("캡처 구간 갱신은 이미지 에셋을 새 컷 경계로 자르고 �
   const merged = mergeCaptureIntoEditorProject(project, {
     ...captureState,
     segments: [
-      { ...captureState.segments[0], startSeconds: 12, endSeconds: 14 },
+      { ...itemAt(captureState.segments, 0), startSeconds: 12, endSeconds: 14 },
       ...captureState.segments.slice(1)
     ]
   });
@@ -2893,9 +2993,9 @@ test("동일한 캡처를 다시 열어도 편집기에서 확장한 컷과 그 
   );
   assert.equal(first.sourceStartMs, 8_000);
   assert.equal(first.sourceEndMs, 17_000);
-  assert.equal(merged.subtitles[0].id, "expanded-cue");
-  assert.equal(merged.subtitles[0].startOffsetMs, 500);
-  assert.equal(merged.subtitles[0].endOffsetMs, 1_500);
+  assert.equal(itemAt(merged.subtitles, 0).id, "expanded-cue");
+  assert.equal(itemAt(merged.subtitles, 0).startOffsetMs, 500);
+  assert.equal(itemAt(merged.subtitles, 0).endOffsetMs, 1_500);
 });
 
 test("사이드패널 선택이 기존 trim과 겹치지 않으면 새 사용자 선택으로 되돌린다", () => {
@@ -2920,7 +3020,7 @@ test("사이드패널 선택이 기존 trim과 겹치지 않으면 새 사용자
   const merged = mergeCaptureIntoEditorProject(project, {
     ...captureState,
     segments: [
-      { ...captureState.segments[0], startSeconds: 30, endSeconds: 40 },
+      { ...itemAt(captureState.segments, 0), startSeconds: 30, endSeconds: 40 },
       ...captureState.segments.slice(1)
     ]
   });
@@ -2945,11 +3045,11 @@ test("정렬 오프셋 뒤에 들어온 캡처 갱신과 새 구간도 같은 �
       { id: "third", startSeconds: 50, endSeconds: 52, description: "추가" }
     ]
   });
-  assert.equal(merged.clips[0].sourceStartMs, 12_125);
-  assert.equal(merged.clips[0].sourceEndMs, 17_750);
-  assert.equal(merged.clips[0].selectionStartMs, 10_125);
-  assert.equal(merged.clips[2].sourceStartMs, 52_000);
-  assert.equal(merged.clips[2].selectionStartMs, 50_000);
+  assert.equal(itemAt(merged.clips, 0).sourceStartMs, 12_125);
+  assert.equal(itemAt(merged.clips, 0).sourceEndMs, 17_750);
+  assert.equal(itemAt(merged.clips, 0).selectionStartMs, 10_125);
+  assert.equal(itemAt(merged.clips, 2).sourceStartMs, 52_000);
+  assert.equal(itemAt(merged.clips, 2).selectionStartMs, 50_000);
 });
 
 test("정렬값 때문에 로컬 원본 시작보다 앞서는 새 선택은 조용히 변형하지 않는다", () => {
@@ -3011,7 +3111,7 @@ test("겹치는 자막 구간을 식별해 미리보기와 burn 결과 불일치
     startMs: 1_000,
     endMs: 1_500
   }]);
-  project.subtitles[1].startOffsetMs = 1_500;
+  itemAt(project.subtitles, 1).startOffsetMs = 1_500;
   assert.deepEqual(findSubtitleOverlaps(project), []);
 });
 

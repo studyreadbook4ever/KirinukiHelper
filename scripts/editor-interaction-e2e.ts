@@ -261,6 +261,14 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
+function requireDefined<T>(
+  value: T | null | undefined,
+  message: string
+): T {
+  assert(value !== null && value !== undefined, message);
+  return value;
+}
+
 async function isExecutable(filePath: string) {
   try {
     await access(filePath, fsConstants.X_OK);
@@ -323,12 +331,15 @@ async function fetchJson(
     timeout = 30_000
   }: { method?: string; body?: unknown; timeout?: number } = {}
 ): Promise<unknown> {
-  const response = await fetch(url, {
+  const requestInit: RequestInit = {
     method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(timeout)
-  });
+  };
+  if (body !== undefined) {
+    requestInit.headers = { "content-type": "application/json" };
+    requestInit.body = JSON.stringify(body);
+  }
+  const response = await fetch(url, requestInit);
   const text = await response.text();
   let payload: unknown = null;
   if (text) {
@@ -2515,6 +2526,10 @@ async function main() {
   );
   const transportFirstClip = transportShortcutClips[0];
   const transportNextClip = transportShortcutClips[1];
+  assert(
+    transportFirstClip && transportNextClip,
+    "Space 및 ,/. 이동 단축키용 첫 두 영상 컷을 찾지 못했습니다."
+  );
   const transportFirstDurationMs = (
     transportFirstClip.sourceEndMs - transportFirstClip.sourceStartMs
   );
@@ -3198,7 +3213,7 @@ async function main() {
   );
   await clickElement("#context-delete-cue");
   await waitForStoredProject(
-    (project) => project.subtitles.length === 1 && project.subtitles[0].id === cueId,
+    (project) => project.subtitles.length === 1 && project.subtitles[0]?.id === cueId,
     "우클릭 자막 삭제"
   );
 
@@ -3634,7 +3649,7 @@ async function main() {
   await contextClickElement(`.cue-block[data-id="${restoredRangeCue.id}"]`);
   await clickElement("#context-delete-cue");
   await waitForStoredProject(
-    (project) => project.subtitles.length === 1 && project.subtitles[0].id === cueId,
+    (project) => project.subtitles.length === 1 && project.subtitles[0]?.id === cueId,
     "리플 삭제 E2E 후행 자막 fixture 정리"
   );
 
@@ -3654,7 +3669,11 @@ async function main() {
     ),
     "투명 PNG 붙여넣기와 프로젝트 autosave"
   );
-  const imageAssetId = assetProject.imageAssets[0].id;
+  const initialImageAsset = requireDefined(
+    assetProject.imageAssets[0],
+    "붙여넣은 이미지 에셋 fixture를 찾지 못했습니다."
+  );
+  const imageAssetId = initialImageAsset.id;
   const assetUi = await waitUntil(async () => {
     const state = await executeSync(`
       const overlay = document.querySelector(
@@ -3946,7 +3965,7 @@ async function main() {
   await waitForStoredProject(
     (project) => (
       project.subtitles.length === 1
-      && project.subtitles[0].id === cueId
+      && project.subtitles[0]?.id === cueId
       && project.imageAssets.find((asset) => asset.id === imageAssetId)?.startOffsetMs
         === timingAsset.startOffsetMs
     ),
@@ -4135,7 +4154,10 @@ async function main() {
     "겹침 검증 뒤 첫 번째 에셋 선택 복원"
   );
 
-  const assetBeforeTrim = assetProject.imageAssets[0];
+  const assetBeforeTrim = requireDefined(
+    assetProject.imageAssets[0],
+    "trim 전 이미지 에셋 fixture를 찾지 못했습니다."
+  );
   const assetLeftDrag = await pointerDrag(
     `.asset-block[data-id="${imageAssetId}"] .trim-handle.left`,
     [{ x: 10, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0 }]
@@ -4240,7 +4262,10 @@ async function main() {
     ),
     "음성 설정 구간 추가"
   );
-  const audioRegionId = audioProject.audioRegions[0].id;
+  const audioRegionId = requireDefined(
+    audioProject.audioRegions[0],
+    "추가한 음성 설정 구간 fixture를 찾지 못했습니다."
+  ).id;
   await waitUntil(async () => {
     const state = await executeSync(`
       return {
@@ -4467,13 +4492,17 @@ async function main() {
     rulerExplicitSeek
   };
 
+  const playbackPointerFirstClip = requireDefined(
+    playbackPointerProject.clips[0],
+    "포인터 선택 검증용 첫 영상 컷 fixture를 찾지 못했습니다."
+  );
   const selectionCases = [
     {
-      selector: `.clip-block[data-id="${playbackPointerProject.clips[0].id}"] .clip-block-body`,
+      selector: `.clip-block[data-id="${playbackPointerFirstClip.id}"] .clip-block-body`,
       selectionKey: "selectedClipId" as const,
-      selectionId: playbackPointerProject.clips[0].id,
-      itemStartMs: playbackPointerProject.clips[0].timelineStartMs,
-      itemClipId: playbackPointerProject.clips[0].id,
+      selectionId: playbackPointerFirstClip.id,
+      itemStartMs: playbackPointerFirstClip.timelineStartMs,
+      itemClipId: playbackPointerFirstClip.id,
       label: "영상 컷"
     },
     {
@@ -4719,7 +4748,7 @@ async function main() {
     input.dispatchEvent(new Event("change", { bubbles: true }));
   `);
   const quietAudioProject = await waitForStoredProject(
-    (project) => Math.abs(project.audioRegions[0]?.gain - 0.35) < 0.0001,
+    (project) => Math.abs((project.audioRegions[0]?.gain ?? Number.NaN) - 0.35) < 0.0001,
     "음성 구간 음량 autosave"
   );
   const audioClip = quietAudioProject.clips.find(
@@ -4753,7 +4782,10 @@ async function main() {
     ),
     "120ms 정밀 음성 구간 autosave"
   );
-  const preciseAudioRegion = preciseAudioProject.audioRegions[0];
+  const preciseAudioRegion = requireDefined(
+    preciseAudioProject.audioRegions[0],
+    "정밀 미리보기용 음성 설정 구간 fixture를 찾지 못했습니다."
+  );
   const preciseAudioMediaOriginMs = Number(preciseAudioProject.mediaAsset?.mediaOriginMs) || 0;
   const preciseAudioPreviewStartSeconds = (
     preciseAudioMediaOriginMs +
@@ -5381,13 +5413,14 @@ async function main() {
   await clickElement("#create-local-draft");
   const manualLocalDraft = await waitUntil(async () => {
     const drafts = await readLocalDrafts();
+    const [draft] = drafts;
     return (
       drafts.length === 1 &&
-      drafts[0].reason === "manual" &&
-      drafts[0].project?.imageAssets?.some(
+      draft?.reason === "manual" &&
+      draft.project?.imageAssets?.some(
         (asset) => asset.id === imageAssetId
       )
-    ) ? drafts[0] : false;
+    ) ? draft : false;
   }, "수동 로컬 임시저장");
   const manualDraftStatus = await executeSync<string>(`
     return document.querySelector("#local-draft-status")

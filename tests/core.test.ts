@@ -68,6 +68,101 @@ test("저장 상태를 기본 스키마와 병합해 복구한다", () => {
   assert.equal(createInitialState().editorProjectId, "");
 });
 
+test("저장 상태의 잘못된 알려진 필드는 기본값으로 복구하고 확장 필드는 안전하게 보존한다", () => {
+  const restored = normalizeState({
+    schemaVersion: "잘못된 버전",
+    editorProjectId: 42,
+    projectName: null,
+    source: {
+      platform: 7,
+      channelId: "channel-safe",
+      streamerName: { unsafe: true },
+      clipActive: "yes",
+      sourceExtension: "preserved"
+    },
+    globalInstruction: false,
+    draft: {
+      startText: 100,
+      endText: "00:00:20",
+      description: null,
+      startCapture: { rawSeconds: "10", method: 3 },
+      endCapture: {
+        rawSeconds: 20,
+        method: "html-video-currentTime",
+        captureExtension: "preserved"
+      },
+      editingId: 99,
+      draftExtension: "preserved"
+    },
+    segments: [
+      null,
+      {
+        id: "valid-segment",
+        startSeconds: 10,
+        endSeconds: 20,
+        description: 123,
+        startCapture: { rawSeconds: -1 },
+        endCapture: { rawSeconds: 20, observedAt: 123 },
+        segmentExtension: "preserved"
+      },
+      {
+        id: "invalid-range",
+        startSeconds: 20,
+        endSeconds: 10,
+        description: "drop"
+      }
+    ],
+    updatedAt: 0,
+    workspaceExtension: { preserved: true }
+  });
+
+  assert.equal(restored.schemaVersion, 1);
+  assert.equal(restored.editorProjectId, "");
+  assert.equal(restored.projectName, "");
+  assert.equal(restored.globalInstruction, "");
+  assert.equal(typeof restored.updatedAt, "string");
+  assert.equal(restored.source.platform, "CHZZK");
+  assert.equal(restored.source.channelId, "channel-safe");
+  assert.equal(restored.source.streamerName, "");
+  assert.equal(restored.source.clipActive, null);
+  assert.equal(restored.source.sourceExtension, "preserved");
+  assert.equal(restored.draft.startText, "");
+  assert.equal(restored.draft.endText, "00:00:20");
+  assert.equal(restored.draft.description, "");
+  assert.equal(restored.draft.startCapture, null);
+  assert.equal(restored.draft.endCapture?.rawSeconds, 20);
+  assert.equal(restored.draft.endCapture?.method, "html-video-currentTime");
+  assert.equal(restored.draft.endCapture?.captureExtension, "preserved");
+  assert.equal(restored.draft.editingId, null);
+  assert.equal(
+    Object.getOwnPropertyDescriptor(
+      restored.draft,
+      "draftExtension"
+    )?.value,
+    "preserved"
+  );
+  assert.equal(restored.segments.length, 1);
+  assert.equal(restored.segments[0]?.id, "valid-segment");
+  assert.equal(restored.segments[0]?.description, "");
+  assert.equal(restored.segments[0]?.startCapture, null);
+  assert.equal(restored.segments[0]?.endCapture?.rawSeconds, 20);
+  assert.equal(restored.segments[0]?.endCapture?.observedAt, undefined);
+  assert.equal(
+    Object.getOwnPropertyDescriptor(
+      restored.segments[0] ?? {},
+      "segmentExtension"
+    )?.value,
+    "preserved"
+  );
+  assert.deepEqual(
+    Object.getOwnPropertyDescriptor(
+      restored,
+      "workspaceExtension"
+    )?.value,
+    { preserved: true }
+  );
+});
+
 test("다중 창 저장 메타데이터를 안전한 epoch와 revision으로 복구한다", () => {
   assert.deepEqual(normalizeWorkspaceMeta(null), {
     resetEpoch: "initial",
@@ -160,7 +255,9 @@ test("내장 MD와 사용자 입력을 포함한 uniform Codex 프롬프트를 �
 
   const jsonBlock = prompt.match(/```json\n([\s\S]+?)\n```/);
   assert.ok(jsonBlock);
-  const metadata = JSON.parse(jsonBlock[1]);
+  const jsonText = jsonBlock[1];
+  assert.ok(jsonText);
+  const metadata = JSON.parse(jsonText);
   assert.equal(metadata.schema, SCHEMA_VERSION);
   assert.equal(metadata.segments.length, 2);
   assert.equal(metadata.segments[0].selectionStartSeconds, 600);
@@ -194,8 +291,10 @@ test("Codex 작업 폴더용 manifest를 uniform 규격으로 만든다", () => 
   assert.equal(manifest.status, "AWAITING_SOURCE_VIDEO");
   assert.equal(manifest.inputs.fullVideo.expectedCount, 1);
   assert.equal(manifest.inputs.fullVideo.status, "USER_TO_ADD");
-  assert.equal(manifest.userIntent.selections[0].selectionStartSeconds, 100);
-  assert.equal(manifest.userIntent.selections[0].authority, "USER");
+  const [selection] = manifest.userIntent.selections;
+  assert.ok(selection);
+  assert.equal(selection.selectionStartSeconds, 100);
+  assert.equal(selection.authority, "USER");
   assert.equal(manifest.inputs.creatorPolicyIndex, "creator-policy-index.json");
   assert.equal(Object.hasOwn(manifest.inputs, "creatorPolicyCache"), false);
   assert.equal(manifest.policyGates.revenueHumanReview, "PENDING");
@@ -266,18 +365,19 @@ test("아리사를 카론유니버스W 공식 링크에 정확히 매칭하고 �
   const matches = resolveCreatorPolicies({ streamerName: "아리사" }, index);
 
   assert.equal(matches.length, 1);
-  assert.equal(matches[0].id, "charon-universe-w");
-  assert.equal(matches[0].group, "카론유니버스W");
-  assert.equal(matches[0].sourceUrl, "https://cafe.naver.com/vkpopstar/1174");
-  assert.equal(matches[0].matchedBy.type, "artist");
-  assert.equal(Object.hasOwn(matches[0], "cache"), false);
+  const [match] = matches;
+  assert.ok(match);
+  assert.equal(match.id, "charon-universe-w");
+  assert.equal(match.group, "카론유니버스W");
+  assert.equal(match.sourceUrl, "https://cafe.naver.com/vkpopstar/1174");
+  assert.equal(match.matchedBy.type, "artist");
+  assert.equal(Object.hasOwn(match, "cache"), false);
+  const indexedPolicy = index.policies.find((policy: { id: string }) => (
+    policy.id === "charon-universe-w"
+  ));
+  assert.ok(indexedPolicy);
   assert.equal(
-    Object.hasOwn(
-      index.policies.find((policy: { id: string }) => (
-        policy.id === "charon-universe-w"
-      )),
-      "cache"
-    ),
+    Object.hasOwn(indexedPolicy, "cache"),
     false
   );
   assert.equal(resolveCreatorPolicies({ streamerName: "아리" }, index).length, 0);
@@ -309,7 +409,9 @@ test("아리사를 카론유니버스W 공식 링크에 정확히 매칭하고 �
   });
   const jsonBlock = prompt.match(/```json\n([\s\S]+?)\n```/);
   assert.ok(jsonBlock);
-  const metadata = JSON.parse(jsonBlock[1]);
+  const jsonText = jsonBlock[1];
+  assert.ok(jsonText);
+  const metadata = JSON.parse(jsonText);
   assert.equal(metadata.creatorPolicyResolution[0].id, "charon-universe-w");
   assert.equal(metadata.creatorPolicyResolution[0].matchedBy.value, "아리사");
   assert.equal(metadata.creatorPolicyResolution[0].redistribution, "LINK_ONLY");

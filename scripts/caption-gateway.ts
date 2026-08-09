@@ -142,7 +142,11 @@ function exactBearerToken(
   if (!match) {
     return false;
   }
-  const supplied = Buffer.from(match[1]);
+  const suppliedToken = match[1];
+  if (suppliedToken === undefined) {
+    return false;
+  }
+  const supplied = Buffer.from(suppliedToken);
   const expected = Buffer.from(expectedToken);
   return (
     supplied.length === expected.length
@@ -202,10 +206,10 @@ async function readJsonRequest(
   request: IncomingMessage,
   maxBodyBytes: number
 ): Promise<unknown> {
-  const contentType = String(request.headers["content-type"] || "")
-    .split(";", 1)[0]
-    .trim()
-    .toLowerCase();
+  const [rawContentType = ""] = String(
+    request.headers["content-type"] || ""
+  ).split(";", 1);
+  const contentType = rawContentType.trim().toLowerCase();
   if (contentType !== "application/json") {
     throw new CaptionGatewayError(
       "Content-Type은 application/json이어야 합니다.",

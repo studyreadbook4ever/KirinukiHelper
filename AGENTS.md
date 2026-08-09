@@ -413,6 +413,8 @@ AudSeg 기준 구현은 MIT 라이선스다.
 - `scripts/local-caption-stack-core.ts`: artifact·프로필·service 생성
 - `src/lib/editor-core.ts`: 프로젝트·cue 모델의 작성 소스
 - `src/lib/session-recovery.ts`: CURRENT와 최근 복구본의 작성 소스
+- `scripts/extension-javascript-build.ts`: TS 진입점과 생성 JS 출력의 단일 typed manifest
+- `scripts/check-typescript-migration.ts`: 저장소 전체 TS migration·생성물 provenance gate
 - `extension/editor.html`: 두 방식 선택과 정직한 설명
 - `extension/**/*.js`: `npm run build`가 TypeScript에서 만든 브라우저 배포물
 - `extension/THIRD_PARTY_NOTICES.md`: Extension 고지
@@ -463,10 +465,15 @@ git diff --check
 
 `npm run check`에는 fail-closed third-party 라이선스 인벤토리 검사가 포함된다. 현재 허용 목록은 runtime `mediabunny@1.51.0`(MPL-2.0), build-only `typescript@5.9.3`(Apache-2.0), `tsx@4.23.1`·`esbuild@0.28.1`·타입 패키지(MIT)와 그 고정 transitive/platform 패키지, AudSeg(MIT), 두 OFL-1.1 글꼴이다. TypeScript 도구는 Extension ZIP에 포함하지 않는다. 새 패키지·버전·라이선스·바이너리 에셋을 추가하려면 원문과 배포 의무를 먼저 검토하고 고지·allowlist·검사를 같은 변경에서 명시적으로 갱신한다.
 
-`npm run migration:check`는 작성 JavaScript뿐 아니라 명시적 `any`와
-`@ts-ignore`·`@ts-nocheck`·`@ts-expect-error`의 재유입도 TypeScript AST와
-원문 기준으로 차단한다. 정상적인 표준 API·문장 안의 `any` 문자열은 막지
-않는다.
+`npm run migration:check`는 빌드보다 먼저, 작업 트리를 수정하지 않고
+실행한다. 저장소 전체에서 typed manifest의 12개 생성물 외 JS 계열 파일,
+first-party `.d.ts`, HTML inline script/event handler, shell·package inline
+JavaScript와 작성 JS 진입점, tsconfig 검사 대상 누락을 차단한다. 명시적 `any`,
+`@ts-ignore`·`@ts-nocheck`·`@ts-expect-error`, production의 `unknown` 이중
+단언도 TypeScript AST와 원문 기준으로 막는다. 정상적인 표준 API·문장 안의
+`any` 문자열은 막지 않는다. esbuild `write:false`·`metafile` 재빌드가
+first-party 입력의 TS provenance와 추적된 생성 JS 12개의 바이트 일치를
+증명해야 하며, 배너만 붙인 수동 JavaScript는 생성물로 인정하지 않는다.
 
 KirinukiHelper가 직접 작성한 코드는 `LICENSE`의 MIT 조건으로 공개한다. 이것은
 Mediabunny(MPL-2.0), Pretendard·Paperlogy(OFL-1.1)와 별도 다운로드되는

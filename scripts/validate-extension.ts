@@ -27,7 +27,9 @@ const devRunnerLockPath = path.join(root, ".dev-editor.lock");
 const devRunnerLockLease = await acquireDevRunnerLock(devRunnerLockPath, {
   pid: process.pid,
   role: "validate",
-  inheritedToken: process.env.KIRINUKI_RELEASE_LOCK_TOKEN,
+  ...(process.env.KIRINUKI_RELEASE_LOCK_TOKEN === undefined
+    ? {}
+    : { inheritedToken: process.env.KIRINUKI_RELEASE_LOCK_TOKEN }),
   onOwnerLost: failClosedOnDevRunnerOwnerLoss("validate")
 });
 
@@ -200,11 +202,27 @@ for (const entry of await readdir(root)) {
   }
 }
 
-for (const [label, relativePath, expectedSha256] of [
-  ["Pretendard", PRETENDARD_FONT.extensionFontPath, PRETENDARD_FONT.fontSha256],
-  ["Pretendard", PRETENDARD_FONT.extensionLicensePath, PRETENDARD_FONT.licenseSha256],
-  ["Paperlogy", PAPERLOGY_FONT.extensionFontPath, PAPERLOGY_FONT.fontSha256],
-  ["Paperlogy", PAPERLOGY_FONT.extensionLicensePath, PAPERLOGY_FONT.licenseSha256]
+for (const { label, relativePath, expectedSha256 } of [
+  {
+    label: "Pretendard",
+    relativePath: PRETENDARD_FONT.extensionFontPath,
+    expectedSha256: PRETENDARD_FONT.fontSha256
+  },
+  {
+    label: "Pretendard",
+    relativePath: PRETENDARD_FONT.extensionLicensePath,
+    expectedSha256: PRETENDARD_FONT.licenseSha256
+  },
+  {
+    label: "Paperlogy",
+    relativePath: PAPERLOGY_FONT.extensionFontPath,
+    expectedSha256: PAPERLOGY_FONT.fontSha256
+  },
+  {
+    label: "Paperlogy",
+    relativePath: PAPERLOGY_FONT.extensionLicensePath,
+    expectedSha256: PAPERLOGY_FONT.licenseSha256
+  }
 ]) {
   let file;
   try {
@@ -620,8 +638,9 @@ const creatorPolicies = Array.isArray(policyIndex.policies) ? policyIndex.polici
 assert(creatorPolicies.length === 5, "방송인 정책 인덱스가 5개 그룹을 포함하지 않습니다.");
 assert(creatorPolicies.every((policy) => !Object.hasOwn(policy, "cache")), "정책 인덱스에 재배포용 본문 캐시가 남아 있습니다.");
 const arisaPolicies = resolveCreatorPolicies({ streamerName: "아리사" }, policyIndex);
-assert(arisaPolicies.length === 1 && arisaPolicies[0].id === "charon-universe-w", "아리사를 카론유니버스W 정책에 매칭하지 못합니다.");
-assert(arisaPolicies[0]?.sourceUrl === "https://cafe.naver.com/vkpopstar/1174", "아리사 정책 출처가 올바르지 않습니다.");
+const [arisaPolicy] = arisaPolicies;
+assert(arisaPolicies.length === 1 && arisaPolicy?.id === "charon-universe-w", "아리사를 카론유니버스W 정책에 매칭하지 못합니다.");
+assert(arisaPolicy?.sourceUrl === "https://cafe.naver.com/vkpopstar/1174", "아리사 정책 출처가 올바르지 않습니다.");
 assert(!html.includes("http://") && !html.includes("https://"), "Extension UI에 원격 코드 또는 원격 자산을 넣지 마세요.");
 
 try {

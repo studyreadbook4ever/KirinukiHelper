@@ -3,14 +3,11 @@ import { copyFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { build } from "esbuild";
-import type { BuildOptions } from "esbuild";
+import { buildExtensionJavaScript } from "./extension-javascript-build.js";
 import { PAPERLOGY_FONT } from "./paperlogy-font.js";
 import { PRETENDARD_FONT } from "./pretendard-font.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const sourceRoot = path.join(root, "src");
-const editorSourceRoot = path.join(root, "src", "editor");
 const outputRoot = path.join(root, "extension", "editor");
 const fontRoot = path.join(outputRoot, "fonts");
 const extensionRoot = path.join(root, "extension");
@@ -44,55 +41,7 @@ await Promise.all([
   assertSha256(PAPERLOGY_FONT.sourceLicensePath, PAPERLOGY_FONT.licenseSha256, "Paperlogy")
 ]);
 
-const shared = {
-  bundle: true,
-  platform: "browser",
-  target: "chrome120",
-  format: "esm",
-  sourcemap: false,
-  minify: false,
-  legalComments: "eof",
-  banner: {
-    js: "// Generated from TypeScript sources. Do not edit directly."
-  },
-  logLevel: "info"
-} satisfies BuildOptions;
-
-await Promise.all([
-  build({
-    ...shared,
-    entryPoints: [path.join(editorSourceRoot, "main.ts")],
-    outfile: path.join(outputRoot, "editor.js")
-  }),
-  build({
-    ...shared,
-    entryPoints: [path.join(editorSourceRoot, "audseg-worker.ts")],
-    outfile: path.join(outputRoot, "audseg-worker.js")
-  }),
-  build({
-    ...shared,
-    format: "iife",
-    entryPoints: [path.join(sourceRoot, "content-script.ts")],
-    outfile: path.join(extensionRoot, "content-script.js")
-  }),
-  build({
-    ...shared,
-    bundle: false,
-    entryPoints: [
-      path.join(sourceRoot, "service-worker.ts"),
-      path.join(sourceRoot, "sidepanel.ts"),
-      path.join(sourceRoot, "lib", "caption-style.ts"),
-      path.join(sourceRoot, "lib", "core.ts"),
-      path.join(sourceRoot, "lib", "editor-core.ts"),
-      path.join(sourceRoot, "lib", "keyboard-shortcuts.ts"),
-      path.join(sourceRoot, "lib", "serial-operation-gate.ts"),
-      path.join(sourceRoot, "lib", "session-recovery.ts"),
-      path.join(sourceRoot, "lib", "source-platform.ts")
-    ],
-    outbase: sourceRoot,
-    outdir: extensionRoot
-  })
-]);
+await buildExtensionJavaScript({ rootDirectory: root });
 
 await Promise.all([
   copyFile(

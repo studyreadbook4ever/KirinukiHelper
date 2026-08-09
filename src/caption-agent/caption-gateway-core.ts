@@ -829,9 +829,15 @@ export async function runCaptionPipeline(rawRequest: unknown, {
     );
     const transcriptPayload = await transcribeAudio(request, {
       fetchImpl,
-      sttEndpoint: config.sttEndpoint,
-      sttModel: config.sttModel,
-      maxAudioBytes: config.maxAudioBytes,
+      ...(config.sttEndpoint === undefined
+        ? {}
+        : { sttEndpoint: config.sttEndpoint }),
+      ...(config.sttModel === undefined
+        ? {}
+        : { sttModel: config.sttModel }),
+      ...(config.maxAudioBytes === undefined
+        ? {}
+        : { maxAudioBytes: config.maxAudioBytes }),
       wavBytes,
       signal: pipelineSignal,
       timeoutMs: deadlineMs

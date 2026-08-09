@@ -51,6 +51,14 @@ interface StoredFileHandle extends FileSystemFileHandle {
 type StoreMap = Record<string, IDBObjectStore>;
 type ResultCarrier<T> = { readonly result: T };
 
+function requiredStore(stores: StoreMap, storeName: string): IDBObjectStore {
+  const store = stores[storeName];
+  if (!store) {
+    throw new Error(`IndexedDB 스토어를 찾지 못했습니다: ${storeName}`);
+  }
+  return store;
+}
+
 let databasePromise: Promise<IDBDatabase> | null = null;
 let activeDatabase: IDBDatabase | null = null;
 
@@ -191,7 +199,7 @@ function runTransaction<T>(
     ) as StoreMap;
     const operationTarget = Array.isArray(storeNames)
       ? stores
-      : stores[storeNames];
+      : tx.objectStore(storeNames);
     let result: ResultCarrier<T>;
     try {
       result = operation(operationTarget, tx);
@@ -213,6 +221,16 @@ function runTransaction<T>(
 type TransactionTarget<S extends string | string[]> =
   S extends string[] ? StoreMap : IDBObjectStore;
 
+type SingleStoreOperation<T> = (
+  target: IDBObjectStore,
+  transaction: IDBTransaction
+) => ResultCarrier<T>;
+
+type MultiStoreOperation<T> = (
+  target: StoreMap,
+  transaction: IDBTransaction
+) => ResultCarrier<T>;
+
 async function transaction<T, S extends string | string[]>(
   storeNames: S,
   mode: IDBTransactionMode,
@@ -228,10 +246,17 @@ async function transaction<T, S extends string | string[]>(
       database,
       storeNames,
       mode,
-      operation as unknown as (
-        target: IDBObjectStore | StoreMap,
-        transaction: IDBTransaction
-      ) => ResultCarrier<T>
+      (target, activeTransaction) => (
+        Array.isArray(storeNames)
+          ? (operation as MultiStoreOperation<T>)(
+              target as StoreMap,
+              activeTransaction
+            )
+          : (operation as SingleStoreOperation<T>)(
+              target as IDBObjectStore,
+              activeTransaction
+            )
+      )
     );
   } catch (error) {
     if (retryClosedDatabase && isClosedDatabaseError(error)) {
@@ -430,9 +455,11 @@ export async function saveLocalDraft(project: StoredProject, {
     [PROJECTS, LOCAL_DRAFTS],
     "readwrite",
     (stores) => {
-      stores[PROJECTS].put(storedProject);
-      stores[LOCAL_DRAFTS].put(draft);
-      trimLocalDrafts(stores[LOCAL_DRAFTS], draft.projectId, removedIds);
+      const projectStore = requiredStore(stores, PROJECTS);
+      const draftStore = requiredStore(stores, LOCAL_DRAFTS);
+      projectStore.put(storedProject);
+      draftStore.put(draft);
+      trimLocalDrafts(draftStore, draft.projectId, removedIds);
       return {
         get result() {
           return {
@@ -474,9 +501,11 @@ export async function restoreLocalDraft(
     [PROJECTS, LOCAL_DRAFTS],
     "readwrite",
     (stores) => {
-      stores[PROJECTS].put(restoredProject);
-      stores[LOCAL_DRAFTS].put(preRestoreDraft);
-      trimLocalDrafts(stores[LOCAL_DRAFTS], projectId, removedIds);
+      const projectStore = requiredStore(stores, PROJECTS);
+      const draftStore = requiredStore(stores, LOCAL_DRAFTS);
+      projectStore.put(restoredProject);
+      draftStore.put(preRestoreDraft);
+      trimLocalDrafts(draftStore, projectId, removedIds);
       return {
         get result() {
           return {
@@ -583,8 +612,11 @@ export async function saveProjectWithImageAssetBlob<T extends StoredProject>(
     [PROJECTS, IMAGE_ASSETS],
     "readwrite",
     (stores) => {
-      stores[PROJECTS].put(project);
-      stores[IMAGE_ASSETS].put(blob, imageAssetKey(project?.id, assetId));
+      requiredStore(stores, PROJECTS).put(project);
+      requiredStore(stores, IMAGE_ASSETS).put(
+        blob,
+        imageAssetKey(project?.id, assetId)
+      );
       return {
         get result() {
           return project;
@@ -630,6 +662,9 @@ export async function pruneImageAssetBlobs(
     [PROJECTS, LOCAL_DRAFTS, IMAGE_ASSETS],
     "readwrite",
     (stores) => {
+      const projectStore = requiredStore(stores, PROJECTS);
+      const draftStore = requiredStore(stores, LOCAL_DRAFTS);
+      const imageAssetStore = requiredStore(stores, IMAGE_ASSETS);
       let count = 0;
       let pendingReferenceReads = 2;
       const keep = new Set(requestedKeep);
@@ -651,7 +686,7 @@ export async function pruneImageAssetBlobs(
         if (pendingReferenceReads > 0) {
           return;
         }
-        const request = stores[IMAGE_ASSETS].openKeyCursor();
+        const request = imageAssetStore.openKeyCursor();
         request.onsuccess = () => {
           const cursor = request.result;
           if (!cursor) {
@@ -664,19 +699,19 @@ export async function pruneImageAssetBlobs(
             && String(key[0]) === targetProjectId
             && !keep.has(String(key[1]))
           ) {
-            stores[IMAGE_ASSETS].delete(key);
+            imageAssetStore.delete(key);
             count += 1;
           }
           cursor.continue();
         };
       };
 
-      const projectRequest = stores[PROJECTS].get(targetProjectId);
+      const projectRequest = projectStore.get(targetProjectId);
       projectRequest.onsuccess = () => {
         collectReferencedAssets(projectRequest.result);
         scanImageAssetsAfterReferences();
       };
-      const draftsRequest = stores[LOCAL_DRAFTS]
+      const draftsRequest = draftStore
         .index(LOCAL_DRAFT_PROJECT_INDEX)
         .getAll(targetProjectId);
       draftsRequest.onsuccess = () => {

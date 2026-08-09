@@ -44,18 +44,166 @@ function createInitialState() {
     updatedAt: nowIso()
   };
 }
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+function stringOr(value, fallback) {
+  return typeof value === "string" ? value : fallback;
+}
+function booleanOrNull(value) {
+  return typeof value === "boolean" ? value : null;
+}
+function normalizeCaptureDetails(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const {
+    method,
+    observedAt,
+    liveEdgeOffsetSeconds,
+    rawSeconds,
+    rawMediaSeconds,
+    sourceSessionId,
+    ...extensions
+  } = value;
+  if (typeof rawSeconds !== "number" || !Number.isFinite(rawSeconds) || rawSeconds < 0) {
+    return null;
+  }
+  return {
+    ...extensions,
+    rawSeconds,
+    ...typeof method === "string" ? { method } : {},
+    ...typeof observedAt === "string" ? { observedAt } : {},
+    ...typeof liveEdgeOffsetSeconds === "number" && Number.isFinite(liveEdgeOffsetSeconds) ? { liveEdgeOffsetSeconds } : {},
+    ...typeof rawMediaSeconds === "number" && Number.isFinite(rawMediaSeconds) ? { rawMediaSeconds } : {},
+    ...typeof sourceSessionId === "string" ? { sourceSessionId } : {}
+  };
+}
+function normalizeWorkspaceSource(value, fallback) {
+  if (!isRecord(value)) {
+    return { ...fallback };
+  }
+  const {
+    platform,
+    url,
+    canonicalUrl,
+    channelId,
+    contentId,
+    contentType,
+    streamerName,
+    broadcastTitle,
+    broadcastStartedAt,
+    clipActive,
+    timeMachineActive,
+    category,
+    observedAt,
+    ...extensions
+  } = value;
+  return {
+    ...extensions,
+    platform: stringOr(platform, fallback.platform),
+    url: stringOr(url, fallback.url),
+    canonicalUrl: stringOr(canonicalUrl, fallback.canonicalUrl),
+    channelId: stringOr(channelId, fallback.channelId),
+    contentId: stringOr(contentId, fallback.contentId),
+    contentType: stringOr(contentType, fallback.contentType),
+    streamerName: stringOr(streamerName, fallback.streamerName),
+    broadcastTitle: stringOr(broadcastTitle, fallback.broadcastTitle),
+    broadcastStartedAt: stringOr(
+      broadcastStartedAt,
+      fallback.broadcastStartedAt
+    ),
+    clipActive: booleanOrNull(clipActive),
+    timeMachineActive: booleanOrNull(timeMachineActive),
+    category: stringOr(category, fallback.category),
+    observedAt: stringOr(observedAt, fallback.observedAt)
+  };
+}
+function normalizeWorkspaceDraft(value, fallback) {
+  if (!isRecord(value)) {
+    return { ...fallback };
+  }
+  const {
+    startText,
+    endText,
+    description,
+    startCapture,
+    endCapture,
+    editingId,
+    ...extensions
+  } = value;
+  return {
+    ...extensions,
+    startText: stringOr(startText, fallback.startText),
+    endText: stringOr(endText, fallback.endText),
+    description: stringOr(description, fallback.description),
+    startCapture: normalizeCaptureDetails(startCapture),
+    endCapture: normalizeCaptureDetails(endCapture),
+    editingId: typeof editingId === "string" ? editingId : null
+  };
+}
+function normalizeStoredSegment(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const {
+    id,
+    startSeconds,
+    endSeconds,
+    description,
+    startCapture,
+    endCapture,
+    createdAt,
+    updatedAt,
+    ...extensions
+  } = value;
+  if (typeof id !== "string" || !id || typeof startSeconds !== "number" || !Number.isFinite(startSeconds) || startSeconds < 0 || typeof endSeconds !== "number" || !Number.isFinite(endSeconds) || endSeconds <= startSeconds) {
+    return null;
+  }
+  return {
+    ...extensions,
+    id,
+    startSeconds,
+    endSeconds,
+    description: stringOr(description, ""),
+    startCapture: normalizeCaptureDetails(startCapture),
+    endCapture: normalizeCaptureDetails(endCapture),
+    ...typeof createdAt === "string" ? { createdAt } : {},
+    ...typeof updatedAt === "string" ? { updatedAt } : {}
+  };
+}
 function normalizeState(raw) {
   const initial = createInitialState();
-  if (!raw || typeof raw !== "object") {
+  if (!isRecord(raw)) {
     return initial;
   }
-  const candidate = raw;
+  const {
+    schemaVersion,
+    editorProjectId,
+    projectName,
+    source,
+    globalInstruction,
+    draft,
+    segments,
+    updatedAt,
+    ...extensions
+  } = raw;
   return {
-    ...initial,
-    ...candidate,
-    source: { ...initial.source, ...candidate.source ?? {} },
-    draft: { ...initial.draft, ...candidate.draft ?? {} },
-    segments: Array.isArray(candidate.segments) ? candidate.segments : []
+    ...extensions,
+    schemaVersion: typeof schemaVersion === "number" && Number.isSafeInteger(schemaVersion) && schemaVersion >= 1 ? schemaVersion : initial.schemaVersion,
+    editorProjectId: stringOr(editorProjectId, initial.editorProjectId),
+    projectName: stringOr(projectName, initial.projectName),
+    source: normalizeWorkspaceSource(source, initial.source),
+    globalInstruction: stringOr(
+      globalInstruction,
+      initial.globalInstruction
+    ),
+    draft: normalizeWorkspaceDraft(draft, initial.draft),
+    segments: Array.isArray(segments) ? segments.flatMap((segment) => {
+      const normalized = normalizeStoredSegment(segment);
+      return normalized ? [normalized] : [];
+    }) : [],
+    updatedAt: stringOr(updatedAt, initial.updatedAt)
   };
 }
 function parseTimestamp(value) {

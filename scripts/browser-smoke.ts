@@ -274,12 +274,15 @@ async function fetchJson(
     timeout = 30_000
   }: { method?: string; body?: unknown; timeout?: number } = {}
 ): Promise<unknown> {
-  const response = await fetch(url, {
+  const requestInit: RequestInit = {
     method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(timeout)
-  });
+  };
+  if (body !== undefined) {
+    requestInit.headers = { "content-type": "application/json" };
+    requestInit.body = JSON.stringify(body);
+  }
+  const response = await fetch(url, requestInit);
   const text = await response.text();
   let payload: unknown = null;
   if (text) {
@@ -479,7 +482,9 @@ async function main() {
       path.join(root, ".dev-editor.lock"),
       {
         role: "validate",
-        inheritedToken: process.env.KIRINUKI_RELEASE_LOCK_TOKEN,
+        ...(process.env.KIRINUKI_RELEASE_LOCK_TOKEN === undefined
+          ? {}
+          : { inheritedToken: process.env.KIRINUKI_RELEASE_LOCK_TOKEN }),
         onOwnerLost: failClosedOnDevRunnerOwnerLoss("browser-smoke")
       }
     );

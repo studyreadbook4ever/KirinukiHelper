@@ -390,14 +390,21 @@ runner가 준비된 뒤 현재 편집기 URL의 쿼리에 `dev=1`을 붙여 한 
 
 이 개발용 TypeScript 번들 재로드가 보존하는 범위는 저장된 **CURRENT 프로젝트**입니다. 실행 취소·다시 실행 스택, 선택한 타임라인 범위와 확대 상태 같은 탭 메모리는 초기화됩니다. 일반 사용자가 자막 글·색·크기·위치를 직접 고칠 때는 이 runner나 페이지 새로고침이 필요하지 않으며, 입력 즉시 미리보기·타임라인에 반영되고 IndexedDB 저장이 시작됩니다. 릴리스 검사·패키징 전에는 runner를 종료해야 합니다. runner·validator·패키저는 같은 OS 커널 mutex를 원자적으로 점유하므로 동시에 실행되지 않으며, 프로세스가 강제 종료돼도 mutex는 운영체제가 해제합니다. `npm run package`는 전체 `check:full` 시작부터 ZIP·체크섬 완료까지 그 mutex를 계속 보유합니다. 핫 리로드 브라우저 smoke는 실제 unpacked Extension이 아니라 임시 복사본의 marker만 조작합니다. `.dev-editor.lock`은 현재 소유자 진단용 메타데이터라 종료 뒤 남을 수 있지만 Git·배포 ZIP에서는 제외됩니다. 비정상 종료로 남은 stale reload marker와 구형 임시 lock은 validator가 mutex를 점유한 상태에서 정리합니다.
 
-작성 소스·테스트·개발 도구는 모두 TypeScript입니다. `npm run build`가
-Chrome이 직접 읽는 JavaScript 10개만 `extension/` 아래에 만들며 각 파일 첫
-줄에 생성물 표시를 넣습니다. Extension ZIP에는 TypeScript compiler,
-`node_modules`, `.ts`·`.tsx`, source map, `tsconfig.json`을 넣지 않습니다.
-`npm run typecheck`는 엄격 모드로 작성 소스를 검사하고
-`npm run migration:check`는 작성 JavaScript, 명시적 `any`, 타입 오류 억제
-지시문의 재유입과 배포물 경계를 TypeScript AST 기준으로 fail-closed로
-막습니다.
+작성 소스·테스트·개발 도구는 모두 TypeScript입니다. 하나의 typed build
+manifest가 Chrome이 직접 읽는 JavaScript 12개의 TS 진입점·출력 경로를
+정의하고, `npm run build`만 그 파일을 `extension/` 아래에 생성합니다.
+Extension ZIP에는 TypeScript compiler, `node_modules`, `.ts`·`.tsx`, source
+map, `tsconfig.json`을 넣지 않습니다.
+
+`npm run typecheck`는 `exactOptionalPropertyTypes`, unchecked index 접근,
+unused·implicit return·fallthrough 검사까지 포함한 엄격 모드로 저장소의 모든
+작성 TypeScript를 검사합니다. `npm run migration:check`는 작업 트리를 고치지
+않고 저장소 전체의 JS 계열 파일, HTML·shell·package의 inline/작성 JS 진입점,
+명시적 `any`, 타입 오류 억제, production의 `unknown` 이중 단언과 tsconfig
+검사 누락을 fail-closed로 차단합니다. 이어 esbuild `metafile`로 first-party
+입력이 전부 TS인지 확인하고, 12개 생성물을 메모리에서 다시 빌드해 추적된
+JavaScript와 바이트 단위로 비교합니다. PR과 `main` push에도 같은 검사가
+GitHub Actions에서 실행됩니다.
 
 ```bash
 npm run check
