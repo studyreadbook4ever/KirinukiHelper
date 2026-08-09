@@ -3206,6 +3206,145 @@ async function main() {
       (cue) => cue.id === simultaneousCue.id
     )?.fontScale
   };
+  const captionSheetProjectBefore = await readStoredProject();
+  assert(captionSheetProjectBefore, "자막 속성 시트 검증 전 저장 프로젝트가 없습니다.");
+  const captionSheetSelectedColorBefore = captionSheetProjectBefore.subtitles.find(
+    (cue) => cue.id === simultaneousCue.id
+  )?.color;
+  await clickElement("#open-caption-sheet");
+  const captionSheetOpened = await waitUntil(async () => {
+    const state = await executeSync<{
+      open: boolean;
+      activeId: string;
+      summary: string;
+      commonStyle: string;
+      dialogText: string;
+      dialogMarkup: string;
+      variationBadgeCount: number;
+      singletonBadgeCount: number;
+      rows: Array<{
+        cueId: string | null;
+        ariaLabel: string | null;
+        cells: string[];
+      }>;
+    }>(`
+      const dialog = document.querySelector("#caption-sheet-dialog");
+      const rows = [...document.querySelectorAll("#caption-sheet-body .caption-sheet-row")];
+      return {
+        open: Boolean(dialog?.open),
+        activeId: document.activeElement?.id || "",
+        summary: document.querySelector("#caption-sheet-summary")?.textContent || "",
+        commonStyle: document.querySelector("#caption-sheet-common-style")?.textContent || "",
+        dialogText: dialog?.textContent || "",
+        dialogMarkup: dialog?.outerHTML || "",
+        variationBadgeCount: dialog?.querySelectorAll(".caption-sheet-variation-badge").length || 0,
+        singletonBadgeCount: dialog?.querySelectorAll(".caption-sheet-singleton-badge").length || 0,
+        rows: rows.map((row) => ({
+          cueId: row.dataset.cueId || null,
+          ariaLabel: row.querySelector(".caption-sheet-cue-button")?.getAttribute("aria-label") || null,
+          cells: [...row.querySelectorAll(":scope > th, :scope > td")]
+            .map((cell) => (cell.textContent || "").trim())
+        }))
+      };
+    `);
+    return (
+      state.open
+      && state.activeId === "close-caption-sheet-dialog"
+      && state.rows.length === captionSheetProjectBefore.subtitles.length
+    ) ? state : false;
+  }, "본문 없는 자막 속성 시트 열기");
+  const storedCaptionTexts = [...new Set(
+    captionSheetProjectBefore.subtitles
+      .map((cue) => String(cue.text || ""))
+      .filter(Boolean)
+  )];
+  assert(
+    storedCaptionTexts.every((text) => (
+      !captionSheetOpened.dialogText.includes(text)
+      && !captionSheetOpened.dialogMarkup.includes(text)
+      && captionSheetOpened.rows.every((row) => !row.ariaLabel?.includes(text))
+    )),
+    `자막 속성 시트의 DOM·접근성 이름에 자막 본문이 노출됐습니다: ${JSON.stringify(captionSheetOpened)}`
+  );
+  const simultaneousSheetRow = captionSheetOpened.rows.find(
+    (row) => row.cueId === simultaneousCue.id
+  );
+  assert(
+    captionSheetOpened.summary.includes(`자막 ${captionSheetProjectBefore.subtitles.length}개`)
+      && captionSheetOpened.summary.includes("설정 2묶음")
+      && captionSheetOpened.commonStyle.includes("프로젝트 공통 외곽선")
+      && captionSheetOpened.singletonBadgeCount === 2
+      && simultaneousSheetRow?.cells[4]?.includes("50.0% / 84.0%")
+      && simultaneousSheetRow.cells[5]?.includes("5.00%")
+      && simultaneousSheetRow.cells[5]?.includes("개별")
+      && simultaneousSheetRow.ariaLabel?.includes("번 자막 편집")
+      && !simultaneousSheetRow.ariaLabel.includes(EDITED_TEXT),
+    `자막 속성 시트의 값·묶음·본문 비노출 계약이 다릅니다: ${JSON.stringify(captionSheetOpened)}`
+  );
+
+  await pressKey("1");
+  await delay(160);
+  const captionSheetShortcutGuard = await readStoredProject();
+  assert(
+    captionSheetShortcutGuard?.subtitles.find(
+      (cue) => cue.id === simultaneousCue.id
+    )?.color === captionSheetSelectedColorBefore
+      && await executeSync<boolean>(
+        `return Boolean(document.querySelector("#caption-sheet-dialog")?.open);`
+      ),
+    "자막 속성 시트가 열린 동안 숫자 색상 단축키가 뒤쪽 프로젝트를 변경했습니다."
+  );
+  await pressKey(KEY.ESCAPE);
+  const captionSheetEscape = await waitUntil(async () => {
+    const state = await executeSync<{ open: boolean; activeId: string }>(`
+      return {
+        open: Boolean(document.querySelector("#caption-sheet-dialog")?.open),
+        activeId: document.activeElement?.id || ""
+      };
+    `);
+    return !state.open && state.activeId === "open-caption-sheet" ? state : false;
+  }, "자막 속성 시트 Escape 닫기와 trigger focus 복귀");
+
+  await clickElement("#open-caption-sheet");
+  await waitUntil(
+    () => executeSync(`return Boolean(document.querySelector("#caption-sheet-dialog")?.open);`),
+    "행 이동 검증용 자막 속성 시트 다시 열기"
+  );
+  await clickElement(
+    `.caption-sheet-cue-button[data-cue-id="${simultaneousCue.id}"]`
+  );
+  const captionSheetRowSelection = await waitUntil(async () => {
+    const state = await executeSync<{
+      open: boolean;
+      activeCueId: string | null;
+      editorHidden: boolean;
+    }>(`
+      return {
+        open: Boolean(document.querySelector("#caption-sheet-dialog")?.open),
+        activeCueId: document.activeElement?.closest(".cue-block")?.dataset.id || null,
+        editorHidden: Boolean(document.querySelector("#cue-editor")?.hidden)
+      };
+    `);
+    return (
+      !state.open
+      && state.activeCueId === simultaneousCue.id
+      && state.editorHidden === false
+    ) ? state : false;
+  }, "자막 속성 시트 행에서 본문 편집기로 이동");
+  await waitForStoredProject(
+    (project) => project.selectedCueId === simultaneousCue.id,
+    "자막 속성 시트 행 선택 autosave"
+  );
+  const captionPropertiesSheet = {
+    summary: captionSheetOpened.summary,
+    rowCount: captionSheetOpened.rows.length,
+    variationBadgeCount: captionSheetOpened.variationBadgeCount,
+    singletonBadgeCount: captionSheetOpened.singletonBadgeCount,
+    textExcluded: true,
+    shortcutGuardColor: captionSheetSelectedColorBefore,
+    escape: captionSheetEscape,
+    rowSelection: captionSheetRowSelection
+  };
   await contextClickElement(`.cue-block[data-id="${simultaneousCue.id}"]`);
   await waitUntil(
     () => executeSync(`return document.querySelector("#context-delete-cue")?.hidden === false;`),
@@ -6826,6 +6965,7 @@ async function main() {
       cueTextHotReload,
       captionBackgroundToggle,
       perCueFontSize,
+      captionPropertiesSheet,
       playbackPointerSafety,
       reorderKeyboardFocus,
       clipGroupMove: clipGroupMoveSmoke,

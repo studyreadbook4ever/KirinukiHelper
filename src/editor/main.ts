@@ -60,6 +60,12 @@ import type {
   EditorSubtitleCue
 } from "../lib/editor-core.js";
 import {
+  createCaptionPropertiesSheet
+} from "../lib/caption-properties-sheet.js";
+import type {
+  CaptionPropertiesSheetRow
+} from "../lib/caption-properties-sheet.js";
+import {
   DEFAULT_CAPTION_STYLE_PRESET_ID,
   captionSpeakerColor,
   captionSpeakerColorAssignments,
@@ -386,6 +392,14 @@ const EDITOR_ELEMENT_IDS = [
   "ai-progress",
   "ai-progress-label",
   "ai-progress-value",
+  "open-caption-sheet",
+  "caption-sheet-dialog",
+  "caption-sheet-summary",
+  "caption-sheet-common-style",
+  "caption-sheet-table",
+  "caption-sheet-body",
+  "caption-sheet-empty",
+  "close-caption-sheet-dialog",
   "cue-list-tab",
   "cue-selected-tab",
   "cue-selected-panel",
@@ -615,6 +629,7 @@ let pointerEditPreservePreviewClock = false;
 let inspectorMode = "selected";
 let fieldEditSession: FieldEditSession | null = null;
 let focusBeforeJob: HTMLElement | null = null;
+let focusBeforeCaptionSheetDialog: HTMLElement | null = null;
 let projectMutationLockCount = 0;
 let pendingCaptureSeed: CaptureSeed | null = null;
 let exportRequestPending = false;
@@ -1216,6 +1231,7 @@ function devReloadBusyReason() {
     || localDraftOperationActive
     || automaticLocalDraftOperation
     || !elements.job_dialog.hidden
+    || elements.caption_sheet_dialog.open
     || elements.local_draft_dialog.open
   ) {
     return "진행 중인 편집·저장·내보내기 작업";
@@ -2443,6 +2459,231 @@ function renderCueList() {
     button.append(time, text);
     elements.cue_list.append(button);
   });
+}
+
+function formatCaptionSheetPercent(value: number, fractionDigits: number) {
+  return `${value.toFixed(fractionDigits)}%`;
+}
+
+function createCaptionSheetSourceBadge(source: "project" | "cue") {
+  const badge = document.createElement("span");
+  badge.className = "caption-sheet-source-badge";
+  badge.textContent = source === "cue" ? "개별" : "기본";
+  badge.title = source === "cue"
+    ? "이 자막에 따로 저장된 설정"
+    : "프로젝트 기본값을 상속한 설정";
+  return badge;
+}
+
+function appendCaptionSheetVariationBadge(
+  cell: HTMLTableCellElement,
+  varies: boolean,
+  propertyLabel: string
+) {
+  if (!varies) {
+    return;
+  }
+  cell.classList.add("caption-sheet-cell-variation");
+  const badge = document.createElement("span");
+  badge.className = "caption-sheet-variation-badge";
+  badge.textContent = "다름";
+  badge.title = `${propertyLabel}이 가장 많이 쓰인 값과 다릅니다. 오류로 확정된 것은 아닙니다.`;
+  cell.append(" ", badge);
+}
+
+function createCaptionSheetColor(color: string) {
+  const value = String(color || "transparent").toLowerCase();
+  const wrapper = document.createElement("span");
+  wrapper.className = "caption-sheet-color";
+  const swatch = document.createElement("span");
+  swatch.className = "caption-sheet-color-swatch";
+  swatch.style.setProperty("--caption-sheet-color", value);
+  swatch.setAttribute("aria-hidden", "true");
+  const code = document.createElement("span");
+  code.className = "caption-sheet-color-code";
+  code.textContent = value.toUpperCase();
+  wrapper.append(swatch, code);
+  return wrapper;
+}
+
+function renderCaptionSheetRow(row: CaptionPropertiesSheetRow) {
+  const tableRow = document.createElement("tr");
+  tableRow.className = "caption-sheet-row";
+  tableRow.classList.toggle("selected", row.cueId === project.selectedCueId);
+  tableRow.classList.toggle("has-variation", row.variations.any);
+  tableRow.classList.toggle("output-excluded", !row.outputEnabled);
+  tableRow.dataset.cueId = row.cueId;
+
+  const cueCell = document.createElement("th");
+  cueCell.scope = "row";
+  const cueButton = document.createElement("button");
+  cueButton.type = "button";
+  cueButton.className = "caption-sheet-cue-button";
+  cueButton.dataset.cueId = row.cueId;
+  cueButton.textContent = `#${row.ordinal}`;
+  cueButton.disabled = !row.outputEnabled;
+  const startLabel = row.timelineStartMs === null
+    ? `컷 안 ${formatTime(row.startOffsetMs, { compact: true })}`
+    : formatTime(row.timelineStartMs, { compact: true });
+  cueButton.setAttribute(
+    "aria-label",
+    row.outputEnabled
+      ? `${row.ordinal}번 자막 편집 · ${row.clipNumber}번 컷 · ${startLabel} · ${row.laneNumber}번 레인`
+      : `${row.ordinal}번 출력 제외 자막 · 편집하려면 ${row.clipNumber}번 컷을 활성화하세요`
+  );
+  if (!row.outputEnabled) {
+    cueButton.title = "출력 제외 컷을 활성화하면 이 자막을 편집할 수 있습니다.";
+  }
+  cueCell.append(cueButton);
+
+  const clipCell = document.createElement("td");
+  clipCell.append(`컷 ${row.clipNumber}`);
+  if (!row.outputEnabled) {
+    const excluded = document.createElement("span");
+    excluded.className = "caption-sheet-source-badge";
+    excluded.textContent = "출력 제외";
+    excluded.title = "비활성 컷에 속한 자막";
+    clipCell.append(" ", excluded);
+  }
+
+  const timeCell = document.createElement("td");
+  timeCell.textContent = startLabel;
+  if (!row.outputEnabled) {
+    timeCell.title = "비활성 컷 안에서의 시작 시각";
+  }
+
+  const laneCell = document.createElement("td");
+  laneCell.textContent = `L${row.laneNumber}`;
+
+  const positionCell = document.createElement("td");
+  positionCell.className = "caption-sheet-position";
+  positionCell.textContent = `${formatCaptionSheetPercent(row.xPercent, 1)} / ${formatCaptionSheetPercent(row.yPercent, 1)}`;
+  appendCaptionSheetVariationBadge(
+    positionCell,
+    row.variations.position,
+    "저장된 자막 위치"
+  );
+
+  const fontScaleCell = document.createElement("td");
+  fontScaleCell.append(
+    formatCaptionSheetPercent(row.fontScalePercent, 2),
+    createCaptionSheetSourceBadge(row.fontScaleSource)
+  );
+  appendCaptionSheetVariationBadge(
+    fontScaleCell,
+    row.variations.fontScale,
+    "설정 크기"
+  );
+
+  const colorCell = document.createElement("td");
+  colorCell.append(createCaptionSheetColor(row.color));
+  appendCaptionSheetVariationBadge(
+    colorCell,
+    row.variations.color,
+    "글자색"
+  );
+
+  const backgroundCell = document.createElement("td");
+  backgroundCell.append(
+    row.backgroundEnabled ? "켬 " : "끔",
+    ...(row.backgroundEnabled
+      ? [createCaptionSheetColor(row.backgroundColor)]
+      : []),
+    createCaptionSheetSourceBadge(row.backgroundSource)
+  );
+  appendCaptionSheetVariationBadge(
+    backgroundCell,
+    row.variations.background,
+    "검은 상자"
+  );
+
+  const groupCell = document.createElement("td");
+  const groupBadge = document.createElement("span");
+  groupBadge.className = "caption-sheet-group-badge";
+  groupBadge.textContent = `${row.styleGroupLabel} · ${row.styleGroupCount}개`;
+  groupCell.append(groupBadge);
+  if (row.styleGroupSingleton) {
+    const singletonBadge = document.createElement("span");
+    singletonBadge.className = "caption-sheet-singleton-badge";
+    singletonBadge.textContent = "단독";
+    singletonBadge.title = "같은 화면 설정을 쓰는 자막이 하나뿐입니다.";
+    groupCell.append(" ", singletonBadge);
+  }
+
+  tableRow.append(
+    cueCell,
+    clipCell,
+    timeCell,
+    laneCell,
+    positionCell,
+    fontScaleCell,
+    colorCell,
+    backgroundCell,
+    groupCell
+  );
+  return tableRow;
+}
+
+function renderCaptionPropertiesSheet() {
+  const sheet = createCaptionPropertiesSheet({
+    clips: project.clips,
+    cues: project.subtitles,
+    defaults: project.subtitleDefaults
+  });
+  const fragment = document.createDocumentFragment();
+  for (const row of sheet.rows) {
+    fragment.append(renderCaptionSheetRow(row));
+  }
+  elements.caption_sheet_body.replaceChildren(fragment);
+  elements.caption_sheet_table.hidden = sheet.rows.length === 0;
+  elements.caption_sheet_empty.hidden = sheet.rows.length > 0;
+
+  const summaryParts = [
+    `자막 ${sheet.summary.captionCount}개`,
+    `설정 ${sheet.summary.styleGroupCount}묶음`
+  ];
+  if (sheet.summary.variationCaptionCount > 0) {
+    summaryParts.push(
+      `가장 많이 쓰인 값과 다른 자막 ${sheet.summary.variationCaptionCount}개`
+    );
+  }
+  if (sheet.summary.singletonStyleGroupCount > 0) {
+    summaryParts.push(`단독 설정 ${sheet.summary.singletonStyleGroupCount}개`);
+  }
+  if (sheet.summary.excludedCaptionCount > 0) {
+    summaryParts.push(`출력 제외 ${sheet.summary.excludedCaptionCount}개`);
+  }
+  if (sheet.summary.unknownClipCaptionCount > 0) {
+    summaryParts.push(`연결된 컷 없음 ${sheet.summary.unknownClipCaptionCount}개`);
+  }
+  elements.caption_sheet_summary.textContent = summaryParts.join(" · ");
+
+  const outline = sheet.summary.commonOutline;
+  elements.caption_sheet_common_style.textContent = outline.enabled
+    ? `프로젝트 공통 외곽선 ${outline.color.toUpperCase()} · ${formatCaptionSheetPercent(outline.widthPercent, 2)} · 행별 검은 상자와는 별도`
+    : "프로젝트 공통 외곽선 없음 · 행별 검은 상자 설정만 비교";
+}
+
+function openCaptionPropertiesSheet() {
+  if (!elements.job_dialog.hidden || elements.local_draft_dialog.open) {
+    showToast("진행 중인 창을 닫은 뒤 자막 속성 시트를 열어 주세요.");
+    return;
+  }
+  focusBeforeCaptionSheetDialog = elements.open_caption_sheet;
+  renderCaptionPropertiesSheet();
+  if (!elements.caption_sheet_dialog.open) {
+    elements.caption_sheet_dialog.showModal();
+  }
+  elements.close_caption_sheet_dialog.focus();
+}
+
+function closeCaptionPropertiesSheet({ restoreFocus = true } = {}) {
+  if (!restoreFocus) {
+    focusBeforeCaptionSheetDialog = null;
+  }
+  if (elements.caption_sheet_dialog.open) {
+    elements.caption_sheet_dialog.close();
+  }
 }
 
 function timelineWidth() {
@@ -4301,6 +4542,9 @@ function renderAll(options = {}) {
   renderClipList();
   renderPropertyInspector();
   renderCueList();
+  if (elements.caption_sheet_dialog.open) {
+    renderCaptionPropertiesSheet();
+  }
   renderTimeline(options);
   renderTransport();
   applyPreviewAudioSettings();
@@ -6891,6 +7135,42 @@ function bindActions() {
   elements.open_local_drafts.addEventListener("click", () => {
     void openLocalDraftDialog();
   });
+  elements.open_caption_sheet.addEventListener(
+    "click",
+    openCaptionPropertiesSheet
+  );
+  elements.close_caption_sheet_dialog.addEventListener(
+    "click",
+    () => closeCaptionPropertiesSheet()
+  );
+  elements.caption_sheet_dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeCaptionPropertiesSheet();
+  });
+  elements.caption_sheet_dialog.addEventListener("close", () => {
+    const focusTarget = focusBeforeCaptionSheetDialog;
+    focusBeforeCaptionSheetDialog = null;
+    if (focusTarget?.isConnected) {
+      focusTarget.focus();
+    }
+  });
+  elements.caption_sheet_body.addEventListener("click", (event) => {
+    const button = (event.target! as EditorControl).closest(
+      ".caption-sheet-cue-button"
+    ) as EditorControl | null;
+    const cueId = button?.dataset.cueId;
+    const cue = project.subtitles.find((candidate) => candidate.id === cueId);
+    if (!cueId || !cue) {
+      return;
+    }
+    const activeRange = cueTimelineRange(project, cue);
+    if (!activeRange) {
+      showToast("출력 제외 컷을 활성화한 뒤 이 자막을 편집해 주세요.");
+      return;
+    }
+    closeCaptionPropertiesSheet({ restoreFocus: false });
+    selectCue(cueId, { seek: true });
+  });
   elements.restore_local_draft.addEventListener("click", () => {
     void restoreSelectedLocalDraft();
   });
@@ -7766,6 +8046,13 @@ function bindActions() {
     const interactive = Boolean((event.target! as EditorControl).closest(
       "button, a, input, textarea, select, [contenteditable='true'], [role='slider'], [role='tab']"
     ));
+    if (elements.caption_sheet_dialog.open) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCaptionPropertiesSheet();
+      }
+      return;
+    }
     if (elements.local_draft_dialog.open) {
       if (event.key === "Escape" && !localDraftOperationActive) {
         event.preventDefault();
