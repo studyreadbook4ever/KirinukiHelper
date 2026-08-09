@@ -116,6 +116,7 @@ AudSeg만 쓸 때는 caption stack 설치·실행이 필요 없다.
 - 자동 본문 위치는 아래 중앙 `x=0.5`, `y=0.84`다.
 - 새 자막은 레인 번호와 무관하게 아래 중앙 `x=0.5`, `y=0.84`에서 시작한다.
 - 자막 크기 조절은 선택한 cue의 `fontScale`만 바꾸며 값이 없는 기존 cue만 프로젝트 기본 크기를 상속한다.
+- 자막 속성 시트는 cue 본문을 데이터, DOM, 접근성 이름, tooltip, dataset 어디에도 포함하지 않고 실제 적용 위치·크기·색상·검은 상자만 파생해 보여 준다.
 - 자막 한 cue는 최대 4초다.
 - 문장 끝의 불필요한 `.`은 제거하고 `?`, `!`, `…`, `~`는 보존한다.
 - 프로젝트 변경은 현재본에 원자적으로 저장하고 오래된 복구본을 자동 우선하지 않는다.
@@ -412,6 +413,7 @@ AudSeg 기준 구현은 MIT 라이선스다.
 - `scripts/local-caption-stack.ts`: setup/start/status/stop
 - `scripts/local-caption-stack-core.ts`: artifact·프로필·service 생성
 - `src/lib/editor-core.ts`: 프로젝트·cue 모델의 작성 소스
+- `src/lib/caption-properties-sheet.ts`: 본문 없는 자막 속성 시트의 파생 행·설정 묶음
 - `src/lib/session-recovery.ts`: CURRENT와 최근 복구본의 작성 소스
 - `scripts/extension-javascript-build.ts`: TS 진입점과 생성 JS 출력의 단일 typed manifest
 - `scripts/check-typescript-migration.ts`: 저장소 전체 TS migration·생성물 provenance gate

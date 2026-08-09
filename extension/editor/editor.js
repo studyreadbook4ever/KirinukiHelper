@@ -2586,6 +2586,249 @@ function serializeSrt(project2) {
   ].join("\n")).join("\n");
 }
 
+// src/lib/caption-properties-sheet.ts
+var DEFAULT_FONT_SCALE = 0.0675;
+var DEFAULT_OUTLINE_COLOR = "#111111";
+function roundTo(value, decimalPlaces) {
+  const factor = 10 ** decimalPlaces;
+  const rounded = Math.round((value + Number.EPSILON) * factor) / factor;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+function configuredFontScale(cue, defaults) {
+  if (typeof cue.fontScale === "number" && Number.isFinite(cue.fontScale) && cue.fontScale > 0) {
+    return { value: cue.fontScale, source: "cue" };
+  }
+  const projectScale = Number(defaults.fontScale);
+  return {
+    value: Number.isFinite(projectScale) && projectScale > 0 ? projectScale : DEFAULT_FONT_SCALE,
+    source: "project"
+  };
+}
+function normalizedBackgroundColor(value) {
+  const rawColor = String(value || "").trim().toLowerCase();
+  const hexColor = normalizeHexColor(rawColor, "");
+  return hexColor || rawColor.replace(/\s+/gu, " ") || "transparent";
+}
+function compareStrings(left, right) {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+}
+function styleGroupLabel(index) {
+  let ordinal = index + 1;
+  let label = "";
+  while (ordinal > 0) {
+    ordinal -= 1;
+    label = String.fromCharCode(65 + ordinal % 26) + label;
+    ordinal = Math.floor(ordinal / 26);
+  }
+  return label;
+}
+function uniqueModalKey(values) {
+  if (values.length === 0) {
+    return null;
+  }
+  const counts = /* @__PURE__ */ new Map();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  let modalKey = null;
+  let modalCount = 0;
+  let tied = false;
+  for (const [key, count] of counts) {
+    if (count > modalCount) {
+      modalKey = key;
+      modalCount = count;
+      tied = false;
+    } else if (count === modalCount) {
+      tied = true;
+    }
+  }
+  return tied ? null : modalKey;
+}
+function prepareRows(input) {
+  const clipById = /* @__PURE__ */ new Map();
+  input.clips.forEach((clip, index) => {
+    if (!clipById.has(clip.id)) {
+      clipById.set(clip.id, { clip, index });
+    }
+  });
+  const prepared = [];
+  input.cues.forEach((cue, sourceIndex) => {
+    const clipEntry = clipById.get(cue.clipId);
+    if (!clipEntry) {
+      return;
+    }
+    const outputEnabled = clipEntry.clip.enabled !== false;
+    const xPercent = roundTo(cue.x * 100, 1);
+    const yPercent = roundTo(cue.y * 100, 1);
+    const fontScale = configuredFontScale(cue, input.defaults);
+    const fontScalePercent = roundTo(fontScale.value * 100, 2);
+    const color = normalizeHexColor(cue.color);
+    const background = resolveSubtitleCueBackground(input.defaults, cue);
+    const backgroundColor = background.enabled ? normalizedBackgroundColor(background.color) : "transparent";
+    const backgroundSource = typeof cue.backgroundEnabled === "boolean" ? "cue" : "project";
+    const positionKey = JSON.stringify([xPercent, yPercent]);
+    const fontScaleKey = String(fontScalePercent);
+    const backgroundKey = JSON.stringify([
+      background.enabled,
+      backgroundColor
+    ]);
+    const styleFingerprint = JSON.stringify([
+      xPercent,
+      yPercent,
+      fontScalePercent,
+      color,
+      background.enabled,
+      backgroundColor
+    ]);
+    prepared.push({
+      cueId: cue.id,
+      sourceIndex,
+      clipIndex: clipEntry.index,
+      outputEnabled,
+      timelineStartMs: outputEnabled ? clipEntry.clip.timelineStartMs + cue.startOffsetMs : null,
+      startOffsetMs: cue.startOffsetMs,
+      endOffsetMs: cue.endOffsetMs,
+      laneNumber: cue.lane + 1,
+      xPercent,
+      yPercent,
+      fontScalePercent,
+      fontScaleSource: fontScale.source,
+      color,
+      backgroundEnabled: background.enabled,
+      backgroundColor,
+      backgroundSource,
+      positionKey,
+      fontScaleKey,
+      backgroundKey,
+      styleFingerprint
+    });
+  });
+  return prepared.sort((left, right) => left.clipIndex - right.clipIndex || left.startOffsetMs - right.startOffsetMs || left.laneNumber - right.laneNumber || left.endOffsetMs - right.endOffsetMs || compareStrings(left.cueId, right.cueId) || left.sourceIndex - right.sourceIndex);
+}
+function buildStyleGroups(rows) {
+  const groupByFingerprint = /* @__PURE__ */ new Map();
+  rows.forEach((row, rowIndex) => {
+    const existing = groupByFingerprint.get(row.styleFingerprint);
+    if (existing) {
+      existing.count += 1;
+      if (row.outputEnabled) {
+        existing.outputCount += 1;
+      }
+      return;
+    }
+    groupByFingerprint.set(row.styleFingerprint, {
+      fingerprint: row.styleFingerprint,
+      count: 1,
+      outputCount: row.outputEnabled ? 1 : 0,
+      firstRowIndex: rowIndex,
+      label: ""
+    });
+  });
+  const hasOutputRows = rows.some((row) => row.outputEnabled);
+  const ordered = [...groupByFingerprint.values()].sort((left, right) => (hasOutputRows ? right.outputCount - left.outputCount : 0) || right.count - left.count || left.firstRowIndex - right.firstRowIndex);
+  ordered.forEach((group, index) => {
+    group.label = styleGroupLabel(index);
+  });
+  return groupByFingerprint;
+}
+function normalizedOutline(defaults) {
+  const rawWidth = Number(defaults.outlineWidth);
+  const width = Number.isFinite(rawWidth) ? Math.max(0, rawWidth) : 0;
+  return {
+    enabled: width > 0,
+    color: normalizeHexColor(defaults.outlineColor, DEFAULT_OUTLINE_COLOR),
+    width,
+    widthPercent: roundTo(width * 100, 2)
+  };
+}
+function createCaptionPropertiesSheet(input) {
+  const preparedRows = prepareRows(input);
+  const styleGroups = buildStyleGroups(preparedRows);
+  const outputRows = preparedRows.filter((row) => row.outputEnabled);
+  const comparisonRows = outputRows.length > 0 ? outputRows : preparedRows;
+  const modalPosition = uniqueModalKey(
+    comparisonRows.map((row) => row.positionKey)
+  );
+  const modalFontScale = uniqueModalKey(
+    comparisonRows.map((row) => row.fontScaleKey)
+  );
+  const modalColor = uniqueModalKey(
+    comparisonRows.map((row) => row.color)
+  );
+  const modalBackground = uniqueModalKey(
+    comparisonRows.map((row) => row.backgroundKey)
+  );
+  const rows = preparedRows.map((row, index) => {
+    const styleGroup = styleGroups.get(row.styleFingerprint);
+    if (!styleGroup) {
+      throw new Error("\uC790\uB9C9 \uC18D\uC131 \uC2DC\uD2B8 \uC2A4\uD0C0\uC77C \uADF8\uB8F9\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+    }
+    const compareForVariations = row.outputEnabled || outputRows.length === 0;
+    const position = compareForVariations && modalPosition !== null && row.positionKey !== modalPosition;
+    const fontScale = compareForVariations && modalFontScale !== null && row.fontScaleKey !== modalFontScale;
+    const color = compareForVariations && modalColor !== null && row.color !== modalColor;
+    const background = compareForVariations && modalBackground !== null && row.backgroundKey !== modalBackground;
+    return {
+      cueId: row.cueId,
+      ordinal: index + 1,
+      clipNumber: row.clipIndex + 1,
+      outputEnabled: row.outputEnabled,
+      timelineStartMs: row.timelineStartMs,
+      startOffsetMs: row.startOffsetMs,
+      endOffsetMs: row.endOffsetMs,
+      laneNumber: row.laneNumber,
+      xPercent: row.xPercent,
+      yPercent: row.yPercent,
+      fontScalePercent: row.fontScalePercent,
+      fontScaleSource: row.fontScaleSource,
+      color: row.color,
+      backgroundEnabled: row.backgroundEnabled,
+      backgroundColor: row.backgroundColor,
+      backgroundSource: row.backgroundSource,
+      styleGroupLabel: styleGroup.label,
+      styleGroupCount: styleGroup.count,
+      styleGroupSingleton: styleGroup.count === 1,
+      variations: {
+        position,
+        fontScale,
+        color,
+        background,
+        any: position || fontScale || color || background
+      }
+    };
+  });
+  const variationCounts = {
+    position: rows.filter((row) => row.variations.position).length,
+    fontScale: rows.filter((row) => row.variations.fontScale).length,
+    color: rows.filter((row) => row.variations.color).length,
+    background: rows.filter((row) => row.variations.background).length,
+    any: rows.filter((row) => row.variations.any).length
+  };
+  const outputCaptionCount = rows.filter((row) => row.outputEnabled).length;
+  return {
+    rows,
+    summary: {
+      captionCount: rows.length,
+      outputCaptionCount,
+      excludedCaptionCount: rows.length - outputCaptionCount,
+      unknownClipCaptionCount: input.cues.length - rows.length,
+      styleGroupCount: styleGroups.size,
+      singletonStyleGroupCount: [...styleGroups.values()].filter(
+        (group) => group.count === 1
+      ).length,
+      variationCaptionCount: variationCounts.any,
+      variationCounts,
+      commonOutline: normalizedOutline(input.defaults)
+    }
+  };
+}
+
 // src/lib/core.ts
 var STORAGE_KEY = "chzzkKirinukiProjectV1";
 
@@ -36719,6 +36962,14 @@ var EDITOR_ELEMENT_IDS = [
   "ai-progress",
   "ai-progress-label",
   "ai-progress-value",
+  "open-caption-sheet",
+  "caption-sheet-dialog",
+  "caption-sheet-summary",
+  "caption-sheet-common-style",
+  "caption-sheet-table",
+  "caption-sheet-body",
+  "caption-sheet-empty",
+  "close-caption-sheet-dialog",
   "cue-list-tab",
   "cue-selected-tab",
   "cue-selected-panel",
@@ -36911,6 +37162,7 @@ var pointerEditPreservePreviewClock = false;
 var inspectorMode = "selected";
 var fieldEditSession = null;
 var focusBeforeJob = null;
+var focusBeforeCaptionSheetDialog = null;
 var projectMutationLockCount = 0;
 var pendingCaptureSeed = null;
 var exportRequestPending = false;
@@ -37394,7 +37646,7 @@ async function readDevReloadMarker() {
   }
 }
 function devReloadBusyReason() {
-  if (activeJobController || exportRequestPending || projectMutationLockCount > 0 || pointerEditActive || rangeHandleDragActive || previewBoundaryTransitioning || localDraftOperationActive || automaticLocalDraftOperation || !elements.job_dialog.hidden || elements.local_draft_dialog.open) {
+  if (activeJobController || exportRequestPending || projectMutationLockCount > 0 || pointerEditActive || rangeHandleDragActive || previewBoundaryTransitioning || localDraftOperationActive || automaticLocalDraftOperation || !elements.job_dialog.hidden || elements.caption_sheet_dialog.open || elements.local_draft_dialog.open) {
     return "\uC9C4\uD589 \uC911\uC778 \uD3B8\uC9D1\xB7\uC800\uC7A5\xB7\uB0B4\uBCF4\uB0B4\uAE30 \uC791\uC5C5";
   }
   if (mediaFile && (project?.mediaAsset?.fileHandleStored !== true || !mediaHandle)) {
@@ -38454,6 +38706,197 @@ function renderCueList() {
     button.append(time, text);
     elements.cue_list.append(button);
   });
+}
+function formatCaptionSheetPercent(value, fractionDigits) {
+  return `${value.toFixed(fractionDigits)}%`;
+}
+function createCaptionSheetSourceBadge(source) {
+  const badge = document.createElement("span");
+  badge.className = "caption-sheet-source-badge";
+  badge.textContent = source === "cue" ? "\uAC1C\uBCC4" : "\uAE30\uBCF8";
+  badge.title = source === "cue" ? "\uC774 \uC790\uB9C9\uC5D0 \uB530\uB85C \uC800\uC7A5\uB41C \uC124\uC815" : "\uD504\uB85C\uC81D\uD2B8 \uAE30\uBCF8\uAC12\uC744 \uC0C1\uC18D\uD55C \uC124\uC815";
+  return badge;
+}
+function appendCaptionSheetVariationBadge(cell, varies, propertyLabel) {
+  if (!varies) {
+    return;
+  }
+  cell.classList.add("caption-sheet-cell-variation");
+  const badge = document.createElement("span");
+  badge.className = "caption-sheet-variation-badge";
+  badge.textContent = "\uB2E4\uB984";
+  badge.title = `${propertyLabel}\uC774 \uAC00\uC7A5 \uB9CE\uC774 \uC4F0\uC778 \uAC12\uACFC \uB2E4\uB985\uB2C8\uB2E4. \uC624\uB958\uB85C \uD655\uC815\uB41C \uAC83\uC740 \uC544\uB2D9\uB2C8\uB2E4.`;
+  cell.append(" ", badge);
+}
+function createCaptionSheetColor(color) {
+  const value = String(color || "transparent").toLowerCase();
+  const wrapper = document.createElement("span");
+  wrapper.className = "caption-sheet-color";
+  const swatch = document.createElement("span");
+  swatch.className = "caption-sheet-color-swatch";
+  swatch.style.setProperty("--caption-sheet-color", value);
+  swatch.setAttribute("aria-hidden", "true");
+  const code = document.createElement("span");
+  code.className = "caption-sheet-color-code";
+  code.textContent = value.toUpperCase();
+  wrapper.append(swatch, code);
+  return wrapper;
+}
+function renderCaptionSheetRow(row) {
+  const tableRow = document.createElement("tr");
+  tableRow.className = "caption-sheet-row";
+  tableRow.classList.toggle("selected", row.cueId === project.selectedCueId);
+  tableRow.classList.toggle("has-variation", row.variations.any);
+  tableRow.classList.toggle("output-excluded", !row.outputEnabled);
+  tableRow.dataset.cueId = row.cueId;
+  const cueCell = document.createElement("th");
+  cueCell.scope = "row";
+  const cueButton = document.createElement("button");
+  cueButton.type = "button";
+  cueButton.className = "caption-sheet-cue-button";
+  cueButton.dataset.cueId = row.cueId;
+  cueButton.textContent = `#${row.ordinal}`;
+  cueButton.disabled = !row.outputEnabled;
+  const startLabel = row.timelineStartMs === null ? `\uCEF7 \uC548 ${formatTime(row.startOffsetMs, { compact: true })}` : formatTime(row.timelineStartMs, { compact: true });
+  cueButton.setAttribute(
+    "aria-label",
+    row.outputEnabled ? `${row.ordinal}\uBC88 \uC790\uB9C9 \uD3B8\uC9D1 \xB7 ${row.clipNumber}\uBC88 \uCEF7 \xB7 ${startLabel} \xB7 ${row.laneNumber}\uBC88 \uB808\uC778` : `${row.ordinal}\uBC88 \uCD9C\uB825 \uC81C\uC678 \uC790\uB9C9 \xB7 \uD3B8\uC9D1\uD558\uB824\uBA74 ${row.clipNumber}\uBC88 \uCEF7\uC744 \uD65C\uC131\uD654\uD558\uC138\uC694`
+  );
+  if (!row.outputEnabled) {
+    cueButton.title = "\uCD9C\uB825 \uC81C\uC678 \uCEF7\uC744 \uD65C\uC131\uD654\uD558\uBA74 \uC774 \uC790\uB9C9\uC744 \uD3B8\uC9D1\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
+  }
+  cueCell.append(cueButton);
+  const clipCell = document.createElement("td");
+  clipCell.append(`\uCEF7 ${row.clipNumber}`);
+  if (!row.outputEnabled) {
+    const excluded = document.createElement("span");
+    excluded.className = "caption-sheet-source-badge";
+    excluded.textContent = "\uCD9C\uB825 \uC81C\uC678";
+    excluded.title = "\uBE44\uD65C\uC131 \uCEF7\uC5D0 \uC18D\uD55C \uC790\uB9C9";
+    clipCell.append(" ", excluded);
+  }
+  const timeCell = document.createElement("td");
+  timeCell.textContent = startLabel;
+  if (!row.outputEnabled) {
+    timeCell.title = "\uBE44\uD65C\uC131 \uCEF7 \uC548\uC5D0\uC11C\uC758 \uC2DC\uC791 \uC2DC\uAC01";
+  }
+  const laneCell = document.createElement("td");
+  laneCell.textContent = `L${row.laneNumber}`;
+  const positionCell = document.createElement("td");
+  positionCell.className = "caption-sheet-position";
+  positionCell.textContent = `${formatCaptionSheetPercent(row.xPercent, 1)} / ${formatCaptionSheetPercent(row.yPercent, 1)}`;
+  appendCaptionSheetVariationBadge(
+    positionCell,
+    row.variations.position,
+    "\uC800\uC7A5\uB41C \uC790\uB9C9 \uC704\uCE58"
+  );
+  const fontScaleCell = document.createElement("td");
+  fontScaleCell.append(
+    formatCaptionSheetPercent(row.fontScalePercent, 2),
+    createCaptionSheetSourceBadge(row.fontScaleSource)
+  );
+  appendCaptionSheetVariationBadge(
+    fontScaleCell,
+    row.variations.fontScale,
+    "\uC124\uC815 \uD06C\uAE30"
+  );
+  const colorCell = document.createElement("td");
+  colorCell.append(createCaptionSheetColor(row.color));
+  appendCaptionSheetVariationBadge(
+    colorCell,
+    row.variations.color,
+    "\uAE00\uC790\uC0C9"
+  );
+  const backgroundCell = document.createElement("td");
+  backgroundCell.append(
+    row.backgroundEnabled ? "\uCF2C " : "\uB054",
+    ...row.backgroundEnabled ? [createCaptionSheetColor(row.backgroundColor)] : [],
+    createCaptionSheetSourceBadge(row.backgroundSource)
+  );
+  appendCaptionSheetVariationBadge(
+    backgroundCell,
+    row.variations.background,
+    "\uAC80\uC740 \uC0C1\uC790"
+  );
+  const groupCell = document.createElement("td");
+  const groupBadge = document.createElement("span");
+  groupBadge.className = "caption-sheet-group-badge";
+  groupBadge.textContent = `${row.styleGroupLabel} \xB7 ${row.styleGroupCount}\uAC1C`;
+  groupCell.append(groupBadge);
+  if (row.styleGroupSingleton) {
+    const singletonBadge = document.createElement("span");
+    singletonBadge.className = "caption-sheet-singleton-badge";
+    singletonBadge.textContent = "\uB2E8\uB3C5";
+    singletonBadge.title = "\uAC19\uC740 \uD654\uBA74 \uC124\uC815\uC744 \uC4F0\uB294 \uC790\uB9C9\uC774 \uD558\uB098\uBFD0\uC785\uB2C8\uB2E4.";
+    groupCell.append(" ", singletonBadge);
+  }
+  tableRow.append(
+    cueCell,
+    clipCell,
+    timeCell,
+    laneCell,
+    positionCell,
+    fontScaleCell,
+    colorCell,
+    backgroundCell,
+    groupCell
+  );
+  return tableRow;
+}
+function renderCaptionPropertiesSheet() {
+  const sheet = createCaptionPropertiesSheet({
+    clips: project.clips,
+    cues: project.subtitles,
+    defaults: project.subtitleDefaults
+  });
+  const fragment = document.createDocumentFragment();
+  for (const row of sheet.rows) {
+    fragment.append(renderCaptionSheetRow(row));
+  }
+  elements.caption_sheet_body.replaceChildren(fragment);
+  elements.caption_sheet_table.hidden = sheet.rows.length === 0;
+  elements.caption_sheet_empty.hidden = sheet.rows.length > 0;
+  const summaryParts = [
+    `\uC790\uB9C9 ${sheet.summary.captionCount}\uAC1C`,
+    `\uC124\uC815 ${sheet.summary.styleGroupCount}\uBB36\uC74C`
+  ];
+  if (sheet.summary.variationCaptionCount > 0) {
+    summaryParts.push(
+      `\uAC00\uC7A5 \uB9CE\uC774 \uC4F0\uC778 \uAC12\uACFC \uB2E4\uB978 \uC790\uB9C9 ${sheet.summary.variationCaptionCount}\uAC1C`
+    );
+  }
+  if (sheet.summary.singletonStyleGroupCount > 0) {
+    summaryParts.push(`\uB2E8\uB3C5 \uC124\uC815 ${sheet.summary.singletonStyleGroupCount}\uAC1C`);
+  }
+  if (sheet.summary.excludedCaptionCount > 0) {
+    summaryParts.push(`\uCD9C\uB825 \uC81C\uC678 ${sheet.summary.excludedCaptionCount}\uAC1C`);
+  }
+  if (sheet.summary.unknownClipCaptionCount > 0) {
+    summaryParts.push(`\uC5F0\uACB0\uB41C \uCEF7 \uC5C6\uC74C ${sheet.summary.unknownClipCaptionCount}\uAC1C`);
+  }
+  elements.caption_sheet_summary.textContent = summaryParts.join(" \xB7 ");
+  const outline = sheet.summary.commonOutline;
+  elements.caption_sheet_common_style.textContent = outline.enabled ? `\uD504\uB85C\uC81D\uD2B8 \uACF5\uD1B5 \uC678\uACFD\uC120 ${outline.color.toUpperCase()} \xB7 ${formatCaptionSheetPercent(outline.widthPercent, 2)} \xB7 \uD589\uBCC4 \uAC80\uC740 \uC0C1\uC790\uC640\uB294 \uBCC4\uB3C4` : "\uD504\uB85C\uC81D\uD2B8 \uACF5\uD1B5 \uC678\uACFD\uC120 \uC5C6\uC74C \xB7 \uD589\uBCC4 \uAC80\uC740 \uC0C1\uC790 \uC124\uC815\uB9CC \uBE44\uAD50";
+}
+function openCaptionPropertiesSheet() {
+  if (!elements.job_dialog.hidden || elements.local_draft_dialog.open) {
+    showToast("\uC9C4\uD589 \uC911\uC778 \uCC3D\uC744 \uB2EB\uC740 \uB4A4 \uC790\uB9C9 \uC18D\uC131 \uC2DC\uD2B8\uB97C \uC5F4\uC5B4 \uC8FC\uC138\uC694.");
+    return;
+  }
+  focusBeforeCaptionSheetDialog = elements.open_caption_sheet;
+  renderCaptionPropertiesSheet();
+  if (!elements.caption_sheet_dialog.open) {
+    elements.caption_sheet_dialog.showModal();
+  }
+  elements.close_caption_sheet_dialog.focus();
+}
+function closeCaptionPropertiesSheet({ restoreFocus = true } = {}) {
+  if (!restoreFocus) {
+    focusBeforeCaptionSheetDialog = null;
+  }
+  if (elements.caption_sheet_dialog.open) {
+    elements.caption_sheet_dialog.close();
+  }
 }
 function timelineWidth() {
   const durationSeconds = Math.max(1, projectDurationMs(project) / 1e3);
@@ -40056,6 +40499,9 @@ function renderAll(options = {}) {
   renderClipList();
   renderPropertyInspector();
   renderCueList();
+  if (elements.caption_sheet_dialog.open) {
+    renderCaptionPropertiesSheet();
+  }
   renderTimeline(options);
   renderTransport();
   applyPreviewAudioSettings();
@@ -42331,6 +42777,42 @@ function bindActions() {
   elements.open_local_drafts.addEventListener("click", () => {
     void openLocalDraftDialog();
   });
+  elements.open_caption_sheet.addEventListener(
+    "click",
+    openCaptionPropertiesSheet
+  );
+  elements.close_caption_sheet_dialog.addEventListener(
+    "click",
+    () => closeCaptionPropertiesSheet()
+  );
+  elements.caption_sheet_dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeCaptionPropertiesSheet();
+  });
+  elements.caption_sheet_dialog.addEventListener("close", () => {
+    const focusTarget = focusBeforeCaptionSheetDialog;
+    focusBeforeCaptionSheetDialog = null;
+    if (focusTarget?.isConnected) {
+      focusTarget.focus();
+    }
+  });
+  elements.caption_sheet_body.addEventListener("click", (event) => {
+    const button = event.target.closest(
+      ".caption-sheet-cue-button"
+    );
+    const cueId = button?.dataset.cueId;
+    const cue = project.subtitles.find((candidate) => candidate.id === cueId);
+    if (!cueId || !cue) {
+      return;
+    }
+    const activeRange = cueTimelineRange(project, cue);
+    if (!activeRange) {
+      showToast("\uCD9C\uB825 \uC81C\uC678 \uCEF7\uC744 \uD65C\uC131\uD654\uD55C \uB4A4 \uC774 \uC790\uB9C9\uC744 \uD3B8\uC9D1\uD574 \uC8FC\uC138\uC694.");
+      return;
+    }
+    closeCaptionPropertiesSheet({ restoreFocus: false });
+    selectCue(cueId, { seek: true });
+  });
   elements.restore_local_draft.addEventListener("click", () => {
     void restoreSelectedLocalDraft();
   });
@@ -43155,6 +43637,13 @@ function bindActions() {
     const interactive = Boolean(event.target.closest(
       "button, a, input, textarea, select, [contenteditable='true'], [role='slider'], [role='tab']"
     ));
+    if (elements.caption_sheet_dialog.open) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCaptionPropertiesSheet();
+      }
+      return;
+    }
     if (elements.local_draft_dialog.open) {
       if (event.key === "Escape" && !localDraftOperationActive) {
         event.preventDefault();
