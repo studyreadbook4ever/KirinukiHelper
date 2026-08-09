@@ -2224,9 +2224,11 @@ function renderCueInspector() {
   elements.cue_y.value = String(Math.round(cueY * 100));
   elements.cue_x_value.textContent = `${Math.round(cueX * 100)}%`;
   elements.cue_y_value.textContent = `${Math.round(cueY * 100)}%`;
-  elements.font_size.value = String(
-    (Number(project.subtitleDefaults.fontScale) || 0.0675) * 100
-  );
+  elements.font_size.value = String((
+    Number(cue.fontScale)
+    || Number(project.subtitleDefaults.fontScale)
+    || 0.0675
+  ) * 100);
   const defaultColor = project.subtitleDefaults.color;
   elements.font_color.value = cue.color
     || (typeof defaultColor === "string" ? defaultColor : DEFAULT_SUBTITLE_COLOR);
@@ -4007,7 +4009,9 @@ function renderSubtitleOverlay() {
     );
     overlay.style.maxWidth = `${maxWidth}px`;
     overlay.style.whiteSpace = maximumLines === 1 ? "nowrap" : "pre-wrap";
-    const fontScale = project.subtitleDefaults.fontScale || 0.0675;
+    const fontScale = cue.fontScale
+      || project.subtitleDefaults.fontScale
+      || 0.0675;
     let fontSize = Math.max(14, Math.min(
       contentRect.height * fontScale,
       contentRect.width * fontScale * 9 / 16
@@ -5046,10 +5050,8 @@ function addCueAtPlayhead({
     endOffsetMs,
     text: "새 자막",
     lane,
-    y: Math.max(
-      0.12,
-      Number(workingProject.subtitleDefaults?.y || 0.84) - lane! * 0.1
-    ),
+    x: 0.5,
+    y: 0.84,
     origin: "human"
   });
   propertyInspectorMode = "caption";
@@ -7224,13 +7226,15 @@ function bindActions() {
     });
   });
   elements.font_size.addEventListener("input", () => {
-    applyFieldProject({
-      ...project,
-      subtitleDefaults: {
-        ...project.subtitleDefaults,
-        fontScale: Number(elements.font_size.value) / 100
-      }
-    }, "font-size");
+    const cue = selectedCue();
+    if (cue) {
+      applyFieldProject(
+        updateSubtitleCue(project, cue.id, {
+          fontScale: Number(elements.font_size.value) / 100
+        }),
+        "font-size"
+      );
+    }
   });
   elements.font_color.addEventListener("input", () => {
     const cue = selectedCue();

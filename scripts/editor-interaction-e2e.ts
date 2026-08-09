@@ -77,6 +77,7 @@ interface EditorCue extends ExternalRecord {
   x: number;
   y: number;
   color: string;
+  fontScale?: number;
   lane: number;
   backgroundEnabled?: boolean;
   remoteMeta?: CaptionRemoteMeta;
@@ -3133,6 +3134,10 @@ async function main() {
     "다른 레인의 동시 자막 추가"
   );
   const simultaneousCue = simultaneousProject.subtitles.find((cue) => cue.id !== cueId)!;
+  assert(
+    simultaneousCue.x === 0.5 && simultaneousCue.y === 0.84,
+    `다른 자막 레인의 새 cue가 50/84에서 시작하지 않았습니다: ${JSON.stringify(simultaneousCue)}`
+  );
   await clickElement(`.cue-block[data-id="${simultaneousCue.id}"] .cue-block-body`);
   const simultaneousOverlayCount = await waitUntil(async () => {
     const count = await executeSync<number>(
@@ -3140,6 +3145,52 @@ async function main() {
     );
     return count === 2 ? count : false;
   }, "동시 자막 2개 미리보기");
+  const simultaneousFontBefore = await executeSync<string>(`
+    return document.querySelector(
+      '#subtitle-overlays .subtitle-overlay[data-cue-id="' + arguments[0] + '"]'
+    )?.style.fontSize || "";
+  `, [simultaneousCue.id]);
+  await executeSync(`
+    const input = document.querySelector("#font-size");
+    input.value = "5";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  `);
+  const resizedSimultaneousProject = await waitForStoredProject(
+    (project) => (
+      project.subtitles.find((cue) => cue.id === simultaneousCue.id)?.fontScale === 0.05
+    ),
+    "선택 자막별 글씨 크기 autosave"
+  );
+  assert(
+    resizedSimultaneousProject.subtitleDefaults.fontScale
+      === simultaneousProject.subtitleDefaults.fontScale
+      && resizedSimultaneousProject.subtitles.find((cue) => cue.id === cueId)?.fontScale
+        === simultaneousProject.subtitles.find((cue) => cue.id === cueId)?.fontScale,
+    "선택 자막 크기를 바꾸면서 다른 cue 또는 프로젝트 기본 크기가 함께 바뀌었습니다."
+  );
+  const simultaneousFontAfter = await waitUntil(async () => {
+    const state = await executeSync<{ fontSize: string; sliderValue: string }>(`
+      return {
+        fontSize: document.querySelector(
+          '#subtitle-overlays .subtitle-overlay[data-cue-id="' + arguments[0] + '"]'
+        )?.style.fontSize || "",
+        sliderValue: document.querySelector("#font-size")?.value || ""
+      };
+    `, [simultaneousCue.id]);
+    return (
+      state.sliderValue === "5"
+      && state.fontSize
+      && state.fontSize !== simultaneousFontBefore
+    ) ? state : false;
+  }, "선택 자막별 글씨 크기 미리보기");
+  const perCueFontSize = {
+    before: simultaneousFontBefore,
+    after: simultaneousFontAfter.fontSize,
+    stored: resizedSimultaneousProject.subtitles.find(
+      (cue) => cue.id === simultaneousCue.id
+    )?.fontScale
+  };
   await contextClickElement(`.cue-block[data-id="${simultaneousCue.id}"]`);
   await waitUntil(
     () => executeSync(`return document.querySelector("#context-delete-cue")?.hidden === false;`),
@@ -6741,6 +6792,7 @@ async function main() {
       },
       cueTextHotReload,
       captionBackgroundToggle,
+      perCueFontSize,
       playbackPointerSafety,
       reorderKeyboardFocus,
       clipGroupMove: clipGroupMoveSmoke,
