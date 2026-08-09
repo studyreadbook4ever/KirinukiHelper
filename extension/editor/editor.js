@@ -1268,6 +1268,7 @@ function normalizeSubtitleCue(cue, clip, laneCount = MAX_SUBTITLE_LANES) {
   const origin = cue.origin === "ai" ? "ai" : "human";
   const humanEdited = Boolean(cue.humanEdited);
   const automaticAiCue = origin === "ai" && !humanEdited;
+  const cueFontScale = cue.fontScale != null && cue.fontScale !== "" && Number.isFinite(Number(cue.fontScale)) ? clamp(Number(cue.fontScale), 0.025, 0.12) : null;
   const remoteMeta = cue.remoteMeta && typeof cue.remoteMeta === "object" ? {
     speakerId: String(rawRemoteMeta.speakerId || "unknown").replace(/\s+/gu, " ").trim().slice(0, 80) || "unknown",
     reviewRequired: Boolean(rawRemoteMeta.reviewRequired),
@@ -1291,6 +1292,7 @@ function normalizeSubtitleCue(cue, clip, laneCount = MAX_SUBTITLE_LANES) {
       Math.max(0, Math.min(MAX_SUBTITLE_LANES, laneCount) - 1)
     ),
     color: normalizeHexColor(cue.color, "#ffffff"),
+    ...cueFontScale != null ? { fontScale: cueFontScale } : {},
     ...typeof cue.backgroundEnabled === "boolean" ? { backgroundEnabled: cue.backgroundEnabled } : {},
     x: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.x : clamp(finiteNumber(cue.x, AUTOMATIC_CAPTION_POSITION.x), 0.05, 0.95),
     y: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.y : clamp(finiteNumber(cue.y, AUTOMATIC_CAPTION_POSITION.y), 0.05, 0.95),
@@ -1344,6 +1346,7 @@ function createSubtitleCue(project2, {
   text = "",
   lane = 0,
   color,
+  fontScale,
   backgroundEnabled,
   x,
   y,
@@ -1364,9 +1367,10 @@ function createSubtitleCue(project2, {
     text,
     lane,
     color: color ?? project2.subtitleDefaults?.color,
+    fontScale,
     backgroundEnabled,
-    x: x ?? project2.subtitleDefaults?.x,
-    y: y ?? project2.subtitleDefaults?.y,
+    x: x ?? AUTOMATIC_CAPTION_POSITION.x,
+    y: y ?? AUTOMATIC_CAPTION_POSITION.y,
     origin,
     confidence,
     remoteMeta,
@@ -33500,7 +33504,7 @@ function drawCaption(context, canvas, project2, cue) {
     return;
   }
   const defaults = project2.subtitleDefaults;
-  const fontScale = defaults.fontScale || 0.0675;
+  const fontScale = cue.fontScale || defaults.fontScale || 0.0675;
   let fontSize = Math.max(18, Math.round(Math.min(
     canvas.height * fontScale,
     canvas.width * fontScale * 9 / 16
@@ -38149,9 +38153,7 @@ function renderCueInspector() {
   elements.cue_y.value = String(Math.round(cueY * 100));
   elements.cue_x_value.textContent = `${Math.round(cueX * 100)}%`;
   elements.cue_y_value.textContent = `${Math.round(cueY * 100)}%`;
-  elements.font_size.value = String(
-    (Number(project.subtitleDefaults.fontScale) || 0.0675) * 100
-  );
+  elements.font_size.value = String((Number(cue.fontScale) || Number(project.subtitleDefaults.fontScale) || 0.0675) * 100);
   const defaultColor = project.subtitleDefaults.color;
   elements.font_color.value = cue.color || (typeof defaultColor === "string" ? defaultColor : DEFAULT_SUBTITLE_COLOR);
   renderCaptionColorRegister(elements.font_color.value);
@@ -39678,7 +39680,7 @@ function renderSubtitleOverlay() {
     const maxWidth = contentRect.width * (project.subtitleDefaults.maxWidth || 0.86);
     overlay.style.maxWidth = `${maxWidth}px`;
     overlay.style.whiteSpace = maximumLines === 1 ? "nowrap" : "pre-wrap";
-    const fontScale = project.subtitleDefaults.fontScale || 0.0675;
+    const fontScale = cue.fontScale || project.subtitleDefaults.fontScale || 0.0675;
     let fontSize = Math.max(14, Math.min(
       contentRect.height * fontScale,
       contentRect.width * fontScale * 9 / 16
@@ -40584,10 +40586,8 @@ function addCueAtPlayhead({
     endOffsetMs,
     text: "\uC0C8 \uC790\uB9C9",
     lane,
-    y: Math.max(
-      0.12,
-      Number(workingProject.subtitleDefaults?.y || 0.84) - lane * 0.1
-    ),
+    x: 0.5,
+    y: 0.84,
     origin: "human"
   });
   propertyInspectorMode = "caption";
@@ -42523,13 +42523,15 @@ function bindActions() {
     });
   });
   elements.font_size.addEventListener("input", () => {
-    applyFieldProject({
-      ...project,
-      subtitleDefaults: {
-        ...project.subtitleDefaults,
-        fontScale: Number(elements.font_size.value) / 100
-      }
-    }, "font-size");
+    const cue = selectedCue();
+    if (cue) {
+      applyFieldProject(
+        updateSubtitleCue(project, cue.id, {
+          fontScale: Number(elements.font_size.value) / 100
+        }),
+        "font-size"
+      );
+    }
   });
   elements.font_color.addEventListener("input", () => {
     const cue = selectedCue();

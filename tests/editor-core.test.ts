@@ -337,6 +337,44 @@ test("새 프로젝트는 에셋·자막 2개 레인과 고정 음성 레인 데
   assert.deepEqual(project.ai.speakerColors, {});
 });
 
+test("새 자막은 레인과 무관하게 50/84에서 시작하고 크기는 cue별로 저장한다", () => {
+  const project = createEditorProjectFromCapture(captureState);
+  const first = createSubtitleCue(project, {
+    id: "first-size-cue",
+    clipId: project.clips[0].id,
+    startOffsetMs: 0,
+    endOffsetMs: 1_000,
+    text: "첫 자막",
+    lane: 0
+  });
+  const second = createSubtitleCue(project, {
+    id: "second-size-cue",
+    clipId: project.clips[0].id,
+    startOffsetMs: 1_000,
+    endOffsetMs: 2_000,
+    text: "둘째 자막",
+    lane: 1
+  });
+  assert.deepEqual([first.x, first.y], [0.5, 0.84]);
+  assert.deepEqual([second.x, second.y], [0.5, 0.84]);
+  assert.equal(first.fontScale, undefined);
+  assert.equal(second.fontScale, undefined);
+
+  const resized = updateSubtitleCue({
+    ...project,
+    subtitles: [first, second]
+  }, second.id, { fontScale: 0.05 });
+  assert.equal(resized.subtitleDefaults.fontScale, 0.0675);
+  assert.equal(resized.subtitles[0].fontScale, undefined);
+  assert.equal(resized.subtitles[1].fontScale, 0.05);
+
+  const restored = required(normalizeEditorProject(
+    JSON.parse(JSON.stringify(resized))
+  ));
+  assert.equal(restored.subtitles[0].fontScale, undefined);
+  assert.equal(restored.subtitles[1].fontScale, 0.05);
+});
+
 test("현재 로컬 Whisper 실행 메타데이터는 저장 왕복에서 legacy로 오인하지 않는다", () => {
   const current = createEditorProjectFromCapture(captureState);
   const normalized = normalizeEditorProject({

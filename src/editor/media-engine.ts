@@ -1112,7 +1112,7 @@ export function drawCaption(
     return;
   }
   const defaults = project.subtitleDefaults;
-  const fontScale = defaults.fontScale || 0.0675;
+  const fontScale = cue.fontScale || defaults.fontScale || 0.0675;
   let fontSize = Math.max(18, Math.round(Math.min(
     canvas.height * fontScale,
     canvas.width * fontScale * 9 / 16

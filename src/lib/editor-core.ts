@@ -166,6 +166,7 @@ export interface SubtitleCueDraftInput {
   text?: unknown;
   lane?: unknown;
   color?: unknown;
+  fontScale?: unknown;
   backgroundEnabled?: unknown;
   x?: unknown;
   y?: unknown;
@@ -246,6 +247,7 @@ export interface EditorSubtitleCue extends DynamicRecord {
   x: number;
   y: number;
   color: string;
+  fontScale?: number;
   backgroundEnabled?: boolean;
   confidence: number | null;
 }
@@ -1704,6 +1706,11 @@ function normalizeSubtitleCue(
   const origin = cue.origin === "ai" ? "ai" : "human";
   const humanEdited = Boolean(cue.humanEdited);
   const automaticAiCue = origin === "ai" && !humanEdited;
+  const cueFontScale = cue.fontScale != null
+    && cue.fontScale !== ""
+    && Number.isFinite(Number(cue.fontScale))
+    ? clamp(Number(cue.fontScale), 0.025, 0.12)
+    : null;
   const remoteMeta = cue.remoteMeta && typeof cue.remoteMeta === "object"
     ? {
       speakerId: String(rawRemoteMeta.speakerId || "unknown")
@@ -1745,6 +1752,7 @@ function normalizeSubtitleCue(
       Math.max(0, Math.min(MAX_SUBTITLE_LANES, laneCount) - 1)
     ),
     color: normalizeHexColor(cue.color, "#ffffff"),
+    ...(cueFontScale != null ? { fontScale: cueFontScale } : {}),
     ...(typeof cue.backgroundEnabled === "boolean"
       ? { backgroundEnabled: cue.backgroundEnabled }
       : {}),
@@ -1823,6 +1831,7 @@ export function createSubtitleCue(project: EditorProject, {
   text = "",
   lane = 0,
   color,
+  fontScale,
   backgroundEnabled,
   x,
   y,
@@ -1843,9 +1852,10 @@ export function createSubtitleCue(project: EditorProject, {
     text,
     lane,
     color: color ?? project.subtitleDefaults?.color,
+    fontScale,
     backgroundEnabled,
-    x: x ?? project.subtitleDefaults?.x,
-    y: y ?? project.subtitleDefaults?.y,
+    x: x ?? AUTOMATIC_CAPTION_POSITION.x,
+    y: y ?? AUTOMATIC_CAPTION_POSITION.y,
     origin,
     confidence,
     remoteMeta,

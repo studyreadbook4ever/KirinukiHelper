@@ -1077,6 +1077,7 @@ function normalizeSubtitleCue(cue, clip, laneCount = MAX_SUBTITLE_LANES) {
   const origin = cue.origin === "ai" ? "ai" : "human";
   const humanEdited = Boolean(cue.humanEdited);
   const automaticAiCue = origin === "ai" && !humanEdited;
+  const cueFontScale = cue.fontScale != null && cue.fontScale !== "" && Number.isFinite(Number(cue.fontScale)) ? clamp(Number(cue.fontScale), 0.025, 0.12) : null;
   const remoteMeta = cue.remoteMeta && typeof cue.remoteMeta === "object" ? {
     speakerId: String(rawRemoteMeta.speakerId || "unknown").replace(/\s+/gu, " ").trim().slice(0, 80) || "unknown",
     reviewRequired: Boolean(rawRemoteMeta.reviewRequired),
@@ -1100,6 +1101,7 @@ function normalizeSubtitleCue(cue, clip, laneCount = MAX_SUBTITLE_LANES) {
       Math.max(0, Math.min(MAX_SUBTITLE_LANES, laneCount) - 1)
     ),
     color: normalizeHexColor(cue.color, "#ffffff"),
+    ...cueFontScale != null ? { fontScale: cueFontScale } : {},
     ...typeof cue.backgroundEnabled === "boolean" ? { backgroundEnabled: cue.backgroundEnabled } : {},
     x: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.x : clamp(finiteNumber(cue.x, AUTOMATIC_CAPTION_POSITION.x), 0.05, 0.95),
     y: automaticAiCue ? AUTOMATIC_CAPTION_POSITION.y : clamp(finiteNumber(cue.y, AUTOMATIC_CAPTION_POSITION.y), 0.05, 0.95),
@@ -1153,6 +1155,7 @@ function createSubtitleCue(project, {
   text = "",
   lane = 0,
   color,
+  fontScale,
   backgroundEnabled,
   x,
   y,
@@ -1173,9 +1176,10 @@ function createSubtitleCue(project, {
     text,
     lane,
     color: color ?? project.subtitleDefaults?.color,
+    fontScale,
     backgroundEnabled,
-    x: x ?? project.subtitleDefaults?.x,
-    y: y ?? project.subtitleDefaults?.y,
+    x: x ?? AUTOMATIC_CAPTION_POSITION.x,
+    y: y ?? AUTOMATIC_CAPTION_POSITION.y,
     origin,
     confidence,
     remoteMeta,

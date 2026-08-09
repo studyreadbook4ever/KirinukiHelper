@@ -88,6 +88,77 @@ test("로컬 대용량 미디어는 Chromium stream reader를 피하고 제한�
   assert.equal(Object.isFrozen(LOCAL_MEDIA_BLOB_SOURCE_OPTIONS), true);
 });
 
+test("최종 렌더는 cue별 글씨 크기를 우선하고 값이 없으면 프로젝트 기본값을 쓴다", () => {
+  const createContext = () => ({
+    save() {},
+    restore() {},
+    measureText: (text: string) => ({ width: text.length * 10 }),
+    fillRect() {},
+    beginPath() {},
+    roundRect() {},
+    fill() {},
+    strokeText() {},
+    fillText() {},
+    textAlign: "center",
+    textBaseline: "middle",
+    lineJoin: "round",
+    font: "",
+    lineWidth: 0,
+    strokeStyle: "",
+    fillStyle: "",
+    shadowColor: "",
+    shadowOffsetX: 0,
+    shadowOffsetY: 0,
+    shadowBlur: 0
+  });
+  const project = {
+    subtitleDefaults: {
+      fontFamily: "Pretendard",
+      fontWeight: 800,
+      fontScale: 0.0675,
+      lineHeight: 1.24,
+      maxLines: 1,
+      maxWidth: 0.86,
+      outlineWidth: 0.006,
+      outlineColor: "#111111",
+      backgroundColor: "transparent",
+      backgroundRadiusEm: 0,
+      color: "#ffffff",
+      shadowColor: "transparent",
+      shadowOffsetXEm: 0,
+      shadowOffsetYEm: 0,
+      shadowBlurEm: 0,
+      align: "center"
+    }
+  };
+  const cue = {
+    text: "자막",
+    color: "#ffffff",
+    x: 0.5,
+    y: 0.84,
+    fontScale: 0.04
+  };
+  const canvas = { width: 1_000, height: 1_000 } as HTMLCanvasElement;
+
+  const overriddenContext = createContext();
+  drawCaption(
+    overriddenContext as unknown as CanvasRenderingContext2D,
+    canvas,
+    project as RenderProjectFixture,
+    cue as never
+  );
+  assert.match(overriddenContext.font, / 23px /u);
+
+  const inheritedContext = createContext();
+  drawCaption(
+    inheritedContext as unknown as CanvasRenderingContext2D,
+    canvas,
+    project as RenderProjectFixture,
+    { ...cue, fontScale: undefined } as never
+  );
+  assert.match(inheritedContext.font, / 38px /u);
+});
+
 test("자막 배경 토글은 켜면 텍스트보다 먼저 각진 배경을 그리고 끄면 배경을 생략한다", () => {
   const calls: string[] = [];
   let fillStyle = "";
