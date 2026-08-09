@@ -9,7 +9,9 @@ function cssRule(css: string, selector: string) {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]+)\\}`, "u"));
   assert.ok(match, `${selector} CSS 규칙을 찾을 수 없습니다.`);
-  return match[1];
+  const body = match[1];
+  assert.ok(body, `${selector} CSS 규칙 본문이 비어 있습니다.`);
+  return body;
 }
 
 function assertDeclaration(

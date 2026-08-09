@@ -16,7 +16,7 @@
     "caption-stack:status": "node --import tsx scripts/local-caption-stack.ts status",
     "caption-stack:stop": "node --import tsx scripts/local-caption-stack.ts stop",
     "dev:editor": "node --import tsx scripts/dev-extension.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.source.json",
     "migration:check": "node --import tsx scripts/check-typescript-migration.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:browser": "node --import tsx scripts/browser-smoke.ts",
@@ -26,7 +26,7 @@
     "validate": "node --import tsx scripts/validate-extension.ts",
     "license:check": "node --import tsx scripts/check-third-party-licenses.ts",
     "audit": "npm audit --audit-level=high",
-    "check": "npm run typecheck && npm run build && npm run migration:check && npm run validate && npm run license:check && npm test && npm run audit",
+    "check": "npm run typecheck && npm run migration:check && npm run build && npm run validate && npm run license:check && npm test && npm run audit",
     "check:full": "npm run check && npm run test:browser && npm run test:hot-reload && npm run test:interaction && npm run test:export",
     "package": "node --import tsx scripts/release-package.ts",
     "check:policy-links": "node --import tsx scripts/check-policy-links.ts"

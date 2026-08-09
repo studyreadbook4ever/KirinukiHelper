@@ -1,4 +1,5 @@
 *.sh text eol=lf
+extension/**/*.js linguist-generated=true
 extension/licenses/PRETENDARD-OFL-1.1.txt -whitespace
 vendor/pretendard/LICENSE -whitespace
 extension/licenses/PAPERLOGY-OFL-1.1.txt -whitespace

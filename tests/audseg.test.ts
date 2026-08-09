@@ -146,8 +146,10 @@ test("AudSeg 브라우저 통합은 모델·네트워크 없이 활동 구간만
   assert.equal(AUDSEG_DRAFT_MODEL, "audseg-local");
   assert.equal(result.activityRegions.length, 1);
   assert.equal(result.segments.length, 1);
+  const [segment] = result.segments;
+  assert.ok(segment);
   assert.deepEqual(
-    [result.segments[0].startSample, result.segments[0].endSample],
+    [segment.startSample, segment.endSample],
     [2_400, 11_040]
   );
   assert.deepEqual(result.warnings, []);
@@ -250,7 +252,8 @@ test("AudSeg Worker 경로는 결과 뒤 종료되고 AbortSignal로 즉시 취�
 
 test("AudSeg timing 초안은 빈 자막으로 보이고 사람이 채우면 재실행에서 보존된다", () => {
   const project = createEditorProjectFromCapture(capture());
-  const clip = project.clips[0];
+  const [clip] = project.clips;
+  assert.ok(clip);
   const result = segmentAudSegPcm(
     concat(silence(0.2), tone(0.4), silence(0.4))
   );
@@ -258,12 +261,14 @@ test("AudSeg timing 초안은 빈 자막으로 보이고 사람이 채우면 재
   const inserted = replaceAiBlankTimingDraft(project, clip.id, drafts);
 
   assert.equal(inserted.subtitles.length, 1);
-  assert.equal(inserted.subtitles[0].text, "");
-  assert.equal(inserted.subtitles[0].origin, "ai");
-  const insertedRemoteMeta = inserted.subtitles[0].remoteMeta;
+  const [insertedCue] = inserted.subtitles;
+  assert.ok(insertedCue);
+  assert.equal(insertedCue.text, "");
+  assert.equal(insertedCue.origin, "ai");
+  const insertedRemoteMeta = insertedCue.remoteMeta;
   assert.ok(insertedRemoteMeta);
   assert.equal(insertedRemoteMeta.reviewRequired, true);
-  assert.equal(subtitleCueNeedsReview(inserted.subtitles[0]), true);
+  assert.equal(subtitleCueNeedsReview(insertedCue), true);
   assert.ok(
     insertedRemoteMeta.qualityCodes?.includes(
       "AUDSEG_BLANK_TIMING"
@@ -272,24 +277,28 @@ test("AudSeg timing 초안은 빈 자막으로 보이고 사람이 채우면 재
 
   const human = updateSubtitleCue(
     inserted,
-    inserted.subtitles[0].id,
+    insertedCue.id,
     { text: "직접 입력한 자막" }
   );
   const rerun = replaceAiBlankTimingDraft(human, clip.id, drafts);
   assert.equal(rerun.subtitles.length, 1);
-  assert.equal(rerun.subtitles[0].id, inserted.subtitles[0].id);
-  assert.equal(rerun.subtitles[0].text, "직접 입력한 자막");
-  assert.equal(rerun.subtitles[0].humanEdited, true);
-  assert.equal(subtitleCueNeedsReview(rerun.subtitles[0]), false);
+  const [rerunCue] = rerun.subtitles;
+  assert.ok(rerunCue);
+  assert.equal(rerunCue.id, insertedCue.id);
+  assert.equal(rerunCue.text, "직접 입력한 자막");
+  assert.equal(rerunCue.humanEdited, true);
+  assert.equal(subtitleCueNeedsReview(rerunCue), false);
 
   const timingOnlyEdit = updateSubtitleCue(
     inserted,
-    inserted.subtitles[0].id,
-    { startOffsetMs: inserted.subtitles[0].startOffsetMs + 20 }
+    insertedCue.id,
+    { startOffsetMs: insertedCue.startOffsetMs + 20 }
   );
-  assert.equal(timingOnlyEdit.subtitles[0].humanEdited, true);
-  assert.equal(timingOnlyEdit.subtitles[0].text, "");
-  assert.equal(subtitleCueNeedsReview(timingOnlyEdit.subtitles[0]), true);
+  const [timingOnlyCue] = timingOnlyEdit.subtitles;
+  assert.ok(timingOnlyCue);
+  assert.equal(timingOnlyCue.humanEdited, true);
+  assert.equal(timingOnlyCue.text, "");
+  assert.equal(subtitleCueNeedsReview(timingOnlyCue), true);
 });
 
 test("AudSeg 원본과 MIT 라이선스는 sibling 패키지로 함께 보존된다", () => {

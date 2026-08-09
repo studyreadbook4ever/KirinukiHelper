@@ -358,10 +358,22 @@ async function readInstalledConfig(
       "로컬 자막 스택 설정이 현재 고정 버전과 맞지 않습니다. setup을 다시 실행하세요."
     );
   }
-  for (const [candidate, root, label] of [
-    [config.whisper?.binaryPath, paths.buildsRoot, "whisper binary"],
-    [config.model?.path, paths.modelsRoot, "Whisper model"],
-    [config.vad?.path, paths.modelsRoot, "VAD model"]
+  for (const { candidate, root, label } of [
+    {
+      candidate: config.whisper?.binaryPath,
+      root: paths.buildsRoot,
+      label: "whisper binary"
+    },
+    {
+      candidate: config.model?.path,
+      root: paths.modelsRoot,
+      label: "Whisper model"
+    },
+    {
+      candidate: config.vad?.path,
+      root: paths.modelsRoot,
+      label: "VAD model"
+    }
   ]) {
     const relative = path.relative(root, path.resolve(String(candidate || "")));
     if (!candidate || relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -1135,7 +1147,9 @@ export function parseProcStartTime(statText: unknown): string | null {
     .trim()
     .split(/\s+/u);
   const startTime = fieldsFromState[19];
-  return /^\d+$/u.test(String(startTime || "")) ? startTime : null;
+  return startTime !== undefined && /^\d+$/u.test(startTime)
+    ? startTime
+    : null;
 }
 
 async function readProcStartTime(pid: number): Promise<string | null> {

@@ -546,7 +546,7 @@ function balancedTextBreak(value: unknown, {
   const best = pool.sort((first, second) => (
     first.score - second.score || first.index - second.index
   ))[0];
-  return best && [best.left, best.right];
+  return best ? [best.left, best.right] : null;
 }
 
 function splitTextForCueCapacity(
@@ -659,7 +659,11 @@ function distributeDurations(
     const durations = raw.map((value) => Math.max(1, Math.floor(value)));
     let remainder = totalDurationMs - durations.reduce((sum, value) => sum + value, 0);
     for (let index = 0; remainder > 0; index = (index + 1) % count) {
-      durations[index] += 1;
+      const duration = durations[index];
+      if (duration === undefined) {
+        throw new RangeError("duration distribution index is out of range");
+      }
+      durations[index] = duration + 1;
       remainder -= 1;
     }
     return durations;
@@ -675,13 +679,13 @@ function distributeDurations(
       break;
     }
     const share = Math.max(1, Math.floor(remaining / eligible.length));
-    for (const { index } of eligible) {
+    for (const { value, index } of eligible) {
       const addition = Math.min(
         share,
         remaining,
-        maximumDurationMs - durations[index]
+        maximumDurationMs - value
       );
-      durations[index] += addition;
+      durations[index] = value + addition;
       remaining -= addition;
       if (remaining === 0) {
         break;
@@ -742,10 +746,16 @@ function wordBoundaryAlignedDurations(
     let anchorWidthCursor = 0;
     const candidates = [];
     for (let anchorIndex = 0; anchorIndex < anchors.length - 1; anchorIndex += 1) {
-      anchorWidthCursor += anchorWidths[anchorIndex];
+      const anchorWidth = anchorWidths[anchorIndex];
+      const anchor = anchors[anchorIndex];
+      const nextAnchor = anchors[anchorIndex + 1];
+      if (anchorWidth === undefined || !anchor || !nextAnchor) {
+        return null;
+      }
+      anchorWidthCursor += anchorWidth;
       const boundary = clamp(
         Math.round(
-          (anchors[anchorIndex].endMs + anchors[anchorIndex + 1].startMs) / 2
+          (anchor.endMs + nextAnchor.startMs) / 2
         ),
         startMs + 1,
         endMs - 1
@@ -769,9 +779,16 @@ function wordBoundaryAlignedDurations(
     boundaries.push(selected.boundary);
   }
   boundaries.push(endMs);
-  return boundaries.slice(0, -1).map(
-    (boundary, index) => boundaries[index + 1] - boundary
-  );
+  const durations = [];
+  for (let index = 1; index < boundaries.length; index += 1) {
+    const previousBoundary = boundaries[index - 1];
+    const boundary = boundaries[index];
+    if (previousBoundary === undefined || boundary === undefined) {
+      return null;
+    }
+    durations.push(boundary - previousBoundary);
+  }
+  return durations;
 }
 
 function wordAnchoredLongCueParts(
@@ -827,6 +844,9 @@ function wordAnchoredLongCueParts(
     const sourceEnd = anchorIndex === anchors.length - 1
       ? sourceGraphemes.length
       : signaturePositions[signatureCursor];
+    if (sourceEnd === undefined) {
+      return null;
+    }
     const rawPart = sourceGraphemes
       .slice(sourceCursor, sourceEnd)
       .join("");
@@ -998,9 +1018,14 @@ function splitRawCue(
   let cursor = expanded.startMs;
   return parts.map((part, partIndex) => {
     const startMs = cursor;
-    const endMs = partIndex === parts.length - 1
-      ? expanded.endMs
-      : cursor + distributed[partIndex];
+    let endMs = expanded.endMs;
+    if (partIndex !== parts.length - 1) {
+      const duration = distributed[partIndex];
+      if (duration === undefined) {
+        throw new RangeError("cue duration distribution is incomplete");
+      }
+      endMs = cursor + duration;
+    }
     cursor = endMs;
     const laidOutText = layoutCueText(part, profile);
     if (laidOutText !== part) {
@@ -1095,6 +1120,9 @@ function repairSameSpeakerOverlaps(
     for (let index = 1; index < speakerCues.length; index += 1) {
       const previous = speakerCues[index - 1];
       const current = speakerCues[index];
+      if (!previous || !current) {
+        throw new RangeError("speaker cue adjacency index is out of range");
+      }
       if (current.startMs >= previous.endMs) {
         continue;
       }
@@ -1225,20 +1253,23 @@ function longestCommonSubsequenceLength<T>(
     current.fill(0);
     for (let index = 1; index <= shorter.length; index += 1) {
       current[index] = longerCharacter === shorter[index - 1]
-        ? previous[index - 1] + 1
-        : Math.max(previous[index], current[index - 1]);
+        ? (previous[index - 1] ?? 0) + 1
+        : Math.max(previous[index] ?? 0, current[index - 1] ?? 0);
     }
     [previous, current] = [current, previous];
   }
-  return previous[shorter.length];
+  return previous[shorter.length] ?? 0;
 }
 
-function transcriptSignature(transcript: unknown, clipDurationMs: unknown) {
-  const canonical = canonicalizeTranscriptUnits(transcript, { clipDurationMs });
-  return {
-    signature: textSignature(canonical.text),
-    warnings: canonical.warnings
-  };
+function requiredCueMetrics(
+  metrics: readonly CueMetrics[],
+  cueIndex: number
+): CueMetrics {
+  const cueMetrics = metrics[cueIndex];
+  if (!cueMetrics) {
+    throw new RangeError(`missing quality metrics for cue ${cueIndex}`);
+  }
+  return cueMetrics;
 }
 
 function appendViolation(
@@ -1423,11 +1454,16 @@ export function evaluateCaptionCues(cues: unknown, {
       || first.cueIndex - second.cueIndex
     ));
     for (let index = 1; index < ranges.length; index += 1) {
-      if (ranges[index].startMs < ranges[index - 1].endMs) {
+      const previous = ranges[index - 1];
+      const current = ranges[index];
+      if (!previous || !current) {
+        throw new RangeError("speaker range adjacency index is out of range");
+      }
+      if (current.startMs < previous.endMs) {
         appendViolation(
           violations,
           "HARNESS_SAME_SPEAKER_OVERLAP",
-          ranges[index].cueIndex
+          current.cueIndex
         );
       }
     }
@@ -1455,10 +1491,11 @@ export function evaluateCaptionCues(cues: unknown, {
         let assigned = false;
         for (const [cueIndex, cue] of normalizedCues.entries()) {
           const local = cueTranscriptMetrics(cue, canonicalTranscript.units);
-          perCueMetrics[cueIndex].transcriptCoverage = Math.round(
+          const metrics = requiredCueMetrics(perCueMetrics, cueIndex);
+          metrics.transcriptCoverage = Math.round(
             local.coverage * 10_000
           ) / 10_000;
-          perCueMetrics[cueIndex].transcriptPrecision = Math.round(
+          metrics.transcriptPrecision = Math.round(
             local.precision * 10_000
           ) / 10_000;
           if (local.coverage < profile.minimumTranscriptCoverage) {
@@ -1482,10 +1519,11 @@ export function evaluateCaptionCues(cues: unknown, {
         let assigned = false;
         for (const [cueIndex, cue] of normalizedCues.entries()) {
           const local = cueTranscriptMetrics(cue, canonicalTranscript.units);
-          perCueMetrics[cueIndex].transcriptCoverage ??= Math.round(
+          const metrics = requiredCueMetrics(perCueMetrics, cueIndex);
+          metrics.transcriptCoverage ??= Math.round(
             local.coverage * 10_000
           ) / 10_000;
-          perCueMetrics[cueIndex].transcriptPrecision ??= Math.round(
+          metrics.transcriptPrecision ??= Math.round(
             local.precision * 10_000
           ) / 10_000;
           if (local.precision < profile.minimumTranscriptPrecision) {
@@ -1530,7 +1568,7 @@ export function evaluateCaptionCues(cues: unknown, {
         ? "rejected"
         : reviewRequired ? "review-required" : "accepted",
       codes,
-      metrics: perCueMetrics[cueIndex]
+      metrics: requiredCueMetrics(perCueMetrics, cueIndex)
     };
   });
   const disposition = cueReviews.some(({ status }) => status === "rejected")
@@ -1575,18 +1613,20 @@ function deterministicSpeakerColors(
   const speakers = [...new Set(cues.map((cue) => cue.speakerId))]
     .sort((first, second) => first.localeCompare(second, "ko"));
   const colors: Record<string, string> = {};
+  const palette = profile.speakerPalette.length > 0
+    ? profile.speakerPalette
+    : DEFAULT_SPEAKER_PALETTE;
+  const primaryColor = palette[0] ?? "#FFFFFF";
   let paletteIndex = 0;
   if (speakers.includes("main")) {
-    colors.main = profile.speakerPalette[0];
+    colors.main = primaryColor;
     paletteIndex = 1;
   }
   for (const speakerId of speakers) {
     if (speakerId === "main") {
       continue;
     }
-    colors[speakerId] = profile.speakerPalette[
-      paletteIndex % profile.speakerPalette.length
-    ];
+    colors[speakerId] = palette[paletteIndex % palette.length] ?? primaryColor;
     paletteIndex += 1;
   }
   return colors;

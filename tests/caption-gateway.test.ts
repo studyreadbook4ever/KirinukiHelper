@@ -89,6 +89,23 @@ function hasErrorCode(error: unknown, code: string): boolean {
   );
 }
 
+async function withReferencedDeadline<T>(
+  operation: Promise<T>,
+  timeoutMs = 1_000
+): Promise<T> {
+  let watchdog: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    watchdog = setTimeout(() => {
+      reject(new Error(`테스트 작업이 ${timeoutMs}ms 안에 끝나지 않았습니다.`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    clearTimeout(watchdog);
+  }
+}
+
 function testWavBase64() {
   const wav = Buffer.alloc(44);
   wav.write("RIFF", 0, "ascii");
@@ -401,7 +418,9 @@ test("로컬 Whisper 요청은 loopback에 WAV를 한 번 보내고 인증 헤�
     }
   );
   assert.equal(calls, 1);
-  assert.equal(transcript.segments[0].text, "로컬 전사");
+  const [segment] = transcript.segments;
+  assert.ok(segment);
+  assert.equal(segment.text, "로컬 전사");
 
   let remoteCalls = 0;
   await assert.rejects(
@@ -444,17 +463,17 @@ test("로컬 Whisper 응답 오류·큰 본문·timeout을 안전한 코드로 �
     (error) => hasErrorCode(error, "STT_RESPONSE_TOO_LARGE")
   );
   await assert.rejects(
-    requestLocalWhisperTranscription(request, {
+    withReferencedDeadline(requestLocalWhisperTranscription(request, {
       sttEndpoint: LOCAL_STT_ENDPOINT,
       timeoutMs: 5,
-      fetchImpl: async (_url, init) => new Promise((resolve, reject) => {
+      fetchImpl: async (_url, init) => new Promise((_resolve, reject) => {
         const signal = init?.signal;
         assert.ok(signal);
         signal.addEventListener("abort", () => {
           reject(signal.reason);
         }, { once: true });
       })
-    }),
+    })),
     (error) => hasErrorCode(error, "STT_TIMEOUT")
   );
 });
@@ -523,8 +542,10 @@ test("파이프라인은 로컬 전사를 한 번 실행하고 Whisper 응답만
   assert.equal(result.provider, "local-whispercpp");
   assert.equal(result.sttModel, "tiny-q5_1");
   assert.equal(result.resolvedModel, "tiny-q5_1");
-  assert.equal(result.cues[0].text, "테스트입니다");
-  assert.equal(result.cues[0].placement, "bottom");
+  const [cue] = result.cues;
+  assert.ok(cue);
+  assert.equal(cue.text, "테스트입니다");
+  assert.equal(cue.placement, "bottom");
 });
 
 test("발화가 없는 로컬 전사는 review-required 빈 결과로 완료한다", async () => {
@@ -561,19 +582,19 @@ test("잘못된 모델은 전사 전에 막고 전체 deadline은 진행 중 전
 
   const transcribeSignal: { current?: AbortSignal } = {};
   await assert.rejects(
-    runCaptionPipeline(captionRequest(), {
+    withReferencedDeadline(runCaptionPipeline(captionRequest(), {
       pipelineTimeoutMs: 5,
       transcribeAudio: async (_request, options) => {
         const { signal } = options;
         assert.ok(signal);
         transcribeSignal.current = signal;
-        await new Promise((resolve, reject) => {
+        await new Promise((_resolve, reject) => {
           signal.addEventListener("abort", () => {
             reject(signal.reason);
           }, { once: true });
         });
       }
-    }),
+    })),
     (error) => hasErrorCode(error, "PIPELINE_TIMEOUT")
   );
   assert.equal(transcribeSignal.current?.aborted, true);

@@ -523,9 +523,12 @@ function normalizeEditorProject(raw) {
   }
   const migratingLegacyProject = raw.schema === LEGACY_EDITOR_SCHEMA_V1;
   const clips = reflowClips(Array.isArray(raw.clips) ? raw.clips : []);
+  const rawProjectId = typeof raw.id === "string" || typeof raw.id === "number" && Number.isFinite(raw.id) ? String(raw.id).trim() : "";
+  const projectId = rawProjectId || makeId("project");
+  const createdAt = typeof raw.createdAt === "string" && raw.createdAt.trim() ? raw.createdAt : nowIso();
   const defaults = createEditorProjectFromCapture({}, {
-    id: String(raw.id || makeId("project")),
-    createdAt: String(raw.createdAt || nowIso())
+    id: projectId,
+    createdAt
   });
   const clipIds = new Set(clips.map((clip) => clip.id));
   const clipSelectionIds = new Set(clips.map((clip) => clip.selectionId));
@@ -686,9 +689,13 @@ function normalizeEditorProject(raw) {
   };
   const rawAi = recordOrEmpty(raw.ai);
   const legacyBrowserWhisperMetadata = rawAi.provider === "transformers.js";
+  const {
+    resolvedModel: rawResolvedModel,
+    ...rawAiExtensions
+  } = rawAi;
   const ai = {
     ...defaults.ai,
-    ...rawAi,
+    ...rawAiExtensions,
     ...legacyBrowserWhisperMetadata ? {
       provider: defaults.ai.provider,
       model: defaults.ai.model,
@@ -718,21 +725,26 @@ function normalizeEditorProject(raw) {
     captionCheckpoints: normalizeAiCaptionCheckpoints(
       rawAi.captionCheckpoints,
       clips
-    )
+    ),
+    ...typeof rawResolvedModel === "string" && rawResolvedModel.trim() ? { resolvedModel: rawResolvedModel } : {}
   };
   const rawHistory = recordOrEmpty(raw.history);
   const rawSource = recordOrEmpty(raw.source);
   const rawBroadcastSession = recordOrEmpty(
     raw.broadcastSession
   );
-  return {
+  const selectedClipId = typeof raw.selectedClipId === "string" && clipIds.has(raw.selectedClipId) ? raw.selectedClipId : null;
+  const selectedCueId = typeof raw.selectedCueId === "string" && subtitles.some((cue) => cue.id === raw.selectedCueId) ? raw.selectedCueId : null;
+  const normalizedProject = {
     ...defaults,
-    ...raw,
     schema: EDITOR_SCHEMA,
+    id: projectId,
+    name: typeof raw.name === "string" && raw.name.trim() ? raw.name : defaults.name,
     source: { ...defaults.source, ...rawSource },
     broadcastSession: {
       ...defaults.broadcastSession,
-      ...rawBroadcastSession
+      ...rawBroadcastSession,
+      id: typeof rawBroadcastSession.id === "string" ? rawBroadcastSession.id : String(defaults.broadcastSession.id || "")
     },
     mediaAsset: normalizeMediaAsset(raw.mediaAsset),
     subtitleDefaults,
@@ -748,9 +760,19 @@ function normalizeEditorProject(raw) {
     recentSubtitleColors: normalizeRecentSubtitleColors(raw.recentSubtitleColors),
     audioRegions,
     imageAssets,
+    selectedClipId,
     selectedImageAssetId: imageAssets.some((asset) => asset.id === raw.selectedImageAssetId) && typeof raw.selectedImageAssetId === "string" ? raw.selectedImageAssetId : null,
-    selectedAudioRegionId: audioRegions.some((region) => region.id === raw.selectedAudioRegionId) && typeof raw.selectedAudioRegionId === "string" ? raw.selectedAudioRegionId : null
+    selectedCueId,
+    selectedAudioRegionId: audioRegions.some((region) => region.id === raw.selectedAudioRegionId) && typeof raw.selectedAudioRegionId === "string" ? raw.selectedAudioRegionId : null,
+    playheadMs: clamp(
+      Math.round(finiteNumber(raw.playheadMs, defaults.playheadMs)),
+      0,
+      projectDurationMs({ clips })
+    ),
+    createdAt,
+    updatedAt: typeof raw.updatedAt === "string" && raw.updatedAt.trim() ? raw.updatedAt : createdAt
   };
+  return { ...raw, ...normalizedProject };
 }
 function applyCaptionStylePreset(project, presetId) {
   if (!project || typeof project !== "object") {
@@ -886,14 +908,14 @@ function mergeCaptureIntoEditorProject(project, captureState = {}) {
       if (!capturedBoundaryUnchanged && !canPreserveTrim) {
         return [];
       }
+      const { note: _previousNote2, ...existingWithoutNote } = existing;
       return [{
         ...incoming,
-        ...existing,
+        ...existingWithoutNote,
         sourceStartMs: capturedBoundaryUnchanged ? existing.sourceStartMs : overlapStartMs,
         sourceEndMs: capturedBoundaryUnchanged ? existing.sourceEndMs : overlapEndMs,
         selectionStartMs: incoming.selectionStartMs,
         selectionEndMs: incoming.selectionEndMs,
-        note: incoming.note,
         capture: incoming.capture,
         updatedAt: nowIso()
       }];
@@ -903,14 +925,17 @@ function mergeCaptureIntoEditorProject(project, captureState = {}) {
       return;
     }
     const [firstExisting] = existingGroup;
+    const {
+      note: _previousNote,
+      ...firstExistingWithoutNote
+    } = firstExisting || {};
     replacementBySelection.set(selectionId, {
       ...incoming,
-      ...firstExisting,
+      ...firstExistingWithoutNote,
       sourceStartMs: incoming.sourceStartMs,
       sourceEndMs: incoming.sourceEndMs,
       selectionStartMs: incoming.selectionStartMs,
       selectionEndMs: incoming.selectionEndMs,
-      note: incoming.note,
       capture: incoming.capture,
       updatedAt: nowIso()
     });
@@ -1021,9 +1046,9 @@ function mergeCaptureIntoEditorProject(project, captureState = {}) {
     audioRegions,
     imageAssets,
     selectedClipId: nextSelectedClipId,
-    selectedCueId: subtitles.some((cue) => cue.id === normalized.selectedCueId) ? normalized.selectedCueId : null,
-    selectedImageAssetId: imageAssets.some((asset) => asset.id === normalized.selectedImageAssetId) ? normalized.selectedImageAssetId : null,
-    selectedAudioRegionId: audioRegions.some((region) => region.id === normalized.selectedAudioRegionId) ? normalized.selectedAudioRegionId : null,
+    selectedCueId: subtitles.some((cue) => cue.id === normalized.selectedCueId) ? normalized.selectedCueId ?? null : null,
+    selectedImageAssetId: imageAssets.some((asset) => asset.id === normalized.selectedImageAssetId) ? normalized.selectedImageAssetId ?? null : null,
+    selectedAudioRegionId: audioRegions.some((region) => region.id === normalized.selectedAudioRegionId) ? normalized.selectedAudioRegionId ?? null : null,
     updatedAt: nowIso()
   };
 }
@@ -1284,7 +1309,13 @@ function updateImageAsset(project, assetId, patch = {}) {
     return project;
   }
   const current = project.imageAssets[index];
+  if (!current) {
+    return project;
+  }
   const clip = project.clips.find((candidate) => candidate.id === current.clipId);
+  if (!clip) {
+    throw new Error("\uC774\uBBF8\uC9C0 \uC5D0\uC14B\uC774 \uCC38\uC870\uD558\uB294 \uC601\uC0C1 \uAD6C\uAC04\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+  }
   const next = normalizeImageAsset({
     ...current,
     ...patch,
@@ -1306,7 +1337,7 @@ function deleteImageAsset(project, assetId) {
   return {
     ...project,
     imageAssets: (project.imageAssets || []).filter((asset) => asset.id !== assetId),
-    selectedImageAssetId: project.selectedImageAssetId === assetId ? null : project.selectedImageAssetId,
+    selectedImageAssetId: project.selectedImageAssetId === assetId ? null : project.selectedImageAssetId ?? null,
     updatedAt: nowIso()
   };
 }
@@ -1378,7 +1409,13 @@ function updateAudioRegion(project, regionId, patch = {}) {
     return project;
   }
   const current = project.audioRegions[index];
+  if (!current) {
+    return project;
+  }
   const clip = project.clips.find((candidate) => candidate.id === current.clipId);
+  if (!clip) {
+    throw new Error("\uC74C\uC131 \uAD6C\uAC04\uC774 \uCC38\uC870\uD558\uB294 \uC601\uC0C1 \uAD6C\uAC04\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+  }
   const next = normalizeAudioRegion({
     ...current,
     ...patch,
@@ -1397,7 +1434,7 @@ function deleteAudioRegion(project, regionId) {
   return {
     ...project,
     audioRegions: project.audioRegions.filter((region) => region.id !== regionId),
-    selectedAudioRegionId: project.selectedAudioRegionId === regionId ? null : project.selectedAudioRegionId,
+    selectedAudioRegionId: project.selectedAudioRegionId === regionId ? null : project.selectedAudioRegionId ?? null,
     updatedAt: nowIso()
   };
 }
@@ -1639,8 +1676,14 @@ function findImageAssetOverlaps(project) {
   const overlaps = [];
   for (let leftIndex = 0; leftIndex < assets.length; leftIndex += 1) {
     const left = assets[leftIndex];
+    if (!left) {
+      continue;
+    }
     for (let rightIndex = leftIndex + 1; rightIndex < assets.length; rightIndex += 1) {
       const right = assets[rightIndex];
+      if (!right) {
+        continue;
+      }
       if (right.range.startMs >= left.range.endMs) {
         break;
       }
@@ -1661,8 +1704,14 @@ function findSubtitleOverlaps(project) {
   const overlaps = [];
   for (let leftIndex = 0; leftIndex < cues.length; leftIndex += 1) {
     const left = cues[leftIndex];
+    if (!left) {
+      continue;
+    }
     for (let rightIndex = leftIndex + 1; rightIndex < cues.length; rightIndex += 1) {
       const right = cues[rightIndex];
+      if (!right) {
+        continue;
+      }
       if (right.range.startMs >= left.range.endMs) {
         break;
       }
@@ -1687,8 +1736,14 @@ function findAudioRegionOverlaps(project) {
   const overlaps = [];
   for (let leftIndex = 0; leftIndex < regions.length; leftIndex += 1) {
     const left = regions[leftIndex];
+    if (!left) {
+      continue;
+    }
     for (let rightIndex = leftIndex + 1; rightIndex < regions.length; rightIndex += 1) {
       const right = regions[rightIndex];
+      if (!right) {
+        continue;
+      }
       if (right.range.startMs >= left.range.endMs) {
         break;
       }
@@ -1721,7 +1776,13 @@ function updateSubtitleCue(project, cueId, patch = {}, { markHuman = true } = {}
     return project;
   }
   const current = project.subtitles[index];
+  if (!current) {
+    return project;
+  }
   const clip = project.clips.find((candidate) => candidate.id === current.clipId);
+  if (!clip) {
+    throw new Error("\uC790\uB9C9\uC774 \uCC38\uC870\uD558\uB294 \uC601\uC0C1 \uAD6C\uAC04\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+  }
   const next = normalizeSubtitleCue({
     ...current,
     ...patch,
@@ -1741,7 +1802,7 @@ function deleteSubtitleCue(project, cueId) {
   return {
     ...project,
     subtitles: project.subtitles.filter((cue) => cue.id !== cueId),
-    selectedCueId: project.selectedCueId === cueId ? null : project.selectedCueId,
+    selectedCueId: project.selectedCueId === cueId ? null : project.selectedCueId ?? null,
     updatedAt: nowIso()
   };
 }
@@ -1824,7 +1885,11 @@ function replaceAiSubtitleDraft(project, clipId, drafts = []) {
     }
     const assigned = { ...candidate, lane };
     aiCues.push(assigned);
-    laneCues[lane].push(assigned);
+    const assignedLane = laneCues[lane];
+    if (!assignedLane) {
+      throw new RangeError("\uC790\uB9C9 \uB808\uC778\uC774 \uD5C8\uC6A9 \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4.");
+    }
+    assignedLane.push(assigned);
     if (speakerId && speakerId !== "unknown" && !speakerLanes.has(speakerId)) {
       speakerLanes.set(speakerId, lane);
     }
@@ -1838,7 +1903,7 @@ function replaceAiSubtitleDraft(project, clipId, drafts = []) {
     ...project,
     subtitleLaneCount,
     subtitles,
-    selectedCueId: subtitles.some((cue) => cue.id === project.selectedCueId) ? project.selectedCueId : aiCues[0]?.id || protectedInClip[0]?.id || null,
+    selectedCueId: subtitles.some((cue) => cue.id === project.selectedCueId) ? project.selectedCueId ?? null : aiCues[0]?.id || protectedInClip[0]?.id || null,
     updatedAt: nowIso()
   };
 }
@@ -1911,7 +1976,7 @@ function appendAiSubtitleDrafts(project, drafts = []) {
   return {
     ...next,
     subtitles,
-    selectedCueId: subtitles.some((cue) => cue.id === selectedCueId) ? selectedCueId : next.selectedCueId,
+    selectedCueId: subtitles.some((cue) => cue.id === selectedCueId) ? selectedCueId ?? null : next.selectedCueId ?? null,
     updatedAt: nowIso()
   };
 }
@@ -1957,6 +2022,9 @@ function transcriptChunksToCueDrafts(chunks = [], clipDuration = 0, {
     }
     const firstWord = group[0];
     const lastWord = group.at(-1);
+    if (!firstWord || !lastWord) {
+      throw new Error("\uC790\uB9C9 \uB2E8\uC5B4 \uADF8\uB8F9\uC758 \uACBD\uACC4\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+    }
     const startOffsetMs = firstWord.startMs;
     const naturalEnd = lastWord.endMs;
     const nextStart = words[words.indexOf(lastWord) + 1]?.startMs;
@@ -1972,7 +2040,11 @@ function transcriptChunksToCueDrafts(chunks = [], clipDuration = 0, {
         if (index === 0) {
           return word.text;
         }
-        const previous = group[index - 1].text;
+        const previousWord = group[index - 1];
+        if (!previousWord) {
+          return word.text;
+        }
+        const previous = previousWord.text;
         const noLeadingSpace = /^[,.:;!?%)\]}〉》」』…]/u.test(word.text);
         const noTrailingSpace = /[(\[{〈《「『]$/u.test(previous);
         return `${noLeadingSpace || noTrailingSpace ? "" : " "}${word.text}`;
@@ -1987,6 +2059,9 @@ function transcriptChunksToCueDrafts(chunks = [], clipDuration = 0, {
     }
     const first = group[0];
     const previous = group.at(-1);
+    if (!first || !previous) {
+      throw new Error("\uC790\uB9C9 \uB2E8\uC5B4 \uADF8\uB8F9\uC758 \uACBD\uACC4\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+    }
     const proposedText = `${group.map((item) => item.text).join(" ")} ${word.text}`.trim();
     const shouldBreak = word.startMs - previous.endMs >= gapBreakMs || word.endMs - first.startMs > boundedMaxDurationMs || proposedText.length > maxCharacters || /[.!?。！？…]$/u.test(previous.text);
     if (shouldBreak) {
@@ -2072,6 +2147,9 @@ function updateClipTrim(project, clipId, {
     return project;
   }
   const current = project.clips[index];
+  if (!current) {
+    return project;
+  }
   const start = Math.max(0, Math.round(finiteNumber(sourceStartMs, current.sourceStartMs)));
   const end = Math.max(start + MIN_CLIP_DURATION_MS, Math.round(finiteNumber(sourceEndMs, current.sourceEndMs)));
   const nextClips = [...project.clips];
@@ -2130,9 +2208,9 @@ function updateClipTrim(project, clipId, {
     }, nextClip);
     return next ? [next] : [];
   });
-  const selectedCueId = subtitles.some((cue) => cue.id === project.selectedCueId) ? project.selectedCueId : null;
-  const selectedAudioRegionId = audioRegions.some((region) => region.id === project.selectedAudioRegionId) ? project.selectedAudioRegionId : null;
-  const selectedImageAssetId = imageAssets.some((asset) => asset.id === project.selectedImageAssetId) ? project.selectedImageAssetId : null;
+  const selectedCueId = subtitles.some((cue) => cue.id === project.selectedCueId) ? project.selectedCueId ?? null : null;
+  const selectedAudioRegionId = audioRegions.some((region) => region.id === project.selectedAudioRegionId) ? project.selectedAudioRegionId ?? null : null;
+  const selectedImageAssetId = imageAssets.some((asset) => asset.id === project.selectedImageAssetId) ? project.selectedImageAssetId ?? null : null;
   return {
     ...project,
     clips,
@@ -2213,10 +2291,13 @@ function rippleDeleteTimelineRange(project, {
     }
     const localDeleteStartMs = overlapStartMs - clipTimelineStartMs;
     const localDeleteEndMs = overlapEndMs - clipTimelineStartMs;
-    const keptRanges = [
+    const candidateRanges = [
       [0, localDeleteStartMs],
       [localDeleteEndMs, clipDuration]
-    ].filter(([rangeStartMs, rangeEndMs]) => rangeEndMs > rangeStartMs);
+    ];
+    const keptRanges = candidateRanges.filter(
+      ([rangeStartMs, rangeEndMs]) => rangeEndMs > rangeStartMs
+    );
     const tooShort = keptRanges.find(([rangeStartMs, rangeEndMs]) => rangeEndMs - rangeStartMs < MIN_CLIP_DURATION_MS);
     if (tooShort) {
       throw new RangeError(
@@ -2232,7 +2313,11 @@ function rippleDeleteTimelineRange(project, {
   const reflowedByClipId = new Map(clips.map((clip) => [clip.id, clip]));
   slicesByClipId.forEach((slices) => {
     slices.forEach((slice) => {
-      slice.nextClip = reflowedByClipId.get(slice.nextClip.id);
+      const reflowed = reflowedByClipId.get(slice.nextClip.id);
+      if (!reflowed) {
+        throw new Error("\uB9AC\uD50C \uC0AD\uC81C \uD6C4 \uC601\uC0C1 \uAD6C\uAC04\uC744 \uB2E4\uC2DC \uC5F0\uACB0\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      }
+      slice.nextClip = reflowed;
     });
   });
   const remapTimedItems = (items, {
@@ -2335,6 +2420,9 @@ function rippleDeleteTimelineRange(project, {
       return;
     }
     const [representative] = previousClips;
+    if (!representative) {
+      return;
+    }
     const previous = suppressedBySelectionId.get(selectionId);
     const suppressed = normalizeSuppressedSelection({
       ...previous,
@@ -2364,9 +2452,9 @@ function rippleDeleteTimelineRange(project, {
     imageAssets,
     audioRegions,
     selectedClipId,
-    selectedCueId: subtitles.some((cue) => cue.id === project.selectedCueId) ? project.selectedCueId : null,
-    selectedImageAssetId: imageAssets.some((asset) => asset.id === project.selectedImageAssetId) ? project.selectedImageAssetId : null,
-    selectedAudioRegionId: audioRegions.some((region) => region.id === project.selectedAudioRegionId) ? project.selectedAudioRegionId : null,
+    selectedCueId: subtitles.some((cue) => cue.id === project.selectedCueId) ? project.selectedCueId ?? null : null,
+    selectedImageAssetId: imageAssets.some((asset) => asset.id === project.selectedImageAssetId) ? project.selectedImageAssetId ?? null : null,
+    selectedAudioRegionId: audioRegions.some((region) => region.id === project.selectedAudioRegionId) ? project.selectedAudioRegionId ?? null : null,
     playheadMs,
     updatedAt: timestamp
   };
@@ -2379,6 +2467,9 @@ function reorderClip(project, clipId, toIndex) {
   }
   const clips = [...project.clips];
   const [moved] = clips.splice(fromIndex, 1);
+  if (!moved) {
+    return project;
+  }
   clips.splice(target, 0, moved);
   return { ...project, clips: reflowClips(clips), updatedAt: nowIso() };
 }
@@ -2394,9 +2485,19 @@ function canReorderClipGroup(clips = [], selectedClipIds = [], direction = 0) {
     return false;
   }
   if (direction < 0) {
-    return clips.some((clip, index) => index > 0 && selected.has(clip.id) && !selected.has(clips[index - 1].id));
+    return clips.some((clip, index) => {
+      const previous = clips[index - 1];
+      return Boolean(
+        previous && selected.has(clip.id) && !selected.has(previous.id)
+      );
+    });
   }
-  return clips.some((clip, index) => index < clips.length - 1 && selected.has(clip.id) && !selected.has(clips[index + 1].id));
+  return clips.some((clip, index) => {
+    const next = clips[index + 1];
+    return Boolean(
+      next && selected.has(clip.id) && !selected.has(next.id)
+    );
+  });
 }
 function reorderClipGroup(project, selectedClipIds = [], direction = 0) {
   const clips = [...project?.clips || []];
@@ -2406,14 +2507,26 @@ function reorderClipGroup(project, selectedClipIds = [], direction = 0) {
   }
   if (direction < 0) {
     for (let index = 1; index < clips.length; index += 1) {
-      if (selected.has(clips[index].id) && !selected.has(clips[index - 1].id)) {
-        [clips[index - 1], clips[index]] = [clips[index], clips[index - 1]];
+      const current = clips[index];
+      const previous = clips[index - 1];
+      if (!current || !previous) {
+        continue;
+      }
+      if (selected.has(current.id) && !selected.has(previous.id)) {
+        clips[index - 1] = current;
+        clips[index] = previous;
       }
     }
   } else {
     for (let index = clips.length - 2; index >= 0; index -= 1) {
-      if (selected.has(clips[index].id) && !selected.has(clips[index + 1].id)) {
-        [clips[index], clips[index + 1]] = [clips[index + 1], clips[index]];
+      const current = clips[index];
+      const next = clips[index + 1];
+      if (!current || !next) {
+        continue;
+      }
+      if (selected.has(current.id) && !selected.has(next.id)) {
+        clips[index] = next;
+        clips[index + 1] = current;
       }
     }
   }

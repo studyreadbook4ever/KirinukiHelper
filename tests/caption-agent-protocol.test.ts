@@ -264,8 +264,10 @@ test("편집기가 만드는 실제 요청과 companion 계약이 같은 버전�
     reviewRequired: false,
     placement: "bottom"
   }], 5_000);
-  assert.equal(editorCues[0].text, "연결됐어?");
-  assert.equal(editorCues[0].remoteMeta.speakerId, "main");
+  const [editorCue] = editorCues;
+  assert.ok(editorCue);
+  assert.equal(editorCue.text, "연결됐어?");
+  assert.equal(editorCue.remoteMeta.speakerId, "main");
 });
 
 test("종결 마침표만 제거하고 물음표·느낌표는 보존한다", () => {
@@ -335,7 +337,9 @@ test("[불명확] 자막은 false를 반환해도 사람 검수를 강제한다"
   }], {
     clipDurationMs: 1_000
   });
-  assert.equal(result.cues[0].reviewRequired, true);
+  const [cue] = result.cues;
+  assert.ok(cue);
+  assert.equal(cue.reviewRequired, true);
 });
 
 test("0.1초 미만 cue는 클립 경계 안에서 안전하게 늘린다", () => {
@@ -349,8 +353,10 @@ test("0.1초 미만 cue는 클립 경계 안에서 안전하게 늘린다", () =
   }], {
     clipDurationMs: 10_000
   });
+  const [cue] = result.cues;
+  assert.ok(cue);
   assert.deepEqual(
-    [result.cues[0].startMs, result.cues[0].endMs],
+    [cue.startMs, cue.endMs],
     [9_900, 10_000]
   );
   assert(

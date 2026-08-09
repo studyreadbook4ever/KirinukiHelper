@@ -318,7 +318,9 @@ test("치지직 SPA에서는 stale canonical 대신 현재 URL의 VOD 식별자�
   assert.equal(activeMetadataTimeouts.size, 0);
   assert.equal(requestSignals.length, 1);
   assert.equal(requestSignals[0]?.aborted, false);
-  assert.match(requestedEndpoints[0], new RegExp(`/${currentVideoId}$`, "u"));
+  const [requestedEndpoint] = requestedEndpoints;
+  assert.ok(requestedEndpoint);
+  assert.match(requestedEndpoint, new RegExp(`/${currentVideoId}$`, "u"));
   assert.equal(
     response.context.canonicalUrl.includes(previousVideoId),
     false,

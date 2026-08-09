@@ -31,6 +31,7 @@ const CAPTION_TEXT = "사람이 확인한 내보내기 자막";
 const SECOND_CAPTION_TEXT = "동시에 보이는 두 번째 자막";
 const FIRST_CAPTION_COLOR = "#ff2020";
 const SECOND_CAPTION_COLOR = "#20ff40";
+const SECOND_CAPTION_Y_PERCENT = 50;
 const IMAGE_ASSET_ID = "asset-transparent-export-e2e";
 const IMAGE_ASSET_NAME = "transparent-export-e2e.png";
 const PREEXISTING_SIDECAR_TEXT = "do-not-overwrite-existing-sidecar\n";
@@ -109,8 +110,19 @@ type SubtitleRecord = {
   color: string;
   origin: string;
   lane: number;
+  x: number;
+  y: number;
   startOffsetMs: number;
   endOffsetMs: number;
+};
+
+type ExportStartSnapshot = {
+  jobVisible: boolean;
+  exportDisabled: boolean;
+  toast: string;
+  toastRole: string | null;
+  pickerCalls: number;
+  getFileHandleCalls: number;
 };
 type ImageAssetRecord = {
   id: string;
@@ -382,6 +394,14 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
+function requireDefined<T>(
+  value: T | null | undefined,
+  message: string
+): T {
+  assert(value !== null && value !== undefined, message);
+  return value;
+}
+
 function isExpectedLocalCaptionOffline(entry: BrowserLogEntry) {
   return (
     entry?.level === "SEVERE"
@@ -390,6 +410,17 @@ function isExpectedLocalCaptionOffline(entry: BrowserLogEntry) {
       "http://127.0.0.1:4319/v1/session - Failed to load resource:"
     )
     && String(entry.message).includes("net::ERR_CONNECTION_REFUSED")
+  );
+}
+
+function isExpectedLocalCaptionOriginRejection(entry: BrowserLogEntry) {
+  return (
+    entry?.level === "SEVERE"
+    && entry?.source === "network"
+    && String(entry?.message || "").startsWith(
+      "http://127.0.0.1:4319/v1/session - Failed to load resource:"
+    )
+    && String(entry.message).includes("status of 403")
   );
 }
 
@@ -517,12 +548,15 @@ async function fetchJson(
     timeout = 30_000
   }: { method?: string; body?: unknown; timeout?: number } = {}
 ): Promise<unknown> {
-  const response = await fetch(url, {
+  const requestInit: RequestInit = {
     method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(timeout)
-  });
+  };
+  if (body !== undefined) {
+    requestInit.headers = { "content-type": "application/json" };
+    requestInit.body = JSON.stringify(body);
+  }
+  const response = await fetch(url, requestInit);
   const text = await response.text();
   let payload: unknown = null;
   if (text) {
@@ -987,6 +1021,7 @@ async function seedTransparentImageAssetFixture() {
     IMAGE_ASSET_ID,
     IMAGE_ASSET_NAME
   ]);
+  const semiGreenAlpha = result.sourcePixels?.semiGreen?.[3];
   assert(
     result?.ok &&
       result.asset?.source?.kind === "blob-key" &&
@@ -998,8 +1033,9 @@ async function seedTransparentImageAssetFixture() {
       result.sourcePixels?.opaqueRed?.[0] === 255 &&
       result.sourcePixels?.opaqueRed?.[3] === 255 &&
       result.sourcePixels?.semiGreen?.[1] === 255 &&
-      result.sourcePixels?.semiGreen?.[3] > 100 &&
-      result.sourcePixels?.semiGreen?.[3] < 200,
+      typeof semiGreenAlpha === "number" &&
+      semiGreenAlpha > 100 &&
+      semiGreenAlpha < 200,
     `투명 PNG blob-key fixture를 IndexedDB에 저장하지 못했습니다: ${JSON.stringify(result)}`
   );
   return result;
@@ -1511,10 +1547,15 @@ async function sampleFrameRgb(ffmpeg: string, filePath: string, timestamp: numbe
     "pipe:1"
   ], { binary: true });
   assert(output.byteLength >= 3, `${timestamp}초 프레임 RGB를 추출하지 못했습니다.`);
+  const [red, green, blue] = output;
+  assert(
+    red !== undefined && green !== undefined && blue !== undefined,
+    `${timestamp}초 프레임 RGB 채널을 읽지 못했습니다.`
+  );
   return {
-    red: output[0],
-    green: output[1],
-    blue: output[2]
+    red,
+    green,
+    blue
   };
 }
 
@@ -1554,9 +1595,9 @@ function analyzeCaptionColors(pixels: Buffer): Record<"red" | "green", CaptionCo
     green: { count: 0, xTotal: 0, yTotal: 0 }
   };
   for (let offset = 0; offset < pixels.byteLength; offset += 3) {
-    const red = pixels[offset];
-    const green = pixels[offset + 1];
-    const blue = pixels[offset + 2];
+    const red = pixels[offset] ?? 0;
+    const green = pixels[offset + 1] ?? 0;
+    const blue = pixels[offset + 2] ?? 0;
     const pixelIndex = offset / 3;
     const x = pixelIndex % FRAME_WIDTH;
     const y = Math.floor(pixelIndex / FRAME_WIDTH);
@@ -1595,9 +1636,9 @@ function averageRgbRegion(pixels: Buffer, {
   for (let pixelY = top; pixelY < bottom; pixelY += 1) {
     for (let pixelX = left; pixelX < right; pixelX += 1) {
       const offset = (pixelY * FRAME_WIDTH + pixelX) * 3;
-      total.red += pixels[offset];
-      total.green += pixels[offset + 1];
-      total.blue += pixels[offset + 2];
+      total.red += pixels[offset] ?? 0;
+      total.green += pixels[offset + 1] ?? 0;
+      total.blue += pixels[offset + 2] ?? 0;
       total.count += 1;
     }
   }
@@ -1648,7 +1689,7 @@ function tonePower(samples: number[], sampleRate: number, frequency: number) {
   for (let index = 0; index < samples.length; index += 1) {
     const window = 0.5 - 0.5 * Math.cos(2 * Math.PI * index / denominator);
     const angle = 2 * Math.PI * frequency * index / sampleRate;
-    const value = samples[index] * window;
+    const value = (samples[index] ?? 0) * window;
     real += value * Math.cos(angle);
     imaginary -= value * Math.sin(angle);
   }
@@ -1881,8 +1922,8 @@ async function main() {
   await clickElement('.clip-item[data-id="clip-blue"] [data-action="up"]');
   const reorderedProject = await waitForStoredProject((project) => (
     project.clips.map((clip) => clip.id).join(",") === "clip-blue,clip-red"
-      && project.clips[0].timelineStartMs === 0
-      && project.clips[1].timelineStartMs === 2_000
+      && project.clips[0]?.timelineStartMs === 0
+      && project.clips[1]?.timelineStartMs === 2_000
   ), "파랑→빨강 컷 순서 저장");
 
   await webdriver("POST", `/session/${sessionId}/url`, { url: sidepanelUrl });
@@ -2125,11 +2166,14 @@ async function main() {
   await setControlValue("#font-color", FIRST_CAPTION_COLOR);
   const firstCaptionProject = await waitForStoredProject((project) => (
     project.subtitles.length === 1
-      && project.subtitles[0].text === CAPTION_TEXT
-      && project.subtitles[0].color === FIRST_CAPTION_COLOR
-      && project.subtitles[0].origin === "human"
+      && project.subtitles[0]?.text === CAPTION_TEXT
+      && project.subtitles[0]?.color === FIRST_CAPTION_COLOR
+      && project.subtitles[0]?.origin === "human"
   ), "첫 자막 텍스트·색상 autosave");
-  const captionCue = firstCaptionProject.subtitles[0];
+  const captionCue = requireDefined(
+    firstCaptionProject.subtitles[0],
+    "첫 자막 fixture를 저장된 프로젝트에서 찾지 못했습니다."
+  );
   const captionClip = requireClip(firstCaptionProject, captionCue.clipId);
   const captionTimelineStartMs =
     Number(captionClip?.timelineStartMs) + Number(captionCue.startOffsetMs);
@@ -2153,6 +2197,7 @@ async function main() {
   await clearAndType("#cue-text", SECOND_CAPTION_TEXT);
   await executeSync("document.querySelector('#cue-text').blur();");
   await setControlValue("#font-color", SECOND_CAPTION_COLOR);
+  await setControlValue("#cue-y", SECOND_CAPTION_Y_PERCENT);
   const captionProject = await waitForStoredProject((project) => (
     project.subtitles.length === 2
       && project.subtitles.some((cue) => (
@@ -2163,16 +2208,23 @@ async function main() {
       && project.subtitles.some((cue) => (
         cue.text === SECOND_CAPTION_TEXT &&
         cue.color === SECOND_CAPTION_COLOR &&
-        cue.lane === 1
+        cue.lane === 1 &&
+        Math.abs(cue.y - SECOND_CAPTION_Y_PERCENT / 100) < 0.001
       ))
   ), "서로 다른 색의 동시 2레인 자막 autosave");
   const captionCues = [...captionProject.subtitles].sort((a, b) => a.lane - b.lane);
+  const firstCaptionCue = captionCues[0];
+  const secondCaptionCue = captionCues[1];
   assert(
-    captionCues[0].clipId === captionCues[1].clipId &&
-      captionCues[0].startOffsetMs === captionCues[1].startOffsetMs &&
-      captionCues[0].endOffsetMs === captionCues[1].endOffsetMs &&
-      captionCues[0].lane === 0 &&
-      captionCues[1].lane === 1,
+    firstCaptionCue &&
+      secondCaptionCue &&
+      firstCaptionCue.clipId === secondCaptionCue.clipId &&
+      firstCaptionCue.startOffsetMs === secondCaptionCue.startOffsetMs &&
+      firstCaptionCue.endOffsetMs === secondCaptionCue.endOffsetMs &&
+      firstCaptionCue.lane === 0 &&
+      secondCaptionCue.lane === 1 &&
+      Math.abs(firstCaptionCue.y - 0.84) < 0.001 &&
+      Math.abs(secondCaptionCue.y - SECOND_CAPTION_Y_PERCENT / 100) < 0.001,
     `두 자막이 서로 다른 레인에서 동시에 겹치지 않습니다: ${JSON.stringify(captionCues)}`
   );
 
@@ -2187,11 +2239,15 @@ async function main() {
   await clickElement("#audio-mute");
   const mutedRegionProject = await waitForStoredProject((project) => (
     project.audioRegions.length === 1
-      && project.audioRegions[0].clipId === "clip-blue"
-      && project.audioRegions[0].muted === true
-      && Math.abs(project.audioRegions[0].startOffsetMs - 800) <= 50
-      && Math.abs(project.audioRegions[0].endOffsetMs - 1_200) <= 2
+      && project.audioRegions[0]?.clipId === "clip-blue"
+      && project.audioRegions[0]?.muted === true
+      && Math.abs((project.audioRegions[0]?.startOffsetMs ?? Number.NaN) - 800) <= 50
+      && Math.abs((project.audioRegions[0]?.endOffsetMs ?? Number.NaN) - 1_200) <= 2
   ), "음소거 구간 autosave");
+  const initialMutedRegion = requireDefined(
+    mutedRegionProject.audioRegions[0],
+    "음소거 구간 fixture를 저장된 프로젝트에서 찾지 못했습니다."
+  );
 
   audioUiActions.gainSeek = await seekTimelineAtClipFraction("clip-blue", 0.05, 0.1);
   await clickElement("#add-audio-region");
@@ -2200,14 +2256,14 @@ async function main() {
       && document.querySelectorAll("#audio-track .audio-block").length === 2;
   `), "저음량 구간 추가");
   await setControlValue("#audio-volume", "25");
-  const gainRegionProject = await waitForStoredProject((project) => (
+  await waitForStoredProject((project) => (
     project.audioRegions.length === 2
       && project.audioRegions.some((region) => (
         region.clipId === "clip-blue" &&
         region.muted === false &&
         Math.abs(region.gain - 0.25) < 0.001 &&
         Math.abs(region.startOffsetMs - 100) <= 50 &&
-        Math.abs(region.endOffsetMs - mutedRegionProject.audioRegions[0].startOffsetMs) <= 2
+        Math.abs(region.endOffsetMs - initialMutedRegion.startOffsetMs) <= 2
       ))
   ), "25% 음량 구간 autosave");
 
@@ -2398,26 +2454,47 @@ async function main() {
   );
 
   await clickElement("#export-video");
-  await waitUntil(async () => {
-    const state = await executeSync<{
-      jobVisible: boolean;
-      exportDisabled: boolean;
-      toast: string;
-    }>(`
+  const readExportStartSnapshot = () => executeSync<ExportStartSnapshot>(`
+      const directoryState = globalThis.__kirinukiE2eDirectory;
+      const toast = document.querySelector("#toast");
       return {
         jobVisible: !document.querySelector("#job-dialog")?.hidden,
         exportDisabled: Boolean(document.querySelector("#export-video")?.disabled),
-        toast: document.querySelector("#toast")?.textContent || ""
+        toast: toast?.textContent || "",
+        toastRole: toast?.getAttribute("role") || null,
+        pickerCalls: directoryState?.pickerCalls?.length ?? -1,
+        getFileHandleCalls: directoryState?.getFileHandleCalls?.length ?? -1
       };
     `);
-    if (/내보내기 실패|인코더를 준비하지 못했습니다/.test(state.toast)) {
+  let lastExportStartSnapshot: ExportStartSnapshot | null = null;
+  const assertExportStartHasNoError = (state: ExportStartSnapshot) => {
+    if (state.toastRole === "alert") {
       throw new Error(
         `UI 내보내기 실패: ${state.toast}\n` +
+        `state=${JSON.stringify(state)}\n` +
         `encoder diagnostics=${JSON.stringify(encoderDiagnostics)}`
       );
     }
-    return state.jobVisible || state.exportDisabled ? state : false;
-  }, "실제 영상 렌더 시작", { timeout: 30_000 });
+  };
+  await waitUntil(async () => {
+    const state = await readExportStartSnapshot();
+    lastExportStartSnapshot = state;
+    assertExportStartHasNoError(state);
+    return state.pickerCalls === 1 ? state : false;
+  }, "영상 내보내기 클릭과 directory picker 접수", { timeout: 10_000 });
+  try {
+    await waitUntil(async () => {
+      const state = await readExportStartSnapshot();
+      lastExportStartSnapshot = state;
+      assertExportStartHasNoError(state);
+      return state.jobVisible || state.exportDisabled ? state : false;
+    }, "실제 영상 렌더 시작", { timeout: 90_000 });
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n` +
+      `마지막 export start state=${JSON.stringify(lastExportStartSnapshot)}`
+    );
+  }
 
   const exportUi = await waitUntil(async () => {
     const state = await executeSync<{
@@ -2500,7 +2577,7 @@ async function main() {
         file.closeCount === 1 &&
         file.abortCount === 0 &&
         file.transactions.length === 1 &&
-        file.transactions[0].at(-1)?.type === "close",
+        file.transactions[0]?.at(-1)?.type === "close",
       `파일 writable이 정상 commit되지 않았습니다: ${JSON.stringify({
         name: file.name,
         committed: file.committed,
@@ -2513,18 +2590,21 @@ async function main() {
   }
   assert(
       videoFile.size > 10_000 &&
-      videoFile.transactions[0].some(
+      videoFile.transactions[0]?.some(
         (operation: ExternalRecord) => (
           operation.type === "write" && operation.mode === "positioned"
         )
-      ),
+      ) === true,
     `영상이 positioned write로 저장되지 않았습니다: ${JSON.stringify({
       name: videoFile.name,
       size: videoFile.size,
-      operations: videoFile.transactions[0]
+      operations: videoFile.transactions[0] ?? []
     })}`
   );
-  const finalizeUi = videoFile.closeUiSnapshots[0];
+  const finalizeUi = requireDefined(
+    videoFile.closeUiSnapshots[0],
+    "영상 writable close UI snapshot이 없습니다."
+  );
   assert(
     videoFile.closeUiSnapshots.length === 1 &&
       finalizeUi.jobHidden === false &&
@@ -2539,18 +2619,18 @@ async function main() {
     )}`
   );
   assert(
-    jsonFile.transactions[0].some(
+    jsonFile.transactions[0]?.some(
       (operation: ExternalRecord) => operation.type === "write" && operation.mode === "raw"
-    ) &&
-      srtFile.transactions[0].some(
+    ) === true &&
+      srtFile.transactions[0]?.some(
         (operation: ExternalRecord) => operation.type === "write" && operation.mode === "raw"
-      ),
+      ) === true,
     "JSON/SRT가 Blob raw write 경로를 사용하지 않았습니다."
   );
   assert(
     memoryDirectory.pickerCalls.length === 1 &&
-      memoryDirectory.pickerCalls[0].id === "chzzk-kirinuki-export" &&
-      memoryDirectory.pickerCalls[0].mode === "readwrite" &&
+      memoryDirectory.pickerCalls[0]?.id === "chzzk-kirinuki-export" &&
+      memoryDirectory.pickerCalls[0]?.mode === "readwrite" &&
       memoryDirectory.savePickerCalls.length === 0 &&
       memoryDirectory.anchorDownloads.length === 0,
     `directory picker 우선/fallback 미사용 계약 위반: ${JSON.stringify({
@@ -2599,29 +2679,33 @@ async function main() {
   const exportedProjectValue: unknown = JSON.parse(jsonText);
   assert(isProjectRecord(exportedProjectValue), "내보낸 kirinuki JSON shape가 올바르지 않습니다.");
   const exportedProject = exportedProjectValue;
+  const [exportedFirstCaption, exportedSecondCaption] = exportedProject.subtitles;
+  const [exportedImageAsset] = exportedProject.imageAssets;
   assert(
     exportedProject.id === PROJECT_ID &&
       exportedProject.name === PROJECT_NAME &&
       exportedProject.clips?.map((clip) => clip.id).join(",") === "clip-blue,clip-red" &&
       exportedProject.subtitles?.length === 2 &&
-      exportedProject.subtitles[0].text === CAPTION_TEXT &&
-      exportedProject.subtitles[0].lane === 0 &&
-      exportedProject.subtitles[0].color === FIRST_CAPTION_COLOR &&
-      exportedProject.subtitles[1].text === SECOND_CAPTION_TEXT &&
-      exportedProject.subtitles[1].lane === 1 &&
-      exportedProject.subtitles[1].color === SECOND_CAPTION_COLOR &&
+      exportedFirstCaption?.text === CAPTION_TEXT &&
+      exportedFirstCaption.lane === 0 &&
+      exportedFirstCaption.color === FIRST_CAPTION_COLOR &&
+      Math.abs(exportedFirstCaption.y - 0.84) < 0.001 &&
+      exportedSecondCaption?.text === SECOND_CAPTION_TEXT &&
+      exportedSecondCaption.lane === 1 &&
+      exportedSecondCaption.color === SECOND_CAPTION_COLOR &&
+      Math.abs(exportedSecondCaption.y - SECOND_CAPTION_Y_PERCENT / 100) < 0.001 &&
       exportedProject.subtitles.every((cue) => cue.origin === "human") &&
       exportedProject.imageAssets?.length === 1 &&
-      exportedProject.imageAssets[0].id === IMAGE_ASSET_ID &&
-      exportedProject.imageAssets[0].clipId === "clip-blue" &&
-      exportedProject.imageAssets[0].startOffsetMs === 200 &&
-      exportedProject.imageAssets[0].endOffsetMs === 800 &&
-      exportedProject.imageAssets[0].source?.kind === "blob-key" &&
-      exportedProject.imageAssets[0].source.value === IMAGE_ASSET_ID &&
-      exportedProject.imageAssets[0].naturalWidth === 120 &&
-      exportedProject.imageAssets[0].naturalHeight === 120 &&
-      exportedProject.imageAssets[0].scale === 2 &&
-      exportedProject.imageAssets[0].opacity === 1 &&
+      exportedImageAsset?.id === IMAGE_ASSET_ID &&
+      exportedImageAsset.clipId === "clip-blue" &&
+      exportedImageAsset.startOffsetMs === 200 &&
+      exportedImageAsset.endOffsetMs === 800 &&
+      exportedImageAsset.source?.kind === "blob-key" &&
+      exportedImageAsset.source.value === IMAGE_ASSET_ID &&
+      exportedImageAsset.naturalWidth === 120 &&
+      exportedImageAsset.naturalHeight === 120 &&
+      exportedImageAsset.scale === 2 &&
+      exportedImageAsset.opacity === 1 &&
       exportedProject.audioRegions?.length === 3 &&
       exportedProject.audioRegions.some((region) => (
         region.id === gainRegion.id && Math.abs(region.gain - 0.25) < 0.001
@@ -2981,7 +3065,7 @@ async function main() {
       && failedVideoFile.closeCount === 1
       && failedVideoFile.abortCount === 0
       && failedVideoFile.transactions.length === 1
-      && failedVideoFile.transactions[0].at(-1)?.type === "close-error",
+      && failedVideoFile.transactions[0]?.at(-1)?.type === "close-error",
     `close 결과가 불명확한 비어 있지 않은 영상을 보존하지 않았습니다: ${JSON.stringify(
       failureDirectory.files.map((file) => ({
         name: file.name,
@@ -2993,7 +3077,10 @@ async function main() {
       }))
     )}`
   );
-  const failedCloseSnapshot = failedVideoFile.closeUiSnapshots[0];
+  const failedCloseSnapshot = requireDefined(
+    failedVideoFile.closeUiSnapshots[0],
+    "close 실패 UI snapshot이 없습니다."
+  );
   assert(
     failedVideoFile.closeUiSnapshots.length === 1
       && failedCloseSnapshot.jobHidden === false
@@ -3068,13 +3155,23 @@ async function main() {
   const expectedLocalCaptionOffline = severeLogs.filter(
     isExpectedLocalCaptionOffline
   );
+  const expectedLocalCaptionOriginRejections = severeLogs.filter(
+    isExpectedLocalCaptionOriginRejection
+  );
   const unexpectedSevereLogs = severeLogs.filter(
-    (entry: BrowserLogEntry) => !isExpectedLocalCaptionOffline(entry)
+    (entry: BrowserLogEntry) => (
+      !isExpectedLocalCaptionOffline(entry)
+      && !isExpectedLocalCaptionOriginRejection(entry)
+    )
   );
   assert(
-    expectedLocalCaptionOffline.length <= 2,
-    "로컬 Whisper startup offline probe가 예상보다 많이 반복됐습니다.\n"
-      + JSON.stringify(expectedLocalCaptionOffline, null, 2)
+    expectedLocalCaptionOffline.length
+      + expectedLocalCaptionOriginRejections.length <= 2,
+    "로컬 Whisper startup unavailable probe가 예상보다 많이 반복됐습니다.\n"
+      + JSON.stringify([
+        ...expectedLocalCaptionOffline,
+        ...expectedLocalCaptionOriginRejections
+      ], null, 2)
   );
   assert(
     unexpectedSevereLogs.length === 0,
@@ -3188,7 +3285,8 @@ async function main() {
     },
     exportUi,
     browserSevereLogs: unexpectedSevereLogs.length,
-    expectedLocalCaptionOffline: expectedLocalCaptionOffline.length
+    expectedLocalCaptionOffline: expectedLocalCaptionOffline.length,
+    expectedLocalCaptionOriginRejections: expectedLocalCaptionOriginRejections.length
   }, null, 2));
 }
 

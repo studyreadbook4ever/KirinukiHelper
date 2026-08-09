@@ -19,9 +19,7 @@ import {
 } from "mediabunny";
 import type {
   AudioCodec,
-  InputAudioTrack,
   InputTrack,
-  InputVideoTrack,
   OutputFormat,
   VideoCodec
 } from "mediabunny";
@@ -37,7 +35,6 @@ import {
   resolveSubtitleCueBackground
 } from "../lib/editor-core.js";
 import type {
-  EditorAudioRegion,
   EditorClip,
   EditorImageAsset,
   EditorProject,
@@ -57,7 +54,6 @@ export const CAPTION_PLACEMENT_SAMPLE_COUNT = 7;
 export type RenderClip = EditorClip;
 type RenderSubtitleCue = EditorSubtitleCue;
 type RenderImageAsset = EditorImageAsset;
-type RenderAudioRegion = EditorAudioRegion;
 export type RenderProject = EditorProject;
 
 type ImageAssetSurface = {
@@ -381,10 +377,13 @@ export function mixAudioChannelSamples(
   if (!Array.isArray(channels) || channels.length === 0) {
     return 0;
   }
+  const interpolatedSample = (channel: Float32Array): number => (
+    (channel[left] ?? 0) * (1 - mix) + (channel[right] ?? 0) * mix
+  );
   if (channelMix === "strongest") {
     let strongest = 0;
     for (const channel of channels) {
-      const value = channel[left] * (1 - mix) + channel[right] * mix;
+      const value = interpolatedSample(channel);
       if (Math.abs(value) > Math.abs(strongest)) {
         strongest = value;
       }
@@ -396,7 +395,7 @@ export function mixAudioChannelSamples(
   }
   let mono = 0;
   for (const channel of channels) {
-    mono += channel[left] * (1 - mix) + channel[right] * mix;
+    mono += interpolatedSample(channel);
   }
   return mono / channels.length;
 }
@@ -483,11 +482,13 @@ function pixelLuminance(
   data: Uint8ClampedArray,
   offset: number
 ): number {
-  return (
-    data[offset] * 0.2126
-    + data[offset + 1] * 0.7152
-    + data[offset + 2] * 0.0722
-  );
+  const red = data[offset];
+  const green = data[offset + 1];
+  const blue = data[offset + 2];
+  if (red === undefined || green === undefined || blue === undefined) {
+    throw new RangeError("자막 안전 영역 분석 픽셀 범위를 벗어났습니다.");
+  }
+  return red * 0.2126 + green * 0.7152 + blue * 0.0722;
 }
 
 function captionBandObstructionScore(
@@ -573,13 +574,23 @@ export function analyzeCaptionPlacementFrame(
       )
     ])
   ) as Record<`${CaptionPlacement}Score`, number>;
-  const preferredPlacement = CAPTION_PLACEMENT_BANDS
-    .map((band) => band.placement)
-    .sort((first, second) => (
-      scores[`${first}Score`] - scores[`${second}Score`]
-      || CAPTION_PLACEMENT_TIE_ORDER[first]
-      - CAPTION_PLACEMENT_TIE_ORDER[second]
-    ))[0];
+  const preferredPlacement = CAPTION_PLACEMENT_BANDS.reduce<CaptionPlacement>(
+    (preferred, band) => {
+      const candidate = band.placement;
+      const scoreDelta = scores[`${candidate}Score`] - scores[`${preferred}Score`];
+      if (scoreDelta < 0) {
+        return candidate;
+      }
+      if (scoreDelta > 0) {
+        return preferred;
+      }
+      return CAPTION_PLACEMENT_TIE_ORDER[candidate]
+        < CAPTION_PLACEMENT_TIE_ORDER[preferred]
+        ? candidate
+        : preferred;
+    },
+    "bottom"
+  );
   return {
     ...scores,
     preferredPlacement
@@ -702,8 +713,12 @@ export async function extractClipCaptionPlacementHints(
           analysisWidth,
           analysisHeight
         );
+        const atMs = localTimestampsMs[sampleIndex];
+        if (atMs === undefined) {
+          throw new Error("자막 위치 분석용 대표 프레임 수가 요청 범위를 넘었습니다.");
+        }
         samples.push({
-          atMs: localTimestampsMs[sampleIndex],
+          atMs,
           ...analysis
         });
       } finally {
@@ -1578,7 +1593,8 @@ export function applyAudioAutomationToSample(
     const gain = audioAutomationGainAt(relevantAutomation, outputSeconds);
     const frameOffset = frameIndex * sample.numberOfChannels;
     for (let channel = 0; channel < sample.numberOfChannels; channel += 1) {
-      data[frameOffset + channel] *= gain;
+      const sampleIndex = frameOffset + channel;
+      data[sampleIndex] = (data[sampleIndex] ?? 0) * gain;
     }
   }
   return new AudioSample({
@@ -1628,7 +1644,7 @@ export async function renderProjectVideo(
     } = settings;
     const activeImageAssetCache = createImageAssetRenderCache(project, {
       resolveImageAsset,
-      signal
+      ...(signal === undefined ? {} : { signal })
     });
     imageAssetCache = activeImageAssetCache;
     const outputCodecs = await chooseOutputCodecs(settings);

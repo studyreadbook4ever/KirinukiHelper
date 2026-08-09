@@ -2335,7 +2335,7 @@ async function openCommand(
   const mode = options.mode || settings?.mode || "audseg";
   const browser = inspectPreferredBrowser({
     explicit: options.browser,
-    stored: settings?.browser,
+    stored: settings?.browser ?? null,
     env: context.env
   });
   if (!browser.available) {
@@ -2445,12 +2445,12 @@ async function doctorCommand(
   const mode = options.mode || settings?.mode || "audseg";
   const browser = inspectPreferredBrowser({
     explicit: options.browser,
-    stored: settings?.browser,
+    stored: settings?.browser ?? null,
     env: context.env
   });
   const report = await inspectLinuxEnvironment({
     mode,
-    browser: browser.binary || options.browser || settings?.browser,
+    browser: browser.binary || options.browser || settings?.browser || null,
     env: context.env,
     platform: context.platform,
     paths: context.paths

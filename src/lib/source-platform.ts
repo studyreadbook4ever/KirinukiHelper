@@ -201,11 +201,11 @@ export function selectSupportedSourceTab(tabs: readonly SourceTab[] | unknown, {
       expectedIdentity
     ));
     if (matches.length === 1) {
-      return matches[0];
+      return matches[0] ?? null;
     }
   }
 
-  return candidates.length === 1 ? candidates[0] : null;
+  return candidates.length === 1 ? candidates[0] ?? null : null;
 }
 
 export function sourceRefreshFailureAction({
@@ -250,8 +250,9 @@ function youtubeChannelIdFromUrls(values: readonly unknown[]): string {
     }
     const parts = url.pathname.split("/").filter(Boolean);
     const channelIndex = parts.indexOf("channel");
-    if (channelIndex >= 0 && parts[channelIndex + 1]) {
-      return parts[channelIndex + 1].slice(0, 128);
+    const channelId = parts[channelIndex + 1];
+    if (channelIndex >= 0 && channelId) {
+      return channelId.slice(0, 128);
     }
     const handle = parts.find((part) => part.startsWith("@"));
     if (handle) {
@@ -270,7 +271,7 @@ function inferYouTubeIdentifiers(url: URL, linkedUrls: readonly unknown[]): Sour
   } else if (url.pathname === "/watch") {
     contentId = youtubeVideoId(url.searchParams.get("v"));
   } else if (
-    ["shorts", "embed", "live"].includes(parts[0])
+    ["shorts", "embed", "live"].includes(parts[0] ?? "")
   ) {
     contentId = youtubeVideoId(parts[1]);
   }

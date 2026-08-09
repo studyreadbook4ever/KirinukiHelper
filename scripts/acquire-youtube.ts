@@ -55,7 +55,7 @@ export const ACQUIRE_YOUTUBE_USAGE = `사용법:
 function parseVideoId(url: URL): string {
   if (url.hostname === "youtu.be") {
     const segments = url.pathname.split("/").filter(Boolean);
-    return segments.length === 1 ? segments[0] : "";
+    return segments.length === 1 ? segments[0] ?? "" : "";
   }
 
   if (!YOUTUBE_HOSTS.has(url.hostname)) {
@@ -119,6 +119,9 @@ export function parseAcquireYouTubeArgs(
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
+    if (argument === undefined) {
+      break;
+    }
     if (argument === "--") {
       positional.push(...argv.slice(index + 1));
       break;

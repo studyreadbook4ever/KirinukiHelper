@@ -16,10 +16,13 @@ import {
   validateSegmentInput
 } from "./lib/core.js";
 import type {
-  CaptureDetails,
   EditSegment,
   ResolvedCreatorPolicy,
-  SourceMetadata
+  SourceMetadata,
+  WorkspaceCaptureDetails,
+  WorkspaceDraft,
+  WorkspaceSource,
+  WorkspaceState
 } from "./lib/core.js";
 import {
   captureStateSourceConflict,
@@ -61,46 +64,10 @@ declare global {
   }
 }
 
-interface PanelCaptureDetails extends CaptureDetails {
-  rawSeconds: number;
-  sourceSessionId?: string;
-}
-
-interface PanelDraft {
-  startText: string;
-  endText: string;
-  description: string;
-  startCapture: PanelCaptureDetails | null;
-  endCapture: PanelCaptureDetails | null;
-  editingId: string | null;
-}
-
-interface PanelSource extends SourceMetadata {
-  platform: string;
-  url: string;
-  canonicalUrl: string;
-  channelId: string;
-  contentId: string;
-  contentType: string;
-  streamerName: string;
-  broadcastTitle: string;
-  broadcastStartedAt: string;
-  clipActive: boolean | null;
-  timeMachineActive: boolean | null;
-  category: string;
-  observedAt: string;
-}
-
-interface PanelState extends Record<string, unknown> {
-  schemaVersion: number;
-  editorProjectId: string;
-  projectName: string;
-  draft: PanelDraft;
-  source: PanelSource;
-  globalInstruction: string;
-  segments: EditSegment[];
-  updatedAt: string;
-}
+type PanelCaptureDetails = WorkspaceCaptureDetails;
+type PanelDraft = WorkspaceDraft;
+type PanelSource = WorkspaceSource;
+type PanelState = WorkspaceState;
 
 interface PagePlayerContext {
   found?: boolean;
@@ -306,9 +273,7 @@ function bindKeyboardShortcuts(): void {
   });
 }
 
-const panelState = (value: unknown): PanelState => (
-  normalizeState(value) as unknown as PanelState
-);
+const panelState = (value: unknown): PanelState => normalizeState(value);
 const errorMessage = (error: unknown): string => (
   error instanceof Error ? error.message : String(error)
 );
@@ -826,13 +791,13 @@ function renderPolicyMatch(): void {
     return;
   }
   const { resolvedPolicies } = currentPolicyBundle();
-  if (resolvedPolicies.length === 0) {
+  const [policy] = resolvedPolicies;
+  if (!policy) {
     elements.policyMatchBadge.textContent = "기본 MD 적용";
     elements.policyMatchBadge.title = "등록된 방송인 정책과 정확히 일치하지 않았습니다.";
     return;
   }
 
-  const policy = resolvedPolicies[0];
   elements.policyMatchBadge.textContent = `${policy.group} · 링크 매칭`;
   elements.policyMatchBadge.title = `${policy.matchedBy.value} → ${policy.sourceUrl}`;
 }
@@ -1235,6 +1200,15 @@ async function seekSourceBy(deltaSeconds: -5 | 5): Promise<void> {
       )
         ? mediaTime - previousRawPosition
         : null;
+      const rawMediaPositionSeconds = chzzkLiveMediaDelta === null
+        ? previousPlayer.rawMediaPositionSeconds
+        : mediaTime;
+      const liveEdgeOffsetSeconds = (
+        chzzkLiveMediaDelta !== null
+        && Number.isFinite(previousLiveEdgeOffset)
+      )
+        ? Math.max(0, previousLiveEdgeOffset - chzzkLiveMediaDelta)
+        : previousPlayer.liveEdgeOffsetSeconds;
       currentContext = {
         ...currentContext,
         player: {
@@ -1242,15 +1216,12 @@ async function seekSourceBy(deltaSeconds: -5 | 5): Promise<void> {
           positionSeconds: chzzkLiveMediaDelta === null
             ? mediaTime
             : Math.max(0, previousPosition + chzzkLiveMediaDelta),
-          rawMediaPositionSeconds: chzzkLiveMediaDelta === null
-            ? previousPlayer.rawMediaPositionSeconds
-            : mediaTime,
-          liveEdgeOffsetSeconds: (
-            chzzkLiveMediaDelta !== null
-            && Number.isFinite(previousLiveEdgeOffset)
-          )
-            ? Math.max(0, previousLiveEdgeOffset - chzzkLiveMediaDelta)
-            : previousPlayer.liveEdgeOffsetSeconds
+          ...(rawMediaPositionSeconds === undefined
+            ? {}
+            : { rawMediaPositionSeconds }),
+          ...(liveEdgeOffsetSeconds === undefined
+            ? {}
+            : { liveEdgeOffsetSeconds })
         }
       };
       renderSource();
@@ -1404,13 +1375,23 @@ async function captureCurrentPosition(kind: "start" | "end"): Promise<void> {
     }
 
     const rounded = Math.round(position * 1000) / 1000;
-    const capture = {
-      method: context.player?.positionSource,
-      confidence: context.player?.confidence,
+    const capture: PanelCaptureDetails = {
+      ...(context.player?.positionSource === undefined
+        ? {}
+        : { method: context.player.positionSource }),
+      ...(context.player?.confidence === undefined
+        ? {}
+        : { confidence: context.player.confidence }),
       rawSeconds: position,
-      rawMediaSeconds: context.player?.rawMediaPositionSeconds,
-      observedAt: context.capturedAt,
-      liveEdgeOffsetSeconds: context.player?.liveEdgeOffsetSeconds,
+      ...(context.player?.rawMediaPositionSeconds === undefined
+        ? {}
+        : { rawMediaSeconds: context.player.rawMediaPositionSeconds }),
+      ...(context.capturedAt === undefined
+        ? {}
+        : { observedAt: context.capturedAt }),
+      ...(context.player?.liveEdgeOffsetSeconds === undefined
+        ? {}
+        : { liveEdgeOffsetSeconds: context.player.liveEdgeOffsetSeconds }),
       broadcastStartedAt: context.broadcastStartedAt,
       pageUrl: context.canonicalUrl || context.url,
       sourceSessionId: sourceIdentity(contextAsSource(context))
@@ -1528,13 +1509,15 @@ async function saveSegment(): Promise<void> {
       : -1;
     const existing = editingIndex >= 0 ? state.segments[editingIndex] : null;
     const segment = createSegment({
-      id: existing?.id,
+      ...(existing?.id === undefined ? {} : { id: existing.id }),
       startText: state.draft.startText,
       endText: state.draft.endText,
       description: state.draft.description,
       startCapture: state.draft.startCapture,
       endCapture: state.draft.endCapture,
-      createdAt: existing?.createdAt
+      ...(existing?.createdAt === undefined
+        ? {}
+        : { createdAt: existing.createdAt })
     });
     segment.updatedAt = new Date().toISOString();
 
@@ -1622,7 +1605,13 @@ async function moveSegment(id: string, direction: -1 | 1): Promise<void> {
   if (index < 0 || nextIndex < 0 || nextIndex >= state.segments.length) {
     return;
   }
-  [state.segments[index], state.segments[nextIndex]] = [state.segments[nextIndex], state.segments[index]];
+  const segment = state.segments[index];
+  const adjacentSegment = state.segments[nextIndex];
+  if (!segment || !adjacentSegment) {
+    return;
+  }
+  state.segments[index] = adjacentSegment;
+  state.segments[nextIndex] = segment;
   renderSegments();
   try {
     await persistState();
