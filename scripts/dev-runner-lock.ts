@@ -241,7 +241,7 @@ function close(server: net.Server): Promise<void> {
 
 function roleLabel(role: DevRunnerRole): string {
   return {
-    editor: "dev:editor",
+    editor: "개발 편집 runner",
     package: "릴리스 패키징",
     validate: "릴리스 검증"
   }[role] ?? role;

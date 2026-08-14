@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const editorCss = await readFile(
-  new URL("../extension/editor/editor.css", import.meta.url),
+  new URL("../web/editor/editor.css", import.meta.url),
   "utf8"
 );
 

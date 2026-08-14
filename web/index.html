@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src https://chzzk.naver.com https://www.youtube-nocookie.com https://vod.sooplive.com; form-action 'self'; script-src 'self' https://www.youtube.com; style-src 'self'; font-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: http://127.0.0.1:4319; worker-src 'self' blob:; connect-src 'self' http://127.0.0.1:4319">
+    <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <title>Kirinuki</title>
+    <link rel="stylesheet" href="/studio.css?v=2.7.0">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Kirinuki 시작 화면">
+        <svg class="kirinuki-mark" viewBox="0 0 100 90" aria-hidden="true" focusable="false">
+          <rect class="kirinuki-mark-frame" x="12.5" y="7.5" width="75" height="59" rx="9"/>
+          <path class="kirinuki-mark-perforation" d="M19 15h6v5h-6zm56 0h6v5h-6zM19 54h6v5h-6zm56 0h6v5h-6z"/>
+          <path class="kirinuki-mark-k" d="M32 17v40M34 38 60 17M46 29l17 28"/>
+          <path class="kirinuki-mark-cut" d="m42 33 5 5-5 5m16-10-5 5 5 5"/>
+          <text class="kirinuki-mark-word" x="50" y="81" text-anchor="middle">KIRINUKI</text>
+        </svg>
+        <strong>Kirinuki</strong>
+      </a>
+    </header>
+
+    <main>
+      <section class="start-intro" aria-labelledby="start-title">
+        <h1 id="start-title">VOD에서 편집할 구간을 선택하세요</h1>
+        <p>편집기를 열 때 선택한 구간만 이 PC에 준비합니다.</p>
+      </section>
+
+      <section id="recent-section" class="recent-card local-project-manager" aria-labelledby="local-projects-title" aria-busy="true">
+        <header class="local-project-manager-header">
+          <div>
+            <h2 id="local-projects-title">저장된 편집</h2>
+            <p id="local-projects-summary" role="status" aria-live="polite">브라우저 저장소를 확인하는 중입니다.</p>
+            <small>직접 저장한 편집과 복구본은 이 브라우저에만 보관됩니다.</small>
+          </div>
+          <div class="local-project-manager-actions">
+            <button id="refresh-local-projects" class="button ghost" type="button" aria-controls="local-projects-list" aria-keyshortcuts="Q" title="저장된 편집 새로고침 (단축키 Q)">새로고침</button>
+            <button id="clear-all-local-projects" class="button danger-ghost" type="button" aria-haspopup="dialog" aria-controls="local-project-delete-dialog" disabled>모두 삭제</button>
+          </div>
+        </header>
+
+        <div id="local-projects-loading" class="local-project-state" role="status">
+          저장된 편집을 확인하는 중…
+        </div>
+        <div id="local-projects-error" class="local-project-state error" role="alert" hidden>
+          <div>
+            <strong>저장된 편집 목록을 읽지 못했습니다.</strong>
+            <span>오류가 난 항목은 임의로 삭제하지 않았습니다. 다시 시도해 주세요.</span>
+          </div>
+          <button id="retry-local-projects" class="button ghost" type="button">다시 시도</button>
+        </div>
+        <div id="local-projects-empty" class="local-project-state empty" hidden>
+          <strong>저장된 편집이 없습니다.</strong>
+          <span>아래에서 VOD와 구간을 입력해 새 편집을 시작하세요.</span>
+        </div>
+        <div id="local-projects-list" class="local-projects-list" role="list" aria-label="이 브라우저에 저장된 편집" hidden></div>
+
+        <template id="local-project-row-template">
+          <article class="local-project-row" role="listitem">
+            <div class="local-project-details">
+              <div class="local-project-badges">
+                <span class="local-project-platform">VOD</span>
+                <span class="local-project-same-source" hidden>현재 입력한 VOD</span>
+                <span class="local-project-active-session" hidden>다른 탭에서 편집 중</span>
+              </div>
+              <div class="local-project-heading">
+                <h3 class="local-project-title"></h3>
+                <time class="local-project-time"></time>
+              </div>
+              <p class="local-project-counts"></p>
+              <p class="local-project-drafts"></p>
+            </div>
+            <div class="local-project-actions">
+              <button class="button secondary" type="button" data-project-action="continue">계속 편집</button>
+              <button class="button ghost" type="button" data-project-action="recover">복구본 선택</button>
+              <button class="button danger-ghost" type="button" data-project-action="delete" aria-haspopup="dialog" aria-controls="local-project-delete-dialog">삭제</button>
+            </div>
+          </article>
+        </template>
+      </section>
+
+      <form id="start-form" novalidate>
+        <section class="step-card" aria-labelledby="source-title">
+          <div class="step-content">
+            <div class="section-heading">
+              <h2 id="source-title">원본 VOD</h2>
+              <span id="source-platform" class="platform-pill">URL 대기</span>
+            </div>
+            <label class="field full">
+              <span>CHZZK·YouTube·SOOP 공개 VOD 주소</span>
+              <span class="source-input-row">
+                <input id="source-url" name="source-url" type="url" required autocomplete="url" placeholder="https://chzzk.naver.com/video/…">
+                <button id="open-source" class="button secondary" type="button">원본 페이지 열기</button>
+                <button id="import-session-archive" class="button secondary" type="button">백업 파일 불러오기</button>
+              </span>
+              <small>공개 VOD만 지원합니다. 로그인이나 접근 제한을 우회하지 않으며, 백업 파일은 이 브라우저에서만 읽습니다.</small>
+              <small id="source-cache-status" class="source-cache-status" role="status" hidden></small>
+            </label>
+            <input id="session-archive-input" type="file" accept="application/json,.json" hidden>
+            <label class="field full">
+              <span>프로젝트 이름</span>
+              <input id="project-name" name="project-name" type="text" minlength="1" maxlength="160" placeholder="예: 유이카 쇼츠 1" required>
+            </label>
+            <div class="source-capture-workspace">
+              <section class="stream-preview" aria-labelledby="stream-preview-title">
+                <div class="stream-preview-heading">
+                  <div>
+                    <h3 id="stream-preview-title">원본 스트리밍 창</h3>
+                  </div>
+                  <span id="stream-preview-kind" class="platform-pill">링크 대기</span>
+                </div>
+                <div class="stream-stage">
+                  <iframe
+                    id="stream-preview-frame"
+                    title="원본 VOD 스트리밍 플레이어"
+                    loading="eager"
+                    referrerpolicy="strict-origin-when-cross-origin"
+                    sandbox="allow-scripts allow-same-origin"
+                    allow="encrypted-media; picture-in-picture"
+                    allowfullscreen
+                    hidden
+                  ></iframe>
+                  <div id="stream-preview-placeholder" class="stream-placeholder">
+                    <strong>VOD 주소를 붙여 넣으세요.</strong>
+                    <span>주소를 확인한 뒤 플랫폼의 플레이어를 이 자리에 엽니다.</span>
+                  </div>
+                </div>
+                <section id="stream-cut-console" class="stream-cut-console" aria-labelledby="stream-cut-console-title">
+                  <div class="stream-cut-console-heading">
+                    <div>
+                      <strong id="stream-cut-console-title">컷 캡처</strong>
+                      <span id="active-clip-label">현재 입력 #01</span>
+                      <span>현재 시각 <output id="stream-current-time">--:--:--</output></span>
+                    </div>
+                    <p id="stream-cut-console-status" role="status" aria-live="polite">VOD 주소를 입력하면 가능한 플레이어 동작을 활성화합니다.</p>
+                  </div>
+                  <div class="stream-cut-buttons" role="group" aria-label="컷 캡처 단축키">
+                    <button id="refresh-source" type="button" aria-keyshortcuts="W" title="현재 플레이어 연결 확인 (단축키 W)" disabled><kbd>W</kbd><span>연결 확인</span></button>
+                    <button id="playback-rate-quarter" type="button" aria-keyshortcuts="Y" aria-pressed="false" title="원본 영상을 0.25배속으로 재생 (단축키 Y)" disabled><kbd>Y</kbd><span>0.25×</span></button>
+                    <button id="playback-rate-double" type="button" aria-keyshortcuts="U" aria-pressed="false" title="원본 영상을 2배속으로 재생 (단축키 U)" disabled><kbd>U</kbd><span>2×</span></button>
+                    <button id="seek-backward-five" type="button" aria-keyshortcuts="D" title="원본 영상을 5초 이전으로 이동 (단축키 D)" disabled><kbd>D</kbd><span>−5초</span></button>
+                    <button id="seek-forward-five" type="button" aria-keyshortcuts="F" title="원본 영상을 5초 이후로 이동 (단축키 F)" disabled><kbd>F</kbd><span>+5초</span></button>
+                    <button id="capture-start" type="button" aria-keyshortcuts="E" title="현재 시각을 시작점으로 캡처 (단축키 E)" disabled><kbd>E</kbd><span>시작 캡처</span></button>
+                    <button id="capture-end" type="button" aria-keyshortcuts="R" title="현재 시각을 끝점으로 캡처 (단축키 R)" disabled><kbd>R</kbd><span>끝 캡처</span></button>
+                    <button id="save-segment" type="button" aria-keyshortcuts="T" title="다음 빈 구간 추가 (단축키 T)"><kbd>T</kbd><span>다음 구간</span></button>
+                  </div>
+                  <p class="stream-cut-console-guide">
+                    이 화면에서는 영상을 내려받지 않습니다. 선택한 구간은 편집기를 열 때 이 PC에 준비합니다.
+                  </p>
+                </section>
+                <div class="stream-preview-footer">
+                  <p id="stream-preview-status" role="status" aria-live="polite">서버 프록시 없이 브라우저가 플랫폼 플레이어에 직접 연결합니다.</p>
+                  <button id="reload-stream" class="button ghost" type="button" disabled>플레이어 다시 시작</button>
+                </div>
+              </section>
+
+              <aside class="selection-rail" aria-labelledby="clips-title">
+                <div class="selection-rail-heading">
+                  <h3 id="clips-title">가져올 구간</h3>
+                  <button id="add-clip" class="button ghost" type="button">빈 구간 추가</button>
+                </div>
+                <p class="section-copy">강조된 행에 E로 시작, R로 끝 시각을 기록합니다.</p>
+                <div id="clip-list" class="clip-list"></div>
+                <template id="clip-row-template">
+                  <article class="clip-row">
+                    <span class="clip-index"></span>
+                    <label class="clip-start"><span>시작</span><input data-field="start" type="text" inputmode="decimal" placeholder="00:01:20.500" required></label>
+                    <span class="arrow" aria-hidden="true">→</span>
+                    <label class="clip-end"><span>끝</span><input data-field="end" type="text" inputmode="decimal" placeholder="00:01:35.000" required></label>
+                    <label class="clip-note"><span>메모 (선택)</span><input data-field="note" type="text" maxlength="160" placeholder="장면 설명"></label>
+                    <button data-action="remove" class="remove" type="button" aria-label="이 구간 삭제">삭제</button>
+                    <small class="coverage"></small>
+                  </article>
+                </template>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <section id="policy-section" class="step-card policy" aria-labelledby="policy-title">
+          <div class="step-content">
+            <div class="section-heading">
+              <h2 id="policy-title">권리 확인</h2>
+              <span class="required-pill">편집 전 필수</span>
+            </div>
+            <div class="liability-notice">
+              <strong>허용된 VOD에만 사용하세요.</strong>
+              <p>스트리머·소속사의 명시적 키리누키 허용, 별도 서면 허락, 또는 공식 편집 권한이 있는 작업만 가능합니다. 취득·편집·게시·수익화와 제3자 권리 확인 결과에 대한 책임은 전적으로(100%) 사용자에게 있습니다.</p>
+              <p>이 입력은 권리를 새로 만들거나 Kirinuki가 법적 적합성을 심사·보증하는 절차가 아닙니다.</p>
+            </div>
+
+            <div class="ack-list">
+              <label><input data-ack type="checkbox" required>이 원본 VOD가 실제 허용 또는 별도 권한 범위에 포함됨을 확인했습니다.</label>
+              <label><input data-ack type="checkbox" required>필요 구간의 로컬 취득과 편집이 그 허용 범위에 포함됨을 확인했습니다.</label>
+              <label><input data-ack type="checkbox" required>편집 허용과 게시·수익화 허용은 별개일 수 있음을 확인했습니다.</label>
+              <label><input data-ack type="checkbox" required>음악·이미지·인물 등 제3자 권리는 별도로 확인할 책임이 있음을 확인했습니다.</label>
+              <label><input data-ack type="checkbox" required>플랫폼 약관을 확인하고 접근 통제·DRM을 우회하지 않겠습니다.</label>
+              <label><input data-ack type="checkbox" required>입력 내용과 사용 결과의 책임이 전적으로(100%) 사용자에게 있음을 확인했습니다.</label>
+            </div>
+            <div class="editor-entry-panel">
+              <p id="mobile-editor-notice" class="mobile-editor-notice" role="alert" hidden>
+                <strong>편집기는 모바일에서 사용할 수 없습니다.</strong>
+                컷 구간은 확인할 수 있지만 편집기 열기는 PC 브라우저에서만 가능합니다.
+              </p>
+              <button id="start-editor" class="button primary editor-open-cta" type="submit" aria-keyshortcuts="A" title="권리 확인 후 편집기 열기 (단축키 A)">편집기 열기</button>
+              <p id="form-status" role="status" aria-live="polite">위 항목을 확인하면 편집기를 열 수 있습니다.</p>
+            </div>
+            <div class="site-trust-notice" aria-label="개인정보 및 오픈소스 안내">
+              <p>이 사이트의 개발자는 사용자의 사용기록과 개인정보를 일절 수집하지 않으며, 문의사항이 있으면 <a href="mailto:lostfragment@naver.com">lostfragment@naver.com</a>으로 메일 부탁드립니다.</p>
+              <p>원본 미리보기와 구간 준비는 브라우저와 이 PC에서 직접 처리되며, 선택한 플랫폼의 개인정보 처리방침과 이용 정책이 적용됩니다.</p>
+              <p class="open-source-notice">
+                <span>이 프로젝트는 오픈소스입니다:</span>
+                <a class="github-link" href="https://github.com/studyreadbook4ever/KirinukiHelper" target="_blank" rel="noopener noreferrer" aria-label="KirinukiHelper GitHub 저장소 새 탭에서 열기">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.69c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.6 9.6 0 0 1 12 6.7a9.6 9.6 0 0 1 2.5.34c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></svg>
+                  <span>GitHub에서 소스 보기</span>
+                </a>
+                <a href="/licenses.html">오픈소스 라이선스</a>
+              </p>
+            </div>
+          </div>
+        </section>
+
+      </form>
+    </main>
+
+    <dialog id="local-project-delete-dialog" class="local-project-delete-dialog" aria-labelledby="local-project-delete-title" aria-describedby="local-project-delete-summary local-project-delete-scope">
+      <div class="local-project-delete-content">
+        <h2 id="local-project-delete-title">브라우저 저장 데이터를 삭제할까요?</h2>
+        <p id="local-project-delete-summary">삭제할 편집을 다시 확인해 주세요.</p>
+        <p id="local-project-delete-scope" class="local-project-delete-scope">이 브라우저에 저장한 편집과 복구본만 삭제합니다. 원본 파일, 내보낸 영상, 편집용 VOD는 삭제하지 않습니다. 편집용 VOD는 편집기에서 ‘작업 끝내고 임시 파일 삭제’를 선택할 때만 삭제됩니다.</p>
+        <div class="local-project-delete-actions">
+          <button id="cancel-local-project-delete" class="button ghost" type="button">취소</button>
+          <button id="confirm-local-project-delete" class="button danger" type="button">삭제</button>
+        </div>
+      </div>
+    </dialog>
+
+    <script type="module" src="/studio.js?v=2.7.0"></script>
+  </body>
+</html>

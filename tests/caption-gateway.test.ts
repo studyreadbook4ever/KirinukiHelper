@@ -1,15 +1,26 @@
 import assert from "node:assert/strict";
 import {
+  KIRINUKI_GATEWAY_ORIGIN_BINDING,
+  KIRINUKI_LOCAL_STUDIO_ORIGIN,
+  KIRINUKI_PUBLIC_STUDIO_ORIGIN
+} from "../src/lib/local-runtime-origin.js";
+import {
+  Agent,
   request as httpRequest,
+  type ClientRequest,
   type IncomingHttpHeaders,
   type OutgoingHttpHeaders
 } from "node:http";
 import test, { type TestContext } from "node:test";
-import type { AddressInfo } from "node:net";
+import { createServer as createNetServer } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
+import path from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   CAPTION_AGENT_REQUEST_SCHEMA_ID,
   CAPTION_AGENT_RESPONSE_SCHEMA_ID,
+  CAPTION_CUE_DURATION_POLICY,
   LOCAL_WHISPER_CAPTION_MODEL,
   SUPPORTED_CAPTION_MODELS,
   validateCaptionAgentRequest
@@ -36,14 +47,25 @@ import {
   CAPTION_AGENT_CAPABILITY_SCHEMA_ID,
   CAPTION_AGENT_HEALTH_SCHEMA_ID,
   CAPTION_AGENT_SESSION_SCHEMA_ID,
+  DEFAULT_CAPTION_REQUEST_BODY_TIMEOUT_MS,
+  DEFAULT_MAX_CONCURRENT_CAPTION_PIPELINES,
+  MAX_CAPTION_REQUEST_BODY_TIMEOUT_MS,
+  MAX_CONCURRENT_CAPTION_PIPELINES,
   createCaptionGatewayServer,
-  resolveCaptionGatewayConfig
+  resolveCaptionGatewayConfig,
+  startCaptionGateway
 } from "../scripts/caption-gateway.js";
+import {
+  LOCAL_VOD_RUNTIME_SCHEMA,
+  PINNED_YT_DLP
+} from "../scripts/local-vod-runtime-core.js";
 
-const ALLOWED_ORIGIN = "chrome-extension://caption-agent-test";
+const ALLOWED_ORIGIN = KIRINUKI_LOCAL_STUDIO_ORIGIN;
 const AGENT_TOKEN = "test-agent-token-123456";
 const LOCAL_STT_ENDPOINT =
   "http://127.0.0.1:4318/kirinuki-test/inference";
+const VOD_INSTANCE_NONCE =
+  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ";
 
 const TEST_ENV = Object.freeze({
   KIRINUKI_STT_MODE: LOCAL_WHISPERCPP_TRANSCRIPTION_MODE,
@@ -51,7 +73,17 @@ const TEST_ENV = Object.freeze({
   KIRINUKI_STT_MODEL: "tiny-q5_1",
   KIRINUKI_AGENT_TOKEN: AGENT_TOKEN,
   KIRINUKI_ALLOWED_ORIGIN: ALLOWED_ORIGIN,
-  KIRINUKI_MAX_AUDIO_BYTES: "1048576"
+  KIRINUKI_MAX_AUDIO_BYTES: "1048576",
+  KIRINUKI_VOD_RUNTIME_SCHEMA: LOCAL_VOD_RUNTIME_SCHEMA,
+  KIRINUKI_VOD_RUNTIME_KIND: "caption-vod",
+  KIRINUKI_VOD_RUNTIME_READY: "1",
+  KIRINUKI_VOD_YT_DLP_VERSION: PINNED_YT_DLP.version,
+  KIRINUKI_VOD_EJS_VERSION: PINNED_YT_DLP.bundledJavascript.version,
+  KIRINUKI_VOD_INSTANCE_NONCE: VOD_INSTANCE_NONCE,
+  KIRINUKI_VOD_STATE_DIR: path.join(
+    tmpdir(),
+    "kirinuki-caption-gateway-test-vod-state"
+  )
 });
 
 interface GatewayBody {
@@ -67,11 +99,13 @@ interface GatewayBody {
 }
 
 interface LocalHttpJsonOptions {
+  agent?: Agent;
   port: number;
   path?: string;
   method?: string;
   headers?: OutgoingHttpHeaders;
   body?: unknown;
+  onSocket?: (socket: Socket) => void;
 }
 
 interface LocalHttpJsonResult {
@@ -103,6 +137,19 @@ async function withReferencedDeadline<T>(
     return await Promise.race([operation, deadline]);
   } finally {
     clearTimeout(watchdog);
+  }
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 1_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`조건이 ${timeoutMs}ms 안에 충족되지 않았습니다.`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
   }
 }
 
@@ -144,7 +191,7 @@ function captionRequest(overrides: Record<string, unknown> = {}) {
       audience: "korean-vtuber-kirinuki",
       includeAllRecognizableSpeech: true,
       uncertainSpeech: "keep-and-mark-for-review",
-      maxCueDurationMs: 4_000,
+      cueDurationPolicy: CAPTION_CUE_DURATION_POLICY,
       terminalPeriod: "omit",
       questionAndExclamationMarks: "keep"
     },
@@ -178,11 +225,13 @@ function jsonResponse(
 }
 
 function localHttpJson({
+  agent,
   port,
   path = "/v1/captions",
   method = "GET",
   headers = {},
-  body
+  body,
+  onSocket
 }: LocalHttpJsonOptions) {
   return new Promise<LocalHttpJsonResult>((resolve, reject) => {
     const request = httpRequest({
@@ -190,7 +239,8 @@ function localHttpJson({
       port,
       path,
       method,
-      headers
+      headers,
+      ...(agent ? { agent } : {})
     }, (response) => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk) => chunks.push(chunk));
@@ -211,6 +261,9 @@ function localHttpJson({
         });
       });
     });
+    if (onSocket) {
+      request.once("socket", onSocket);
+    }
     request.once("error", reject);
     if (body != null) {
       request.write(
@@ -221,11 +274,51 @@ function localHttpJson({
   });
 }
 
+function partialCaptionHttpRequest(
+  port: number,
+  partialBody: string = "{"
+) {
+  // Promise executors run synchronously, so this is assigned before return.
+  let pendingRequest!: ClientRequest;
+  const response = new Promise<LocalHttpJsonResult>((resolve, reject) => {
+    pendingRequest = httpRequest({
+      host: "127.0.0.1",
+      port,
+      path: "/v1/captions",
+      method: "POST",
+      headers: {
+        Origin: ALLOWED_ORIGIN,
+        Authorization: `Bearer ${AGENT_TOKEN}`,
+        "Content-Type": "application/json",
+        "Content-Length": "4096"
+      }
+    }, (incoming) => {
+      const chunks: Buffer[] = [];
+      incoming.on("data", (chunk) => chunks.push(chunk));
+      incoming.once("error", reject);
+      incoming.once("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve({
+          status: incoming.statusCode,
+          headers: incoming.headers,
+          body: text
+            ? JSON.parse(text) as GatewayBody
+            : {} as GatewayBody
+        });
+      });
+    });
+    pendingRequest.once("error", reject);
+    pendingRequest.write(partialBody);
+  });
+  return { request: pendingRequest, response };
+}
+
 async function listenTestServer(
   t: TestContext,
   options: Parameters<typeof createCaptionGatewayServer>[0]
 ) {
-  const { server, config } = createCaptionGatewayServer(options);
+  const runtime = createCaptionGatewayServer(options);
+  const { server, config } = runtime;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -234,6 +327,7 @@ async function listenTestServer(
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   return {
+    runtime,
     server,
     config,
     port: (address as AddressInfo).port
@@ -341,6 +435,37 @@ test("Whisper segment·word 시각을 클립 기준 정수 밀리초로 정규�
   ]);
 });
 
+test("Whisper segment와 nested word가 다른 시간축이면 조용히 보정하지 않는다", () => {
+  assert.throws(
+    () => normalizeSttTranscript({
+      text: "시간축 충돌",
+      segments: [{
+        start: 8,
+        end: 9,
+        text: "시간축 충돌",
+        words: [{ start: 1, end: 2, word: "시간축 충돌" }]
+      }]
+    }, {
+      clipDurationMs: 10_000
+    }),
+    (error) => hasErrorCode(error, "STT_TIMESTAMP_CLOCK_MISMATCH")
+  );
+
+  const transcript = normalizeSttTranscript({
+    text: "같은 시간축",
+    segments: [{
+      start: 1,
+      end: 2,
+      text: "같은 시간축",
+      words: [{ start: 1.1, end: 1.9, word: "같은 시간축" }]
+    }]
+  }, {
+    clipDurationMs: 10_000
+  });
+  assert.equal(transcript.segments.length, 1);
+  assert.equal(transcript.words.length, 1);
+});
+
 test("시간 없는 텍스트와 과도한 전사 배열·본문은 거절한다", () => {
   assert.throws(
     () => normalizeSttTranscript(
@@ -406,6 +531,11 @@ test("로컬 Whisper 요청은 loopback에 WAV를 한 번 보내고 인증 헤�
         assert(init.body instanceof FormData);
         assert.equal(init.body.get("model"), "tiny-q5_1");
         assert.equal(init.body.get("language"), "ko");
+        assert.equal(init.body.get("vad"), "false");
+        assert.deepEqual(
+          init.body.getAll("timestamp_granularities[]"),
+          ["segment", "word"]
+        );
         return jsonResponse({
           text: "로컬 전사",
           segments: [{
@@ -513,6 +643,54 @@ test("로컬 초벌은 STT 경계와 품질 하네스 계약을 보존한다", (
   );
 });
 
+test("로컬 초벌은 4초를 넘는 Whisper 원본 segment를 그대로 보존한다", () => {
+  const text = "한식비페에서 제육볶음 먹고 왔어. 잘했지?";
+  const wordRanges: Array<[number, number, string]> = [
+    [0, 420, "한"],
+    [420, 840, "식"],
+    [840, 1_260, "비"],
+    [1_260, 1_680, "페"],
+    [1_680, 2_530, "에서"],
+    [2_530, 2_950, "제"],
+    [2_950, 3_360, "육"],
+    [3_370, 3_540, "�"],
+    [3_660, 3_790, "�"],
+    [3_790, 4_210, "음"],
+    [4_210, 5_060, "먹고"],
+    [5_060, 5_480, "왔"],
+    [5_480, 5_840, "어"],
+    [6_410, 6_560, "잘"],
+    [6_560, 6_690, "했"],
+    [6_890, 7_120, "지"],
+    [7_120, 7_440, "?"]
+  ];
+  const request = normalizedCaptionRequest({
+    clip: {
+      id: "gateway-clip-duration-regression",
+      title: "실제 Whisper 경계 회귀 컷",
+      durationMs: 8_911
+    }
+  });
+  const result = buildLocalWhisperCaptionDraft(request, {
+    text,
+    segments: [{ startMs: 140, endMs: 7_940, text }],
+    words: wordRanges.map(([startMs, endMs, word]) => ({
+      startMs,
+      endMs,
+      text: word
+    }))
+  });
+
+  assert.deepEqual(
+    result.cues.map(({ startMs, endMs }) => ({ startMs, endMs })),
+    [{ startMs: 140, endMs: 7_940 }]
+  );
+  const [longCue] = result.cues;
+  assert.ok(longCue);
+  assert.equal(longCue.endMs - longCue.startMs, 7_800);
+  assert.equal(result.qualityReport.disposition, "accepted");
+});
+
 test("파이프라인은 로컬 전사를 한 번 실행하고 Whisper 응답만 만든다", async () => {
   let calls = 0;
   const observed: {
@@ -605,14 +783,77 @@ test("게이트웨이 설정은 exact Origin과 세션 인증을 강제한다", 
   assert.equal(config.allowedOrigin, ALLOWED_ORIGIN);
   assert.equal(config.agentToken, AGENT_TOKEN);
   assert.equal(config.pipeline.sttEndpoint, LOCAL_STT_ENDPOINT);
-
-  assert.throws(
-    () => resolveCaptionGatewayConfig({
-      ...TEST_ENV,
-      KIRINUKI_ALLOWED_ORIGIN: "*"
-    }),
-    (error) => hasErrorCode(error, "INVALID_CONFIGURATION")
+  assert.equal(
+    config.maxConcurrentCaptionPipelines,
+    DEFAULT_MAX_CONCURRENT_CAPTION_PIPELINES
   );
+  assert.equal(
+    config.captionRequestBodyTimeoutMs,
+    DEFAULT_CAPTION_REQUEST_BODY_TIMEOUT_MS
+  );
+
+  const publicConfig = resolveCaptionGatewayConfig({
+    ...TEST_ENV,
+    KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+    KIRINUKI_MAX_CONCURRENT_CAPTION_PIPELINES: String(
+      MAX_CONCURRENT_CAPTION_PIPELINES
+    )
+  });
+  assert.equal(publicConfig.allowedOrigin, KIRINUKI_PUBLIC_STUDIO_ORIGIN);
+  assert.equal(
+    publicConfig.maxConcurrentCaptionPipelines,
+    MAX_CONCURRENT_CAPTION_PIPELINES
+  );
+  assert.equal(
+    resolveCaptionGatewayConfig({
+      ...TEST_ENV,
+      KIRINUKI_CAPTION_REQUEST_BODY_TIMEOUT_MS: String(
+        MAX_CAPTION_REQUEST_BODY_TIMEOUT_MS
+      )
+    }).captionRequestBodyTimeoutMs,
+    MAX_CAPTION_REQUEST_BODY_TIMEOUT_MS
+  );
+
+  for (const invalidOrigin of [
+    "*",
+    "https://kirinuki.eff0rtchung.kr/",
+    "https://kirinuki.eff0rtchung.kr.attacker.example",
+    " https://kirinuki.eff0rtchung.kr",
+    "https://kirinuki.eff0rtchung.kr\n"
+  ]) {
+    assert.throws(
+      () => resolveCaptionGatewayConfig({
+        ...TEST_ENV,
+        KIRINUKI_ALLOWED_ORIGIN: invalidOrigin
+      }),
+      (error) => hasErrorCode(error, "INVALID_CONFIGURATION")
+    );
+  }
+  for (const invalidConcurrency of ["", "0", "3", "01", "1.0", " 1"]) {
+    assert.throws(
+      () => resolveCaptionGatewayConfig({
+        ...TEST_ENV,
+        KIRINUKI_MAX_CONCURRENT_CAPTION_PIPELINES: invalidConcurrency
+      }),
+      (error) => hasErrorCode(error, "INVALID_CONFIGURATION")
+    );
+  }
+  for (const invalidBodyTimeout of [
+    "",
+    "0",
+    String(MAX_CAPTION_REQUEST_BODY_TIMEOUT_MS + 1),
+    "01",
+    "1.0",
+    " 1000"
+  ]) {
+    assert.throws(
+      () => resolveCaptionGatewayConfig({
+        ...TEST_ENV,
+        KIRINUKI_CAPTION_REQUEST_BODY_TIMEOUT_MS: invalidBodyTimeout
+      }),
+      (error) => hasErrorCode(error, "INVALID_CONFIGURATION")
+    );
+  }
   assert.throws(
     () => resolveCaptionGatewayConfig({
       ...TEST_ENV,
@@ -621,6 +862,59 @@ test("게이트웨이 설정은 exact Origin과 세션 인증을 강제한다", 
     }),
     (error) => hasErrorCode(error, "MISSING_CONFIGURATION")
   );
+  for (const invalidEnvironment of [
+    {
+      ...TEST_ENV,
+      KIRINUKI_VOD_RUNTIME_SCHEMA: "foreign-runtime/v1"
+    },
+    {
+      ...TEST_ENV,
+      KIRINUKI_VOD_YT_DLP_VERSION: "latest"
+    },
+    {
+      ...TEST_ENV,
+      KIRINUKI_VOD_EJS_VERSION: "latest"
+    },
+    {
+      ...TEST_ENV,
+      KIRINUKI_VOD_INSTANCE_NONCE: "generic"
+    },
+    {
+      ...TEST_ENV,
+      KIRINUKI_VOD_RUNTIME_READY: undefined
+    }
+  ]) {
+    assert.throws(
+      () => resolveCaptionGatewayConfig(invalidEnvironment),
+      (error) => hasErrorCode(error, "INVALID_CONFIGURATION")
+    );
+  }
+});
+
+test("gateway start 경로는 공개 Origin 설정이어도 127.0.0.1에만 bind한다", async (t) => {
+  const reservation = createNetServer();
+  await new Promise<void>((resolve, reject) => {
+    reservation.once("error", reject);
+    reservation.listen(0, "127.0.0.1", resolve);
+  });
+  const reservedAddress = reservation.address();
+  assert.ok(reservedAddress && typeof reservedAddress !== "string");
+  const port = reservedAddress.port;
+  await new Promise<void>((resolve) => reservation.close(() => resolve()));
+
+  const runtime = await startCaptionGateway({
+    env: {
+      ...TEST_ENV,
+      KIRINUKI_AGENT_PORT: String(port),
+      KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+    }
+  });
+  t.after(() => runtime.shutdown());
+  const address = runtime.server.address();
+  assert.ok(address && typeof address !== "string");
+  assert.equal(address.address, "127.0.0.1");
+  assert.equal(address.port, port);
+  assert.equal(runtime.config.allowedOrigin, KIRINUKI_PUBLIC_STUDIO_ORIGIN);
 });
 
 test("관리형 gateway는 health·자동 pairing·Whisper-only capability를 제공한다", async (t) => {
@@ -644,7 +938,19 @@ test("관리형 gateway는 health·자동 pairing·Whisper-only capability를 �
   });
   assert.equal(health.status, 200);
   assert.equal(health.body.schema, CAPTION_AGENT_HEALTH_SCHEMA_ID);
+  assert.equal(
+    health.body.originBinding,
+    KIRINUKI_GATEWAY_ORIGIN_BINDING
+  );
   assert.equal(health.body.transcriptionMode, "local-whispercpp");
+  assert.deepEqual(health.body.vodRuntime, {
+    schema: LOCAL_VOD_RUNTIME_SCHEMA,
+    kind: "caption-vod",
+    ready: true,
+    ytDlp: { version: "2026.07.04" },
+    ejs: { version: "0.8.0" },
+    instanceNonce: VOD_INSTANCE_NONCE
+  });
   assert.equal(Object.hasOwn(health.body, "token"), false);
 
   const pairing = await localHttpJson({
@@ -679,6 +985,27 @@ test("관리형 gateway는 health·자동 pairing·Whisper-only capability를 �
     localWhisperReady: true
   });
   assert.equal(capability.body.transcription.authentication, "none-loopback");
+  assert.equal(capability.body.transcription.vad, false);
+  assert.equal(
+    capability.body.transcription.timestampClock,
+    "original-audio"
+  );
+  assert.equal(
+    capability.body.transcription.timingRevision,
+    "vad-off-original-clock-v1"
+  );
+  assert.equal(
+    capability.body.cueDurationPolicy,
+    CAPTION_CUE_DURATION_POLICY
+  );
+  assert.equal(
+    capability.body.qualityHarness.profile,
+    CAPTION_QUALITY_PROFILE_ID
+  );
+  assert.equal(
+    capability.body.qualityHarness.harnessFingerprint,
+    CAPTION_HARNESS_FINGERPRINT
+  );
   assert.equal(capability.body.qualityHarness.paidRepairCalls, 0);
   assert.doesNotMatch(
     JSON.stringify(capability.body),
@@ -686,21 +1013,53 @@ test("관리형 gateway는 health·자동 pairing·Whisper-only capability를 �
   );
 });
 
-test("gateway CORS에는 인증·프로토콜·JSON 헤더만 노출한다", async (t) => {
-  const { port } = await listenTestServer(t, { env: TEST_ENV });
+test("gateway CORS에는 인증·프로토콜·JSON·미디어 접근 헤더만 노출한다", async (t) => {
+  const { port } = await listenTestServer(t, {
+    env: {
+      ...TEST_ENV,
+      KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+    }
+  });
   const preflight = await localHttpJson({
     port,
     method: "OPTIONS",
-    headers: { Origin: ALLOWED_ORIGIN }
+    headers: {
+      Origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+      "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Private-Network": "true"
+    }
   });
   assert.equal(preflight.status, 204);
   assert.equal(
     preflight.headers["access-control-allow-origin"],
-    ALLOWED_ORIGIN
+    KIRINUKI_PUBLIC_STUDIO_ORIGIN
   );
   assert.equal(
     preflight.headers["access-control-allow-headers"],
-    "Authorization, Content-Type, X-Kirinuki-Protocol"
+    "Authorization, Content-Type, X-Kirinuki-Media-Access, X-Kirinuki-Protocol"
+  );
+  assert.equal(
+    preflight.headers["access-control-allow-private-network"],
+    "true"
+  );
+  assert.equal(
+    preflight.headers.vary,
+    "Origin, Access-Control-Request-Private-Network"
+  );
+
+  const wrongOrigin = await localHttpJson({
+    port,
+    method: "OPTIONS",
+    headers: {
+      Origin: "https://kirinuki.eff0rtchung.kr.attacker.example",
+      "Access-Control-Request-Private-Network": "true"
+    }
+  });
+  assert.equal(wrongOrigin.status, 403);
+  assert.equal(wrongOrigin.headers["access-control-allow-origin"], undefined);
+  assert.equal(
+    wrongOrigin.headers["access-control-allow-private-network"],
+    undefined
   );
 });
 
@@ -715,6 +1074,15 @@ test("gateway는 잘못된 Origin·인증·health probe를 거절한다", async 
   });
   assert.equal(wrongOrigin.status, 403);
   assert.equal(wrongOrigin.body.error.code, "ORIGIN_NOT_ALLOWED");
+
+  const missingOrigin = await localHttpJson({
+    port,
+    headers: {
+      Authorization: `Bearer ${AGENT_TOKEN}`
+    }
+  });
+  assert.equal(missingOrigin.status, 403);
+  assert.equal(missingOrigin.body.error.code, "ORIGIN_NOT_ALLOWED");
 
   const unauthorized = await localHttpJson({
     port,
@@ -733,6 +1101,98 @@ test("gateway는 잘못된 Origin·인증·health probe를 거절한다", async 
     badHealth.body.error.code,
     "HEALTH_PROBE_NOT_ALLOWED"
   );
+});
+
+test("본문을 읽기 전 거절한 모든 gateway 경로는 keep-alive 연결을 닫아 후속 요청을 오염시키지 않는다", async (t) => {
+  const { port } = await listenTestServer(t, {
+    env: {
+      ...TEST_ENV,
+      KIRINUKI_AUTO_PAIR: "1"
+    }
+  });
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  t.after(() => agent.destroy());
+  const rejectedCases = [
+    {
+      label: "origin",
+      path: "/v1/captions",
+      headers: { Origin: "chrome-extension://wrong" },
+      status: 403,
+      code: "ORIGIN_NOT_ALLOWED"
+    },
+    {
+      label: "pairing protocol",
+      path: "/v1/session",
+      headers: { Origin: ALLOWED_ORIGIN },
+      status: 400,
+      code: "PROTOCOL_REQUIRED"
+    },
+    {
+      label: "materialization protocol",
+      path: "/v1/vod/materializations",
+      headers: {
+        Origin: ALLOWED_ORIGIN,
+        Authorization: `Bearer ${AGENT_TOKEN}`
+      },
+      status: 400,
+      code: "PROTOCOL_REQUIRED"
+    },
+    {
+      label: "caption auth",
+      path: "/v1/captions",
+      headers: { Origin: ALLOWED_ORIGIN },
+      status: 401,
+      code: "UNAUTHORIZED"
+    }
+  ] as const;
+
+  for (const rejectedCase of rejectedCases) {
+    const body = JSON.stringify({
+      case: rejectedCase.label,
+      padding: "x".repeat(8_192)
+    });
+    let rejectedSocket: Socket | null = null;
+    const rejected = await localHttpJson({
+      agent,
+      port,
+      path: rejectedCase.path,
+      method: "POST",
+      headers: {
+        ...rejectedCase.headers,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body)
+      },
+      body,
+      onSocket: (socket) => {
+        rejectedSocket = socket;
+      }
+    });
+    assert.equal(rejected.status, rejectedCase.status, rejectedCase.label);
+    assert.equal(rejected.body.error.code, rejectedCase.code, rejectedCase.label);
+    assert.equal(rejected.headers.connection, "close", rejectedCase.label);
+
+    let healthSocket: Socket | null = null;
+    const health = await localHttpJson({
+      agent,
+      port,
+      path: "/v1/health",
+      headers: {
+        Origin: ALLOWED_ORIGIN,
+        "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA_ID
+      },
+      onSocket: (socket) => {
+        healthSocket = socket;
+      }
+    });
+    assert.equal(health.status, 200, rejectedCase.label);
+    assert.ok(rejectedSocket, `${rejectedCase.label}: 거절 요청 socket 누락`);
+    assert.ok(healthSocket, `${rejectedCase.label}: health 요청 socket 누락`);
+    assert.notEqual(
+      healthSocket,
+      rejectedSocket,
+      `${rejectedCase.label}: 읽지 않은 본문이 있는 socket을 재사용했습니다.`
+    );
+  }
 });
 
 test("gateway POST는 고정된 로컬 pipeline 설정만 전달한다", async (t) => {
@@ -778,6 +1238,362 @@ test("gateway POST는 고정된 로컬 pipeline 설정만 전달한다", async (
   );
   assert.equal(Object.hasOwn(received.options, "sttApiKey"), false);
   assert.equal(Object.hasOwn(received.options, "providerApiKey"), false);
+});
+
+test("자막 pipeline은 기본 동시 실행 1개를 넘으면 body를 버리고 429로 즉시 거절한다", async (t) => {
+  let releaseFirst: (() => void) | undefined;
+  let markFirstStarted: (() => void) | undefined;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const firstStarted = new Promise<void>((resolve) => {
+    markFirstStarted = resolve;
+  });
+  let executions = 0;
+  const { port, runtime } = await listenTestServer(t, {
+    env: TEST_ENV,
+    pipelineRunner: (async () => {
+      executions += 1;
+      if (executions === 1) {
+        markFirstStarted?.();
+        await firstGate;
+      }
+      return { ok: true, executions };
+    }) as NonNullable<
+      NonNullable<
+        Parameters<typeof createCaptionGatewayServer>[0]
+      >["pipelineRunner"]
+    >
+  });
+  t.after(() => releaseFirst?.());
+
+  const firstResponse = localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: captionRequest({ requestId: "caption-concurrency-first" })
+  });
+  await withReferencedDeadline(firstStarted);
+  assert.equal(runtime.activeCaptionPipelineCount, 1);
+
+  const rejected = await localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      ...captionRequest({ requestId: "caption-concurrency-rejected" }),
+      unreadPadding: "x".repeat(8_192)
+    })
+  });
+  assert.equal(rejected.status, 429);
+  assert.equal(rejected.body.error.code, "CAPTION_PIPELINE_BUSY");
+  assert.equal(rejected.headers["retry-after"], "1");
+  assert.equal(rejected.headers.connection, "close");
+  assert.equal(executions, 1);
+
+  releaseFirst?.();
+  assert.equal((await firstResponse).status, 200);
+  assert.equal(runtime.activeCaptionPipelineCount, 0);
+  const next = await localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: captionRequest({ requestId: "caption-concurrency-next" })
+  });
+  assert.equal(next.status, 200);
+  assert.equal(executions, 2);
+  assert.equal(runtime.activeCaptionPipelineCount, 0);
+});
+
+test("자막 pipeline 동시성 2 설정은 두 작업만 허용하고 세 번째를 거절한다", async (t) => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let executions = 0;
+  const { port, runtime } = await listenTestServer(t, {
+    env: {
+      ...TEST_ENV,
+      KIRINUKI_MAX_CONCURRENT_CAPTION_PIPELINES: "2"
+    },
+    pipelineRunner: (async () => {
+      executions += 1;
+      await gate;
+      return { ok: true };
+    }) as NonNullable<
+      NonNullable<
+        Parameters<typeof createCaptionGatewayServer>[0]
+      >["pipelineRunner"]
+    >
+  });
+  t.after(() => release?.());
+  const request = (requestId: string) => localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: captionRequest({ requestId })
+  });
+  const first = request("caption-concurrency-two-first");
+  const second = request("caption-concurrency-two-second");
+  await waitForCondition(() => runtime.activeCaptionPipelineCount === 2);
+  assert.equal(executions, 2);
+
+  const third = await request("caption-concurrency-two-third");
+  assert.equal(third.status, 429);
+  assert.equal(third.body.error.code, "CAPTION_PIPELINE_BUSY");
+  assert.equal(executions, 2);
+
+  release?.();
+  assert.equal((await first).status, 200);
+  assert.equal((await second).status, 200);
+  assert.equal(runtime.activeCaptionPipelineCount, 0);
+});
+
+test("부분 자막 body는 수신 기한 뒤 연결을 닫고 단일 pipeline 슬롯을 반환한다", async (t) => {
+  let executions = 0;
+  const { port, runtime } = await listenTestServer(t, {
+    env: {
+      ...TEST_ENV,
+      KIRINUKI_CAPTION_REQUEST_BODY_TIMEOUT_MS: "250"
+    },
+    pipelineRunner: (async () => {
+      executions += 1;
+      return { ok: true, executions };
+    }) as NonNullable<
+      NonNullable<
+        Parameters<typeof createCaptionGatewayServer>[0]
+      >["pipelineRunner"]
+    >
+  });
+  const partial = partialCaptionHttpRequest(port);
+  t.after(() => partial.request.destroy());
+  await waitForCondition(() => runtime.activeCaptionPipelineCount === 1);
+
+  const limited = await localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: captionRequest({ requestId: "caption-partial-body-limited" })
+  });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.body.error.code, "CAPTION_PIPELINE_BUSY");
+  assert.equal(executions, 0);
+
+  const timedOut = await withReferencedDeadline(partial.response, 2_000);
+  assert.equal(timedOut.status, 408);
+  assert.equal(timedOut.body.error.code, "REQUEST_BODY_TIMEOUT");
+  assert.equal(timedOut.headers.connection, "close");
+  await waitForCondition(() => runtime.activeCaptionPipelineCount === 0);
+
+  const next = await localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: captionRequest({ requestId: "caption-after-partial-timeout" })
+  });
+  assert.equal(next.status, 200);
+  assert.equal(executions, 1);
+});
+
+test("잘못된 자막 JSON도 pipeline 슬롯을 반환해 다음 정상 요청을 막지 않는다", async (t) => {
+  let executions = 0;
+  const { port, runtime } = await listenTestServer(t, {
+    env: TEST_ENV,
+    pipelineRunner: (async () => {
+      executions += 1;
+      return { ok: true };
+    }) as NonNullable<
+      NonNullable<
+        Parameters<typeof createCaptionGatewayServer>[0]
+      >["pipelineRunner"]
+    >
+  });
+  const invalid = await localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: "{"
+  });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error.code, "INVALID_JSON");
+  assert.equal(runtime.activeCaptionPipelineCount, 0);
+  assert.equal(executions, 0);
+
+  const next = await localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: captionRequest({ requestId: "caption-after-invalid-json" })
+  });
+  assert.equal(next.status, 200);
+  assert.equal(executions, 1);
+});
+
+test("gateway shutdown은 수신 중인 부분 자막 body를 즉시 중단하고 슬롯을 반환한다", async (t) => {
+  const { port, runtime } = await listenTestServer(t, {
+    env: {
+      ...TEST_ENV,
+      KIRINUKI_CAPTION_REQUEST_BODY_TIMEOUT_MS: "60000"
+    }
+  });
+  const partial = partialCaptionHttpRequest(port);
+  t.after(() => partial.request.destroy());
+  await waitForCondition(() => runtime.activeCaptionPipelineCount === 1);
+
+  await withReferencedDeadline(runtime.shutdown({
+    graceMs: 100,
+    deadlineMs: 1_000
+  }), 2_000);
+  const closing = await withReferencedDeadline(partial.response);
+  assert.equal(closing.status, 503);
+  assert.equal(closing.body.error.code, "GATEWAY_SHUTTING_DOWN");
+  assert.equal(runtime.activeCaptionPipelineCount, 0);
+  assert.equal(runtime.activeHandlerCount, 0);
+});
+
+test("gateway shutdown은 실행 중 자막 controller를 중단하고 슬롯을 반환한다", async (t) => {
+  let markStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  let observedAbort = false;
+  const { port, runtime } = await listenTestServer(t, {
+    env: TEST_ENV,
+    pipelineRunner: (async (_body, options) => {
+      markStarted?.();
+      const signal = options.signal;
+      assert.ok(signal);
+      await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          observedAbort = true;
+          reject(signal.reason);
+        }, { once: true });
+      });
+    }) as NonNullable<
+      NonNullable<
+        Parameters<typeof createCaptionGatewayServer>[0]
+      >["pipelineRunner"]
+    >
+  });
+  const response = localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: captionRequest({ requestId: "caption-shutdown-active" })
+  });
+  await withReferencedDeadline(started);
+  assert.equal(runtime.activeCaptionPipelineCount, 1);
+  await withReferencedDeadline(runtime.shutdown({
+    graceMs: 100,
+    deadlineMs: 1_000
+  }), 2_000);
+  const closing = await withReferencedDeadline(response);
+  assert.equal(closing.status, 503);
+  assert.equal(closing.body.error.code, "GATEWAY_SHUTTING_DOWN");
+  assert.equal(observedAbort, true);
+  assert.equal(runtime.activeCaptionPipelineCount, 0);
+  assert.equal(runtime.activeHandlerCount, 0);
+});
+
+test("gateway shutdown deadline은 abort를 무시하는 pipeline에서도 유한하게 실패한다", async (t) => {
+  let markStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const never = new Promise<never>(() => {});
+  const { port, runtime } = await listenTestServer(t, {
+    env: TEST_ENV,
+    pipelineRunner: (async () => {
+      markStarted?.();
+      return never;
+    }) as NonNullable<
+      NonNullable<
+        Parameters<typeof createCaptionGatewayServer>[0]
+      >["pipelineRunner"]
+    >
+  });
+  const response = localHttpJson({
+    port,
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: captionRequest({ requestId: "caption-shutdown-ignores-abort" })
+  });
+  const responseSettlement = response.then(
+    (value) => value,
+    (error: unknown) => error
+  );
+  await withReferencedDeadline(started);
+
+  await assert.rejects(
+    withReferencedDeadline(runtime.shutdown({
+      graceMs: 10,
+      deadlineMs: 75
+    }), 1_000),
+    (error) => hasErrorCode(
+      error,
+      "GATEWAY_SHUTDOWN_DEADLINE_EXCEEDED"
+    )
+  );
+  await withReferencedDeadline(responseSettlement);
+  assert.equal(runtime.server.listening, false);
+});
+
+test("gateway shutdown은 VOD cleanup 실패를 성공으로 숨기지 않는다", async (t) => {
+  const { runtime } = await listenTestServer(t, { env: TEST_ENV });
+  const cleanupFailure = new Error("synthetic VOD cleanup failure");
+  Object.defineProperty(runtime.chzzkVodJobs, "close", {
+    configurable: true,
+    value: () => Promise.reject(cleanupFailure)
+  });
+
+  await assert.rejects(
+    withReferencedDeadline(runtime.shutdown({
+      graceMs: 100,
+      deadlineMs: 1_000
+    }), 2_000),
+    (error) => error === cleanupFailure
+  );
+  assert.equal(runtime.server.listening, false);
 });
 
 test("자동 pairing은 exact Origin·프로토콜과 분당 상한을 지킨다", async (t) => {

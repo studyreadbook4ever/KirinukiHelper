@@ -6,6 +6,20 @@ import {
   captionStyleDefaults,
   normalizeCaptionStylePresetId
 } from "./caption-style.js";
+import {
+  activeShortFormWorkspace,
+  createDefaultShortFormBranch,
+  normalizeShortFormBranch,
+  normalizeShortFormWorkspaceCollection,
+  saveActiveShortFormWorkspace
+} from "./short-form.js";
+import type {
+  EditorShortFormBranch,
+  EditorShortFormWorkspaceCollection
+} from "./short-form.js";
+import {
+  normalizeSoopVodSourceClockIdentity
+} from "./soop-vod-source-clock.js";
 
 export const EDITOR_SCHEMA = "chzzk-kirinuki-editor/v3";
 export const EDITOR_PROJECTS_STORE_KEY = "chzzkKirinukiEditorProjectsV1";
@@ -54,6 +68,24 @@ export interface SourceRecord {
   url?: unknown;
   broadcastTitle?: unknown;
   streamerName?: unknown;
+  /** Strict, secret-free official SOOP multipart clock identity. */
+  sourceClockIdentity?: unknown;
+}
+
+function sourceWithValidatedClockIdentity(
+  source: SourceRecord
+): SourceRecord {
+  const normalized: SourceRecord = { ...source };
+  delete normalized.sourceClockIdentity;
+  const platform = String(source.platform || "").trim().toUpperCase();
+  const contentId = String(source.contentId || "").trim();
+  const identity = platform === "SOOP"
+    ? normalizeSoopVodSourceClockIdentity(source.sourceClockIdentity)
+    : null;
+  if (identity && identity.contentId === contentId) {
+    normalized.sourceClockIdentity = identity;
+  }
+  return normalized;
 }
 
 interface BroadcastSessionRecord extends DynamicRecord {
@@ -294,6 +326,8 @@ export interface EditorProject extends DynamicRecord {
   subtitleLaneCount: number;
   recentSubtitleColors: string[];
   audioRegions: EditorAudioRegion[];
+  shortForm: EditorShortFormBranch;
+  shortFormWorkspaces: EditorShortFormWorkspaceCollection;
   subtitleDefaults: SubtitleDefaultsRecord;
   ai: AiStateRecord;
   history?: HistoryRecord;
@@ -763,7 +797,14 @@ export function sameSourceSession(
       type === "live" || type === "vod"
     ))
   );
-  if (!sameContentType && !chzzkLiveVodPair) {
+  const youtubeLiveVodPair = (
+    leftPlatform === "YOUTUBE"
+    && new Set([leftContentType, rightContentType]).size === 2
+    && [leftContentType, rightContentType].every((type) => (
+      type === "live" || type === "vod"
+    ))
+  );
+  if (!sameContentType && !chzzkLiveVodPair && !youtubeLiveVodPair) {
     return false;
   }
 
@@ -814,6 +855,61 @@ export function sameSourceSession(
   const leftIdentity = sourceSessionIdentity(leftSource);
   const rightIdentity = sourceSessionIdentity(rightSource);
   return Boolean(leftIdentity && leftIdentity === rightIdentity);
+}
+
+export function mergeSameSourceSessionMetadata<T extends SourceRecord>(
+  previousSource: T,
+  nextSource: T
+): T {
+  if (!sameSourceSession(previousSource, nextSource)) {
+    return { ...nextSource } as T;
+  }
+  const previousContentType = String(
+    previousSource.contentType ?? "unknown"
+  ).trim().toLowerCase() || "unknown";
+  const nextContentType = String(
+    nextSource.contentType ?? previousContentType
+  ).trim().toLowerCase() || previousContentType;
+  const nextContentId = String(nextSource.contentId ?? "").trim();
+  const previousContentId = String(
+    previousSource.contentId ?? ""
+  ).trim();
+  const nextPlatform = String(
+    nextSource.platform ?? previousSource.platform ?? "CHZZK"
+  ).trim().toUpperCase() || "CHZZK";
+  const stableContentId = (
+    nextPlatform === "CHZZK"
+    && nextContentType === "live"
+  )
+    ? ""
+    : nextContentId || (
+      previousContentType === nextContentType
+        ? previousContentId
+        : ""
+    );
+  return {
+    ...nextSource,
+    platform: nextSource.platform || previousSource.platform,
+    channelId: nextSource.channelId || previousSource.channelId,
+    broadcastStartedAt: (
+      nextSource.broadcastStartedAt
+      || previousSource.broadcastStartedAt
+    ),
+    contentId: stableContentId,
+    contentType: nextContentType,
+    canonicalUrl: (
+      nextSource.canonicalUrl
+      || nextSource.url
+      || previousSource.canonicalUrl
+      || previousSource.url
+    ),
+    url: (
+      nextSource.url
+      || nextSource.canonicalUrl
+      || previousSource.url
+      || previousSource.canonicalUrl
+    )
+  } as T;
 }
 
 export function captureStateSourceConflict(
@@ -951,8 +1047,51 @@ export function createEditorProjectFromCapture(captureState: CaptureState = {}, 
   id = captureProjectId(captureState),
   createdAt = nowIso()
 }: { id?: string; createdAt?: string } = {}): EditorProject {
-  const source = { ...(captureState.source || {}) };
+  const source = sourceWithValidatedClockIdentity(captureState.source || {});
   const clips = reflowClips((captureState.segments || []).map(segmentToClip));
+  const subtitles: EditorSubtitleCue[] = [];
+  const imageAssets: EditorImageAsset[] = [];
+  const audioRegions: EditorAudioRegion[] = [];
+  const recentSubtitleColors: string[] = [];
+  const subtitleDefaults = normalizedCaptionStyleDefaults(
+    DEFAULT_CAPTION_STYLE_PRESET_ID
+  );
+  const ai: AiStateRecord = {
+    provider: "caption-agent",
+    model: "whisper-tiny",
+    language: "korean",
+    status: "idle",
+    progress: 0,
+    lastRunAt: null,
+    error: null,
+    warnings: [],
+    captionCheckpoints: [],
+    speakerColors: {}
+  };
+  const shortForm = normalizeShortFormBranch(createDefaultShortFormBranch(), {
+    clips,
+    subtitles,
+    imageAssets,
+    audioRegions,
+    subtitleLaneCount: MIN_SUBTITLE_LANES,
+    recentSubtitleColors,
+    subtitleDefaults,
+    ai
+  });
+  const shortFormWorkspaces = normalizeShortFormWorkspaceCollection(
+    null,
+    shortForm,
+    {
+      clips,
+      subtitles,
+      imageAssets,
+      audioRegions,
+      subtitleLaneCount: MIN_SUBTITLE_LANES,
+      recentSubtitleColors,
+      subtitleDefaults,
+      ai
+    }
+  );
   return {
     schema: EDITOR_SCHEMA,
     id,
@@ -962,31 +1101,20 @@ export function createEditorProjectFromCapture(captureState: CaptureState = {}, 
     mediaAsset: null,
     clips,
     suppressedSelections: [],
-    imageAssets: [],
-    subtitles: [],
+    imageAssets,
+    subtitles,
     subtitleLaneCount: MIN_SUBTITLE_LANES,
-    recentSubtitleColors: [],
-    audioRegions: [],
+    recentSubtitleColors,
+    audioRegions,
+    shortForm,
+    shortFormWorkspaces,
     selectedClipId: clips[0]?.id || null,
     selectedImageAssetId: null,
     selectedCueId: null,
     selectedAudioRegionId: null,
     playheadMs: 0,
-    subtitleDefaults: normalizedCaptionStyleDefaults(
-      DEFAULT_CAPTION_STYLE_PRESET_ID
-    ),
-    ai: {
-      provider: "caption-agent",
-      model: "whisper-tiny",
-      language: "korean",
-      status: "idle",
-      progress: 0,
-      lastRunAt: null,
-      error: null,
-      warnings: [],
-      captionCheckpoints: [],
-      speakerColors: {}
-    },
+    subtitleDefaults,
+    ai,
     history: {
       undo: [],
       redo: []
@@ -1274,6 +1402,46 @@ export function normalizeEditorProject(raw: DynamicRecord | null | undefined): E
   )
     ? raw.selectedCueId
     : null;
+  const shortFormContext = {
+    clips,
+    subtitles,
+    imageAssets,
+    audioRegions,
+    subtitleLaneCount,
+    recentSubtitleColors: normalizeRecentSubtitleColors(raw.recentSubtitleColors),
+    subtitleDefaults,
+    ai
+  };
+  let shortFormWorkspaces = normalizeShortFormWorkspaceCollection(
+    raw.shortFormWorkspaces,
+    raw.shortForm,
+    shortFormContext
+  );
+  const normalizedMirror = normalizeShortFormBranch(
+    raw.shortForm,
+    shortFormContext
+  );
+  const storedActiveShortForm = activeShortFormWorkspace(
+    shortFormWorkspaces,
+    raw.shortForm,
+    shortFormContext
+  ).shortForm;
+  // Typed pre-envelope callers historically replaced only `shortForm`.
+  // Accept that compatibility write only when its monotonic branch revision
+  // is newer; otherwise the named-workspace collection is authoritative.
+  if (normalizedMirror.revision > storedActiveShortForm.revision) {
+    shortFormWorkspaces = saveActiveShortFormWorkspace(
+      shortFormWorkspaces,
+      storedActiveShortForm,
+      normalizedMirror,
+      shortFormContext
+    );
+  }
+  const shortForm = activeShortFormWorkspace(
+    shortFormWorkspaces,
+    normalizedMirror,
+    shortFormContext
+  ).shortForm;
   const normalizedProject: EditorProject = {
     ...defaults,
     schema: EDITOR_SCHEMA,
@@ -1281,7 +1449,10 @@ export function normalizeEditorProject(raw: DynamicRecord | null | undefined): E
     name: typeof raw.name === "string" && raw.name.trim()
       ? raw.name
       : defaults.name,
-    source: { ...defaults.source, ...rawSource },
+    source: sourceWithValidatedClockIdentity({
+      ...defaults.source,
+      ...rawSource
+    }),
     broadcastSession: {
       ...defaults.broadcastSession,
       ...rawBroadcastSession,
@@ -1303,6 +1474,8 @@ export function normalizeEditorProject(raw: DynamicRecord | null | undefined): E
     recentSubtitleColors: normalizeRecentSubtitleColors(raw.recentSubtitleColors),
     audioRegions,
     imageAssets,
+    shortForm,
+    shortFormWorkspaces,
     selectedClipId,
     selectedImageAssetId: imageAssets.some((asset) => asset.id === raw.selectedImageAssetId)
       && typeof raw.selectedImageAssetId === "string"
@@ -1632,7 +1805,10 @@ export function mergeCaptureIntoEditorProject(
     }, nextClip);
     return next ? [next] : [];
   });
-  const source = { ...normalized.source, ...(captureState.source || {}) };
+  const source = sourceWithValidatedClockIdentity({
+    ...normalized.source,
+    ...(captureState.source || {})
+  });
   const incomingSession = createBroadcastSession(source);
   const previouslySelectedClip = normalized.clips.find((clip) => (
     clip.id === normalized.selectedClipId
@@ -1645,6 +1821,26 @@ export function mergeCaptureIntoEditorProject(
     : nextClips.find((clip) => (
       clip.selectionId === previouslySelectedClip?.selectionId
     ))?.id || nextClips[0]?.id || null;
+  const shortFormContext = {
+    clips: reflowedClips,
+    subtitles,
+    imageAssets,
+    audioRegions,
+    subtitleLaneCount: normalized.subtitleLaneCount,
+    recentSubtitleColors: normalized.recentSubtitleColors,
+    subtitleDefaults: normalized.subtitleDefaults,
+    ai: normalized.ai
+  };
+  const shortForm = normalizeShortFormBranch(
+    normalized.shortForm,
+    shortFormContext
+  );
+  const shortFormWorkspaces = saveActiveShortFormWorkspace(
+    normalized.shortFormWorkspaces,
+    normalized.shortForm,
+    shortForm,
+    shortFormContext
+  );
 
   return {
     ...normalized,
@@ -1663,6 +1859,8 @@ export function mergeCaptureIntoEditorProject(
       )
     },
     clips: reflowedClips,
+    shortForm,
+    shortFormWorkspaces,
     suppressedSelections,
     subtitles,
     audioRegions,
@@ -2935,21 +3133,15 @@ export function transcriptChunksToCueDrafts(
   clipDuration: unknown = 0,
   {
   maxCharacters = 26,
-  maxDurationMs = 4_000,
   gapBreakMs = 800,
   minimumDurationMs = 650
   }: {
     maxCharacters?: number;
-    maxDurationMs?: number;
     gapBreakMs?: number;
     minimumDurationMs?: number;
   } = {}
 ): SubtitleCueDraft[] {
   const clipDurationMs = Math.max(MIN_CUE_DURATION_MS, Math.round(finiteNumber(clipDuration)));
-  const boundedMaxDurationMs = Math.max(
-    MIN_CUE_DURATION_MS,
-    Math.round(finiteNumber(maxDurationMs, 4_000))
-  );
   const words: TranscriptWord[] = chunks.flatMap((chunk) => {
     const text = String(chunk?.text || "").trim();
     if (!text) {
@@ -3028,7 +3220,6 @@ export function transcriptChunksToCueDrafts(
     const proposedText = `${group.map((item) => item.text).join(" ")} ${word.text}`.trim();
     const shouldBreak = (
       word.startMs - previous.endMs >= gapBreakMs ||
-      word.endMs - first.startMs > boundedMaxDurationMs ||
       proposedText.length > maxCharacters ||
       /[.!?。！？…]$/u.test(previous.text)
     );
@@ -3038,60 +3229,8 @@ export function transcriptChunksToCueDrafts(
     group.push(word);
   });
   flush();
-  const splitTextIntoParts = (
-    text: string,
-    requestedParts: number
-  ): string[] => {
-    if (requestedParts <= 1) {
-      return [text];
-    }
-    const wordsInText = text.split(/\s+/u).filter(Boolean);
-    const units = wordsInText.length >= requestedParts
-      ? wordsInText
-      : Array.from(text);
-    const separator = wordsInText.length >= requestedParts ? " " : "";
-    const partCount = Math.max(1, Math.min(requestedParts, units.length));
-    return Array.from({ length: partCount }, (_, index) => {
-      const from = Math.floor(index * units.length / partCount);
-      const to = Math.floor((index + 1) * units.length / partCount);
-      return units.slice(from, to).join(separator).trim();
-    }).filter(Boolean);
-  };
-  const durationBoundedDrafts = drafts.flatMap((draft) => {
-    const durationMs = draft.endOffsetMs - draft.startOffsetMs;
-    if (durationMs <= boundedMaxDurationMs) {
-      return [draft];
-    }
-    const requestedParts = Math.ceil(durationMs / boundedMaxDurationMs);
-    const textParts = splitTextIntoParts(draft.text, requestedParts);
-    const slotDurationMs = Math.min(
-      boundedMaxDurationMs,
-      durationMs / textParts.length
-    );
-    const availableGapMs = Math.max(
-      0,
-      durationMs - slotDurationMs * textParts.length
-    );
-    return textParts.map((text, index) => {
-      const gapBeforeMs = textParts.length <= 1
-        ? 0
-        : availableGapMs * index / (textParts.length - 1);
-      const startOffsetMs = Math.round(
-        draft.startOffsetMs + index * slotDurationMs + gapBeforeMs
-      );
-      return {
-        ...draft,
-        startOffsetMs,
-        endOffsetMs: Math.min(
-          draft.endOffsetMs,
-          startOffsetMs + boundedMaxDurationMs
-        ),
-        text
-      };
-    });
-  });
   const nonOverlapping: SubtitleCueDraft[] = [];
-  for (const draft of durationBoundedDrafts) {
+  for (const draft of drafts) {
     const previous = nonOverlapping.at(-1);
     if (!previous || draft.startOffsetMs >= previous.endOffsetMs) {
       nonOverlapping.push(draft);
@@ -3106,10 +3245,7 @@ export function transcriptChunksToCueDrafts(
       continue;
     }
     previous.text = `${previous.text} ${draft.text}`.trim();
-    previous.endOffsetMs = Math.min(
-      previous.startOffsetMs + boundedMaxDurationMs,
-      Math.max(previous.endOffsetMs, draft.endOffsetMs)
-    );
+    previous.endOffsetMs = Math.max(previous.endOffsetMs, draft.endOffsetMs);
   }
   return nonOverlapping;
 }
@@ -3210,6 +3346,228 @@ export function updateClipTrim(project: EditorProject, clipId: unknown, {
   };
 }
 
+/** Splits one enabled clip at a project-timeline point without deleting media. */
+export function splitClipAtTimeline(
+  project: EditorProject,
+  timelineMsValue: unknown
+): EditorProject {
+  const timelineMs = Math.round(finiteNumber(timelineMsValue, -1));
+  const clipIndex = project.clips.findIndex((clip) => (
+    clip.enabled !== false
+    && timelineMs > clip.timelineStartMs
+    && timelineMs < clip.timelineStartMs + clipDurationMs(clip)
+  ));
+  const clip = project.clips[clipIndex];
+  if (!clip) {
+    throw new RangeError("분할 위치는 활성 컷의 시작과 끝 사이여야 합니다.");
+  }
+  const splitOffsetMs = timelineMs - clip.timelineStartMs;
+  const durationMs = clipDurationMs(clip);
+  if (
+    splitOffsetMs < MIN_CLIP_DURATION_MS
+    || durationMs - splitOffsetMs < MIN_CLIP_DURATION_MS
+  ) {
+    throw new RangeError("분할 뒤 양쪽 영상 조각은 각각 0.1초 이상이어야 합니다.");
+  }
+  const timestamp = nowIso();
+  const usedClipIds = new Set(project.clips.map((candidate) => candidate.id));
+  let rightId = makeId("clip");
+  while (usedClipIds.has(rightId)) {
+    rightId = makeId("clip");
+  }
+  const leftClip: EditorClip = {
+    ...clip,
+    sourceEndMs: clip.sourceStartMs + splitOffsetMs,
+    updatedAt: timestamp
+  };
+  const rightClip: EditorClip = {
+    ...clip,
+    id: rightId,
+    ...(clip.shortFormSourceClipId || clip.shortFormFramingSourceId
+      ? { shortFormFramingSourceId: clip.id }
+      : {}),
+    sourceStartMs: clip.sourceStartMs + splitOffsetMs,
+    timelineStartMs: timelineMs,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+  const clips = reflowClips([
+    ...project.clips.slice(0, clipIndex),
+    leftClip,
+    rightClip,
+    ...project.clips.slice(clipIndex + 1)
+  ]);
+  const normalizedLeft = clips.find((candidate) => candidate.id === leftClip.id)!;
+  const normalizedRight = clips.find((candidate) => candidate.id === rightClip.id)!;
+
+  const splitTimedItems = <T extends TimedItemRecord>(items: T[], {
+    idPrefix,
+    normalize
+  }: {
+    idPrefix: string;
+    normalize: (item: T, owner: EditorClip) => T | null;
+  }): T[] => items.flatMap((item) => {
+    if (item.clipId !== clip.id) {
+      return [item];
+    }
+    const fragments: Array<{ owner: EditorClip; start: number; end: number }> = [];
+    const leftEnd = Math.min(item.endOffsetMs, splitOffsetMs);
+    if (leftEnd - item.startOffsetMs >= MIN_CUE_DURATION_MS) {
+      fragments.push({
+        owner: normalizedLeft,
+        start: item.startOffsetMs,
+        end: leftEnd
+      });
+    }
+    const rightStart = Math.max(item.startOffsetMs, splitOffsetMs);
+    if (item.endOffsetMs - rightStart >= MIN_CUE_DURATION_MS) {
+      fragments.push({
+        owner: normalizedRight,
+        start: rightStart - splitOffsetMs,
+        end: item.endOffsetMs - splitOffsetMs
+      });
+    }
+    return fragments.flatMap((fragment, index) => {
+      const normalized = normalize({
+        ...item,
+        id: index === 0 ? item.id : makeId(idPrefix),
+        clipId: fragment.owner.id,
+        startOffsetMs: fragment.start,
+        endOffsetMs: fragment.end,
+        createdAt: index === 0 ? item.createdAt : timestamp,
+        updatedAt: timestamp
+      }, fragment.owner);
+      return normalized ? [normalized] : [];
+    });
+  });
+
+  const subtitles = splitTimedItems(project.subtitles, {
+    idPrefix: "cue",
+    normalize: (cue, owner) => normalizeSubtitleCue(
+      cue,
+      owner,
+      project.subtitleLaneCount ?? MIN_SUBTITLE_LANES
+    )
+  });
+  const imageAssets = splitTimedItems(project.imageAssets, {
+    idPrefix: "asset",
+    normalize: normalizeImageAsset
+  });
+  const audioRegions = splitTimedItems(project.audioRegions, {
+    idPrefix: "audio",
+    normalize: normalizeAudioRegion
+  });
+  return {
+    ...project,
+    clips,
+    subtitles,
+    imageAssets,
+    audioRegions,
+    selectedClipId: rightClip.id,
+    selectedCueId: subtitles.some((cue) => cue.id === project.selectedCueId)
+      ? project.selectedCueId ?? null
+      : null,
+    selectedImageAssetId: imageAssets.some((asset) => asset.id === project.selectedImageAssetId)
+      ? project.selectedImageAssetId ?? null
+      : null,
+    selectedAudioRegionId: audioRegions.some((region) => region.id === project.selectedAudioRegionId)
+      ? project.selectedAudioRegionId ?? null
+      : null,
+    playheadMs: timelineMs,
+    updatedAt: timestamp
+  };
+}
+
+/** Merges two adjacent, source-contiguous clips while preserving timed items. */
+export function mergeAdjacentClips(
+  project: EditorProject,
+  leftClipId: unknown,
+  rightClipId: unknown
+): EditorProject {
+  const leftIndex = project.clips.findIndex((clip) => clip.id === leftClipId);
+  const rightIndex = project.clips.findIndex((clip) => clip.id === rightClipId);
+  const left = project.clips[leftIndex];
+  const right = project.clips[rightIndex];
+  if (!left || !right || rightIndex !== leftIndex + 1) {
+    throw new RangeError("병합할 두 영상 조각은 타임라인에서 바로 이웃해야 합니다.");
+  }
+  if (
+    left.enabled === false
+    || right.enabled === false
+    || left.sourceEndMs !== right.sourceStartMs
+    || String(left.shortFormSourceClipId || left.id)
+      !== String(right.shortFormSourceClipId || right.id)
+  ) {
+    throw new RangeError("같은 원본에서 실제로 이어진 쇼츠 조각만 병합할 수 있습니다.");
+  }
+  const timestamp = nowIso();
+  const leftDurationMs = clipDurationMs(left);
+  const mergedClip: EditorClip = {
+    ...left,
+    sourceEndMs: right.sourceEndMs,
+    updatedAt: timestamp
+  };
+  const clips = reflowClips([
+    ...project.clips.slice(0, leftIndex),
+    mergedClip,
+    ...project.clips.slice(rightIndex + 1)
+  ]);
+  const normalizedOwner = clips.find((clip) => clip.id === mergedClip.id)!;
+  const mergeTimedItems = <T extends TimedItemRecord>(items: T[], {
+    normalize
+  }: {
+    normalize: (item: T, owner: EditorClip) => T | null;
+  }): T[] => items.flatMap((item) => {
+    if (item.clipId !== left.id && item.clipId !== right.id) {
+      return [item];
+    }
+    const offset = item.clipId === right.id ? leftDurationMs : 0;
+    const normalized = normalize({
+      ...item,
+      clipId: normalizedOwner.id,
+      startOffsetMs: item.startOffsetMs + offset,
+      endOffsetMs: item.endOffsetMs + offset,
+      updatedAt: timestamp
+    }, normalizedOwner);
+    return normalized ? [normalized] : [];
+  });
+  const subtitles = mergeTimedItems(project.subtitles, {
+    normalize: (cue, owner) => normalizeSubtitleCue(
+      cue,
+      owner,
+      project.subtitleLaneCount ?? MIN_SUBTITLE_LANES
+    )
+  });
+  const imageAssets = mergeTimedItems(project.imageAssets, {
+    normalize: normalizeImageAsset
+  });
+  const audioRegions = mergeTimedItems(project.audioRegions, {
+    normalize: normalizeAudioRegion
+  });
+  const rightWasSelected = project.selectedClipId === right.id;
+  return {
+    ...project,
+    clips,
+    subtitles,
+    imageAssets,
+    audioRegions,
+    selectedClipId: rightWasSelected
+      ? normalizedOwner.id
+      : project.selectedClipId ?? null,
+    selectedCueId: subtitles.some((cue) => cue.id === project.selectedCueId)
+      ? project.selectedCueId ?? null
+      : null,
+    selectedImageAssetId: imageAssets.some((asset) => asset.id === project.selectedImageAssetId)
+      ? project.selectedImageAssetId ?? null
+      : null,
+    selectedAudioRegionId: audioRegions.some((region) => region.id === project.selectedAudioRegionId)
+      ? project.selectedAudioRegionId ?? null
+      : null,
+    playheadMs: Math.min(project.playheadMs, projectDurationMs({ clips })),
+    updatedAt: timestamp
+  };
+}
+
 export function rippleDeleteTimelineRange(project: EditorProject, {
   startMs,
   endMs
@@ -3257,6 +3615,11 @@ export function rippleDeleteTimelineRange(project: EditorProject, {
         ? {
           ...clip,
           id,
+          ...(id !== clip.id && (
+            clip.shortFormSourceClipId || clip.shortFormFramingSourceId
+          )
+            ? { shortFormFramingSourceId: clip.id }
+            : {}),
           sourceStartMs: clip.sourceStartMs + oldStartOffsetMs,
           sourceEndMs: clip.sourceStartMs + oldEndOffsetMs,
           createdAt: id === clip.id ? clip.createdAt : timestamp,
@@ -3625,19 +3988,61 @@ export function applyMediaAlignmentOffset(
   if (delta === 0 && project.broadcastSession?.alignmentConfirmed) {
     return project;
   }
-  const clips = project.clips.map((clip) => {
-    const sourceStartMs = clip.sourceStartMs + delta;
-    const sourceEndMs = clip.sourceEndMs + delta;
-    if (sourceStartMs < 0 || sourceEndMs <= sourceStartMs) {
-      throw new Error("정렬 오프셋을 적용하면 선택 구간이 원본 시작보다 앞으로 넘어갑니다.");
+  const shiftClips = (clips: readonly EditorClip[]) => reflowClips(
+    clips.map((clip) => {
+      const sourceStartMs = clip.sourceStartMs + delta;
+      const sourceEndMs = clip.sourceEndMs + delta;
+      if (sourceStartMs < 0 || sourceEndMs <= sourceStartMs) {
+        throw new Error("정렬 오프셋을 적용하면 선택 구간이 원본 시작보다 앞으로 넘어갑니다.");
+      }
+      return {
+        ...clip,
+        sourceStartMs,
+        sourceEndMs,
+        updatedAt: nowIso()
+      };
+    })
+  );
+  const clips = shiftClips(project.clips);
+  const shiftShortFormSource = <T extends {
+    sourceStartMs: number;
+    sourceEndMs: number;
+    sourceSelectionStartMs: number;
+    sourceSelectionEndMs: number;
+  }>(source: T, kind: "영상" | "음성"): T => {
+    const sourceStartMs = source.sourceStartMs + delta;
+    const sourceEndMs = source.sourceEndMs + delta;
+    const sourceSelectionStartMs = source.sourceSelectionStartMs + delta;
+    const sourceSelectionEndMs = source.sourceSelectionEndMs + delta;
+    if (
+      sourceStartMs < 0
+      || sourceEndMs <= sourceStartMs
+      || sourceSelectionStartMs < 0
+      || sourceSelectionEndMs <= sourceSelectionStartMs
+      || sourceStartMs < sourceSelectionStartMs
+      || sourceEndMs > sourceSelectionEndMs
+    ) {
+      throw new Error(
+        `정렬 오프셋을 적용하면 쇼츠 ${kind} 에셋이 원본 시작보다 앞으로 넘어갑니다.`
+      );
     }
     return {
-      ...clip,
+      ...source,
       sourceStartMs,
       sourceEndMs,
-      updatedAt: nowIso()
+      sourceSelectionStartMs,
+      sourceSelectionEndMs
     };
-  });
+  };
+  const shortForm = {
+    ...project.shortForm,
+    videoAssets: project.shortForm.videoAssets.map((asset) => (
+      shiftShortFormSource(asset, "영상")
+    )),
+    sourceAudioAssets: project.shortForm.sourceAudioAssets.map((asset) => (
+      shiftShortFormSource(asset, "음성")
+    ))
+  };
   return {
     ...project,
     broadcastSession: {
@@ -3645,7 +4050,8 @@ export function applyMediaAlignmentOffset(
       alignmentOffsetMs: nextOffset,
       alignmentConfirmed: true
     },
-    clips: reflowClips(clips),
+    clips,
+    shortForm,
     updatedAt: nowIso()
   };
 }

@@ -8,6 +8,7 @@ import {
   AUDSEG_PIPELINE_FINGERPRINT,
   audSegAudioFootprint,
   audSegBlankSubtitleDrafts,
+  resolveAudSegWorkerUrl,
   segmentAudSegPcm,
   segmentAudSegPcmInWorker
 } from "../src/editor/audseg.js";
@@ -28,6 +29,15 @@ const packageRoot = path.resolve(
 function silence(seconds: number) {
   return new Float32Array(Math.round(SAMPLE_RATE * seconds));
 }
+
+test("AudSeg Worker는 Popovic immutable release query를 editor bundle과 공유한다", () => {
+  assert.equal(
+    resolveAudSegWorkerUrl(
+      "https://kirinuki.eff0rtchung.kr/editor/editor.js?v=2.7.0"
+    ).href,
+    "https://kirinuki.eff0rtchung.kr/editor/audseg-worker.js?v=2.7.0"
+  );
+});
 
 function tone(
   seconds: number,

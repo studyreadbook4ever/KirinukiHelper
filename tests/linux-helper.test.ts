@@ -21,12 +21,18 @@ import { fileURLToPath } from "node:url";
 import {
   BROWSER_CANDIDATES,
   DEFAULT_SOURCE_URL,
+  LOCAL_STUDIO_URL,
+  PUBLIC_STUDIO_URL,
+  STUDIO_ORIGIN_IDENTITY_OPTION,
+  STREAMING_COMPANION_PROTOCOL_OPTION,
   browserProduct,
   browserLaunchArgs,
   captionStartStrategy,
+  companionBuildMatchesStudioOrigin,
+  classifyDedicatedBrowserProcess,
+  dedicatedBrowserPreparationDisposition,
   desktopDatabaseRefreshCommand,
   desktopEntryContent,
-  extensionTreesMatch,
   helpText,
   inspectBrowser,
   inspectPreferredBrowser,
@@ -37,10 +43,22 @@ import {
   resolveLinuxHelperPaths,
   restoreLauncherPermissions,
   shouldCycleForegroundCaption,
+  shouldCycleStudioServer,
+  studioServerMatchesOrigin,
+  studioServerStartArgs,
+  studioUrlForOrigin,
+  summarizeDedicatedBrowserProcesses,
   userLauncherContent,
   validateSourceUrl,
   versionAtLeast
 } from "../scripts/linux-helper.js";
+import {
+  STREAMING_BRIDGE_PROTOCOL
+} from "../src/web/streaming-bridge-protocol.js";
+import {
+  KIRINUKI_LOCAL_STUDIO_ORIGIN,
+  KIRINUKI_PUBLIC_STUDIO_ORIGIN
+} from "../src/lib/local-runtime-origin.js";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const helperPath = path.join(packageRoot, "scripts", "linux-helper.ts");
@@ -81,17 +99,20 @@ async function runNode(
   });
 }
 
-test("버전 하한은 Node 20.9와 Chromium 120 경계를 정확히 구분한다", () => {
-  assert.equal(versionAtLeast("20.8.9", "20.9.0"), false);
-  assert.equal(versionAtLeast("20.9.0", "20.9.0"), true);
-  assert.equal(versionAtLeast("21.0.0", "20.9.0"), true);
+test("버전 하한은 Node 22와 Chromium 120 경계를 정확히 구분한다", () => {
+  assert.equal(versionAtLeast("21.99.9", "22.0.0"), false);
+  assert.equal(versionAtLeast("22.0.0", "22.0.0"), true);
+  assert.equal(versionAtLeast("23.0.0", "22.0.0"), true);
   assert.equal(parseBrowserMajor("Chromium 119.0.1"), 119);
   assert.equal(parseBrowserMajor("Google Chrome 120.0.1"), 120);
   assert.equal(parseBrowserMajor("unknown"), null);
   assert.equal(browserProduct("Chromium 150.0.1"), "chromium");
   assert.equal(browserProduct("Google Chrome 150.0.1"), "chrome");
   assert.equal(browserProduct("unknown"), "unknown");
-  assert.deepEqual(BROWSER_CANDIDATES, ["chromium", "chromium-browser"]);
+  assert.deepEqual(BROWSER_CANDIDATES, [
+    "chromium",
+    "chromium-browser"
+  ]);
 });
 
 test("CLI는 setup/doctor/open/status/stop 계약과 자막 방식을 파싱한다", () => {
@@ -150,7 +171,10 @@ test("URL은 지원 서비스의 공개 HTTPS만 한 인자로 허용한다", ()
     "https://chzzk.naver.com/video/14405514",
     "https://www.youtube.com/watch?v=nixLJx1UhfY",
     "https://youtu.be/nixLJx1UhfY",
-    "https://naver.me/xJcAj1dV"
+    "https://naver.me/xJcAj1dV",
+    "https://vod.sooplive.com/player/123456",
+    "https://vod.sooplive.co.kr/player/123456",
+    "https://vod.afreecatv.com/PLAYER/STATION/123456"
   ]) {
     assert.equal(validateSourceUrl(value), value);
   }
@@ -166,21 +190,270 @@ test("URL은 지원 서비스의 공개 HTTPS만 한 인자로 허용한다", ()
   }
 });
 
-test("브라우저 인자는 안정적인 전용 profile과 exact Extension만 사용한다", () => {
+test("브라우저 인자는 전용 profile과 선택한 exact Studio origin만 사용한다", () => {
   const args = browserLaunchArgs({
-    extensionRoot: "/tmp/Kirinuki Folder/extension",
     profileRoot: "/tmp/Kirinuki Profile",
+    streamingCompanionRoot: "/opt/Kirinuki Helper/streaming-companion",
     sourceUrl: "https://chzzk.naver.com/video/1"
   });
   assert.deepEqual(args, [
     "--user-data-dir=/tmp/Kirinuki Profile",
-    "--disable-extensions-except=/tmp/Kirinuki Folder/extension",
-    "--load-extension=/tmp/Kirinuki Folder/extension",
+    "--disable-extensions-except=/opt/Kirinuki Helper/streaming-companion",
+    "--load-extension=/opt/Kirinuki Helper/streaming-companion",
+    `${STREAMING_COMPANION_PROTOCOL_OPTION}=${STREAMING_BRIDGE_PROTOCOL}`,
+    `${STUDIO_ORIGIN_IDENTITY_OPTION}=${KIRINUKI_LOCAL_STUDIO_ORIGIN}`,
     "--no-first-run",
     "--no-default-browser-check",
-    "https://chzzk.naver.com/video/1"
+    "http://127.0.0.1:4320/?source=https%3A%2F%2Fchzzk.naver.com%2Fvideo%2F1"
   ]);
   assert.ok(!args.some((value) => /remote-debugging/iu.test(value)));
+  assert.deepEqual(browserLaunchArgs({
+    profileRoot: "/tmp/Kirinuki Profile",
+    streamingCompanionRoot: "/opt/Kirinuki Helper/streaming-companion"
+  }), [
+    "--user-data-dir=/tmp/Kirinuki Profile",
+    "--disable-extensions-except=/opt/Kirinuki Helper/streaming-companion",
+    "--load-extension=/opt/Kirinuki Helper/streaming-companion",
+    `${STREAMING_COMPANION_PROTOCOL_OPTION}=${STREAMING_BRIDGE_PROTOCOL}`,
+    `${STUDIO_ORIGIN_IDENTITY_OPTION}=${KIRINUKI_LOCAL_STUDIO_ORIGIN}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    LOCAL_STUDIO_URL
+  ]);
+  const publicArgs = browserLaunchArgs({
+    profileRoot: "/tmp/Kirinuki Profile",
+    streamingCompanionRoot: "/opt/Kirinuki Helper/streaming-companion",
+    studioOrigin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+    sourceUrl: "https://youtu.be/nixLJx1UhfY"
+  });
+  assert.equal(
+    publicArgs.at(-1),
+    `${PUBLIC_STUDIO_URL}?source=https%3A%2F%2Fyoutu.be%2FnixLJx1UhfY`
+  );
+  assert.ok(publicArgs.includes(
+    `${STUDIO_ORIGIN_IDENTITY_OPTION}=${KIRINUKI_PUBLIC_STUDIO_ORIGIN}`
+  ));
+  assert.equal(
+    studioUrlForOrigin(KIRINUKI_LOCAL_STUDIO_ORIGIN),
+    LOCAL_STUDIO_URL
+  );
+  assert.equal(
+    studioUrlForOrigin(KIRINUKI_PUBLIC_STUDIO_ORIGIN),
+    PUBLIC_STUDIO_URL
+  );
+  assert.doesNotMatch(
+    studioServerStartArgs(KIRINUKI_LOCAL_STUDIO_ORIGIN).join(" "),
+    /--public-origin/u
+  );
+  assert.match(
+    studioServerStartArgs(KIRINUKI_PUBLIC_STUDIO_ORIGIN).join(" "),
+    /--public-origin/u
+  );
+  assert.equal(companionBuildMatchesStudioOrigin(
+    `allowed=${KIRINUKI_PUBLIC_STUDIO_ORIGIN}`,
+    KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  ), true);
+  assert.equal(companionBuildMatchesStudioOrigin(
+    `allowed=${KIRINUKI_LOCAL_STUDIO_ORIGIN},${KIRINUKI_PUBLIC_STUDIO_ORIGIN}`,
+    KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  ), false);
+});
+
+test("전용 브라우저 identity는 clean·최소 companion·정확한 legacy를 구분한다", () => {
+  const profileRoot = "/tmp/Kirinuki Profile";
+  const streamingCompanionRoot = "/opt/Kirinuki Helper/streaming-companion";
+  const legacyExtensionRoot = "/opt/Kirinuki Helper/extension";
+  const processSnapshot = (argv: readonly string[], overrides: Partial<{
+    pid: number;
+    parentPid: number;
+    ownerUid: number;
+    startTimeTicks: string;
+    executable: string;
+  }> = {}) => ({
+    pid: overrides.pid ?? 4123,
+    parentPid: overrides.parentPid ?? 1,
+    ownerUid: overrides.ownerUid ?? 1000,
+    startTimeTicks: overrides.startTimeTicks ?? "987654",
+    executable: overrides.executable ?? "/usr/lib/chromium/chromium",
+    argv
+  });
+  const classify = (
+    argv: readonly string[],
+    overrides: Parameters<typeof processSnapshot>[1] = {}
+  ) => classifyDedicatedBrowserProcess(
+    processSnapshot(argv, overrides),
+    {
+      profileRoot,
+      streamingCompanionRoot,
+      legacyExtensionRoot,
+      product: "chromium",
+      expectedUid: 1000
+    }
+  );
+  const executable = "/usr/lib/chromium/chromium";
+  const protocolArgument = (
+    `${STREAMING_COMPANION_PROTOCOL_OPTION}=${STREAMING_BRIDGE_PROTOCOL}`
+  );
+  const originArgument = (
+    `${STUDIO_ORIGIN_IDENTITY_OPTION}=${KIRINUKI_LOCAL_STUDIO_ORIGIN}`
+  );
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    "--no-first-run",
+    LOCAL_STUDIO_URL
+  ]), "clean-root");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${streamingCompanionRoot}`,
+    `--load-extension=${streamingCompanionRoot}`,
+    protocolArgument,
+    originArgument,
+    "--no-first-run"
+  ]), "minimal-companion-root");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${streamingCompanionRoot}`,
+    `--load-extension=${streamingCompanionRoot}`,
+    protocolArgument,
+    `${STUDIO_ORIGIN_IDENTITY_OPTION}=${KIRINUKI_PUBLIC_STUDIO_ORIGIN}`
+  ]), "stale-minimal-companion-root");
+  assert.equal(classifyDedicatedBrowserProcess(processSnapshot([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${streamingCompanionRoot}`,
+    `--load-extension=${streamingCompanionRoot}`,
+    protocolArgument,
+    originArgument
+  ]), {
+    profileRoot,
+    streamingCompanionRoot,
+    legacyExtensionRoot,
+    product: "chromium",
+    expectedUid: 1000,
+    streamingCompanionProtocol: "future-protocol"
+  }), "stale-minimal-companion-root");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${streamingCompanionRoot}`,
+    `--load-extension=${streamingCompanionRoot}`
+  ]), "stale-minimal-companion-root");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${streamingCompanionRoot}`,
+    `--load-extension=${streamingCompanionRoot}`,
+    `${STREAMING_COMPANION_PROTOCOL_OPTION}=old-protocol`,
+    originArgument
+  ]), "stale-minimal-companion-root");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${streamingCompanionRoot}`,
+    `--load-extension=${streamingCompanionRoot}`,
+    protocolArgument,
+    protocolArgument,
+    originArgument
+  ]), "stale-minimal-companion-root");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${legacyExtensionRoot}`,
+    `--load-extension=${legacyExtensionRoot}`,
+    "--no-first-run"
+  ]), "legacy-extension-root");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${legacyExtensionRoot}`,
+    `--load-extension=${legacyExtensionRoot}`,
+    protocolArgument
+  ]), "conflict");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${legacyExtensionRoot}`,
+    "--load-extension=/opt/unrelated-extension"
+  ]), "conflict");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--user-data-dir=${profileRoot}`
+  ]), "conflict");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    "--disable-extensions"
+  ]), "conflict");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    "--type=renderer"
+  ]), "profile-child");
+  assert.equal(classify([
+    executable,
+    "--user-data-dir=/tmp/Other Profile"
+  ]), "unrelated");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`
+  ], { ownerUid: 1001 }), "conflict");
+  assert.equal(classify([
+    executable,
+    `--user-data-dir=${profileRoot}`
+  ], { executable: "/usr/bin/node" }), "conflict");
+
+  const reportFor = (argv: readonly string[]) => (
+    summarizeDedicatedBrowserProcesses([processSnapshot(argv)], {
+      profileRoot,
+      streamingCompanionRoot,
+      legacyExtensionRoot,
+      product: "chromium",
+      expectedUid: 1000
+    })
+  );
+  const clean = reportFor([
+    executable,
+    `--user-data-dir=${profileRoot}`
+  ]);
+  assert.equal(clean.state, "clean");
+  assert.equal(clean.transitionRequired, true);
+  assert.equal(
+    dedicatedBrowserPreparationDisposition(clean),
+    "reject-clean-without-signal"
+  );
+  const companion = reportFor([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${streamingCompanionRoot}`,
+    `--load-extension=${streamingCompanionRoot}`,
+    protocolArgument,
+    originArgument
+  ]);
+  assert.equal(companion.state, "minimal-companion");
+  assert.equal(companion.transitionRequired, false);
+  assert.equal(
+    dedicatedBrowserPreparationDisposition(companion),
+    "reuse-minimal-companion"
+  );
+  const staleCompanion = reportFor([
+    executable,
+    `--user-data-dir=${profileRoot}`,
+    `--disable-extensions-except=${streamingCompanionRoot}`,
+    `--load-extension=${streamingCompanionRoot}`,
+    `${STREAMING_COMPANION_PROTOCOL_OPTION}=old-protocol`,
+    originArgument
+  ]);
+  assert.equal(staleCompanion.state, "stale-minimal-companion");
+  assert.equal(staleCompanion.transitionRequired, true);
+  assert.match(staleCompanion.reason, /protocol marker|현재 빌드/u);
+  assert.equal(
+    dedicatedBrowserPreparationDisposition(staleCompanion),
+    "reject-stale-minimal-without-signal"
+  );
 });
 
 test("Whisper 시작은 설치·Origin·ready 뒤 systemd/foreground를 정확히 고른다", () => {
@@ -221,6 +494,28 @@ test("Whisper 시작은 설치·Origin·ready 뒤 systemd/foreground를 정확�
       managedForeground: false
     }
   }), false);
+  assert.equal(shouldCycleStudioServer({
+    ready: true,
+    ownership: "managed",
+    managerPid: 123
+  }), true);
+  assert.equal(shouldCycleStudioServer({
+    ready: false,
+    ownership: "foreign",
+    managerPid: null
+  }), false);
+  assert.equal(studioServerMatchesOrigin({
+    ready: true,
+    ownership: "managed",
+    managerPid: 123,
+    studioOrigin: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  }, KIRINUKI_PUBLIC_STUDIO_ORIGIN), true);
+  assert.equal(studioServerMatchesOrigin({
+    ready: true,
+    ownership: "managed",
+    managerPid: 123,
+    studioOrigin: KIRINUKI_LOCAL_STUDIO_ORIGIN
+  }, KIRINUKI_PUBLIC_STUDIO_ORIGIN), false);
 });
 
 test("XDG 경로는 repository 밖의 안정적인 사용자 profile을 고른다", () => {
@@ -229,7 +524,9 @@ test("XDG 경로는 repository 밖의 안정적인 사용자 profile을 고른�
       XDG_CONFIG_HOME: "/tmp/config root",
       XDG_STATE_HOME: "/tmp/state root",
       XDG_DATA_HOME: "/tmp/data root",
+      KIRINUKI_PACKAGE_ROOT: "/srv/kirinuki runtime",
       KIRINUKI_EXTENSION_ROOT: "/srv/kirinuki runtime/extension",
+      KIRINUKI_STREAMING_COMPANION_ROOT: "/srv/kirinuki runtime/streaming-companion",
       KIRINUKI_BROWSER_PROFILE_ROOT: "/srv/kirinuki profile"
     },
     homeDir: "/tmp/home",
@@ -240,9 +537,14 @@ test("XDG 경로는 repository 밖의 안정적인 사용자 profile을 고른�
     "/srv/kirinuki profile"
   );
   assert.equal(
-    paths.extensionRoot,
+    paths.streamingCompanionRoot,
+    "/srv/kirinuki runtime/streaming-companion"
+  );
+  assert.equal(
+    paths.legacyExtensionRoot,
     "/srv/kirinuki runtime/extension"
   );
+  assert.equal(paths.packageRoot, "/srv/kirinuki runtime");
   assert.equal(
     paths.captionLogPath,
     "/tmp/state root/kirinuki-studio/caption-stack.log"
@@ -257,8 +559,10 @@ test("XDG 경로는 repository 밖의 안정적인 사용자 profile을 고른�
     "/tmp/data root/applications/chromium-kirinuki.desktop"
   );
   const invalidOverrides: ReadonlyArray<readonly [string, string]> = [
+    ["KIRINUKI_PACKAGE_ROOT", "relative/package"],
     ["KIRINUKI_EXTENSION_ROOT", "relative/extension"],
     ["KIRINUKI_EXTENSION_ROOT", ""],
+    ["KIRINUKI_STREAMING_COMPANION_ROOT", "relative/companion"],
     ["KIRINUKI_BROWSER_PROFILE_ROOT", "/tmp/profile\nother"]
   ];
   for (const [name, value] of invalidOverrides) {
@@ -280,7 +584,6 @@ test("setup용 사용자 명령과 desktop entry는 원자적으로 최신 경�
   const paths = resolveLinuxHelperPaths({
     env: {
       XDG_DATA_HOME: path.join(tempRoot, "data"),
-      KIRINUKI_EXTENSION_ROOT: path.join(tempRoot, "runtime extension"),
       KIRINUKI_BROWSER_PROFILE_ROOT: path.join(tempRoot, "browser profile")
     },
     homeDir: path.join(tempRoot, "home"),
@@ -313,9 +616,11 @@ test("setup용 사용자 명령과 desktop entry는 원자적으로 최신 경�
     launcher,
     userLauncherContent(paths, "/opt/Kirinuki Helper")
   );
+  assert.doesNotMatch(launcher, /KIRINUKI_EXTENSION_ROOT/u);
+  assert.match(launcher, /KIRINUKI_STREAMING_COMPANION_ROOT/u);
   assert.match(
     launcher,
-    /KIRINUKI_EXTENSION_ROOT='\/.+runtime extension'/u
+    /KIRINUKI_PACKAGE_ROOT='\/opt\/Kirinuki Helper'/u
   );
   assert.match(
     launcher,
@@ -437,6 +742,94 @@ test("setup용 사용자 명령과 desktop entry는 원자적으로 최신 경�
     userLauncherContent(paths, "/opt/Kirinuki Helper")
   );
 
+  const previousWebLauncher = [
+    "#!/usr/bin/env sh",
+    "set -eu",
+    `# kirinuki-helper-config=${JSON.stringify({
+      packageRoot: "/opt/Kirinuki Helper",
+      browserProfileRoot: paths.browserProfileRoot
+    })}`,
+    `export KIRINUKI_BROWSER_PROFILE_ROOT='${paths.browserProfileRoot}'`,
+    "if [ \"$#\" -eq 0 ]; then",
+    "  set -- open",
+    "fi",
+    "exec '/opt/Kirinuki Helper/kirinuki.sh' \"$@\"",
+    ""
+  ].join("\n");
+  await writeFile(paths.userLauncherPath, previousWebLauncher);
+  await chmod(paths.userLauncherPath, 0o755);
+  const migratedPreviousWeb = await installUserEntrypoints(
+    paths,
+    "/opt/Kirinuki Helper"
+  );
+  assert.equal(migratedPreviousWeb.replacedEntrypointBackups.length, 1);
+  assert.equal(
+    await readFile(paths.userLauncherPath, "utf8"),
+    userLauncherContent(paths, "/opt/Kirinuki Helper")
+  );
+
+  const previousWebLauncherWithPackageRoot = [
+    "#!/usr/bin/env sh",
+    "set -eu",
+    `# kirinuki-helper-config=${JSON.stringify({
+      packageRoot: "/opt/Kirinuki Helper",
+      browserProfileRoot: paths.browserProfileRoot
+    })}`,
+    "export KIRINUKI_PACKAGE_ROOT='/opt/Kirinuki Helper'",
+    `export KIRINUKI_BROWSER_PROFILE_ROOT='${paths.browserProfileRoot}'`,
+    "if [ \"$#\" -eq 0 ]; then",
+    "  set -- open",
+    "fi",
+    "exec '/opt/Kirinuki Helper/kirinuki.sh' \"$@\"",
+    ""
+  ].join("\n");
+  await writeFile(paths.userLauncherPath, previousWebLauncherWithPackageRoot);
+  await chmod(paths.userLauncherPath, 0o755);
+  const migratedPreviousWebWithPackageRoot = await installUserEntrypoints(
+    paths,
+    "/opt/Kirinuki Helper"
+  );
+  assert.equal(
+    migratedPreviousWebWithPackageRoot.replacedEntrypointBackups.length,
+    1
+  );
+  assert.equal(
+    await readFile(paths.userLauncherPath, "utf8"),
+    userLauncherContent(paths, "/opt/Kirinuki Helper")
+  );
+
+  const previousExtensionLauncher = [
+    "#!/usr/bin/env sh",
+    "set -eu",
+    `# kirinuki-helper-config=${JSON.stringify({
+      packageRoot: "/opt/Kirinuki Helper",
+      extensionRoot: paths.legacyExtensionRoot,
+      browserProfileRoot: paths.browserProfileRoot
+    })}`,
+    "export KIRINUKI_PACKAGE_ROOT='/opt/Kirinuki Helper'",
+    `export KIRINUKI_EXTENSION_ROOT='${paths.legacyExtensionRoot}'`,
+    `export KIRINUKI_BROWSER_PROFILE_ROOT='${paths.browserProfileRoot}'`,
+    "if [ \"$#\" -eq 0 ]; then",
+    "  set -- open",
+    "fi",
+    "exec '/opt/Kirinuki Helper/kirinuki.sh' \"$@\"",
+    ""
+  ].join("\n");
+  await writeFile(paths.userLauncherPath, previousExtensionLauncher);
+  await chmod(paths.userLauncherPath, 0o755);
+  const migratedPreviousManaged = await installUserEntrypoints(
+    paths,
+    "/opt/Kirinuki Helper"
+  );
+  assert.equal(
+    migratedPreviousManaged.replacedEntrypointBackups.length,
+    1
+  );
+  assert.equal(
+    await readFile(paths.userLauncherPath, "utf8"),
+    userLauncherContent(paths, "/opt/Kirinuki Helper")
+  );
+
   await writeFile(
     paths.userLauncherPath,
     "#!/bin/sh\nexec /opt/old-kirinuki/kirinuki.sh \"$@\"\n"
@@ -463,7 +856,7 @@ test("설치된 bare kirinuki는 open으로, 명시 인자는 그대로 전달�
     [
       "#!/bin/sh",
       "printf 'args=%s\\n' \"$*\"",
-      "printf 'extension=%s\\n' \"$KIRINUKI_EXTENSION_ROOT\"",
+      "printf 'package=%s\\n' \"$KIRINUKI_PACKAGE_ROOT\"",
       "printf 'profile=%s\\n' \"$KIRINUKI_BROWSER_PROFILE_ROOT\"",
       ""
     ].join("\n")
@@ -472,7 +865,6 @@ test("설치된 bare kirinuki는 open으로, 명시 인자는 그대로 전달�
   const paths = resolveLinuxHelperPaths({
     env: {
       XDG_DATA_HOME: path.join(tempRoot, "data"),
-      KIRINUKI_EXTENSION_ROOT: path.join(tempRoot, "runtime extension"),
       KIRINUKI_BROWSER_PROFILE_ROOT: path.join(tempRoot, "browser profile")
     },
     homeDir: path.join(tempRoot, "home"),
@@ -506,7 +898,7 @@ test("설치된 bare kirinuki는 open으로, 명시 인자는 그대로 전달�
   assert.match(bare.stdout, /^args=open$/mu);
   assert.match(
     bare.stdout,
-    new RegExp(`^extension=${paths.extensionRoot}$`, "mu")
+    new RegExp(`^package=${paths.packageRoot}$`, "mu")
   );
   assert.match(
     bare.stdout,
@@ -720,31 +1112,6 @@ test("사용자의 unrelated 파일과 symlink는 setup이 절대 덮어쓰지 �
   );
 });
 
-test("외부 Extension 경로는 현재 repository 빌드와 파일 단위로 같아야 한다", async (t) => {
-  const tempRoot = await mkdtemp(
-    path.join(os.tmpdir(), "kirinuki-extension-match-")
-  );
-  t.after(() => rm(tempRoot, { recursive: true, force: true }));
-  const reference = path.join(tempRoot, "reference");
-  const selected = path.join(tempRoot, "selected");
-  await Promise.all([
-    mkdir(path.join(reference, "editor"), { recursive: true }),
-    mkdir(path.join(selected, "editor"), { recursive: true })
-  ]);
-  await Promise.all([
-    writeFile(path.join(reference, "manifest.json"), "{\"version\":\"1\"}"),
-    writeFile(path.join(selected, "manifest.json"), "{\"version\":\"1\"}"),
-    writeFile(path.join(reference, "editor", "editor.js"), "latest"),
-    writeFile(path.join(selected, "editor", "editor.js"), "latest")
-  ]);
-  assert.equal(await extensionTreesMatch(reference, selected), true);
-  await writeFile(path.join(selected, "editor", "editor.js"), "stale");
-  assert.equal(await extensionTreesMatch(reference, selected), false);
-  await writeFile(path.join(selected, "editor", "editor.js"), "latest");
-  await writeFile(path.join(selected, "unexpected.js"), "old leftover");
-  assert.equal(await extensionTreesMatch(reference, selected), false);
-});
-
 test("도움말은 사람이 쓸 모든 명령과 안전 경계를 노출한다", () => {
   const text = helpText();
   for (const command of [
@@ -761,8 +1128,12 @@ test("도움말은 사람이 쓸 모든 명령과 안전 경계를 노출한다"
   assert.match(text, /whisper/u);
   assert.match(text, /강제 종료하지 않음/u);
   assert.match(text, /\.local\/bin\/kirinuki/u);
-  assert.match(text, /KIRINUKI_EXTENSION_ROOT/u);
+  assert.match(text, /127\.0\.0\.1:4320/u);
+  assert.match(text, /최소 streaming companion[\s\S]*자동 로드/u);
+  assert.match(text, /legacy Extension 전체/u);
   assert.match(text, /KIRINUKI_BROWSER_PROFILE_ROOT/u);
+  assert.match(text, /KIRINUKI_STREAMING_COMPANION_ROOT/u);
+  assert.match(text, /protocol marker/u);
   assert.doesNotMatch(text, /curl\s*\|\s*(?:ba)?sh/iu);
 });
 
@@ -807,6 +1178,33 @@ test("fresh Linux dry-run은 외부 변경 없이 정확한 setup과 open 명령
   assert.match(setup.stdout, /앱 메뉴 설치:/u);
   assert.doesNotMatch(setup.stdout, /caption-stack\.ts" "setup/u);
 
+  const publicSetup = await runNode([
+    "setup",
+    "--mode",
+    "audseg",
+    "--yes",
+    "--dry-run"
+  ], {
+    env: {
+      ...env,
+      KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+    }
+  });
+  assert.equal(publicSetup.code, 0, publicSetup.stderr);
+  assert.match(
+    publicSetup.stdout,
+    new RegExp(`Studio Origin: ${KIRINUKI_PUBLIC_STUDIO_ORIGIN}`, "u")
+  );
+
+  const invalidOrigin = await runNode(["help"], {
+    env: {
+      ...env,
+      KIRINUKI_ALLOWED_ORIGIN: "https://example.com"
+    }
+  });
+  assert.equal(invalidOrigin.code, 1);
+  assert.match(invalidOrigin.stderr, /Kirinuki Studio Origin.*고정된/u);
+
   const whisperSetup = await runNode([
     "setup",
     "--mode",
@@ -833,7 +1231,19 @@ test("fresh Linux dry-run은 외부 변경 없이 정확한 setup과 open 명령
   ], { env });
   assert.equal(open.code, 0, open.stderr);
   assert.match(open.stdout, /--user-data-dir=/u);
-  assert.match(open.stdout, /--load-extension=/u);
+  assert.match(open.stdout, /local-studio-server\.ts" "status" "--json/u);
+  assert.match(open.stdout, /local-studio-server\.ts" "start/u);
+  assert.match(open.stdout, /http:\/\/127\.0\.0\.1:4320/u);
+  assert.match(
+    open.stdout,
+    /--disable-extensions-except=.*streaming-companion/u
+  );
+  assert.match(open.stdout, /--load-extension=.*streaming-companion/u);
+  assert.match(
+    open.stdout,
+    /--kirinuki-streaming-companion-protocol=kirinuki-streaming-bridge\/v\d+/u
+  );
+  assert.doesNotMatch(open.stdout, /--load-extension=.*\/extension(?:"|\s|$)/u);
   assert.match(open.stdout, /https:\/\/naver\.me\/xJcAj1dV/u);
   assert.equal(
     await readFile(browser, "utf8"),
@@ -841,7 +1251,7 @@ test("fresh Linux dry-run은 외부 변경 없이 정확한 setup과 open 명령
   );
 });
 
-test("일반 Google Chrome 자동 로드는 fail-closed이고 저장된 Chrome은 Chromium으로 대체한다", async (t) => {
+test("자동 companion 로드는 Chromium만 허용하고 branded Chrome은 fail-closed한다", async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-browser-brand-")
   );
@@ -870,10 +1280,10 @@ test("일반 Google Chrome 자동 로드는 fail-closed이고 저장된 Chrome�
     inspectPreferredBrowser({ explicit: chrome, env }).supported,
     false
   );
-  const replacement = inspectPreferredBrowser({ stored: chrome, env });
-  assert.equal(replacement.supported, true);
-  assert.equal(replacement.product, "chromium");
-  assert.equal(replacement.binary, chromium);
+  const stored = inspectPreferredBrowser({ stored: chrome, env });
+  assert.equal(stored.supported, true);
+  assert.equal(stored.product, "chromium");
+  assert.equal(stored.binary, chromium);
 });
 
 test("누락된 fresh Linux 의존성은 변경 없이 실행 가능한 설치 안내로 실패한다", async (t) => {
@@ -892,6 +1302,7 @@ test("누락된 fresh Linux 의존성은 변경 없이 실행 가능한 설치 �
   delete env.KIRINUKI_BROWSER_BINARY;
   delete env.KIRINUKI_NPM_BINARY;
   delete env.KIRINUKI_EXTENSION_ROOT;
+  delete env.KIRINUKI_STREAMING_COMPANION_ROOT;
   delete env.KIRINUKI_BROWSER_PROFILE_ROOT;
   const result = await runNode([
     "doctor",
@@ -900,13 +1311,13 @@ test("누락된 fresh Linux 의존성은 변경 없이 실행 가능한 설치 �
   ], { env });
   assert.equal(result.code, 1);
   assert.match(result.stdout, /npm: 없음/u);
-  assert.match(result.stdout, /Chromium 없음/u);
+  assert.match(result.stdout, /Chromium 계열 브라우저 없음/u);
   assert.match(result.stdout, /apt install nodejs npm chromium/u);
   assert.doesNotMatch(result.stdout, /chromium cmake c\+\+ tar/u);
   assert.match(result.stdout, /자동 실행하지 않습니다/u);
 });
 
-test("AudSeg status와 stop은 Whisper companion을 호출하지 않는다", async (t) => {
+test("AudSeg status와 stop은 VOD와 localhost studio lifecycle을 함께 다룬다", async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-audseg-status-")
   );
@@ -926,15 +1337,21 @@ test("AudSeg status와 stop은 Whisper companion을 호출하지 않는다", asy
   assert.equal(status.code, 0, status.stderr);
   const parsed = JSON.parse(status.stdout);
   assert.equal(parsed.caption.value.required, false);
+  assert.equal(parsed.browserProfile.running, "stopped");
+  assert.equal(parsed.browserProfile.runtime.transitionRequired, false);
+  assert.equal(parsed.vod.value.configured, false);
+  assert.equal(parsed.studioServer.ok, true);
+  assert.equal(parsed.studioServer.value.url, "http://127.0.0.1:4320");
 
   const stopped = await runNode([
     "stop",
     "--mode",
-    "audseg"
+    "audseg",
+    "--dry-run"
   ], { env });
   assert.equal(stopped.code, 0, stopped.stderr);
-  assert.match(stopped.stdout, /중지할 백그라운드 서비스가 없습니다/u);
-  assert.match(stopped.stdout, /직접 정상 종료/u);
+  assert.match(stopped.stdout, /local-vod-runtime\.ts" "stop/u);
+  assert.match(stopped.stdout, /local-studio-server\.ts" "stop/u);
 });
 
 test("셸 진입점은 ZIP의 0644 권한에서도 setup을 열고 성공 뒤 실행권한을 복원한다", async (t) => {
@@ -944,13 +1361,17 @@ test("셸 진입점은 ZIP의 0644 권한에서도 setup을 열고 성공 뒤 �
   ]);
   assert.match(launcher, /^#!\/usr\/bin\/env bash/u);
   assert.match(launcher, /scripts\/linux-helper\.ts/u);
-  assert.match(launcher, /Node\.js 20\.9/u);
+  assert.match(launcher, /Node\.js 22/u);
   assert.doesNotMatch(launcher, /curl\s*\|\s*(?:ba)?sh/iu);
   assert.match(setup, /kirinuki\.sh" setup/u);
   assert.doesNotMatch(setup, /rm\s+-rf/u);
   assert.match(setup, /exec bash .+kirinuki\.sh" setup/u);
   const helper = await readFile(helperPath, "utf8");
-  assert.doesNotMatch(helper, /process\.kill|child\.kill/u);
+  assert.match(helper, /process\.kill\([^\n]+, "SIGTERM"\)/u);
+  assert.doesNotMatch(
+    helper,
+    /process\.kill\([^)]*,\s*["']SIGKILL["']|child\.kill/u
+  );
   assert.match(helper, /detached:\s*true/u);
 
   const tempRoot = await mkdtemp(
@@ -977,7 +1398,7 @@ test("셸 진입점은 ZIP의 0644 권한에서도 setup을 열고 성공 뒤 �
       [
         "#!/bin/sh",
         "if [ \"$1\" = \"--version\" ]; then",
-        "  printf '%s\\n' 'v20.9.0'",
+        "  printf '%s\\n' 'v22.0.0'",
         "  exit 0",
         "fi",
         "printf '%s\\n' \"$@\"",

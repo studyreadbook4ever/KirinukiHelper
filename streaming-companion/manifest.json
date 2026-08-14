@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Kirinuki Streaming Companion",
+  "version": "2.0.0",
+  "description": "Kirinuki Studio의 임베드 스트리밍 플레이어를 클라이언트에서 제어합니다.",
+  "minimum_chrome_version": "120",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chzzk.naver.com/*",
+        "https://www.youtube-nocookie.com/*"
+      ],
+      "js": [
+        "streaming-companion.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://vod.sooplive.com/*"
+      ],
+      "js": [
+        "soop-streaming-companion.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

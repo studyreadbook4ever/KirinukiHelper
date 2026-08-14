@@ -15,7 +15,6 @@ import {
   assertSha256,
   buildWhisperServerArgs,
   createInstallConfig,
-  extensionOriginForPath,
   installedProfileSummary,
   parseLocalCaptionStackArgs,
   renderSystemdUserUnit,
@@ -28,6 +27,11 @@ import {
   systemdStopCommands
 } from "../scripts/local-caption-stack-core.js";
 import {
+  KIRINUKI_LOCAL_STUDIO_ORIGIN,
+  KIRINUKI_PUBLIC_STUDIO_ORIGIN
+} from "../src/lib/local-runtime-origin.js";
+import {
+  captionInstallMatchesRequestedStudioOrigin,
   commandLineRunsExactCaptionCli,
   foregroundPidRecordVersion,
   isSystemdRunningState,
@@ -60,39 +64,39 @@ function fixturePaths() {
       XDG_RUNTIME_DIR: "/tmp/kirinuki-test/run"
     },
     homeDir: "/tmp/kirinuki-test/home",
-    repoRoot: "/opt/kirinuki"
+    packageRoot: "/opt/kirinuki"
   });
 }
 
-test("Extension Origin 경로 override는 절대경로만 명시적으로 사용한다", () => {
+test("localhost companion package root override는 절대경로만 사용한다", () => {
   const overridden = resolveStackPaths({
     env: {
-      KIRINUKI_EXTENSION_ROOT: "/srv/kirinuki runtime/extension"
+      KIRINUKI_PACKAGE_ROOT: "/srv/kirinuki runtime"
     },
     homeDir: "/tmp/kirinuki-test/home",
-    repoRoot: "/opt/kirinuki"
+    packageRoot: "/opt/kirinuki"
   });
   assert.equal(
-    overridden.extensionRoot,
-    "/srv/kirinuki runtime/extension"
+    overridden.packageRoot,
+    "/srv/kirinuki runtime"
   );
-  for (const value of ["", "relative/extension", " /opt/extension", "/opt/x\nx"]) {
+  for (const value of ["", "relative/package", " /opt/package", "/opt/x\nx"]) {
     assert.throws(
       () => resolveStackPaths({
-        env: { KIRINUKI_EXTENSION_ROOT: value },
+        env: { KIRINUKI_PACKAGE_ROOT: value },
         homeDir: "/tmp/kirinuki-test/home",
-        repoRoot: "/opt/kirinuki"
+        packageRoot: "/opt/kirinuki"
       }),
       /절대 경로/u
     );
   }
 });
 
-test("CLI의 Node 최소 버전은 package 계약인 20.9.0을 정확히 지킨다", () => {
-  assert.equal(supportedNodeVersion("20.8.9"), false);
-  assert.equal(supportedNodeVersion("20.9.0"), true);
-  assert.equal(supportedNodeVersion("20.10.0"), true);
-  assert.equal(supportedNodeVersion("21.0.0"), true);
+test("CLI의 Node 최소 버전은 package 계약인 22.0.0을 정확히 지킨다", () => {
+  assert.equal(supportedNodeVersion("21.99.9"), false);
+  assert.equal(supportedNodeVersion("22.0.0"), true);
+  assert.equal(supportedNodeVersion("22.1.0"), true);
+  assert.equal(supportedNodeVersion("23.0.0"), true);
   assert.equal(supportedNodeVersion("invalid"), false);
 });
 
@@ -357,7 +361,7 @@ test("설정은 loopback·semantic 정보만 담고 API 키나 token을 직렬�
   assert.equal(config.host, LOOPBACK_HOST);
   assert.equal(config.sttPort, DEFAULT_STT_PORT);
   assert.equal(config.gatewayPort, DEFAULT_GATEWAY_PORT);
-  assert.match(config.origin, /^chrome-extension:\/\/[a-p]{32}$/u);
+  assert.equal(config.origin, KIRINUKI_LOCAL_STUDIO_ORIGIN);
   const serialized = secretFreeConfigJson(config, [
     "should-never-appear",
     "another-runtime-secret"
@@ -366,22 +370,48 @@ test("설정은 loopback·semantic 정보만 담고 API 키나 token을 직렬�
   assert.doesNotMatch(serialized, /should-never-appear/u);
 });
 
-test("확장 Origin은 절대 경로에서 결정적으로 파생된다", () => {
-  const first = extensionOriginForPath("/opt/kirinuki/extension");
-  const again = extensionOriginForPath("/opt/kirinuki/extension");
-  const moved = extensionOriginForPath("/opt/kirinuki-copy/extension");
-  assert.equal(first, again);
-  assert.notEqual(first, moved);
-  assert.match(first, /^chrome-extension:\/\/[a-p]{32}$/u);
+test("로컬 Studio Origin은 설치 경로와 무관한 고정 browser origin이다", () => {
+  const first = createInstallConfig(
+    fixturePaths(),
+    resolveSemanticProfile("draft", hardware(), "cpu")
+  );
+  const moved = createInstallConfig(
+    resolveStackPaths({
+      homeDir: "/tmp/kirinuki-test/home",
+      packageRoot: "/opt/kirinuki-copy"
+    }),
+    resolveSemanticProfile("draft", hardware(), "cpu")
+  );
+  assert.equal(first.origin, KIRINUKI_LOCAL_STUDIO_ORIGIN);
+  assert.equal(moved.origin, KIRINUKI_LOCAL_STUDIO_ORIGIN);
+  const publicInstall = createInstallConfig(
+    fixturePaths(),
+    resolveSemanticProfile("draft", hardware(), "cpu"),
+    { origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN }
+  );
+  assert.equal(publicInstall.origin, KIRINUKI_PUBLIC_STUDIO_ORIGIN);
+  assert.equal(captionInstallMatchesRequestedStudioOrigin(first, {}), true);
+  assert.equal(captionInstallMatchesRequestedStudioOrigin(publicInstall, {
+    KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  }), true);
+  assert.equal(captionInstallMatchesRequestedStudioOrigin(publicInstall, {}), false);
+  assert.throws(
+    () => captionInstallMatchesRequestedStudioOrigin(first, {
+      KIRINUKI_ALLOWED_ORIGIN: "https://example.com"
+    }),
+    /Kirinuki Studio Origin.*고정된/u
+  );
 });
 
 test("systemd-user unit은 자동 페어링·로컬 STT·exact Origin만 환경에 넣는다", () => {
-  const origin = extensionOriginForPath("/opt/kirinuki/extension");
+  const origin = KIRINUKI_LOCAL_STUDIO_ORIGIN;
   const unit = renderSystemdUserUnit({
     nodePath: "/usr/bin/node",
     cliPath: "/opt/kirinuki/scripts/local-caption-stack.ts",
-    repoRoot: "/opt/kirinuki",
-    origin
+    packageRoot: "/opt/kirinuki",
+    origin,
+    writableDataRoot: "/home/test/.local/share/kirinuki-caption-stack",
+    writableVodStateRoot: "/home/test/.local/state/kirinuki-vod-runtime"
   });
   assert.match(unit, /KIRINUKI_AUTO_PAIR=1/u);
   assert.match(unit, /KIRINUKI_STT_MODE=local-whispercpp/u);
@@ -389,7 +419,27 @@ test("systemd-user unit은 자동 페어링·로컬 STT·exact Origin만 환경�
   assert.match(unit, /NoNewPrivileges=true/u);
   assert.match(unit, /ProtectSystem=strict/u);
   assert.match(unit, /ProtectHome=read-only/u);
+  assert.match(
+    unit,
+    /^ReadWritePaths=\/home\/test\/\.local\/share\/kirinuki-caption-stack$/mu
+  );
+  const publicUnit = renderSystemdUserUnit({
+    nodePath: "/usr/bin/node",
+    cliPath: "/opt/kirinuki/scripts/local-caption-stack.ts",
+    packageRoot: "/opt/kirinuki",
+    origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  });
+  assert.ok(publicUnit.includes(
+    `KIRINUKI_ALLOWED_ORIGIN=${KIRINUKI_PUBLIC_STUDIO_ORIGIN}`
+  ));
+  assert.match(
+    unit,
+    /^ReadWritePaths=\/home\/test\/\.local\/state\/kirinuki-vod-runtime$/mu
+  );
+  assert.doesNotMatch(unit, /KIRINUKI_CHZZK_VOD_STATE_DIR/u);
   assert.match(unit, /^WorkingDirectory=\/opt\/kirinuki$/mu);
+  assert.match(unit, /KIRINUKI_PACKAGE_ROOT=\/opt\/kirinuki/u);
+  assert.doesNotMatch(unit, /KIRINUKI_EXTENSION_ROOT/u);
   assert.doesNotMatch(
     unit,
     /API_KEY|KIRINUKI_AGENT_TOKEN/u
@@ -398,10 +448,10 @@ test("systemd-user unit은 자동 페어링·로컬 STT·exact Origin만 환경�
     () => renderSystemdUserUnit({
       nodePath: "/usr/bin/node",
       cliPath: "/opt/kirinuki/scripts/local-caption-stack.ts",
-      repoRoot: "/opt/kirinuki",
+      packageRoot: "/opt/kirinuki",
       origin: "*"
     }),
-    /정확한 확장 프로그램 Origin/u
+    /정확한 Kirinuki Studio Origin/u
   );
 });
 
@@ -472,7 +522,7 @@ test("package scripts는 doctor/setup/start/status/stop을 Node CLI로 노출한
   const packageJson = JSON.parse(
     await readFile(path.join(packageRoot, "package.json"), "utf8")
   );
-  assert.match(packageJson.engines.node, />=20/u);
+  assert.equal(packageJson.engines.node, ">=22");
   assert.equal(
     packageJson.scripts["caption-stack"],
     "node --import tsx scripts/local-caption-stack.ts"
@@ -492,6 +542,14 @@ test("CLI source는 gateway를 오케스트레이션하되 키를 env·argv에 �
   );
   assert.match(source, /caption-gateway\.ts/u);
   assert.match(source, /KIRINUKI_AUTO_PAIR:\s*"1"/u);
+  assert.match(source, /managedVodRuntimeEnvironment\(vodConfig/u);
+  assert.match(source, /installedVodRuntimeForOrigin\(config\.origin\)/u);
+  assert.match(source, /inspectVodToolchain\(config\)\.ready/u);
+  assert.match(source, /createVodInstanceNonce\(\)/u);
+  assert.match(source, /instanceNonce:\s*gatewayInstanceNonce/u);
+  assert.match(source, /spawn\(vodConfig\.node\.path/u);
+  assert.match(source, /nodePath:\s*vodConfig\.node\.path/u);
+  assert.match(source, /expectedInstanceNonce:\s*gatewayInstanceNonce/u);
   assert.match(source, /KIRINUKI_STT_MODE:\s*"local-whispercpp"/u);
   assert.match(source, /randomBytes\(24\).*toString\("hex"\)/u);
   assert.match(source, /open\(paths\.pidPath,\s*"wx"/u);

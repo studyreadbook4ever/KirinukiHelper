@@ -7,9 +7,9 @@ import {
   CAPTION_AGENT_REQUEST_JSON_SCHEMA,
   CAPTION_AGENT_RESPONSE_SCHEMA_ID,
   CAPTION_AGENT_RESPONSE_JSON_SCHEMA,
+  CAPTION_CUE_DURATION_POLICY,
   LOCAL_WHISPER_CAPTION_MODEL,
   MAX_AUDIO_WAV_BYTES,
-  MAX_CAPTION_CUE_DURATION_MS,
   MAX_CAPTION_CUES,
   MAX_CAPTION_WARNINGS,
   MAX_CLIP_DURATION_MS,
@@ -71,7 +71,7 @@ function protocolRequest(overrides = {}) {
       audience: "korean-vtuber-kirinuki",
       includeAllRecognizableSpeech: true,
       uncertainSpeech: "keep-and-mark-for-review",
-      maxCueDurationMs: 4_000,
+      cueDurationPolicy: CAPTION_CUE_DURATION_POLICY,
       terminalPeriod: "omit",
       questionAndExclamationMarks: "keep"
     },
@@ -117,6 +117,7 @@ test("프로토콜은 로컬 Whisper 전용 모델·provider 계약을 공개한
     4 * Math.ceil(MAX_AUDIO_WAV_BYTES / 3)
   );
   assert.equal(MAX_CLIP_DURATION_MS, 30 * 60 * 1_000);
+  assert.equal(CAPTION_CUE_DURATION_POLICY, "source-timing-within-clip");
   assert.equal(
     CAPTION_AGENT_RESPONSE_JSON_SCHEMA.properties.warnings.maxItems,
     MAX_CAPTION_WARNINGS
@@ -278,7 +279,7 @@ test("종결 마침표만 제거하고 물음표·느낌표는 보존한다", ()
   assert.equal(stripTerminalPeriods("3.14"), "3.14");
 });
 
-test("자막 cue는 클립 안으로 맞추고 4초 이하 의미 조각으로 나눈다", () => {
+test("자막 cue는 클립 안으로 맞추되 Whisper 원본 표시 시간을 보존한다", () => {
   const result = normalizeCaptionCuesDetailed([
     {
       startMs: -500,
@@ -302,23 +303,25 @@ test("자막 cue는 클립 안으로 맞추고 4초 이하 의미 조각으로 �
     clipDurationMs: 12_000
   });
 
-  assert.equal(result.cues.length, 4);
+  assert.equal(result.cues.length, 2);
   assert(result.cues.every((cue) => (
     cue.startMs >= 0
     && cue.startMs < cue.endMs
     && cue.endMs <= 12_000
-    && cue.endMs - cue.startMs <= MAX_CAPTION_CUE_DURATION_MS
   )));
-  assert.equal(
-    result.cues.slice(0, 3).map((cue) => cue.text).join(" "),
-    "하나 둘 셋 넷 다섯 여섯"
-  );
+  const firstCue = result.cues[0];
+  assert.ok(firstCue);
+  assert.equal(firstCue.text, "하나 둘 셋 넷 다섯 여섯");
+  assert.equal(firstCue.endMs - firstCue.startMs, 9_000);
   const lastCue = result.cues.at(-1);
   assert.ok(lastCue);
   assert.equal(lastCue.text, "진짜야?");
   assert.equal(lastCue.speakerId, "speaker-2");
   assert.equal(lastCue.placement, "bottom");
-  assert(result.warnings.some((warning) => warning.code === "SPLIT_LONG_CUE"));
+  assert.equal(
+    result.warnings.some((warning) => warning.code === "SPLIT_LONG_CUE"),
+    false
+  );
   assert(result.warnings.some((warning) => warning.code === "DROPPED_EMPTY_RANGE"));
   assert.equal(
     validateCaptionCues(result.cues, { clipDurationMs: 12_000 }).valid,
@@ -391,7 +394,7 @@ test("원시 cue와 응답 warning 개수 상한을 처리 전에 강제한다",
   );
 });
 
-test("cue 검증은 경계·최대 4초·종결 마침표를 각각 진단한다", () => {
+test("cue 검증은 클립 경계·종결 마침표를 진단하되 4초 상한을 두지 않는다", () => {
   assert.deepEqual(
     validateCaptionCue({
       startMs: -1,
@@ -406,7 +409,6 @@ test("cue 검증은 경계·최대 4초·종결 마침표를 각각 진단한다
     [
       "startMs",
       "clipDurationMs",
-      "maxDurationMs",
       "terminalPeriod",
       "speakerId",
       "reviewRequired",
@@ -448,7 +450,7 @@ test("응답 생성기는 로컬 Whisper를 기본 provider로 계약 형태에 
   assert.equal(response.qualityReport.disposition, "accepted");
   assert.match(
     response.harnessFingerprint,
-    /^kr-vtuber-clean-v1:/u
+    /^kr-vtuber-clean-v2:/u
   );
   assert.match(
     response.editorialContextFingerprint,

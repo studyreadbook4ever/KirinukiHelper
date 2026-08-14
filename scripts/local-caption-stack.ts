@@ -30,6 +30,16 @@ import type { ChildProcess } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  KIRINUKI_GATEWAY_ORIGIN_BINDING,
+  isKirinukiStudioOrigin,
+  resolveKirinukiStudioOrigin
+} from "../src/lib/local-runtime-origin.js";
+import {
+  createWhisperConnectionDescriptor,
+  serializeWhisperConnectionDescriptor
+} from "../src/lib/whisper-connection.js";
+
+import {
   DEFAULT_GATEWAY_PORT,
   DEFAULT_STT_PORT,
   LOCAL_CAPTION_STACK_SCHEMA,
@@ -41,7 +51,6 @@ import {
   PINNED_WHISPER_CPP,
   buildWhisperServerArgs,
   createInstallConfig,
-  extensionOriginForPath,
   installedProfileSummary,
   parseLocalCaptionStackArgs,
   renderSystemdUserUnit,
@@ -61,6 +70,20 @@ import type {
   LocalCaptionStackPaths
 } from "./local-caption-stack-core.js";
 import {
+  PINNED_YT_DLP,
+  createVodInstanceNonce,
+  inspectArtifactFile as inspectVodArtifactFile,
+  isManagedVodHealthPayload,
+  managedVodRuntimeEnvironment,
+  readVodRuntimeConfig,
+  resolveVodRuntimePaths
+} from "./local-vod-runtime-core.js";
+import type {
+  LocalVodRuntimeConfig,
+  LocalVodRuntimePaths
+} from "./local-vod-runtime-core.js";
+import { inspectVodToolchain } from "./local-vod-runtime.js";
+import {
   TSX_IMPORT_ARGUMENTS,
   typescriptCommandArgs
 } from "./typescript-runtime.js";
@@ -76,6 +99,64 @@ const CAPTION_REQUEST_SCHEMA =
 const CAPTION_HEALTH_SCHEMA =
   "chzzk-kirinuki-caption-agent/health-v1";
 const MAX_HEALTH_RESPONSE_BYTES = 64 * 1024;
+
+function vodRuntimePaths(
+  env: NodeJS.ProcessEnv = process.env
+): Readonly<LocalVodRuntimePaths> {
+  return resolveVodRuntimePaths({
+    env,
+    homeDir: os.homedir(),
+    packageRoot
+  });
+}
+
+async function installedVodRuntimeForOrigin(
+  origin: string,
+  env: NodeJS.ProcessEnv = process.env,
+  { requireCaptionNotices = true }: { requireCaptionNotices?: boolean } = {}
+): Promise<Readonly<LocalVodRuntimeConfig>> {
+  const paths = vodRuntimePaths(env);
+  const config = await readVodRuntimeConfig(paths, { required: true });
+  if (!config || config.origin !== origin) {
+    throw new Error(
+      "로컬 VOD runtime의 Studio Origin이 Whisper 설정과 다릅니다. ./kirinuki.sh setup을 다시 실행하세요."
+    );
+  }
+  const artifact = await inspectVodArtifactFile(
+    config.ytDlp.path,
+    PINNED_YT_DLP
+  );
+  if (!artifact.verified) {
+    throw new Error(
+      "관리형 yt-dlp artifact가 없거나 검증에 실패했습니다. ./kirinuki.sh setup을 다시 실행하세요."
+    );
+  }
+  const noticeManifest = {
+    size: config.noticesSize,
+    sha256: config.noticesSha256
+  };
+  const noticePaths = [
+    path.join(packageRoot, "legal", "THIRD_PARTY_NOTICES.md"),
+    config.noticesPath,
+    ...(requireCaptionNotices ? [stackPaths(env).runtimeNoticesPath] : [])
+  ];
+  const noticeInspections = await Promise.all(noticePaths.map((noticePath) => (
+    inspectVodArtifactFile(noticePath, noticeManifest, {
+      requireExecutable: false
+    })
+  )));
+  if (noticeInspections.some((inspection) => !inspection.verified)) {
+    throw new Error(
+      "로컬 runtime 오픈소스 고지가 없거나 현재 source와 다릅니다. ./kirinuki.sh setup을 다시 실행하세요."
+    );
+  }
+  if (!inspectVodToolchain(config).ready) {
+    throw new Error(
+      "관리형 VOD runtime의 exact Node·Python→yt-dlp·ffmpeg/libx264/AAC/mp4·ffprobe 실행 검증에 실패했습니다. ./kirinuki.sh setup을 다시 실행하세요."
+    );
+  }
+  return config;
+}
 
 interface Artifact {
   name: string;
@@ -156,6 +237,10 @@ systemd-user가 없다면:
   npm run caption-stack -- start --foreground
   종료는 같은 터미널에서 Ctrl+C
   실행 중 설정 변경은 caption-stack:stop → setup → start 순서로 적용
+
+공개 Studio opt-in:
+  KIRINUKI_ALLOWED_ORIGIN=https://kirinuki.eff0rtchung.kr npm run caption-stack -- setup
+  생략하면 기존 http://127.0.0.1:4320 전용이며 다른 Origin은 거절합니다.
 `.trim();
 }
 
@@ -257,7 +342,7 @@ function stackPaths(
   return resolveStackPaths({
     env,
     homeDir: os.homedir(),
-    repoRoot: packageRoot
+    packageRoot
   });
 }
 
@@ -343,7 +428,7 @@ async function readInstalledConfig(
     || gatewayPort < 1
     || gatewayPort > 65_535
     || sttPort === gatewayPort
-    || !/^chrome-extension:\/\/[a-p]{32}$/u.test(String(config.origin || ""))
+    || !isKirinukiStudioOrigin(config.origin)
     || config.whisper?.version !== PINNED_WHISPER_CPP.version
     || config.whisper?.commit !== PINNED_WHISPER_CPP.commit
     || !pinnedModel
@@ -383,23 +468,33 @@ async function readInstalledConfig(
   return config as InstallConfig;
 }
 
-function installOriginMatches(
-  paths: LocalCaptionStackPaths,
-  config: InstallConfig | null | undefined
+function installOriginMatchesLocalStudio(
+  _paths: LocalCaptionStackPaths,
+  config: InstallConfig | null | undefined,
+  environment: NodeJS.ProcessEnv = process.env
+): boolean {
+  return captionInstallMatchesRequestedStudioOrigin(config, environment);
+}
+
+export function captionInstallMatchesRequestedStudioOrigin(
+  config: Pick<InstallConfig, "origin"> | null | undefined,
+  environment: NodeJS.ProcessEnv = process.env
 ): boolean {
   return Boolean(
     config
-    && config.origin === extensionOriginForPath(paths.extensionRoot)
+    && config.origin === resolveKirinukiStudioOrigin(
+      environment.KIRINUKI_ALLOWED_ORIGIN
+    )
   );
 }
 
-function assertInstallOriginMatches(
+function assertInstallOriginMatchesLocalStudio(
   paths: LocalCaptionStackPaths,
   config: InstallConfig | null
 ): asserts config is InstallConfig {
-  if (!installOriginMatches(paths, config)) {
+  if (!installOriginMatchesLocalStudio(paths, config)) {
     throw new Error(
-      "Extension 폴더 경로가 설치 때와 달라졌습니다. caption-stack:setup을 다시 실행하세요."
+      "설치된 gateway Origin이 현재 KIRINUKI_ALLOWED_ORIGIN과 다릅니다. caption-stack:setup을 다시 실행하세요."
     );
   }
 }
@@ -549,6 +644,25 @@ async function writeAtomic(
   }
 }
 
+export async function writeWhisperConnectionFile(
+  paths: LocalCaptionStackPaths,
+  config: InstallConfig
+) {
+  const descriptor = createWhisperConnectionDescriptor({
+    gatewayPort: config.gatewayPort,
+    origin: config.origin,
+    requestedProfile: config.profile,
+    effectiveProfile: config.effectiveProfile,
+    backend: config.backend,
+    modelId: config.model.id
+  });
+  await writeAtomic(
+    paths.connectionPath,
+    serializeWhisperConnectionDescriptor(descriptor, config.origin)
+  );
+  return descriptor;
+}
+
 async function ensureWhisperSource(
   paths: LocalCaptionStackPaths,
   archivePath: string,
@@ -666,7 +780,14 @@ async function doctorCommand(options: LocalCaptionStackOptions) {
     installation: {
       configured: Boolean(config),
       configPath: paths.configPath,
-      originMatchesCurrentPath: installOriginMatches(paths, config),
+      configuredOrigin: config?.origin || null,
+      expectedOrigin: resolveKirinukiStudioOrigin(
+        process.env.KIRINUKI_ALLOWED_ORIGIN
+      ),
+      originMatchesLocalStudio: installOriginMatchesLocalStudio(paths, config),
+      // Temporary compatibility key for the extension-era launcher. Remove
+      // once every status consumer reads originMatchesLocalStudio.
+      originMatchesCurrentPath: installOriginMatchesLocalStudio(paths, config),
       binaryReady: Boolean(config && await locateWhisperBinary(config)),
       modelReady: modelVerified,
       vadReady: vadVerified,
@@ -725,8 +846,8 @@ async function doctorCommand(options: LocalCaptionStackOptions) {
     )
     + (
       report.installation.configured
-      && !report.installation.originMatchesCurrentPath
-        ? " · Extension 경로 변경(setup 필요)"
+      && !report.installation.originMatchesLocalStudio
+        ? " · Studio Origin 변경(setup 필요)"
         : ""
     )
   );
@@ -748,13 +869,18 @@ async function setupCommand(
     throw new Error("현재 setup은 Linux만 지원합니다.");
   }
   const paths = stackPaths();
+  const vodPaths = vodRuntimePaths();
   const hardware = inspectLocalHardware();
   const semantic = resolveSemanticProfile(
     options.profile,
     hardware,
     options.backend
   );
-  const config = createInstallConfig(paths, semantic);
+  const config = createInstallConfig(paths, semantic, {
+    origin: resolveKirinukiStudioOrigin(
+      process.env.KIRINUKI_ALLOWED_ORIGIN
+    )
+  });
   const sourceArchive = path.join(
     paths.downloadsRoot,
     PINNED_WHISPER_CPP.archive.name
@@ -796,7 +922,9 @@ async function setupCommand(
         { file: "cmake", args: cmakeBuild }
       ],
       configPath: paths.configPath,
+      connectionPath: paths.connectionPath,
       unitPath: paths.unitPath,
+      requiredVodRuntimeConfigPath: vodPaths.configPath,
       secretsPersisted: false
     }, null, 2));
     return;
@@ -807,6 +935,11 @@ async function setupCommand(
       throw new Error(`${requiredTool}가 필요합니다. 설치 후 setup을 다시 실행하세요.`);
     }
   }
+  const vodConfig = await installedVodRuntimeForOrigin(
+    config.origin,
+    process.env,
+    { requireCaptionNotices: false }
+  );
   if (
     !isSystemdRunningState(systemdServiceState())
     && await verifiedForegroundPid(paths)
@@ -843,17 +976,20 @@ async function setupCommand(
     paths.configPath,
     secretFreeConfigJson(installedConfig)
   );
+  await writeWhisperConnectionFile(paths, installedConfig);
 
   if (systemdUserAvailable()) {
     const restartActiveService = isSystemdRunningState(
       systemdServiceState()
     );
     const unit = renderSystemdUserUnit({
-      nodePath: process.execPath,
+      nodePath: vodConfig.node.path,
       runtimeArgs: TSX_IMPORT_ARGUMENTS,
       cliPath,
-      repoRoot: packageRoot,
-      origin: installedConfig.origin
+      packageRoot,
+      origin: installedConfig.origin,
+      writableDataRoot: paths.dataRoot,
+      writableVodStateRoot: vodConfig.vodStateDir
     });
     await writeAtomic(paths.unitPath, unit, 0o600);
     output(`systemd-user unit 준비: ${paths.unitPath}`);
@@ -874,6 +1010,7 @@ async function setupCommand(
     `설치 완료: ${installedConfig.effectiveProfile} (${installedConfig.model.id})`
     + ` · ${installedConfig.backend} · API 키 저장 없음`
   );
+  output(`Whisper 연결 파일: ${paths.connectionPath}`);
   output("실행: npm run caption-stack -- start");
 }
 
@@ -967,7 +1104,10 @@ function waitForPort(port: number, {
 
 function probeManagedGateway(
   config: InstallConfig,
-  timeoutMs = 1_500
+  timeoutMs = 1_500,
+  {
+    expectedInstanceNonce
+  }: { expectedInstanceNonce?: string } = {}
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     let settled = false;
@@ -1020,8 +1160,14 @@ function probeManagedGateway(
           && payload?.schema === CAPTION_HEALTH_SCHEMA
           && payload?.status === "ok"
           && payload?.managed === true
-          && payload?.originBinding === "exact-extension"
+          && payload?.originBinding === KIRINUKI_GATEWAY_ORIGIN_BINDING
           && payload?.transcriptionMode === "local-whispercpp"
+          && isManagedVodHealthPayload(payload, {
+            kind: "caption-vod",
+            ...(expectedInstanceNonce
+              ? { instanceNonce: expectedInstanceNonce }
+              : {})
+          })
         );
         finish(validHealth);
       });
@@ -1037,14 +1183,18 @@ function probeManagedGateway(
 
 async function waitForManagedGateway(config: InstallConfig, {
   timeoutMs = STARTUP_TIMEOUT_MS,
-  requireActiveService = false
+  requireActiveService = false,
+  expectedInstanceNonce
 }: {
   timeoutMs?: number;
   requireActiveService?: boolean;
+  expectedInstanceNonce?: string;
 } = {}): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (await probeManagedGateway(config)) {
+    if (await probeManagedGateway(config, 1_500, {
+      ...(expectedInstanceNonce ? { expectedInstanceNonce } : {})
+    })) {
       return;
     }
     if (
@@ -1330,6 +1480,7 @@ async function runStack(config: InstallConfig): Promise<void> {
   if (config.host !== LOOPBACK_HOST) {
     throw new Error("127.0.0.1 이외 주소로는 로컬 자막 스택을 실행할 수 없습니다.");
   }
+  const vodConfig = await installedVodRuntimeForOrigin(config.origin);
   const paths = stackPaths();
   const binaryPath = await locateWhisperBinary(config);
   if (!binaryPath) {
@@ -1337,6 +1488,7 @@ async function runStack(config: InstallConfig): Promise<void> {
   }
   const privateRequestPath =
     `/kirinuki-${randomBytes(24).toString("hex")}`;
+  const gatewayInstanceNonce = createVodInstanceNonce();
   const pidRecord = await writePidFile(paths);
   let whisper: ChildProcess | null = null;
   let gateway: ChildProcess | null = null;
@@ -1377,8 +1529,13 @@ async function runStack(config: InstallConfig): Promise<void> {
       }
     );
     await waitForPort(config.sttPort, { child: whisper });
-    const base = managedChildEnvironment();
-    gateway = spawn(process.execPath, typescriptCommandArgs(gatewayPath), {
+    const base = managedVodRuntimeEnvironment(vodConfig, {
+      baseEnvironment: managedChildEnvironment(),
+      nodeBinary: vodConfig.node.path,
+      kind: "caption-vod",
+      instanceNonce: gatewayInstanceNonce
+    });
+    gateway = spawn(vodConfig.node.path, typescriptCommandArgs(gatewayPath), {
       env: {
         ...base,
         KIRINUKI_AUTO_PAIR: "1",
@@ -1392,6 +1549,10 @@ async function runStack(config: InstallConfig): Promise<void> {
       stdio: "inherit"
     });
     await waitForPort(config.gatewayPort, { child: gateway });
+    await waitForManagedGateway(config, {
+      timeoutMs: 15_000,
+      expectedInstanceNonce: gatewayInstanceNonce
+    });
     output(
       `로컬 자막 스택 준비: http://${LOOPBACK_HOST}:${config.gatewayPort}/v1/captions`
     );
@@ -1423,10 +1584,17 @@ function runSystemdCommands(
   }
 }
 
-function printConnection(config: InstallConfig): void {
+function printConnection(
+  config: InstallConfig,
+  connectionPath: string
+): void {
   output(`에이전트 주소: http://${LOOPBACK_HOST}:${config.gatewayPort}/v1/captions`);
+  output(`Whisper 연결 파일: ${connectionPath}`);
   output("자동 페어링: 켜짐 · 로컬 STT는 API 키 없이 127.0.0.1에서만 연결");
-  output("Whisper Tiny 초벌: 외부 API 호출 0회 · API 키 불필요");
+  output(
+    `Whisper ${config.model.id} (${config.effectiveProfile}/${config.backend}): `
+    + "외부 API 호출 0회 · API 키 불필요"
+  );
 }
 
 async function startCommand(
@@ -1434,7 +1602,13 @@ async function startCommand(
 ): Promise<void> {
   const paths = stackPaths();
   const config = await readInstalledConfig(paths, { required: true });
-  assertInstallOriginMatches(paths, config);
+  assertInstallOriginMatchesLocalStudio(paths, config);
+  // Upgraded installations may predate the browser connection descriptor.
+  // Recreate its path-free public view on explicit user starts, while the
+  // sandboxed systemd child reuses the file written by setup/the parent CLI.
+  if (!options.foreground || !process.env.INVOCATION_ID) {
+    await writeWhisperConnectionFile(paths, config);
+  }
   if (!options.foreground && systemdUserAvailable()) {
     if (!await pathExists(paths.unitPath)) {
       throw new Error("systemd-user unit이 없습니다. setup을 다시 실행하세요.");
@@ -1453,14 +1627,14 @@ async function startCommand(
       throw error;
     }
     output(`systemd-user로 ${LOCAL_CAPTION_STACK_SERVICE} 시작 완료`);
-    printConnection(config);
+    printConnection(config, paths.connectionPath);
     return;
   }
   if (!options.foreground) {
     output("systemd-user를 사용할 수 없어 foreground fallback으로 실행합니다.");
     output("이 터미널에서 Ctrl+C로 종료할 수 있습니다.");
   }
-  printConnection(config);
+  printConnection(config, paths.connectionPath);
   await runStack(config);
 }
 
@@ -1484,7 +1658,10 @@ async function statusCommand(
   const systemd = systemdUserAvailable();
   const serviceState = systemdServiceState();
   const foregroundPid = await verifiedForegroundPid(paths);
-  const originMatchesCurrentPath = installOriginMatches(paths, config);
+  const originMatchesLocalStudio = installOriginMatchesLocalStudio(
+    paths,
+    config
+  );
   const [sttListening, gatewayListening] = config
     ? await Promise.all([
       probePort(config.sttPort),
@@ -1493,7 +1670,7 @@ async function statusCommand(
     : [false, false];
   const managedGateway = Boolean(
     config
-    && originMatchesCurrentPath
+    && originMatchesLocalStudio
     && gatewayListening
     && await probeManagedGateway(config)
   );
@@ -1501,7 +1678,14 @@ async function statusCommand(
   const managedForeground = Boolean(!systemdManaged && foregroundPid);
   const status = {
     configured: Boolean(config),
-    originMatchesCurrentPath,
+    packageRoot: paths.packageRoot,
+    configuredOrigin: config?.origin || null,
+    expectedOrigin: resolveKirinukiStudioOrigin(
+      process.env.KIRINUKI_ALLOWED_ORIGIN
+    ),
+    originMatchesLocalStudio,
+    // Temporary compatibility key for the extension-era launcher.
+    originMatchesCurrentPath: originMatchesLocalStudio,
     profile: config?.profile || null,
     effectiveProfile: config?.effectiveProfile || null,
     backend: config?.backend || null,
@@ -1529,8 +1713,8 @@ async function statusCommand(
   output(
     `설정: ${status.configured ? "있음" : "없음"}`
     + (
-      status.configured && !status.originMatchesCurrentPath
-        ? " · Extension 경로 변경 감지(setup 필요)"
+      status.configured && !status.originMatchesLocalStudio
+        ? " · Studio Origin 변경 감지(setup 필요)"
         : ""
     )
   );
@@ -1599,7 +1783,7 @@ async function stopCommand(): Promise<void> {
   const config = await readInstalledConfig(paths).catch(() => null);
   const managedGatewayBeforeStop = Boolean(
     config
-    && installOriginMatches(paths, config)
+    && installOriginMatchesLocalStudio(paths, config)
     && await probeManagedGateway(config)
   );
   let stopRequested = false;
@@ -1644,7 +1828,7 @@ async function stopCommand(): Promise<void> {
     ),
     isManagedGatewayActive: async () => Boolean(
       config
-      && installOriginMatches(paths, config)
+      && installOriginMatchesLocalStudio(paths, config)
       && await probeManagedGateway(config)
     ),
     isManagedSttPortListening: async () => Boolean(

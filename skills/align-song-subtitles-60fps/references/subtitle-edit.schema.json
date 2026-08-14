@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kirinuki.eff0rtchung.kr/schemas/picture-locked-song-subtitle-edit-v1.json",
+  "title": "Kirinuki picture-locked semi-automatic completed song subtitle edit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "mode", "requiresHumanReview", "humanReviewState", "applyToEditorAllowed", "autoExportAllowed", "baseProject", "evidenceCatalog", "subtitleEdit", "reviewQueue", "issues"],
+  "properties": {
+    "schemaVersion": { "const": "kirinuki/picture-locked-song-subtitle-edit-v1" },
+    "status": { "enum": ["edit_complete", "edit_complete_with_inference", "input_error"] },
+    "mode": { "const": "subtitle_only_on_picture_lock" },
+    "requiresHumanReview": { "const": true },
+    "humanReviewState": { "const": "pending" },
+    "applyToEditorAllowed": { "const": true },
+    "autoExportAllowed": { "const": false },
+    "baseProject": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/baseProject" }
+      ]
+    },
+    "evidenceCatalog": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "subtitleEdit": { "$ref": "#/$defs/subtitleEdit" },
+    "reviewQueue": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/review" }
+    },
+    "issues": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/issue" }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "input_error" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "subtitleEdit": {
+            "properties": { "operations": { "maxItems": 0 } }
+          },
+          "reviewQueue": { "maxItems": 0 },
+          "issues": {
+            "minItems": 1,
+            "contains": {
+              "properties": { "severity": { "const": "input_error" } },
+              "required": ["severity"]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "baseProject": { "type": "object" },
+          "subtitleEdit": {
+            "properties": { "operations": { "minItems": 1 } }
+          },
+          "reviewQueue": { "minItems": 1 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "baseProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "revision", "pictureLockSha256", "timelineAudioSha256", "lyricsCatalogSha256", "evidenceBundleSha256", "frameSetSha256", "durationTicks", "tickRate", "endSemantics", "allowNewCues", "replaceableCueIds", "humanLockedCueIds", "layoutPolicy"],
+      "properties": {
+        "projectId": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "pictureLockSha256": { "$ref": "#/$defs/sha256" },
+        "timelineAudioSha256": { "$ref": "#/$defs/sha256" },
+        "lyricsCatalogSha256": { "$ref": "#/$defs/sha256" },
+        "evidenceBundleSha256": { "$ref": "#/$defs/sha256" },
+        "frameSetSha256": { "$ref": "#/$defs/sha256" },
+        "durationTicks": { "type": "integer", "minimum": 1 },
+        "tickRate": { "const": 60 },
+        "endSemantics": { "const": "exclusive" },
+        "allowNewCues": { "type": "boolean" },
+        "replaceableCueIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "humanLockedCueIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "layoutPolicy": { "$ref": "#/$defs/layoutPolicy" }
+      }
+    },
+    "layoutPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowedStyleTokens", "minFontScaleMilli", "safeArea", "maxAdjacentPositionDeltaMilli", "maxAdjacentFontScaleDeltaMilli"],
+      "properties": {
+        "allowedStyleTokens": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "minFontScaleMilli": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "safeArea": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minXMilli", "maxXMilli", "minYMilli", "maxYMilli"],
+          "properties": {
+            "minXMilli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "maxXMilli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "minYMilli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "maxYMilli": { "type": "integer", "minimum": 0, "maximum": 1000 }
+          }
+        },
+        "maxAdjacentPositionDeltaMilli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "maxAdjacentFontScaleDeltaMilli": { "type": "integer", "minimum": 0, "maximum": 1999 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "family", "dependencyGroup", "audioSha256", "tick", "minTick", "maxTick", "confidenceMilli"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "family": {
+          "enum": ["asr", "forced_alignment", "phoneme", "vad", "onset", "silence", "energy", "pitch", "human_lock", "neighbor_anchor", "project_bound", "frame_check"]
+        },
+        "dependencyGroup": { "type": "string", "minLength": 1 },
+        "audioSha256": { "$ref": "#/$defs/sha256" },
+        "tick": { "type": "integer", "minimum": 0 },
+        "minTick": { "type": "integer", "minimum": 0 },
+        "maxTick": { "type": "integer", "minimum": 0 },
+        "confidenceMilli": { "type": "integer", "minimum": 0, "maximum": 1000 }
+      }
+    },
+    "boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tick", "minTick", "maxTick", "basis", "confidenceMilli", "signalRefs", "inferenceMethod"],
+      "properties": {
+        "tick": { "type": "integer", "minimum": 0 },
+        "minTick": { "type": "integer", "minimum": 0 },
+        "maxTick": { "type": "integer", "minimum": 0 },
+        "basis": { "enum": ["measured", "inferred", "human_locked"] },
+        "confidenceMilli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "signalRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "inferenceMethod": {
+          "type": ["string", "null"],
+          "enum": [null, "signal_reconciliation", "anchored_constraint", "local_rate_interpolation", "proportional_phrase_allocation", "adjacent_geometry"]
+        }
+      }
+    },
+    "captions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jaLines", "koLines"],
+      "properties": {
+        "jaLines": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "koLines": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 2,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          ]
+        }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane", "xMilli", "yMilli", "align", "styleToken", "japanesePlacement", "fontScaleMilli", "basis", "checkedFrameTicks"],
+      "properties": {
+        "lane": { "type": "integer", "minimum": 0, "maximum": 7 },
+        "xMilli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "yMilli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "align": { "enum": ["left", "center", "right"] },
+        "styleToken": { "type": "string", "minLength": 1 },
+        "japanesePlacement": { "enum": ["above_korean", "japanese_only"] },
+        "fontScaleMilli": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "basis": { "enum": ["frame_checked", "template_inferred", "human_locked"] },
+        "checkedFrameTicks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "cueId", "existingCueId", "sourceLineId", "occurrence", "sourceTextSha256", "startTick", "endTickExclusive", "captions", "layout", "timingBasis", "reviewPriority", "matchScoreMilli", "runnerUpMarginMilli", "startBoundary", "endBoundary", "reasonCodes"],
+      "properties": {
+        "op": { "enum": ["add", "update"] },
+        "cueId": { "type": "string", "minLength": 1 },
+        "existingCueId": { "type": ["string", "null"] },
+        "sourceLineId": { "type": "string", "minLength": 1 },
+        "occurrence": { "type": "integer", "minimum": 1 },
+        "sourceTextSha256": { "$ref": "#/$defs/sha256" },
+        "startTick": { "type": "integer", "minimum": 0 },
+        "endTickExclusive": { "type": "integer", "minimum": 1 },
+        "captions": { "$ref": "#/$defs/captions" },
+        "layout": { "$ref": "#/$defs/layout" },
+        "timingBasis": { "enum": ["measured", "inferred", "human_locked"] },
+        "reviewPriority": { "enum": ["normal", "high"] },
+        "matchScoreMilli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "runnerUpMarginMilli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "startBoundary": { "$ref": "#/$defs/boundary" },
+        "endBoundary": { "$ref": "#/$defs/boundary" },
+        "reasonCodes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "subtitleEdit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pictureLockSha256", "lanesRequired", "untouchedDomains", "operations"],
+      "properties": {
+        "pictureLockSha256": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/sha256" }
+          ]
+        },
+        "lanesRequired": { "type": "integer", "minimum": 0, "maximum": 8 },
+        "untouchedDomains": {
+          "const": ["clips", "clipOrder", "clipTiming", "canvas", "videoAssets", "imageAssets", "audioRegions", "cropTransforms", "projectDuration"]
+        },
+        "operations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/operation" }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cueId", "priority", "reasonCodes"],
+      "properties": {
+        "cueId": { "type": "string", "minLength": 1 },
+        "priority": { "enum": ["normal", "high"] },
+        "reasonCodes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "cueIds", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["info", "review", "input_error"] },
+        "cueIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

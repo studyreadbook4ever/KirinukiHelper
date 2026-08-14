@@ -20,6 +20,10 @@ export const DEFAULT_CAPTION_MODEL = LOCAL_WHISPER_CAPTION_MODEL;
 export const LOCAL_WHISPERCPP_TRANSCRIPTION_MODE = "local-whispercpp";
 export const DEFAULT_TRANSCRIPTION_MODE =
   LOCAL_WHISPERCPP_TRANSCRIPTION_MODE;
+export const LOCAL_WHISPER_VAD_ENABLED = false;
+export const LOCAL_WHISPER_TIMESTAMP_CLOCK = "original-audio";
+export const LOCAL_WHISPER_TIMING_REVISION =
+  "vad-off-original-clock-v1";
 export const DEFAULT_STT_MODEL = "whisper-tiny";
 export const DEFAULT_MAX_AUDIO_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_PIPELINE_TIMEOUT_MS = 45 * 60 * 1_000;
@@ -381,6 +385,46 @@ function deduplicateTranscriptUnits(units: TranscriptUnit[]): TranscriptUnit[] {
     });
 }
 
+function assertNestedWordTimestampClock(
+  rawSegments: DynamicRecord[],
+  clipDurationMs: number
+): void {
+  for (const segment of rawSegments) {
+    const segmentText = normalizeTranscriptText(segment?.text ?? segment?.word);
+    const nestedWords = Array.isArray(segment?.words) ? segment.words : [];
+    if (!segmentText || nestedWords.length === 0) {
+      continue;
+    }
+    const validWordRanges = nestedWords
+      .map((word) => transcriptRange(
+        word && typeof word === "object" && !Array.isArray(word)
+          ? word as DynamicRecord
+          : null,
+        clipDurationMs
+      ))
+      .filter((range): range is { startMs: number; endMs: number } => (
+        range !== null
+      ));
+    if (validWordRanges.length === 0) {
+      continue;
+    }
+    const segmentRange = transcriptRange(segment, clipDurationMs);
+    const overlapsNestedWord = segmentRange && validWordRanges.some((word) => (
+      Math.min(segmentRange.endMs, word.endMs)
+      > Math.max(segmentRange.startMs, word.startMs)
+    ));
+    if (!overlapsNestedWord) {
+      throw new CaptionGatewayError(
+        "로컬 Whisper의 세그먼트와 단어 타임스탬프 시간축이 다릅니다.",
+        {
+          code: "STT_TIMESTAMP_CLOCK_MISMATCH",
+          httpStatus: 502
+        }
+      );
+    }
+  }
+}
+
 export function normalizeSttTranscript(
   payload: unknown,
   { clipDurationMs }: { clipDurationMs?: unknown } = {}
@@ -411,6 +455,11 @@ export function normalizeSttTranscript(
       { code: "STT_RESPONSE_TOO_LARGE" }
     );
   }
+  // A VAD-on request followed by VAD-off on the same pinned whisper.cpp
+  // context can leave a stale segment mapping while token timestamps use the
+  // new full-audio clock. Never hide that state leak by dropping or rebasing
+  // transcript units; an exact remapping table is not present in the JSON.
+  assertNestedWordTimestampClock(rawSegments, duration);
   const segments = deduplicateTranscriptUnits(
     rawSegments
       .map((segment) => normalizeTranscriptUnit(
@@ -618,6 +667,11 @@ export async function requestLocalWhisperTranscription(request: CaptionAgentRequ
   form.append("response_format", "verbose_json");
   form.append("timestamp_granularities[]", "segment");
   form.append("timestamp_granularities[]", "word");
+  // The pinned whisper.cpp revision remaps segment timestamps after VAD but
+  // serializes token timestamps on the compressed VAD clock. Keep both on the
+  // original PCM clock; the gateway has no exact VAD map with which to repair
+  // word timestamps after the response.
+  form.append("vad", String(LOCAL_WHISPER_VAD_ENABLED));
 
   const requestedTimeoutMs = Number(timeoutMs);
   const sttTimeoutMs = Number.isFinite(requestedTimeoutMs)

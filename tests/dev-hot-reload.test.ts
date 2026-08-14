@@ -9,12 +9,12 @@ import { pathToFileURL } from "node:url";
 
 import {
   DEV_RELOAD_SCHEMA,
-  classifyDevReload,
+  classifyWebDevReload,
   createDevReloadMarker,
-  devChangeNeedsBuild,
   isDevReloadMarker,
   readDevReloadMarker,
   removeOwnedDevReloadMarker,
+  webDevChangeNeedsBuild,
   writeDevReloadMarker
 } from "../scripts/dev-hot-reload-core.js";
 import {
@@ -57,50 +57,63 @@ function runNodeScript(
   });
 }
 
-test("개발 변경을 안전한 리로드 종류로 분류한다", () => {
-  assert.equal(classifyDevReload(["extension/editor/editor.css"]), "style");
-  assert.equal(classifyDevReload(["src/editor/main.ts"]), "editor");
-  assert.equal(classifyDevReload(["src/caption-agent/protocol.ts"]), "editor");
-  assert.equal(classifyDevReload(["src/lib/editor-core.ts"]), "extension");
-  assert.equal(classifyDevReload(["src/lib/core.ts"]), "extension");
+test("localhost web 개발 변경만 안전한 편집기 리로드로 분류한다", () => {
+  const editorOnlyDependencies = [
+    "src/lib/caption-properties-sheet.ts",
+    "src/lib/chzzk-vod-materialization.ts",
+    "src/lib/session-archive.ts",
+    "src/lib/session-cleanup.ts",
+    "src/lib/whisper-connection.ts"
+  ];
+  assert.equal(classifyWebDevReload(["web/editor/editor.css"]), "style");
+  assert.equal(classifyWebDevReload(["web/editor.html"]), "editor");
+  assert.equal(classifyWebDevReload(["web/index.html"]), "editor");
+  assert.equal(classifyWebDevReload(["src/web/main.ts"]), "editor");
+  assert.equal(classifyWebDevReload(["src/editor/main.ts"]), "editor");
+  assert.equal(classifyWebDevReload(["src/caption-agent/protocol.ts"]), "editor");
+  for (const dependency of editorOnlyDependencies) {
+    assert.equal(classifyWebDevReload([dependency]), "editor", dependency);
+  }
+  assert.equal(classifyWebDevReload(["src/lib/editor-core.ts"]), "editor");
+  assert.equal(classifyWebDevReload(["src/lib/usage-policy.ts"]), "editor");
   assert.equal(
-    classifyDevReload(["extension/editor/editor.css", "src/editor/audseg-worker.ts"]),
+    classifyWebDevReload(["web/editor/editor.css", "src/editor/audseg-worker.ts"]),
     "editor"
   );
-  assert.equal(classifyDevReload(["src/content-script.ts"]), "content");
-  assert.equal(
-    classifyDevReload([
-      "src/content-script.ts",
-      "extension/editor/editor.css"
-    ]),
-    "editor"
-  );
-  assert.equal(classifyDevReload(["src/lib/source-platform.ts"]), "extension");
-  assert.equal(classifyDevReload(["src/lib/keyboard-shortcuts.ts"]), "extension");
-  assert.equal(classifyDevReload(["src/lib/serial-operation-gate.ts"]), "extension");
-  assert.equal(classifyDevReload(["src/lib/session-recovery.ts"]), "extension");
-  assert.equal(
-    classifyDevReload(["src/editor/main.ts", "extension/manifest.json"]),
-    "extension"
-  );
-  assert.equal(classifyDevReload(["README.md"]), "none");
+  assert.equal(classifyWebDevReload(["src/content-script.ts"]), "none");
+  assert.equal(classifyWebDevReload(["extension/editor/editor.css"]), "none");
+  assert.equal(classifyWebDevReload(["extension/manifest.json"]), "none");
+  assert.equal(classifyWebDevReload(["README.md"]), "none");
 });
 
-test("번들이 필요한 변경만 빌드 대상으로 분리한다", () => {
-  assert.equal(devChangeNeedsBuild(["src/editor/main.ts"]), true);
-  assert.equal(devChangeNeedsBuild(["src/caption-agent/protocol.ts"]), true);
-  assert.equal(devChangeNeedsBuild(["src/lib/editor-core.ts"]), true);
-  assert.equal(devChangeNeedsBuild(["src/lib/keyboard-shortcuts.ts"]), true);
-  assert.equal(devChangeNeedsBuild(["src/lib/serial-operation-gate.ts"]), true);
-  assert.equal(devChangeNeedsBuild(["src/content-script.ts"]), true);
-  assert.equal(devChangeNeedsBuild(["extension/editor/editor.css"]), false);
-  assert.equal(devChangeNeedsBuild(["extension/editor.html"]), false);
+test("localhost web 번들이 필요한 변경만 빌드 대상으로 분리한다", () => {
+  const newlyWatchedDependencies = [
+    "src/lib/caption-properties-sheet.ts",
+    "src/lib/chzzk-vod-materialization.ts",
+    "src/lib/session-archive.ts",
+    "src/lib/session-cleanup.ts",
+    "src/lib/usage-policy.ts",
+    "src/lib/whisper-connection.ts"
+  ];
+  assert.equal(webDevChangeNeedsBuild(["src/editor/main.ts"]), true);
+  assert.equal(webDevChangeNeedsBuild(["src/caption-agent/protocol.ts"]), true);
+  assert.equal(webDevChangeNeedsBuild(["src/web/main.ts"]), true);
+  for (const dependency of newlyWatchedDependencies) {
+    assert.equal(webDevChangeNeedsBuild([dependency]), true, dependency);
+  }
+  assert.equal(webDevChangeNeedsBuild(["src/lib/editor-core.ts"]), true);
+  assert.equal(webDevChangeNeedsBuild(["src/lib/keyboard-shortcuts.ts"]), true);
+  assert.equal(webDevChangeNeedsBuild(["src/lib/serial-operation-gate.ts"]), true);
+  assert.equal(webDevChangeNeedsBuild(["src/lib/short-form.ts"]), true);
+  assert.equal(webDevChangeNeedsBuild(["src/content-script.ts"]), false);
+  assert.equal(webDevChangeNeedsBuild(["web/editor/editor.css"]), false);
+  assert.equal(webDevChangeNeedsBuild(["extension/editor.html"]), false);
 });
 
 test("개발 marker를 원자적으로 기록하고 소유자만 지운다", async (context) => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "kirinuki-dev-reload-"));
   context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
-  const markerPath = path.join(temporaryRoot, "extension", "dev-reload.json");
+  const markerPath = path.join(temporaryRoot, "web", "dev-reload.json");
   const marker = createDevReloadMarker({
     revision: "revision-7",
     kind: "editor",
@@ -195,7 +208,7 @@ test("개발 runner 잠금은 커널에서 원자적으로 상호 배제한다",
       pid: process.pid,
       role: "package"
     }),
-    /dev:editor.*잠금을 사용 중/
+    /개발 편집 runner.*잠금을 사용 중/
   );
   assert.equal(await releaseDevRunnerLock(editorLease), true);
   assert.equal(await releaseDevRunnerLock(editorLease), false);
@@ -434,7 +447,7 @@ test("잠금 소유자가 강제 종료돼도 커널 잠금이 자동 해제된�
   assert.equal(await releaseDevRunnerLock(recoveredLease), true);
 });
 
-test("활성 최상위 lease 중 validator와 package가 모두 fail closed한다", async () => {
+test("활성 최상위 lease 중 web package가 fail closed한다", async () => {
   const root = path.resolve(".");
   const lockPath = path.join(root, ".dev-editor.lock");
   const inheritedToken = process.env.KIRINUKI_RELEASE_LOCK_TOKEN;
@@ -444,10 +457,7 @@ test("활성 최상위 lease 중 validator와 package가 모두 fail closed한�
   const childEnvironment = { ...process.env };
   delete childEnvironment.KIRINUKI_RELEASE_LOCK_TOKEN;
   try {
-    for (const script of [
-      "scripts/validate-extension.ts",
-      "scripts/package-extension.ts"
-    ]) {
+    for (const script of ["scripts/package-web.ts"]) {
       const result = await runNodeScript(path.join(root, script), {
         env: childEnvironment
       });
@@ -455,7 +465,7 @@ test("활성 최상위 lease 중 validator와 package가 모두 fail closed한�
       assert.equal(result.signal, null);
       assert.match(
         `${result.stdout}\n${result.stderr}`,
-        /(?:dev:editor|릴리스 패키징).*잠금을 사용 중/
+        /(?:개발 편집 runner|릴리스 패키징).*잠금을 사용 중/
       );
     }
   } finally {
@@ -465,48 +475,33 @@ test("활성 최상위 lease 중 validator와 package가 모두 fail closed한�
   }
 });
 
-test("일치하는 최상위 package handshake는 자식 validator에서만 재사용된다", async () => {
-  const root = path.resolve(".");
-  const inheritedToken = process.env.KIRINUKI_RELEASE_LOCK_TOKEN;
-  const ownerLease = inheritedToken
-    ? null
-    : await acquireDevRunnerLock(path.join(root, ".dev-editor.lock"), {
-      role: "package"
-    });
-  const token = inheritedToken ?? ownerLease?.lock.token;
-  assert.ok(token);
-  try {
-    const result = await runNodeScript(
-      path.join(root, "scripts/validate-extension.ts"),
-      {
-        env: {
-          ...process.env,
-          KIRINUKI_RELEASE_LOCK_TOKEN: token
-        }
-      }
-    );
-    assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /Extension 검증 통과/);
-  } finally {
-    if (ownerLease) {
-      await releaseDevRunnerLock(ownerLease);
-    }
-  }
+test("web package는 일치하는 최상위 release token만 자식 lease로 전달한다", async () => {
+  const source = await readFile("scripts/package-web.ts", "utf8");
+  assert.match(source, /process\.env\.KIRINUKI_RELEASE_LOCK_TOKEN/u);
+  assert.match(source, /inheritedToken:/u);
+  assert.match(source, /onOwnerLost: failClosedOnDevRunnerOwnerLoss\("package:web"\)/u);
 });
 
-test("릴리스 명령은 전체 검증부터 ZIP까지 한 lease로 감싼다", async () => {
-  const [packageJson, releaseScript, browserSmoke] = await Promise.all([
+test("web 릴리스 명령은 전체 검증부터 web ZIP까지 한 lease로 감싼다", async () => {
+  const [packageJson, releaseScript] = await Promise.all([
     readFile("package.json", "utf8").then(JSON.parse),
-    readFile("scripts/release-package.ts", "utf8"),
-    readFile("scripts/browser-smoke.ts", "utf8")
+    readFile("scripts/release-package.ts", "utf8")
   ]);
   assert.equal(
     packageJson.scripts.package,
     "node --import tsx scripts/release-package.ts"
   );
+  assert.equal(packageJson.name, "kirinuki-local-web-studio");
+  assert.equal(
+    packageJson.scripts.build,
+    "node --import tsx scripts/build-web.ts"
+  );
+  assert.equal(
+    packageJson.scripts.validate,
+    "node --import tsx scripts/validate-local-studio.ts"
+  );
   assert.match(releaseScript, /acquireDevRunnerLock/);
-  assert.match(releaseScript, /\["run", "check:full"\]/);
-  assert.match(releaseScript, /package-extension\.ts/);
-  assert.match(browserSmoke, /extension-under-test/);
-  assert.match(browserSmoke, /await cp\(sourceExtensionRoot/);
+  assert.match(releaseScript, /\["run", "check:full"\]/u);
+  assert.doesNotMatch(releaseScript, /legacy-extension|package-extension/u);
+  assert.match(releaseScript, /package-web\.ts/);
 });

@@ -3,12 +3,10 @@ export const DEV_RELOAD_SCHEMA = "chzzk-kirinuki-dev-reload/v1";
 const DEV_RELOAD_KINDS = new Set([
   "initial",
   "style",
-  "editor",
-  "content",
-  "extension"
+  "editor"
 ]);
 
-export type DevReloadKind = "initial" | "style" | "editor" | "content" | "extension";
+export type DevReloadKind = "initial" | "style" | "editor";
 
 export interface DevReloadMarker {
   schema: typeof DEV_RELOAD_SCHEMA;

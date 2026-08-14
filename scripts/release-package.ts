@@ -12,6 +12,9 @@ import {
 import { typescriptCommandArgs } from "./typescript-runtime.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+if (process.argv.slice(2).length > 0) {
+  throw new TypeError("사용법: release-package.ts");
+}
 const lockPath = path.join(root, ".dev-editor.lock");
 const releaseLease = await acquireDevRunnerLock(lockPath, {
   pid: process.pid,
@@ -113,7 +116,7 @@ async function main() {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   await run(npmCommand, ["run", "check:full"]);
   await run(process.execPath, typescriptCommandArgs(
-    path.join(root, "scripts", "package-extension.ts")
+    path.join(root, "scripts", "package-web.ts")
   ));
 }
 
