@@ -1144,14 +1144,23 @@ test("fresh Linux dry-run은 외부 변경 없이 정확한 setup과 open 명령
   t.after(() => rm(tempRoot, { recursive: true, force: true }));
   const browser = path.join(tempRoot, "chromium");
   const npm = path.join(tempRoot, "npm");
+  const ffmpeg = path.join(tempRoot, "ffmpeg");
+  const ffprobe = path.join(tempRoot, "ffprobe");
   await Promise.all([
     writeFile(
       browser,
       "#!/bin/sh\nprintf '%s\\n' 'Chromium 120.0.0.0'\n"
     ),
-    writeFile(npm, "#!/bin/sh\nexit 0\n")
+    writeFile(npm, "#!/bin/sh\nexit 0\n"),
+    writeFile(ffmpeg, "#!/bin/sh\nexit 0\n"),
+    writeFile(ffprobe, "#!/bin/sh\nexit 0\n")
   ]);
-  await Promise.all([chmod(browser, 0o755), chmod(npm, 0o755)]);
+  await Promise.all([
+    chmod(browser, 0o755),
+    chmod(npm, 0o755),
+    chmod(ffmpeg, 0o755),
+    chmod(ffprobe, 0o755)
+  ]);
   const env = {
     ...process.env,
     HOME: path.join(tempRoot, "home"),

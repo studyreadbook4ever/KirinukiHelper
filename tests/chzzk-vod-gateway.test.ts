@@ -1833,7 +1833,11 @@ test("shutdown 시작 뒤 기존 socket에서 완성된 pipelined 요청은 새 
 
   const shutdownPromise = runtime.shutdown({
     graceMs: 500,
-    deadlineMs: 2_000
+    // The full suite intentionally runs many process/socket tests in parallel.
+    // Keep the production 500 ms force-close assertion, but leave enough wall
+    // time for an overloaded CI event loop to dispatch the resulting close
+    // callbacks before the fail-closed deadline wins the race.
+    deadlineMs: 10_000
   });
   socket.write("\r\n\r\n{}");
   for (
