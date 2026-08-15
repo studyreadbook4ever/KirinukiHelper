@@ -1,5 +1,6 @@
 {
   "name": "kirinuki-app",
+  "productName": "Kirinuki",
   "version": "3.0.0",
   "private": true,
   "license": "Unlicense",
@@ -14,8 +15,11 @@
     "public-shell:check": "node --import tsx scripts/check-public-deployment.ts",
     "dev:web": "npm run build && node --import tsx scripts/local-studio-server.ts start --foreground",
     "dev:editor": "node --import tsx scripts/dev-web.ts",
+    "desktop": "node --import tsx scripts/run-desktop.ts",
     "build": "node --import tsx scripts/build-web.ts",
     "build:web": "node --import tsx scripts/build-web.ts",
+    "build:desktop": "node --import tsx scripts/build-desktop.ts",
+    "tools:desktop": "node --import tsx scripts/prepare-desktop-tools.ts",
     "caption-gateway": "node --import tsx scripts/caption-gateway.ts",
     "caption-stack": "node --import tsx scripts/local-caption-stack.ts",
     "caption-stack:doctor": "node --import tsx scripts/local-caption-stack.ts doctor",
@@ -35,6 +39,7 @@
     "test:browser": "node --import tsx scripts/local-studio-browser-smoke.ts",
     "test:browser:public-shell": "node --import tsx scripts/public-shell-browser-smoke.ts",
     "test:package:web:reproducibility": "node --import tsx scripts/verify-web-package-reproducibility.ts",
+    "test:package:desktop": "node --import tsx scripts/desktop-package-smoke.ts",
     "acceptance:localhost": "node --import tsx scripts/local-studio-user-acceptance.ts",
     "test:browser:live-embeds": "KIRINUKI_LIVE_EMBED_SMOKE=1 node --import tsx scripts/local-studio-browser-smoke.ts",
     "test:browser:live-vod": "KIRINUKI_LIVE_VOD_SMOKE=1 node --import tsx scripts/local-studio-live-vod-smoke.ts",
@@ -43,15 +48,16 @@
     "validate": "node --import tsx scripts/validate-local-studio.ts",
     "license:check": "node --import tsx scripts/check-third-party-licenses.ts",
     "audit": "npm audit --audit-level=high",
-    "check": "npm run typecheck && npm run migration:check && npm run build && npm run validate && npm run license:check && npm test && npm run audit",
+    "check": "npm run typecheck && npm run migration:check && npm run build && npm run build:desktop && npm run validate && npm run license:check && npm test && npm run audit",
     "check:full": "npm run check && npm run test:browser",
     "package": "node --import tsx scripts/release-package.ts",
     "package:web": "node --import tsx scripts/package-web.ts",
     "package:linux": "node --import tsx scripts/package-linux-app.ts",
+    "package:desktop": "node --import tsx scripts/package-desktop.ts",
     "streaming:companion:build": "node --import tsx scripts/build-streaming-companion.ts"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.17.0"
   },
   "dependencies": {
     "esbuild": "0.28.1",
@@ -59,7 +65,11 @@
     "tsx": "4.23.1"
   },
   "devDependencies": {
+    "@electron/asar": "4.2.1",
+    "@electron/fuses": "2.1.3",
+    "@electron/packager": "20.3.0",
     "@types/node": "20.19.43",
+    "electron": "43.4.0",
     "typescript": "5.9.3"
   }
 }

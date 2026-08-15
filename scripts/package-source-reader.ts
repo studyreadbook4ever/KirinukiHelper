@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 
 function invariant(condition: unknown, message: string): asserts condition {
@@ -119,6 +119,11 @@ async function readWorktreeRegularFile(
 ): Promise<Buffer> {
   const canonicalRoot = await realpath(repositoryRoot);
   const expectedPath = path.join(canonicalRoot, ...repositoryPath.split("/"));
+  const unresolvedMetadata = await lstat(expectedPath);
+  invariant(
+    !unresolvedMetadata.isSymbolicLink(),
+    `릴리스 source 경로에 심볼릭 링크가 있습니다: ${repositoryPath}`
+  );
   const canonicalSource = await realpath(expectedPath);
   invariant(
     canonicalSource === expectedPath,

@@ -90,6 +90,15 @@ function dependencies(
     async runProcess(_command, args) {
       const outputPath = args.at(-1);
       assert.ok(outputPath);
+      const caPaths = args.flatMap((value, index) => (
+        value === "-ca_file" && args[index + 1] ? [args[index + 1]!] : []
+      ));
+      assert.ok(caPaths.length >= 1);
+      assert.equal(new Set(caPaths).size, 1);
+      assert.equal(path.dirname(caPaths[0]!), path.dirname(outputPath));
+      const caBundle = await readFile(caPaths[0]!, "utf8");
+      assert.match(caBundle, /^-----BEGIN CERTIFICATE-----/u);
+      assert.match(caBundle, /-----END CERTIFICATE-----\n$/u);
       await writeFile(outputPath, Buffer.from("mock-direct-mp4"), { flag: "wx" });
       return { exitCode: 0, stdout: "", stderr: "" };
     },
@@ -133,7 +142,8 @@ test("FFmpeg arguments seek both exact inputs and use deterministic public heade
     },
     outputPath: "/private/work/output.mp4",
     sourceStartUs: 123_456_000,
-    durationUs: 30_000_000
+    durationUs: 30_000_000,
+    tlsCaFile: "/private/work/node-root-ca.pem"
   });
   assert.equal(args.filter((value) => value === "-ss").length, 2);
   const seekValues = args.flatMap((value, index) => (
@@ -141,10 +151,33 @@ test("FFmpeg arguments seek both exact inputs and use deterministic public heade
   ));
   assert.deepEqual(seekValues, ["123.456000", "123.456000"]);
   assert.equal(args.filter((value) => value === "-headers").length, 2);
+  assert.equal(args.filter((value) => value === "-tls_verify").length, 2);
+  assert.equal(args.filter((value) => value === "1").length >= 2, true);
+  assert.equal(args.filter((value) => value === "-ca_file").length, 2);
+  assert.equal(
+    args.filter((value) => value === "/private/work/node-root-ca.pem").length,
+    2
+  );
+  assert.equal(args.filter((value) => value === "-max_redirects").length, 2);
+  for (const inputIndex of args.flatMap((value, index) => (
+    value === "-i" ? [index] : []
+  ))) {
+    const previousInput = args.slice(0, inputIndex).lastIndexOf("-i");
+    const inputArgs = args.slice(previousInput < 0 ? 0 : previousInput + 2, inputIndex);
+    const exactOption = (name: string, expected: string): void => {
+      const optionIndex = inputArgs.indexOf(name);
+      assert.notEqual(optionIndex, -1, name);
+      assert.equal(inputArgs[optionIndex + 1], expected, name);
+    };
+    exactOption("-protocol_whitelist", "https,tls,tcp");
+    exactOption("-tls_verify", "1");
+    exactOption("-ca_file", "/private/work/node-root-ca.pem");
+    exactOption("-max_redirects", "0");
+  }
   assert.ok(args.includes("1:a:0?"));
   assert.ok(args.includes("setpts=PTS-STARTPTS"));
   assert.ok(args.includes("asetpts=PTS-STARTPTS"));
-  assert.equal(args.at(-1), "/private/work/output.mp4");
+  assert.equal(args.at(-1), path.resolve("/private/work/output.mp4"));
 });
 
 test("direct acquisition rejects a shape-valid forged clock-proof ID before FFmpeg", async () => {

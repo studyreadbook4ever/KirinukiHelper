@@ -276,7 +276,11 @@ test("setup용 writer는 config root의 안정된 이름에 연결 파일을 원
   const parsed = parseWhisperConnectionJson(json, config.origin);
   assert.equal(parsed.modelId, "medium-q5_0");
   assert.equal(parsed.endpoint, whisperCaptionEndpoint(config.gatewayPort));
-  assert.equal((await stat(paths.connectionPath)).mode & 0o777, 0o600);
+  const connectionMetadata = await stat(paths.connectionPath);
+  assert.equal(connectionMetadata.isFile(), true);
+  if (process.platform !== "win32") {
+    assert.equal(connectionMetadata.mode & 0o777, 0o600);
+  }
   assert.deepEqual(
     await readdir(paths.configRoot),
     [KIRINUKI_WHISPER_CONNECTION_FILENAME]

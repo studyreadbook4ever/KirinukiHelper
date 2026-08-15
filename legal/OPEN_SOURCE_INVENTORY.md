@@ -1,6 +1,7 @@
 # Open-source inventory
 
-이 문서는 웹 배포를 준비할 때 사람이 빠르게 범위를 파악하기 위한 표입니다.
+이 문서는 웹·소스 설치판·데스크톱 개발 프리뷰의 범위를 사람이 빠르게 파악하기
+위한 표입니다.
 기계가 검사하는 canonical 목록은 `src/lib/third-party-attributions.ts`, 상세
 고지는 `legal/THIRD_PARTY_NOTICES.md`입니다. 등록 ID, 고정 버전·artifact,
 필수 provenance marker와 배포 사본이 어긋나면 `npm run license:check`가
@@ -43,6 +44,27 @@ Prosperity·불명확한 LicenseRef 차단, pseudo-license의 비재배포 kind 
 | `typescript-toolchain` | TypeScript/types | lockfile pins | Apache-2.0/MIT | 개발·build 전용, web 정적 ZIP 제외 |
 | `github-actions-ci` | checkout/setup-node/setup-chrome Actions | full commit SHA | MIT | GitHub-hosted CI 전용, 제품 산출물 제외 |
 | `chzzk-service`, `youtube-service`, `soop-service` | 외부 서비스 이름 | external | 서비스 약관·상표 | 코드 의존성과 분리된 참조 |
+
+### 데스크톱 프리뷰 추가 경계
+
+아래 항목은 현재 canonical registry의 공개 배포 승인 항목이 아니라, CI가 만드는
+unsigned 개발 패키지에서 새로 생긴 **검토 대기 재배포 경계**입니다.
+
+| 구성요소 | 고정점 | 알려진 라이선스 경계 | 현재 판정 |
+| --- | --- | --- | --- |
+<!-- attribution-id: desktop-preview-runtime -->
+| Electron runtime | `43.4.0` | Electron MIT + bundled Chromium/Node/third-party notices | 최종 runtime archive hash·SBOM·고지 미완료, 공개 차단 |
+| `@electron/asar` | `4.2.1` | MIT 및 transitive build dependencies | build-only, 패키지 내부 allowlist·hash 검증 |
+| `@electron/packager` | `20.3.0` | BSD-2-Clause 및 transitive build dependencies | build-only, canonical lock inventory 검토 미완료 |
+| `@electron/fuses` | `2.1.3` | MIT 및 transitive build dependencies | build-only, canonical lock inventory 검토 미완료 |
+| FFmpeg·ffprobe sidecar | FFmpeg `n8.1.2`, Shaka build tag `n8.1.2-1` | GPLv3·정적 외부 library 조건 | buildconf·link·대응 소스 검토 전 공개 차단 |
+| yt-dlp standalone | `2026.07.04` | Unlicense + embedded Python/EJS/기타 component | target별 embedded notice 검토 전 공개 차단 |
+
+대상별 sidecar URL·바이트·SHA-256은 `src/desktop/tool-manifest.ts`에 있습니다.
+Electron npm package의 version/integrity는 lockfile에 고정되어 있지만, 패키징 때
+받는 Electron 플랫폼 archive 자체의 URL·크기·SHA-256을 release record에 아직
+고정하지 않았습니다. 자세한 승인 조건은
+[`DESKTOP_BINARY_RELEASE_GATE.md`](DESKTOP_BINARY_RELEASE_GATE.md)입니다.
 
 ## Linux 소스 앱의 browser assets에 실제로 포함되는 것
 
@@ -105,22 +127,23 @@ upstream: https://github.com/Freesentation/paperlogy/tree/8ef35f53b318c7ca914c52
 모든 runtime download는 URL·size·SHA-256 세 값을 함께 고정합니다. 전체 값은
 `legal/RUNTIME_DEPENDENCIES.md`에 있습니다.
 
-## 시스템 제공 도구
+## Linux 소스 설치판의 시스템 제공 도구
 
 <!-- attribution-id: ffmpeg -->
 - FFmpeg는 `ffmpeg -version`, `ffmpeg -buildconf`로 실제 build를 확인합니다.
 <!-- attribution-id: ffprobe -->
 - ffprobe는 `ffprobe -version` 및 동일 FFmpeg build 정보로 확인합니다.
 <!-- attribution-id: nodejs -->
-- Node.js 22 이상은 `node --version`, `process.versions`로 확인합니다.
+- Node.js 22.17.0 이상은 `node --version`, `process.versions`로 확인합니다.
 <!-- attribution-id: python -->
 - Python 3.11 이상은 `python3 --version`으로 확인합니다.
 <!-- attribution-id: chromium -->
 - Chromium/Chrome/ChromeDriver는 각 `--version`으로 테스트 환경을 확인합니다.
 
-현재는 어느 것도 web 정적 ZIP에 재배포하지 않습니다. 웹 컨테이너나 데스크톱
-bundle에 넣는 순간 이 분류는 바뀌며 실제 binary build의 전체 라이선스를 새로
-수집해야 합니다.
+현재는 어느 것도 web 정적 ZIP이나 Linux 소스 archive에 재배포하지 않습니다.
+Electron 개발 프리뷰에는 Electron의 Chromium·Node와 FFmpeg·ffprobe sidecar가
+포함되므로 이 분류가 이미 바뀌었습니다. 개발 패키지를 공개하려면 실제 binary
+build의 전체 라이선스를 새로 수집해야 합니다.
 
 ## Kirinuki 앱 내부 runtime용 npm 패키지
 
@@ -194,3 +217,5 @@ image까지 포함한 실제 CI provenance를 다시 기록합니다.
    구성요소까지 적습니다. 서로 다른 배포 경계를 동일하게 만들지 않습니다.
 5. `npm run license:check`, `npm run build`, `npm run validate`, 실제 release
    archive 검사를 통과시킵니다.
+6. 데스크톱 binary는 target별 SBOM과 sidecar build evidence, Windows 서명,
+   macOS 서명·공증까지 모두 끝나기 전에는 공개하지 않습니다.

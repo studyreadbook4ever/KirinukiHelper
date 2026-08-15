@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import type { ChildProcess, SpawnOptions, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import {
   link,
+  lstat,
   mkdtemp,
   mkdir,
+  open,
   readdir,
   readFile,
   rename,
@@ -35,8 +38,13 @@ import {
   buildExternalMetadataProbeArgs,
   buildExternalSelectedSourceProbeArgs,
   compatibleExternalPacketCopySignatures,
+  copyVerifiedExternalVodFileAtomic,
   createExternalProcessEnvironment,
+  externalVodArtifactCacheFileName,
+  externalPublishedArtifactInspectionBinding,
   externalVodConsumerScopeHash,
+  externalVodSourceRootCacheFileName,
+  externalYtDlpCommand,
   materializeExternalVod as strictMaterializeExternalVod,
   missingExternalVodSections,
   normalizeExternalVodUrl,
@@ -44,7 +52,10 @@ import {
   parseExternalVodMetadata,
   planExternalVodSections,
   probeExternalVodMetadata,
-  runExternalProcess
+  runExternalProcess,
+  normalizedExternalFileDeviceId,
+  sameExternalFileCrossApiObjectIdentity,
+  terminateWindowsExternalProcessTree
 } from "../scripts/external-vod-materializer.js";
 import type {
   ExternalMediaInspection,
@@ -72,6 +83,11 @@ import type { ExternalVodHlsTimeline } from
   "../scripts/external-vod-hls-acquirer.js";
 import { normalizeChzzkVodMaterialization } from
   "../src/lib/chzzk-vod-materialization.js";
+import {
+  vodConsumerMaterializationDirectory,
+  vodConsumerScopePathSegment,
+  vodMaterializationPathSegment
+} from "../scripts/vod-consumer-scope.js";
 
 const YOUTUBE_ID = "abcdefghijk";
 const YOUTUBE_URL = `https://www.youtube.com/watch?v=${YOUTUBE_ID}`;
@@ -79,9 +95,44 @@ const CHZZK_ID = "14514980";
 const CHZZK_URL = `https://chzzk.naver.com/video/${CHZZK_ID}`;
 const SOOP_ID = "123456789";
 const SOOP_URL = `https://vod.sooplive.com/player/${SOOP_ID}`;
-const PYTHON_BINARY = "/usr/bin/python3";
-const YT_DLP_ARTIFACT = "/opt/kirinuki/yt-dlp";
+const PYTHON_BINARY = path.resolve("/usr/bin/python3");
+const YT_DLP_ARTIFACT = path.resolve("/opt/kirinuki/yt-dlp");
 const TEST_CONSUMER_ID = "kirinuki-test-editor-project";
+
+function externalJobDirectory(
+  stateDirectory: string,
+  consumerId: string,
+  platform: "chzzk" | "youtube" | "soop",
+  materializationId: string
+): string {
+  return vodConsumerMaterializationDirectory({
+    stateDirectory,
+    consumerScopeHash: externalVodConsumerScopeHash(consumerId),
+    platform,
+    materializationId
+  });
+}
+
+function isHlsAcquisitionPath(value: string): boolean {
+  return value.includes(".hls-acquire-")
+    || value.split(/[\\/]/u).some((segment) => segment.startsWith(".h-"));
+}
+
+function isDirectAcquisitionPath(value: string): boolean {
+  return value.includes(".direct-acquire-")
+    || value.split(/[\\/]/u).some((segment) => segment.startsWith(".d-"));
+}
+
+function isPublishedArtifactEntry(value: string): boolean {
+  return /^(?:materialized-|m-)/u.test(path.basename(value));
+}
+
+function isAttemptEntry(value: string): boolean {
+  return value.split(/[\\/]/u).some((segment) => (
+    /^attempt-[a-f0-9]+$/u.test(segment)
+    || /^\.a-[a-f0-9]+$/u.test(segment)
+  ));
+}
 
 function soopSourceClockIdentity(
   parts: readonly { id: string; durationSeconds: number }[]
@@ -312,6 +363,24 @@ function sha256Buffer(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function isPublishedInspectionInput(
+  filePath: string,
+  options?: Pick<ExternalProcessRunOptions, "inheritedInputFileDescriptor">
+): boolean {
+  return options?.inheritedInputFileDescriptor !== undefined
+    || filePath.startsWith(`/proc/${process.pid}/fd/`);
+}
+
+async function readFixtureMediaText(
+  filePath: string,
+  options?: Pick<ExternalProcessRunOptions, "inheritedInputFileDescriptor">
+): Promise<string> {
+  const inheritedFileDescriptor = options?.inheritedInputFileDescriptor;
+  return inheritedFileDescriptor === undefined
+    ? await readFile(filePath, "utf8")
+    : readFileSync(inheritedFileDescriptor, "utf8");
+}
+
 function youtubeFixtureDependencies(
   overrides: Partial<ExternalVodMaterializerDependencies> = {},
   afterMux?: (outputPath: string) => Promise<void>
@@ -393,6 +462,79 @@ test("외부 VOD consumer scope는 domain-separated SHA-256만 경로 식별자�
   }
 });
 
+test("Windows VOD cache 경로는 case-fold-safe 256-bit 이름과 짧은 물리 layout을 쓴다", () => {
+  const zeroHash = `00${"00".repeat(31)}`;
+  const base64CaseCollisionHash = `68${"00".repeat(31)}`;
+  assert.equal(
+    Buffer.from(zeroHash, "hex").toString("base64url").toLowerCase(),
+    Buffer.from(base64CaseCollisionHash, "hex").toString("base64url").toLowerCase(),
+    "mixed-case base64url이라면 NTFS에서 충돌하는 digest fixture여야 합니다."
+  );
+  const zeroSegment = vodConsumerScopePathSegment(zeroHash, "win32");
+  const collisionSegment = vodConsumerScopePathSegment(
+    base64CaseCollisionHash,
+    "win32"
+  );
+  assert.match(zeroSegment, /^[0-9a-v]{52}$/u);
+  assert.match(collisionSegment, /^[0-9a-v]{52}$/u);
+  assert.notEqual(zeroSegment, collisionSegment);
+  assert.notEqual(zeroSegment.toLowerCase(), collisionSegment.toLowerCase());
+  assert.equal(vodConsumerScopePathSegment(zeroHash, "linux"), zeroHash);
+
+  const materializationId = "ab".repeat(16);
+  assert.match(
+    vodMaterializationPathSegment(materializationId, "win32"),
+    /^[0-9a-v]{26}$/u
+  );
+  const windowsJob = vodConsumerMaterializationDirectory({
+    stateDirectory: path.resolve("/state"),
+    consumerScopeHash: zeroHash,
+    platform: "youtube",
+    materializationId,
+    runtimePlatform: "win32"
+  });
+  assert.deepEqual(windowsJob.split(path.sep).slice(-5), [
+    "c",
+    zeroSegment,
+    "j",
+    "y",
+    vodMaterializationPathSegment(materializationId, "win32")
+  ]);
+  assert.match(
+    externalVodArtifactCacheFileName(zeroHash, "01".repeat(16), "win32"),
+    /^m-[0-9a-v]{26}\.mp4$/u
+  );
+  assert.equal(
+    externalVodSourceRootCacheFileName(zeroHash, "win32"),
+    `r-${zeroSegment}.mp4`
+  );
+});
+
+test("Windows path stat과 fd stat은 low32 dev만 정규화하고 ino·size·nlink는 exact다", () => {
+  const low32 = 0x89abcdefn;
+  const pathDevice = (0x12345678n << 32n) | low32;
+  const pathIdentity = { dev: pathDevice, ino: 7n, size: 11n, nlink: 1n };
+  const handleIdentity = { ...pathIdentity, dev: low32 };
+  assert.equal(normalizedExternalFileDeviceId(pathDevice, "win32"), low32);
+  assert.equal(normalizedExternalFileDeviceId(pathDevice, "linux"), pathDevice);
+  assert.equal(
+    sameExternalFileCrossApiObjectIdentity(pathIdentity, handleIdentity, "win32"),
+    true
+  );
+  assert.equal(
+    sameExternalFileCrossApiObjectIdentity(pathIdentity, handleIdentity, "linux"),
+    false
+  );
+  assert.equal(sameExternalFileCrossApiObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    ino: 8n
+  }, "win32"), false);
+  assert.equal(sameExternalFileCrossApiObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    nlink: 2n
+  }, "win32"), false);
+});
+
 test("동일 semantic 계획도 consumer별 물리 job을 격리하고 같은 consumer만 재사용한다", async (t) => {
   const stateDir = await mkdtemp(path.join(
     os.tmpdir(),
@@ -413,11 +555,9 @@ test("동일 semantic 계획도 consumer별 물리 job을 격리하고 같은 co
     consumerId: consumerA
   }, youtubeFixtureDependencies());
   const firstAJobDirectory = path.dirname(firstA.artifactPath);
-  assert.equal(firstAJobDirectory, path.join(
+  assert.equal(firstAJobDirectory, externalJobDirectory(
     stateDir,
-    "consumers",
-    externalVodConsumerScopeHash(consumerA),
-    "jobs",
+    consumerA,
     "youtube",
     firstA.manifest.materializationId
   ));
@@ -471,11 +611,9 @@ test("동일 semantic 계획도 consumer별 물리 job을 격리하고 같은 co
   assert.equal(rebuiltA.manifest.planFingerprint, firstB.manifest.planFingerprint);
   assert.equal(rebuiltA.manifest.materializationId, firstB.manifest.materializationId);
   assert.notEqual(rebuiltA.artifactPath, firstB.artifactPath);
-  assert.equal(path.dirname(firstB.artifactPath), path.join(
+  assert.equal(path.dirname(firstB.artifactPath), externalJobDirectory(
     stateDir,
-    "consumers",
-    externalVodConsumerScopeHash(consumerB),
-    "jobs",
+    consumerB,
     "youtube",
     firstB.manifest.materializationId
   ));
@@ -765,9 +903,9 @@ test("사용자 환경에서 경로·로케일 외 쿠키와 자격 증명 가�
   }, "/private/job"), {
     PATH: "/usr/bin",
     NO_COLOR: "1",
-    TEMP: "/private/job",
-    TMP: "/private/job",
-    TMPDIR: "/private/job"
+    TEMP: path.resolve("/private/job"),
+    TMP: path.resolve("/private/job"),
+    TMPDIR: path.resolve("/private/job")
   });
 });
 
@@ -820,6 +958,133 @@ test("yt-dlp 실행 파일 누락은 외부 stderr 없이 명확한 안전 오�
       }
     }),
     /yt-dlp artifact 실행 경로는 검증된 절대 경로/u
+  );
+});
+
+test("standalone yt-dlp는 Python 없이 검증된 실행 파일을 직접 호출한다", async () => {
+  const args = buildExternalMetadataProbeArgs(YOUTUBE_URL, {
+    nodeBinary: process.execPath
+  });
+  const command = externalYtDlpCommand({
+    mode: "standalone",
+    ytDlpBinary: YT_DLP_ARTIFACT,
+    args
+  });
+  assert.equal(command.executable, YT_DLP_ARTIFACT);
+  assert.deepEqual(command.args, args);
+  assert.notEqual(command.args, args);
+  assert.notEqual(command.args[0], "-I");
+  assert.equal(Object.isFrozen(command), true);
+  assert.equal(Object.isFrozen(command.args), true);
+  assert.deepEqual(externalYtDlpCommand({
+    mode: "python-zipimport",
+    ytDlpBinary: YT_DLP_ARTIFACT,
+    pythonBinary: PYTHON_BINARY,
+    args
+  }), {
+    executable: PYTHON_BINARY,
+    args: ["-I", YT_DLP_ARTIFACT, ...args]
+  });
+
+  const metadata = await probeExternalVodMetadata(YOUTUBE_URL, {
+    cwd: "/tmp",
+    processEnv: {},
+    ytDlpMode: "standalone",
+    ytDlpBinary: YT_DLP_ARTIFACT,
+    nodeBinary: process.execPath,
+    runProcess: async (executable, actualArgs, options) => {
+      assert.equal(executable, YT_DLP_ARTIFACT);
+      assert.deepEqual(actualArgs, args);
+      assert.equal(options.shell, false);
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          id: YOUTUBE_ID,
+          extractor: "youtube",
+          duration: 120,
+          availability: "public",
+          live_status: "not_live",
+          webpage_url: YOUTUBE_URL,
+          timestamp: 1_700_000_000
+        }),
+        stderr: ""
+      };
+    }
+  });
+  assert.equal(metadata.contentId, YOUTUBE_ID);
+
+  assert.throws(() => externalYtDlpCommand({
+    mode: "standalone",
+    ytDlpBinary: "yt-dlp",
+    args
+  }), /절대 경로/u);
+  assert.throws(() => externalYtDlpCommand({
+    mode: "python-zipimport",
+    ytDlpBinary: YT_DLP_ARTIFACT,
+    args
+  }), /Python/u);
+});
+
+test("published ffprobe binding은 Linux·macOS·Windows의 exact handle 경계를 만든다", () => {
+  const linuxBinding = externalPublishedArtifactInspectionBinding({
+    platform: "linux",
+    processId: 12_345,
+    fileDescriptor: 17
+  });
+  assert.deepEqual(linuxBinding, {
+    inputPath: "/proc/12345/fd/17"
+  });
+  assert.equal(Object.isFrozen(linuxBinding), true);
+  assert.deepEqual(externalPublishedArtifactInspectionBinding({
+    platform: "darwin",
+    processId: 12_345,
+    fileDescriptor: 17
+  }), {
+    inputPath: "/dev/fd/3",
+    inheritedInputFileDescriptor: 17
+  });
+  assert.deepEqual(externalPublishedArtifactInspectionBinding({
+    platform: "win32",
+    processId: 12_345,
+    fileDescriptor: 17
+  }), {
+    inputPath: "pipe:3",
+    inheritedInputFileDescriptor: 17
+  });
+  for (const invalid of [
+    { platform: "freebsd", processId: 1, fileDescriptor: 3 },
+    { platform: "linux", processId: 0, fileDescriptor: 3 },
+    { platform: "darwin", processId: 1, fileDescriptor: -1 },
+    { platform: "win32", processId: 1, fileDescriptor: 1.5 }
+  ]) {
+    assert.throws(
+      () => externalPublishedArtifactInspectionBinding(invalid),
+      (error: unknown) => (
+        error instanceof ExternalVodMaterializationError
+        && error.code === "MEDIA_VERIFICATION_FAILED"
+      )
+    );
+  }
+  assert.equal(
+    buildExternalFfprobeArgs("/dev/fd/3", {
+      inheritedInputFileDescriptor: 17
+    }).at(-1),
+    "/dev/fd/3"
+  );
+  assert.equal(
+    buildExternalFfprobeArgs("pipe:3", {
+      inheritedInputFileDescriptor: 17
+    }).at(-1),
+    "pipe:3"
+  );
+  assert.throws(
+    () => buildExternalFfprobeArgs("relative.mp4", {
+      inheritedInputFileDescriptor: 17
+    }),
+    (error: unknown) => (
+      error instanceof ExternalVodMaterializationError
+      && error.code === "MEDIA_VERIFICATION_FAILED"
+    )
   );
 });
 
@@ -1192,6 +1457,7 @@ test("selected-source probe는 SOOP 파트와 YouTube 분리 video+audio를 엄�
 
 test("YouTube direct clock probe는 ffprobe 옵션 경계와 공개 헤더를 정확히 만든다", () => {
   const semanticIdentity = "youtube:format:136:video";
+  const tlsCaFile = path.resolve("/private/clock/node-root-ca.pem");
   const args = buildExternalDirectClockProbeArgs({
     url: "https://rr1.googlevideo.com/videoplayback?sig=runtime-only",
     semanticIdentity,
@@ -1200,9 +1466,12 @@ test("YouTube direct clock probe는 ffprobe 옵션 경계와 공개 헤더를 �
       "user-agent": "Kirinuki fixture",
       accept: "*/*"
     }
-  });
+  }, tlsCaFile);
   assert(!args.includes("-nostdin"), "ffprobe는 -nostdin을 값 옵션으로 오해합니다.");
   assert.equal(optionValue(args, "-protocol_whitelist"), "https,tls,tcp");
+  assert.equal(optionValue(args, "-tls_verify"), "1");
+  assert.equal(optionValue(args, "-ca_file"), tlsCaFile);
+  assert.equal(optionValue(args, "-max_redirects"), "0");
   assert.equal(
     optionValue(args, "-headers"),
     "accept: */*\r\nuser-agent: Kirinuki fixture\r\n"
@@ -1233,7 +1502,7 @@ test("정규화 root의 최종 concat은 packet-copy faststart MP4를 만든다"
   const outputFormatIndex = args.lastIndexOf("-f");
   assert.notEqual(outputFormatIndex, -1);
   assert.equal(args[outputFormatIndex + 1], "mp4");
-  assert.equal(args.at(-1), "/tmp/job/materialized.tmp.mp4");
+  assert.equal(args.at(-1), path.resolve("/tmp/job/materialized.tmp.mp4"));
 });
 
 test("strict packet-copy 검증이 없으면 최종 concat은 안전하게 재인코딩한다", () => {
@@ -1448,7 +1717,7 @@ test("ffprobe는 packet-copy 결정을 위해 codec extradata SHA-256을 요청�
   const args = buildExternalFfprobeArgs("/tmp/job/root.mp4");
   assert(args.includes("-show_data"));
   assert.equal(optionValue(args, "-show_data_hash"), "sha256");
-  assert.equal(args.at(-1), "/tmp/job/root.mp4");
+  assert.equal(args.at(-1), path.resolve("/tmp/job/root.mp4"));
 });
 
 test("CHZZK 0초·비영점 조각은 컨테이너 합집합과 각 A/V 스트림 범위를 따로 검증한다", async (t) => {
@@ -1547,7 +1816,7 @@ test("CHZZK 0초·비영점 조각은 컨테이너 합집합과 각 A/V 스트�
     assert.ok(outputPath);
     await writeFile(
       outputPath,
-      outputPath.includes(".hls-acquire-")
+      isHlsAcquisitionPath(outputPath)
         ? "chzzk-strict-section"
         : "chzzk-zero-final"
     );
@@ -1557,8 +1826,8 @@ test("CHZZK 0초·비영점 조각은 컨테이너 합집합과 각 A/V 스트�
     runProcess,
     pythonBinary: PYTHON_BINARY,
     ytDlpBinary: YT_DLP_ARTIFACT,
-    inspectMedia: async (filePath) => {
-      const content = await readFile(filePath, "utf8");
+    inspectMedia: async (filePath, options) => {
+      const content = await readFixtureMediaText(filePath, options);
       return content === "chzzk-strict-section"
         ? sectionInspection
         : editorSafeInspection(15_000);
@@ -1620,10 +1889,12 @@ test("기본 프로세스 경계는 argv 배열과 shell:false를 사용한다",
   ) => {
     captured = { command, args, options };
     const child = new EventEmitter() as EventEmitter & {
+      pid: number;
       stdout: PassThrough;
       stderr: PassThrough;
       kill: () => boolean;
     };
+    child.pid = 77_777;
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     child.kill = () => true;
@@ -1649,11 +1920,348 @@ test("기본 프로세스 경계는 argv 배열과 shell:false를 사용한다",
   assert.equal(captured?.command, "yt-dlp");
   assert.deepEqual(captured?.args, ["--version"]);
   assert.equal(captured?.options.shell, false);
-  assert.equal(captured?.options.detached, true);
-  assert.equal(captured?.options.env?.TEMP, "/tmp");
-  assert.equal(captured?.options.env?.TMP, "/tmp");
-  assert.equal(captured?.options.env?.TMPDIR, "/tmp");
+  assert.equal(
+    captured?.options.detached,
+    process.platform === "win32" ? undefined : true
+  );
+  assert.equal(captured?.options.env?.TEMP, path.resolve("/tmp"));
+  assert.equal(captured?.options.env?.TMP, path.resolve("/tmp"));
+  assert.equal(captured?.options.env?.TMPDIR, path.resolve("/tmp"));
   assert.equal(captured?.options.env?.temp, undefined);
+});
+
+test("ffprobe용 열린 파일은 모든 OS에서 child fd 3에 매핑하고 Windows만 process group을 만들지 않는다", async () => {
+  for (const platform of ["linux", "darwin", "win32"] as const) {
+    let captured: SpawnOptions | undefined;
+    const spawnImpl = ((_command: string, _args: readonly string[], options: SpawnOptions) => {
+      captured = options;
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill: () => boolean;
+      };
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => true;
+      queueMicrotask(() => {
+        child.stdout.end("{}\n");
+        child.stderr.end();
+        child.emit("close", 0, null);
+      });
+      return child as unknown as ChildProcess;
+    }) as unknown as typeof spawn;
+    await runExternalProcess("ffprobe", ["-i", "bound-input"], {
+      cwd: "/tmp",
+      env: {},
+      shell: false,
+      inheritedInputFileDescriptor: 17
+    }, {
+      platform,
+      spawnImpl
+    });
+    assert.deepEqual(captured?.stdio, ["ignore", "pipe", "pipe", 17], platform);
+    assert.equal(captured?.detached, platform === "win32" ? undefined : true, platform);
+    assert.equal(captured?.shell, false, platform);
+  }
+  await assert.rejects(
+    runExternalProcess("ffprobe", [], {
+      cwd: "/tmp",
+      env: {},
+      shell: false,
+      inheritedInputFileDescriptor: -1
+    }),
+    (error: unknown) => (
+      error instanceof ExternalVodMaterializationError
+      && error.code === "INVALID_PROCESS_BINARY"
+    )
+  );
+});
+
+test("macOS child fd 3은 실제 /dev/fd/3 입력으로 열린 파일 bytes를 읽는다", {
+  skip: process.platform !== "darwin"
+}, async (t) => {
+  const workingDirectory = await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-darwin-inherited-fd-"
+  ));
+  t.after(async () => {
+    await rm(workingDirectory, { recursive: true, force: true });
+  });
+  const fixturePath = path.join(workingDirectory, "published.mp4");
+  await writeFile(fixturePath, "darwin-fd-bound-fixture");
+  const handle = await open(fixturePath, "r");
+  try {
+    const result = await runExternalProcess(process.execPath, [
+      "--input-type=module",
+      "--eval",
+      'import { readFileSync } from "node:fs"; process.stdout.write(readFileSync("/dev/fd/3", "utf8"));'
+    ], {
+      cwd: workingDirectory,
+      env: {},
+      shell: false,
+      inheritedInputFileDescriptor: handle.fd
+    });
+    assert.equal(result.stdout, "darwin-fd-bound-fixture");
+  } finally {
+    await handle.close();
+  }
+});
+
+test("Windows 취소는 PID fallback 없이 exact child handle만 종료한다", async () => {
+  const controller = new AbortController();
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let child: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    child = new EventEmitter() as typeof child & NonNullable<typeof child>;
+    child.pid = 4_321;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      queueMicrotask(() => {
+        child?.stdout.end();
+        child?.stderr.end();
+        child?.emit("close", 1, null);
+      });
+      return true;
+    };
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("yt-dlp.exe", ["--version"], {
+    cwd: "/tmp",
+    env: {},
+    shell: false,
+    signal: controller.signal
+  }, {
+    platform: "win32",
+    spawnImpl
+  });
+  controller.abort();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error && "code" in error && error.code === "ABORT_ERR"
+  ));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+});
+
+test("Windows taskkill helper timeout은 killer를 종료하고 close까지 기다린다", async () => {
+  let timeoutCallback: (() => void) | undefined;
+  let timeoutDelay = 0;
+  let timerCleared = false;
+  let alive = true;
+  let settled = false;
+  const killerSignals: Array<NodeJS.Signals | number | undefined> = [];
+  const killer = new EventEmitter() as EventEmitter & {
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  };
+  killer.kill = (signal) => {
+    killerSignals.push(signal);
+    return true;
+  };
+  const spawnImpl = ((_command: string, _args: readonly string[], _options: SpawnOptions) => (
+    killer as unknown as ChildProcess
+  )) as unknown as typeof spawn;
+  const timerHandle = {} as ReturnType<typeof setTimeout>;
+  const pending = terminateWindowsExternalProcessTree(4_321, {
+    environment: { SystemRoot: "C:\\Windows" },
+    spawnImpl,
+    timeoutMs: 17,
+    probeProcessImpl: () => {
+      if (!alive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
+    setTimeoutImpl: ((callback: () => void, delay = 0) => {
+      timeoutCallback = callback;
+      timeoutDelay = delay;
+      return timerHandle;
+    }) as unknown as typeof setTimeout,
+    clearTimeoutImpl: ((handle: ReturnType<typeof setTimeout>) => {
+      assert.equal(handle, timerHandle);
+      timerCleared = true;
+    }) as typeof clearTimeout
+  });
+  void pending.finally(() => { settled = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(timeoutDelay, 2);
+  timeoutCallback?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(killerSignals, ["SIGKILL"]);
+  assert.equal(settled, false);
+  alive = false;
+  killer.emit("close", null, "SIGKILL");
+  await pending;
+  assert.equal(timerCleared, true);
+});
+
+test("Windows exact child kill은 반복 abort에도 한 번만 실행된다", async () => {
+  const controller = new AbortController();
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let childRef: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.pid = 8_765;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      queueMicrotask(() => {
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", null, "SIGKILL");
+      });
+      return true;
+    };
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("yt-dlp.exe", [], {
+    cwd: "C:\\Kirinuki",
+    env: {},
+    shell: false,
+    signal: controller.signal
+  }, {
+    platform: "win32",
+    spawnImpl
+  });
+  controller.abort();
+  controller.abort();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ABORT_ERR"
+  ));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+});
+
+test("Windows timeout은 exact child를 한 번 죽이고 close 한 번으로 원래 오류를 보존한다", async () => {
+  const scheduled: Array<{
+    callback: () => void;
+    delay: number;
+    cleared: boolean;
+  }> = [];
+  const handles = new Map<object, (typeof scheduled)[number]>();
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    const task = { callback, delay, cleared: false };
+    const handle = {};
+    scheduled.push(task);
+    handles.set(handle, task);
+    return handle;
+  }) as unknown as typeof setTimeout;
+  const clearTimeoutImpl = ((handle: object) => {
+    const task = handles.get(handle);
+    if (task) {
+      task.cleared = true;
+    }
+  }) as unknown as typeof clearTimeout;
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let childRef: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.pid = 9_876;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      queueMicrotask(() => {
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", null, "SIGKILL");
+        child.emit("close", null, "SIGKILL");
+      });
+      return true;
+    };
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("ffmpeg.exe", [], {
+    cwd: "C:\\Kirinuki",
+    env: {},
+    shell: false,
+    timeoutMs: 123
+  }, {
+    platform: "win32",
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl
+  });
+  assert.equal(scheduled[0]?.delay, 123);
+  scheduled[0]?.callback();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ETIMEDOUT"
+  ));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  assert.equal(scheduled[0]?.cleared, true);
+  assert.equal(scheduled.length, 2);
+  assert.equal(scheduled[1]?.cleared, true);
+  assert.equal(childRef?.listenerCount("close"), 0);
+});
+
+test("Windows exact child가 닫히지 않아도 timeout 결과는 bounded하게 끝난다", async () => {
+  const scheduled: Array<{ callback: () => void; delay: number }> = [];
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    scheduled.push({ callback, delay });
+    return {};
+  }) as unknown as typeof setTimeout;
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let unrefCount = 0;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: (signal?: NodeJS.Signals | number) => boolean;
+      unref: () => void;
+    };
+    child.pid = 9_877;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      return false;
+    };
+    child.unref = () => { unrefCount += 1; };
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("ffmpeg.exe", [], {
+    cwd: "C:\\Kirinuki",
+    env: {},
+    shell: false,
+    timeoutMs: 123
+  }, {
+    platform: "win32",
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl: (() => undefined) as unknown as typeof clearTimeout,
+    killGraceMs: 17
+  });
+  scheduled[0]?.callback();
+  assert.equal(scheduled[1]?.delay, 17);
+  scheduled[1]?.callback();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ETIMEDOUT"
+    && error.cause instanceof Error
+  ));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  assert.equal(unrefCount, 1);
 });
 
 test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM 후 KILL하고 close에서 끝난다", async () => {
@@ -1697,6 +2305,7 @@ test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM �
     return child as unknown as ChildProcess;
   }) as unknown as typeof spawn;
   const groupSignals: NodeJS.Signals[] = [];
+  let groupAlive = true;
   const pending = runExternalProcess("yt-dlp", ["--version"], {
     cwd: "/tmp",
     env: { PATH: "/usr/bin" },
@@ -1708,6 +2317,11 @@ test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM �
     clearTimeoutImpl,
     killGraceMs: 17,
     platform: "linux",
+    probeProcessGroupImpl: () => {
+      if (!groupAlive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
     killProcessGroupImpl: (pid, signal) => {
       assert.equal(pid, 42_424);
       groupSignals.push(signal);
@@ -1716,16 +2330,21 @@ test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM �
   const rejected = assert.rejects(pending, /123ms 시간 제한/u);
   assert.equal(scheduled[0]?.delay, 123);
   scheduled[0]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(groupSignals, ["SIGTERM"]);
   assert.equal(scheduled[1]?.delay, 17);
   scheduled[1]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(groupSignals, ["SIGTERM", "SIGKILL"]);
+  groupAlive = false;
+  assert.equal(scheduled[2]?.delay, 17);
+  scheduled[2]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   childRef?.stdout.end();
   childRef?.stderr.end();
   childRef?.emit("close", null, "SIGKILL");
   await rejected;
   assert.equal(scheduled[0]?.cleared, true);
-  assert.equal(scheduled[1]?.cleared, true);
 });
 
 test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 뒤 KILL한다", async () => {
@@ -1769,6 +2388,7 @@ test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 
     return child as unknown as ChildProcess;
   }) as unknown as typeof spawn;
   const groupSignals: NodeJS.Signals[] = [];
+  let groupAlive = true;
   const pending = runExternalProcess("ffmpeg", [], {
     cwd: "/tmp",
     env: {},
@@ -1780,6 +2400,11 @@ test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 
     clearTimeoutImpl,
     killGraceMs: 25,
     platform: "linux",
+    probeProcessGroupImpl: () => {
+      if (!groupAlive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
     killProcessGroupImpl: (_pid, signal) => {
       groupSignals.push(signal);
     }
@@ -1791,6 +2416,7 @@ test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 
   );
   const rejected = assert.rejects(pending, /100ms 시간 제한/u);
   scheduled[0]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(groupSignals, ["SIGTERM"]);
   childRef?.stdout.end();
   childRef?.stderr.end();
@@ -1799,9 +2425,176 @@ test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 
   assert.equal(settled, false);
   assert.equal(scheduled[1]?.delay, 25);
   scheduled[1]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(groupSignals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(scheduled[2]?.delay, 25);
+  groupAlive = false;
+  scheduled[2]?.callback();
+  await rejected;
+});
+
+test("정상 close도 남은 POSIX descendant group을 회수한 뒤에만 성공한다", async () => {
+  const scheduled: Array<{ callback: () => void; delay: number }> = [];
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    scheduled.push({ callback, delay });
+    return {} as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  let groupAlive = true;
+  const groupSignals: NodeJS.Signals[] = [];
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: () => boolean;
+    };
+    child.pid = 61_616;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end("ok\n");
+      child.stderr.end();
+      child.emit("close", 0, null);
+    });
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("ffmpeg", [], {
+    cwd: "/tmp",
+    env: {},
+    shell: false
+  }, {
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl: (() => undefined) as typeof clearTimeout,
+    killGraceMs: 13,
+    platform: "linux",
+    probeProcessGroupImpl: () => {
+      if (!groupAlive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
+    killProcessGroupImpl: (_pid, signal) => groupSignals.push(signal)
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(groupSignals, ["SIGTERM"]);
+  let settled = false;
+  void pending.then(() => { settled = true; });
+  assert.equal(settled, false);
+  groupAlive = false;
+  assert.equal(scheduled[1]?.delay, 13);
+  scheduled[1]?.callback();
+  const result = await pending;
+  assert.equal(result.stdout, "ok\n");
+  assert.deepEqual(groupSignals, ["SIGTERM"]);
+});
+
+test("정상 exit 뒤 POSIX descendant가 SIGKILL에도 남으면 성공으로 처리하지 않는다", async () => {
+  const scheduled: Array<{ callback: () => void; delay: number }> = [];
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    scheduled.push({ callback, delay });
+    return {} as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  const groupSignals: NodeJS.Signals[] = [];
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: () => boolean;
+    };
+    child.pid = 62_626;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 0, null);
+    });
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("ffmpeg", [], {
+    cwd: "/tmp",
+    env: {},
+    shell: false
+  }, {
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl: (() => undefined) as typeof clearTimeout,
+    killGraceMs: 11,
+    platform: "linux",
+    probeProcessGroupImpl: () => undefined,
+    killProcessGroupImpl: (_pid, signal) => groupSignals.push(signal)
+  });
+  const rejected = assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "EPROCESSGROUPALIVE"
+  ));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  scheduled[1]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  scheduled[2]?.callback();
   await rejected;
   assert.deepEqual(groupSignals, ["SIGTERM", "SIGKILL"]);
-  assert.equal(scheduled[1]?.cleared, true);
+});
+
+test("실제 POSIX 정상 exit도 SIGTERM 무시 descendant를 남기지 않는다", {
+  skip: process.platform === "win32"
+}, async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "kirinuki-process-group-test-"));
+  const pidPath = path.join(cwd, "descendant.pid");
+  t.after(async () => {
+    try {
+      const descendantPid = Number(await readFile(pidPath, "utf8"));
+      if (Number.isSafeInteger(descendantPid) && descendantPid > 0) {
+        try {
+          process.kill(descendantPid, "SIGKILL");
+        } catch (error) {
+          if (
+            !(error instanceof Error)
+            || !("code" in error)
+            || error.code !== "ESRCH"
+          ) {
+            throw error;
+          }
+        }
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+  const parentScript = [
+    "const { spawn } = require('node:child_process');",
+    "const { writeFileSync } = require('node:fs');",
+    "const descendant = spawn(process.execPath, ['-e', 'process.on(\\\"SIGTERM\\\", () => {}); setInterval(() => {}, 1000);'], { stdio: 'ignore' });",
+    "writeFileSync(process.argv[1], String(descendant.pid));",
+    "setTimeout(() => process.exit(0), 25);"
+  ].join("\n");
+  const result = await runExternalProcess(process.execPath, [
+    "-e",
+    parentScript,
+    pidPath
+  ], {
+    cwd,
+    env: process.env,
+    shell: false,
+    timeoutMs: 5_000
+  }, {
+    killGraceMs: process.platform === "darwin" ? 1_000 : 100,
+    platform: process.platform
+  });
+  assert.equal(result.exitCode, 0);
+  const descendantPid = Number(await readFile(pidPath, "utf8"));
+  assert.throws(
+    () => process.kill(descendantPid, 0),
+    (error: unknown) => (
+      error instanceof Error
+      && "code" in error
+      && error.code === "ESRCH"
+    )
+  );
 });
 
 test("빠른 close도 진행 중인 재귀 quota 검사가 끝나기 전에 성공하지 않는다", async (t) => {
@@ -1847,15 +2640,21 @@ test("빠른 close도 진행 중인 재귀 quota 검사가 끝나기 전에 성�
 });
 
 test("빠른 close 뒤 최종 statfs가 나빠지면 성공 대신 오류를 전파한다", async () => {
+  let killCount = 0;
   const spawnImpl = (() => {
     const child = new EventEmitter() as EventEmitter & {
+      pid: number;
       stdout: PassThrough;
       stderr: PassThrough;
       kill: () => boolean;
     };
+    child.pid = 88_888;
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    child.kill = () => true;
+    child.kill = () => {
+      killCount += 1;
+      return true;
+    };
     queueMicrotask(() => {
       child.stdout.end();
       child.stderr.end();
@@ -1887,6 +2686,7 @@ test("빠른 close 뒤 최종 statfs가 나빠지면 성공 대신 오류를 전
     }
   );
   assert.equal(statFileSystemCalls, 2);
+  assert.equal(killCount, 0, "close 뒤 재사용 가능 PID를 다시 종료하면 안 됩니다.");
 });
 
 test("기본 프로세스 경계는 작업 파일이 상한을 넘는 즉시 child를 종료한다", async (t) => {
@@ -2028,7 +2828,7 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
     assert.equal(options.timeoutMs, 5 * 60 * 1_000);
     const outputPath = args.at(-1);
     assert.ok(outputPath);
-    if (options.cwd.includes(".hls-acquire-")) {
+    if (isHlsAcquisitionPath(options.cwd)) {
       (sectionCalls as string[][]).push([...args]);
       const durationMs = Math.round(Number(optionValue(args, "-t")) * 1_000);
       await writeFile(outputPath, `strict-section:${durationMs}`);
@@ -2039,16 +2839,18 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
     return { exitCode: 0, stdout: "", stderr: "" };
   };
   const inspectMedia = async (
-    filePath: string
+    filePath: string,
+    options?: ExternalProcessRunOptions
   ): Promise<ExternalMediaInspection> => {
-    const content = await readFile(filePath, "utf8");
+    const content = await readFixtureMediaText(filePath, options);
     const section = /^strict-section:(\d+)$/u.exec(content);
     return editorSafeInspection(section ? Number(section[1]) : 21_000);
   };
   const inspectPacketCopyMedia = async (
-    filePath: string
+    filePath: string,
+    options: ExternalProcessRunOptions
   ): Promise<ExternalMediaInspection> => ({
-    ...(await inspectMedia(filePath)),
+    ...(await inspectMedia(filePath, options)),
     packetCopySignature: "fixture-strict-codec-parameters"
   });
   const request = {
@@ -2094,11 +2896,9 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
   }]);
   assert.ok(normalizeChzzkVodMaterialization(first.manifest));
   assert.equal(first.receipt.schemaId, EXTERNAL_VOD_CACHE_SCHEMA);
-  assert.equal(path.dirname(first.artifactPath), path.join(
+  assert.equal(path.dirname(first.artifactPath), externalJobDirectory(
     stateDir,
-    "consumers",
-    externalVodConsumerScopeHash(TEST_CONSUMER_ID),
-    "jobs",
+    TEST_CONSUMER_ID,
     "soop",
     first.manifest.materializationId
   ));
@@ -2258,7 +3058,7 @@ test("최종 ffprobe 뒤 source가 교체돼도 게시본을 다시 검사하고
       clips: [{ id: "clip", startMs: 20_000, endMs: 21_000 }],
       stateDir
     }, youtubeFixtureDependencies({
-      inspectMedia: async (filePath) => {
+      inspectMedia: async (filePath, options) => {
         const basename = path.basename(filePath);
         if (basename === "materialized.tmp.mp4" && !sourceSwapped) {
           const original = await readFile(filePath);
@@ -2267,7 +3067,7 @@ test("최종 ffprobe 뒤 source가 교체돼도 게시본을 다시 검사하고
           sourceSwapped = true;
           return editorSafeInspection(21_000);
         }
-        if (filePath.startsWith(`/proc/${process.pid}/fd/`)) {
+        if (isPublishedInspectionInput(filePath, options)) {
           publishedProbeCalls += 1;
           return editorSafeInspection(22_000);
         }
@@ -2284,7 +3084,7 @@ test("최종 ffprobe 뒤 source가 교체돼도 게시본을 다시 검사하고
   assert.equal(sourceSwapped, true);
   assert.equal(publishedProbeCalls, 1);
   const entries = await readdir(stateDir, { recursive: true });
-  assert.equal(entries.some((entry) => path.basename(entry).startsWith("materialized-")), false);
+  assert.equal(entries.some(isPublishedArtifactEntry), false);
   assert.equal(entries.some((entry) => entry.endsWith("manifest.json")), false);
 });
 
@@ -2302,14 +3102,14 @@ test("게시 경로를 바꿨다가 복원해도 semantic probe는 열린 fd만 
       clips: [{ id: "clip", startMs: 20_000, endMs: 21_000 }],
       stateDir
     }, youtubeFixtureDependencies({
-      inspectMedia: async (filePath) => {
-        if (!filePath.startsWith(`/proc/${process.pid}/fd/`)) {
+      inspectMedia: async (filePath, options) => {
+        if (!isPublishedInspectionInput(filePath, options)) {
           return editorSafeInspection(21_000);
         }
         descriptorProbeCalls += 1;
         const entries = await readdir(stateDir, { recursive: true });
         const artifactEntry = entries.find((entry) => (
-          path.basename(entry).startsWith("materialized-")
+          isPublishedArtifactEntry(entry)
           && entry.endsWith(".mp4")
         ));
         assert.ok(artifactEntry);
@@ -2320,7 +3120,7 @@ test("게시 경로를 바꿨다가 복원해도 semantic probe는 열린 fd만 
         try {
           await writeFile(artifactPath, "alternate-path-bytes");
           await writeFile(backupPath, original);
-          inspectedContent = await readFile(filePath, "utf8");
+          inspectedContent = await readFixtureMediaText(filePath, options);
         } finally {
           await rm(artifactPath, { force: true });
           await rename(backupPath, artifactPath);
@@ -2338,7 +3138,7 @@ test("게시 경로를 바꿨다가 복원해도 semantic probe는 열린 fd만 
   assert.equal(descriptorProbeCalls, 1);
   assert.equal(inspectedContent, "youtube-final-mp4");
   const entries = await readdir(stateDir, { recursive: true });
-  assert.equal(entries.some((entry) => path.basename(entry).startsWith("materialized-")), false);
+  assert.equal(entries.some(isPublishedArtifactEntry), false);
   assert.equal(entries.some((entry) => entry.endsWith("manifest.json")), false);
 });
 
@@ -2399,7 +3199,7 @@ test("게시 중 같은 inode가 변조되면 자신이 만든 hard-link만 정�
     }
   );
   const entries = await readdir(stateDir, { recursive: true });
-  assert.equal(entries.some((entry) => path.basename(entry).startsWith("materialized-")), false);
+  assert.equal(entries.some(isPublishedArtifactEntry), false);
 });
 
 test("게시 원본에 기존 hard-link가 있으면 nlink 1 경계를 통과하지 못한다", async (t) => {
@@ -2503,7 +3303,7 @@ test("SOOP 선택 source proof의 파트 identity가 계획과 다르면 즉시 
     if (command === "ffmpeg") {
       const outputPath = args.at(-1);
       assert.ok(outputPath);
-      if (outputPath.includes(".hls-acquire-")) {
+      if (isHlsAcquisitionPath(outputPath)) {
         await writeFile(outputPath, "strict-soop-section");
         return { exitCode: 0, stdout: "", stderr: "" };
       }
@@ -2601,14 +3401,20 @@ test("YouTube direct clock의 일시적 CDN 실패만 새 선택 source로 한 �
     await rm(stateDir, { recursive: true, force: true });
   });
   let resolverCalls = 0;
+  const observedTlsCaFiles = new Set<string>();
   const completed = await materializeExternalVod({
     consumerId: TEST_CONSUMER_ID,
     sourceUrl: YOUTUBE_URL,
     clips: [{ id: "clock-retry", startMs: 20_000, endMs: 21_000 }],
     stateDir
   }, youtubeFixtureDependencies({
-    resolveClockProofSet: async (metadata, parts) => {
+    resolveClockProofSet: async (metadata, parts, context) => {
       resolverCalls += 1;
+      assert.equal(path.dirname(context.tlsCaFile), context.cwd);
+      const tlsCaBundle = await readFile(context.tlsCaFile, "utf8");
+      assert.match(tlsCaBundle, /^-----BEGIN CERTIFICATE-----/u);
+      assert.match(tlsCaBundle, /-----END CERTIFICATE-----\n$/u);
+      observedTlsCaFiles.add(context.tlsCaFile);
       if (resolverCalls === 1) {
         throw Object.assign(new Error("transient signed edge URL"), {
           code: "DIRECT_CLOCK_PROBE_FAILED"
@@ -2619,6 +3425,7 @@ test("YouTube direct clock의 일시적 CDN 실패만 새 선택 source로 한 �
   }));
   assert.equal(completed.manifest.source.platform, "YOUTUBE");
   assert.equal(resolverCalls, 3, "최초 1회 재시도와 완료 source 재검증만 허용합니다.");
+  assert.equal(observedTlsCaFiles.size, 2, "각 private clock-probe 생명주기마다 CA를 하나만 만듭니다.");
 });
 
 test("다운로드 완료 전 metadata 재검증에서 sourceVersionId 변화가 보이면 publish하지 않는다", async (t) => {
@@ -2653,7 +3460,7 @@ test("다운로드 완료 전 metadata 재검증에서 sourceVersionId 변화가
     if (command === "ffmpeg") {
       const outputPath = args.at(-1);
       assert.ok(outputPath);
-      if (outputPath.includes(".hls-acquire-")) {
+      if (isHlsAcquisitionPath(outputPath)) {
         await writeFile(outputPath, "stable-soop-section");
         return { exitCode: 0, stdout: "", stderr: "" };
       }
@@ -2760,7 +3567,7 @@ test("strict section 검사 실패는 취득 작업 폴더와 부분 파일을 �
   const entries = await readdir(stateDir, { recursive: true });
   assert.deepEqual(
     entries.filter((entry) => (
-      /section-|\.part$|\.direct-acquire-/u.test(entry)
+      /section-|\.part$/u.test(entry) || isDirectAcquisitionPath(entry)
     )),
     []
   );
@@ -2797,7 +3604,7 @@ test("필수 오디오가 없는 strict section은 최종 mux 전에 거부한�
     if (command === "ffmpeg") {
       const outputPath = args.at(-1);
       assert.ok(outputPath);
-      if (outputPath.includes(".hls-acquire-")) {
+      if (isHlsAcquisitionPath(outputPath)) {
         sectionCalls += 1;
         await writeFile(outputPath, `strict-section:${sectionCalls}`);
         return { exitCode: 0, stdout: "", stderr: "" };
@@ -2833,8 +3640,8 @@ test("필수 오디오가 없는 strict section은 최종 mux 전에 거부한�
       runProcess,
       pythonBinary: PYTHON_BINARY,
       ytDlpBinary: YT_DLP_ARTIFACT,
-      inspectMedia: async (filePath) => {
-        const content = await readFile(filePath, "utf8");
+      inspectMedia: async (filePath, options) => {
+        const content = await readFixtureMediaText(filePath, options);
         return editorSafeInspection(
           content === "strict-section:2" ? 6_000 : 15_000,
           content === "strict-section:2" ? null : "aac"
@@ -2884,7 +3691,7 @@ test("동일 계획의 동시 attempt는 BUSY나 공유 삭제 없이 원자적 
     assert.equal(command, "ffmpeg");
     const outputPath = args.at(-1);
     assert.ok(outputPath);
-    if (outputPath.includes(".direct-acquire-")) {
+    if (isDirectAcquisitionPath(outputPath)) {
       downloadCalls += 1;
       if (downloadCalls === 1) {
         await firstDownloadWaiting;
@@ -2933,7 +3740,142 @@ test("동일 계획의 동시 attempt는 BUSY나 공유 삭제 없이 원자적 
   assert.equal(downloadCalls, 2);
   const entries = await readdir(stateDir, { recursive: true });
   assert.equal(entries.some((entry) => entry.endsWith(".materializing.lock")), false);
-  assert.equal(entries.some((entry) => /attempt-[a-f0-9]+\//u.test(entry)), false);
+  assert.equal(entries.some(isAttemptEntry), false);
+  const sourceRootEntries = entries.filter((entry) => (
+    /^(?:root-|r-)/u.test(path.basename(entry))
+    && entry.endsWith(".mp4")
+  ));
+  assert.ok(sourceRootEntries.length > 0);
+  for (const entry of sourceRootEntries) {
+    assert.equal(
+      (await lstat(path.join(stateDir, entry), { bigint: true })).nlink,
+      1n,
+      "동시 copy publish 뒤 공유 source root는 단일 링크여야 합니다."
+    );
+  }
+});
+
+test("content-addressed copy는 attempt staging 검증 뒤 corrupt destination을 원자 교체한다", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-copy-atomic-"));
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const rootsDirectory = path.join(directory, "roots");
+  const stagingDirectory = path.join(directory, "attempts", "attempt-a");
+  await mkdir(rootsDirectory, { recursive: true, mode: 0o700 });
+  const sourcePath = path.join(stagingDirectory, "source.mp4");
+  const destinationPath = path.join(rootsDirectory, "root.mp4");
+  const preservedCorruptLink = path.join(directory, "preserved-corrupt-link");
+  await mkdir(stagingDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(sourcePath, "verified-root-bytes");
+  await writeFile(destinationPath, "corrupt-root-bytes");
+  await link(destinationPath, preservedCorruptLink);
+
+  await copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory,
+    expectedHash: sha256Buffer("verified-root-bytes"),
+    expectedSize: Buffer.byteLength("verified-root-bytes")
+  });
+
+  assert.equal(await readFile(destinationPath, "utf8"), "verified-root-bytes");
+  assert.equal(await readFile(preservedCorruptLink, "utf8"), "corrupt-root-bytes");
+  assert.equal((await lstat(destinationPath, { bigint: true })).nlink, 1n);
+  assert.equal((await lstat(preservedCorruptLink, { bigint: true })).nlink, 1n);
+  assert.deepEqual(
+    (await readdir(rootsDirectory)).filter((entry) => entry.startsWith(".t-")),
+    [],
+    "강제 종료 전 partial이 persistent roots namespace에 생성되면 안 됩니다."
+  );
+  assert.deepEqual(
+    (await readdir(stagingDirectory)).filter((entry) => entry.startsWith(".t-")),
+    [],
+    "정상 완료 뒤 invocation-owned staging은 비워져야 합니다."
+  );
+});
+
+test("검증 실패 copy는 deterministic destination을 게시하거나 덮어쓰지 않는다", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-copy-reject-"));
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const stagingDirectory = path.join(directory, "attempt");
+  const sourcePath = path.join(directory, "source.mp4");
+  const destinationPath = path.join(directory, "root.mp4");
+  await writeFile(sourcePath, "wrong-root");
+  await writeFile(destinationPath, "existing-root");
+
+  await assert.rejects(copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory,
+    expectedHash: sha256Buffer("right-root"),
+    expectedSize: Buffer.byteLength("right-root")
+  }), (error: unknown) => (
+    error instanceof ExternalVodMaterializationError
+    && error.code === "CACHE_INTEGRITY_FAILED"
+  ));
+  assert.equal(await readFile(destinationPath, "utf8"), "existing-root");
+  assert.deepEqual(await readdir(stagingDirectory), []);
+});
+
+test("atomic destination 사전 검증은 이미 취소된 신호를 성공이나 경로 오류로 삼키지 않는다", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-copy-cancel-"));
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const bytes = "already-verified-root";
+  const sourcePath = path.join(directory, "source.mp4");
+  const destinationPath = path.join(directory, "root.mp4");
+  await writeFile(sourcePath, bytes);
+  await writeFile(destinationPath, bytes);
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory: path.join(directory, "attempt"),
+    expectedHash: sha256Buffer(bytes),
+    expectedSize: Buffer.byteLength(bytes),
+    signal: controller.signal
+  }), (error: unknown) => (
+    error instanceof ExternalVodMaterializationError
+    && error.code === "CANCELLED"
+  ));
+  assert.equal(await readFile(destinationPath, "utf8"), bytes);
+});
+
+test("동시 atomic copy publisher는 동일 expected bytes로 함께 수렴한다", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-copy-race-"));
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const bytes = "same-verified-root";
+  const sourcePath = path.join(directory, "source.mp4");
+  const destinationPath = path.join(directory, "roots", "root.mp4");
+  await mkdir(path.dirname(destinationPath), { recursive: true, mode: 0o700 });
+  await writeFile(sourcePath, bytes);
+  const publish = (name: string) => copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory: path.join(directory, "attempts", name),
+    expectedHash: sha256Buffer(bytes),
+    expectedSize: Buffer.byteLength(bytes)
+  });
+
+  await Promise.all(Array.from({ length: 16 }, (_value, index) => (
+    publish(`attempt-${index}`)
+  )));
+  assert.equal(await readFile(destinationPath, "utf8"), bytes);
+  assert.equal((await lstat(destinationPath, { bigint: true })).nlink, 1n);
+  for (let index = 0; index < 16; index += 1) {
+    assert.deepEqual(
+      await readdir(path.join(directory, "attempts", `attempt-${index}`)),
+      []
+    );
+  }
 });
 
 test("동시 publish 뒤 한 attempt의 검증 실패가 다른 attempt의 committed artifact를 지우지 않는다", async (t) => {
@@ -2947,8 +3889,8 @@ test("동시 publish 뒤 한 attempt의 검증 실패가 다른 attempt의 commi
     releaseFirstDescriptor = resolve;
   });
   const dependencies = youtubeFixtureDependencies({
-    inspectMedia: async (filePath) => {
-      if (!filePath.startsWith(`/proc/${process.pid}/fd/`)) {
+    inspectMedia: async (filePath, options) => {
+      if (!isPublishedInspectionInput(filePath, options)) {
         return editorSafeInspection(21_000);
       }
       descriptorCalls += 1;
@@ -3025,18 +3967,17 @@ test("immutable artifact 게시 뒤 receipt 원자 저장 실패는 그 attempt�
   });
   let blockedReceiptWrite = false;
   const dependencies = youtubeFixtureDependencies({
-    inspectMedia: async (filePath) => {
+    inspectMedia: async (filePath, options) => {
       if (
         !blockedReceiptWrite
-        && filePath.startsWith(`/proc/${process.pid}/fd/`)
+        && isPublishedInspectionInput(filePath, options)
       ) {
-        const platformDirectory = path.join(
+        const platformDirectory = path.dirname(externalJobDirectory(
           stateDir,
-          "consumers",
-          externalVodConsumerScopeHash(TEST_CONSUMER_ID),
-          "jobs",
-          "youtube"
-        );
+          TEST_CONSUMER_ID,
+          "youtube",
+          "0".repeat(32)
+        ));
         const jobDirectories = (await readdir(platformDirectory, {
           withFileTypes: true
         })).filter((entry) => entry.isDirectory());
@@ -3062,14 +4003,14 @@ test("immutable artifact 게시 뒤 receipt 원자 저장 실패는 그 attempt�
   assert.equal(blockedReceiptWrite, true);
   const entries = await readdir(stateDir, { recursive: true });
   assert.equal(
-    entries.some((entry) => path.basename(entry).startsWith("materialized-")),
+    entries.some(isPublishedArtifactEntry),
     false
   );
   assert.equal(
     entries.some((entry) => entry.includes("manifest.json.tmp-")),
     false
   );
-  assert.equal(entries.some((entry) => /attempt-[a-f0-9]+\//u.test(entry)), false);
+  assert.equal(entries.some(isAttemptEntry), false);
 });
 
 test("YouTube hot-load는 기존 clip 부분집합 root를 상속하고 새 lineage의 실제 공백만 받는다", async (t) => {
@@ -3100,7 +4041,7 @@ test("YouTube hot-load는 기존 clip 부분집합 root를 상속하고 새 line
     const outputPath = args.at(-1);
     assert.ok(outputPath);
     const durationMs = Math.round(Number(optionValue(args, "-t")) * 1_000);
-    if (outputPath.includes(".direct-acquire-")) {
+    if (isDirectAcquisitionPath(outputPath)) {
       const startMs = Math.round(Number(optionValue(args, "-ss")) * 1_000);
       const expression = `*${(startMs / 1_000).toFixed(3)}-${(
         (startMs + durationMs) / 1_000
@@ -3115,8 +4056,11 @@ test("YouTube hot-load는 기존 clip 부분집합 root를 상속하고 새 line
     await writeFile(outputPath, `final:${durationMs}`);
     return { exitCode: 0, stdout: "", stderr: "" };
   };
-  const inspectMedia = async (filePath: string): Promise<ExternalMediaInspection> => {
-    const content = await readFile(filePath, "utf8");
+  const inspectMedia = async (
+    filePath: string,
+    options?: ExternalProcessRunOptions
+  ): Promise<ExternalMediaInspection> => {
+    const content = await readFixtureMediaText(filePath, options);
     if (content.startsWith("final:")) {
       return editorSafeInspection(Number(content.slice("final:".length)));
     }
@@ -3282,12 +4226,12 @@ test("YouTube hot-load는 기존 clip 부분집합 root를 상속하고 새 line
   );
   await assert.rejects(
     readFile(path.join(
-      warmStateDir,
-      "consumers",
-      externalVodConsumerScopeHash(TEST_CONSUMER_ID),
-      "jobs",
-      "youtube",
-      restarted.manifest.materializationId,
+      externalJobDirectory(
+        warmStateDir,
+        TEST_CONSUMER_ID,
+        "youtube",
+        restarted.manifest.materializationId
+      ),
       "partial-roots.json"
     )),
     (error: unknown) => (
@@ -3367,7 +4311,7 @@ test("HLS hot-load는 같은 playlist라도 겹치는 경계 fragment bytes가 �
     const durationMs = Math.round(Number(optionValue(args, "-t")) * 1_000);
     await writeFile(
       outputPath,
-      outputPath.includes(".hls-acquire-")
+      isHlsAcquisitionPath(outputPath)
         ? `section:${generation}:${durationMs}`
         : `final:${durationMs}`
     );
@@ -3378,8 +4322,10 @@ test("HLS hot-load는 같은 playlist라도 겹치는 경계 fragment bytes가 �
     fetchImpl,
     pythonBinary: PYTHON_BINARY,
     ytDlpBinary: YT_DLP_ARTIFACT,
-    inspectMedia: async (filePath) => {
-      const duration = /:(\d+)$/u.exec(await readFile(filePath, "utf8"))?.[1];
+    inspectMedia: async (filePath, options) => {
+      const duration = /:(\d+)$/u.exec(
+        await readFixtureMediaText(filePath, options)
+      )?.[1];
       assert.ok(duration);
       return editorSafeInspection(Number(duration));
     },
@@ -3535,7 +4481,7 @@ test("HLS hot-load는 선택 sequence가 맞닿기만 해도 선행 바이트 �
     const durationMs = Math.round(Number(optionValue(args, "-t")) * 1_000);
     await writeFile(
       outputPath,
-      outputPath.includes(".hls-acquire-")
+      isHlsAcquisitionPath(outputPath)
         ? `section:${generation}:${durationMs}`
         : `final:${durationMs}`
     );
@@ -3547,8 +4493,10 @@ test("HLS hot-load는 선택 sequence가 맞닿기만 해도 선행 바이트 �
     resolveClockProofSet: resolveSegmentedClockProofSet,
     pythonBinary: PYTHON_BINARY,
     ytDlpBinary: YT_DLP_ARTIFACT,
-    inspectMedia: async (filePath) => {
-      const duration = /:(\d+)$/u.exec(await readFile(filePath, "utf8"))?.[1];
+    inspectMedia: async (filePath, options) => {
+      const duration = /:(\d+)$/u.exec(
+        await readFixtureMediaText(filePath, options)
+      )?.[1];
       assert.ok(duration);
       return editorSafeInspection(Number(duration));
     },
@@ -3641,11 +4589,9 @@ test("증명 없는 v1·v2 base receipt는 승격하지 않고 fail-closed 한�
   ].entries()) {
     const planFingerprint = sha256Buffer(`proofless-plan-${index}`);
     const materializationId = planFingerprint.slice(0, 32);
-    const legacyJobDirectory = path.join(
+    const legacyJobDirectory = externalJobDirectory(
       stateDir,
-      "consumers",
-      externalVodConsumerScopeHash(TEST_CONSUMER_ID),
-      "jobs",
+      TEST_CONSUMER_ID,
       "soop",
       materializationId
     );

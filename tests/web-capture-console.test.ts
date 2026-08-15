@@ -7,16 +7,6 @@ import {
   studioCaptureShortcutBinding,
   studioCaptureShortcutLetterFromEvent
 } from "../src/web/studio-capture-console.js";
-import {
-  YOUTUBE_IFRAME_API_LOAD_TIMEOUT_MS,
-  YOUTUBE_IFRAME_API_SCRIPT_URL,
-  loadYouTubeIframeApi,
-  readYouTubePlayerSnapshot
-} from "../src/web/youtube-iframe-api.js";
-import type {
-  YouTubeIframePlayer
-} from "../src/web/youtube-iframe-api.js";
-
 test("웹 컷 콘솔은 핵심 제어만 보이고 중복 진입 동작은 기존 CTA에 연결한다", async () => {
   const [html, source, css] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
@@ -99,7 +89,6 @@ test("W는 iframe과 버퍼를 버리지 않고 현재 플레이어 문맥만 �
     source.indexOf("async function refreshActivePlayerContext"),
     source.indexOf("function reloadActivePlayerFrame")
   );
-  assert.match(refresh, /currentYouTubePlayerSnapshot\(\)/u);
   assert.match(refresh, /streamingBridgeClient[\s\S]*client\.snapshot\(\)/u);
   assert.doesNotMatch(refresh, /updateStreamPreview|replaceFrame|\.src\s*=/u);
   assert.match(
@@ -182,147 +171,12 @@ test("A는 화면 아래의 단일 편집기 CTA와 같은 검증 경로를 사�
   );
 });
 
-test("YouTube 시계는 공식 YT.Player getter만 안전하게 읽는다", () => {
-  assert.equal(YOUTUBE_IFRAME_API_SCRIPT_URL, "https://www.youtube.com/iframe_api");
-  const player = {
-    getCurrentTime: () => 12.5,
-    getDuration: () => 80,
-    getPlaybackRate: () => 2,
-    getPlayerState: () => 1
-  } as YouTubeIframePlayer;
-  assert.deepEqual(readYouTubePlayerSnapshot(player), {
-    currentTime: 12.5,
-    duration: 80,
-    playbackRate: 2,
-    playerState: 1
-  });
-  assert.equal(readYouTubePlayerSnapshot({
-    ...player,
-    getCurrentTime: () => {
-      throw new Error("not ready");
-    }
-  }), null);
-});
-
-test("YouTube 제어는 raw 메시지가 아니라 공식 lazy YT.Player 계약을 쓴다", async () => {
-  const [source, adapter] = await Promise.all([
-    readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
-    readFile(new URL("../src/web/youtube-iframe-api.ts", import.meta.url), "utf8")
-  ]);
-  assert.match(adapter, /https:\/\/www\.youtube\.com\/iframe_api/u);
-  assert.match(adapter, /script\.referrerPolicy = "strict-origin-when-cross-origin"/u);
-  assert.match(source, /new api\.Player\(frame/u);
-  assert.match(source, /player\.seekTo\(target, true\)/u);
-  assert.match(source, /player\.setPlaybackRate\(playbackRate\)/u);
-  assert.doesNotMatch(source, /postMessage|infoDelivery|youtubeIframeCommandMessage/u);
-});
-
-test("멈춘 YouTube API load는 제한 시간 뒤 정리되고 새 script로 재시도된다", async (t) => {
-  assert.equal(YOUTUBE_IFRAME_API_LOAD_TIMEOUT_MS, 15_000);
-  const originalDescriptors = new Map(
-    ["window", "document", "HTMLScriptElement"].map((name) => [
-      name,
-      Object.getOwnPropertyDescriptor(globalThis, name)
-    ])
-  );
-  const scripts = new Map<string, FakeScriptElement>();
-  class FakeScriptElement {
-    id = "";
-    src = "";
-    async = false;
-    referrerPolicy = "";
-    readonly listeners = new Map<string, Set<() => void>>();
-
-    addEventListener(type: string, listener: () => void): void {
-      const callbacks = this.listeners.get(type) ?? new Set<() => void>();
-      callbacks.add(listener);
-      this.listeners.set(type, callbacks);
-    }
-
-    removeEventListener(type: string, listener: () => void): void {
-      this.listeners.get(type)?.delete(listener);
-    }
-
-    remove(): void {
-      if (scripts.get(this.id) === this) {
-        scripts.delete(this.id);
-      }
-    }
-  }
-  let previousReadyCalls = 0;
-  const previousReady = (): void => {
-    previousReadyCalls += 1;
-  };
-  const fakeWindow: Record<string, unknown> = {
-    onYouTubeIframeAPIReady: previousReady,
-    setTimeout: globalThis.setTimeout.bind(globalThis),
-    clearTimeout: globalThis.clearTimeout.bind(globalThis)
-  };
-  const fakeDocument = {
-    getElementById: (id: string) => scripts.get(id) ?? null,
-    createElement: (tagName: string) => {
-      assert.equal(tagName, "script");
-      return new FakeScriptElement();
-    },
-    head: {
-      append: (script: FakeScriptElement) => {
-        scripts.set(script.id, script);
-      }
-    }
-  };
-  for (const [name, value] of [
-    ["window", fakeWindow],
-    ["document", fakeDocument],
-    ["HTMLScriptElement", FakeScriptElement]
-  ] as const) {
-    Object.defineProperty(globalThis, name, {
-      configurable: true,
-      writable: true,
-      value
-    });
-  }
-  t.after(() => {
-    for (const [name, descriptor] of originalDescriptors) {
-      if (descriptor) {
-        Object.defineProperty(globalThis, name, descriptor);
-      } else {
-        Reflect.deleteProperty(globalThis, name);
-      }
-    }
-  });
-
-  const stalled = loadYouTubeIframeApi({ timeoutMs: 5 });
-  const firstScript = scripts.get("kirinuki-youtube-iframe-api");
-  assert.ok(firstScript);
-  await assert.rejects(stalled, /5ms 안에 준비되지 않았습니다/u);
-  assert.equal(scripts.size, 0, "시간 초과 script가 DOM에 남았습니다.");
-  assert.equal(fakeWindow.onYouTubeIframeAPIReady, previousReady);
-  assert.equal(previousReadyCalls, 0);
-
-  const retried = loadYouTubeIframeApi({ timeoutMs: 30 });
-  const secondScript = scripts.get("kirinuki-youtube-iframe-api");
-  assert.ok(secondScript);
-  assert.notEqual(secondScript, firstScript);
-  const fakeApi = { Player: class FakePlayer {} };
-  fakeWindow.YT = fakeApi;
-  const ready = fakeWindow.onYouTubeIframeAPIReady;
-  assert.equal(typeof ready, "function");
-  (ready as () => void)();
-  assert.equal(await retried, fakeApi);
-  assert.equal(fakeWindow.onYouTubeIframeAPIReady, previousReady);
-  assert.equal(previousReadyCalls, 1);
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  assert.equal(
-    scripts.get("kirinuki-youtube-iframe-api"),
-    secondScript,
-    "성공한 재시도의 오래된 timeout이 새 script를 지웠습니다."
-  );
-});
-
-test("세 플랫폼의 컷 제어는 YouTube API 또는 client-only streaming bridge만 사용한다", async () => {
-  const [html, source] = await Promise.all([
+test("YouTube를 포함한 세 플랫폼 제어는 격리된 app-owned streaming bridge만 사용한다", async () => {
+  const [html, source, server, companion] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
-    readFile(new URL("../src/web/main.ts", import.meta.url), "utf8")
+    readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/local-studio-server-core.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/streaming-companion.ts", import.meta.url), "utf8")
   ]);
   assert.match(
     html,
@@ -344,10 +198,6 @@ test("세 플랫폼의 컷 제어는 YouTube API 또는 client-only streaming br
   }
   assert.match(
     source,
-    /activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE[\s\S]*youtubePlayerReady/u
-  );
-  assert.match(
-    source,
     /function currentStreamingSourceIdentity[\s\S]*SOURCE_PLATFORM_CHZZK[\s\S]*SOURCE_PLATFORM_SOOP[\s\S]*SOURCE_PLATFORM_YOUTUBE[\s\S]*createStreamingBridgeSourceIdentity/u
   );
   assert.match(
@@ -366,8 +216,14 @@ test("세 플랫폼의 컷 제어는 YouTube API 또는 client-only streaming br
     source,
     /async function setPlayerRate[\s\S]*client\.setPlaybackRate\(playbackRate\)/u
   );
-  assert.match(source, /resetYouTubeIframePlayer\(\{ replaceFrame: true \}\)/u);
-  assert.match(source, /generation !== youtubePlayerGeneration/u);
+  assert.match(source, /function replaceStreamFrame\(\)/u);
+  assert.match(
+    companion,
+    /www\.youtube-nocookie\.com[\s\S]*installStreamingBridgeContentEndpoint/u
+  );
+  assert.match(server, /"script-src 'self'"/u);
+  assert.doesNotMatch(server, /script-src[^\n]*youtube/u);
+  assert.doesNotMatch(source, /youtube-iframe-api|window\.YT|onYouTubeIframeAPIReady|new api\.Player/u);
   assert.doesNotMatch(
     source,
     /LOCAL_VOD_COMPANION_ENDPOINT|KIRINUKI_MEDIA_ENGINE_ENDPOINT|startChzzkVodMaterialization|waitForChzzkVodMaterialization|localPreviewVideo/u

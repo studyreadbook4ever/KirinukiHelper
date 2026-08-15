@@ -133,6 +133,7 @@ test("companion endpoint는 exact parent WindowProxy/origin/schema만 받고 완
   const dispose = installStreamingBridgeContentEndpoint({
     allowedParentOrigins: ["http://127.0.0.1:4320"],
     hostWindow: harness.hostWindow,
+    isTrustedMessageEvent: () => true,
     adapter: {
       readSource: () => ({
         platform: "SOOP",
@@ -204,6 +205,38 @@ test("companion endpoint는 exact parent WindowProxy/origin/schema만 받고 완
   dispose();
 });
 
+test("direct SOOP endpoint는 synthetic MessageEvent request를 실행하지 않는다", async () => {
+  const harness = fakeChildWindow();
+  let snapshots = 0;
+  const dispose = installStreamingBridgeContentEndpoint({
+    allowedParentOrigins: ["http://127.0.0.1:4320"],
+    hostWindow: harness.hostWindow,
+    adapter: {
+      readSource: () => ({
+        platform: "SOOP",
+        contentType: "vod",
+        contentId: "169475287"
+      }),
+      snapshot: () => {
+        snapshots += 1;
+        return snapshot();
+      },
+      seekAbsolute: () => undefined,
+      setPlaybackRate: () => undefined
+    }
+  });
+  harness.dispatch("message", {
+    isTrusted: false,
+    source: harness.parentWindow,
+    origin: "http://127.0.0.1:4320",
+    data: request()
+  });
+  await flushTasks();
+  assert.equal(snapshots, 0);
+  assert.deepEqual(harness.posted, []);
+  dispose();
+});
+
 test("절대 탐색 request replay는 영상을 한 번만 변경한다", async () => {
   const harness = fakeChildWindow();
   let seeks = 0;
@@ -211,6 +244,7 @@ test("절대 탐색 request replay는 영상을 한 번만 변경한다", async 
   const dispose = installStreamingBridgeContentEndpoint({
     allowedParentOrigins: ["http://127.0.0.1:4320"],
     hostWindow: harness.hostWindow,
+    isTrustedMessageEvent: () => true,
     adapter: {
       readSource: () => ({
         platform: "SOOP",
@@ -276,6 +310,7 @@ test("endpoint는 원본·플레이어의 일시 예외를 안전한 복구 코�
     const dispose = installStreamingBridgeContentEndpoint({
       allowedParentOrigins: ["http://127.0.0.1:4320"],
       hostWindow: harness.hostWindow,
+      isTrustedMessageEvent: () => true,
       adapter: {
         readSource: fixture.readSource,
         snapshot: fixture.snapshot,
@@ -312,7 +347,9 @@ test("companion shortcut은 VIDEO 포커스만 허용하고 INPUT·IME·modifier
   const dispose = installStreamingBridgeContentEndpoint({
     allowedParentOrigins: ["http://127.0.0.1:4320"],
     hostWindow: harness.hostWindow,
+    isTrustedMessageEvent: () => true,
     createEventId: () => `shortcut-event-${++eventSequence}`,
+    isTrustedKeyboardEvent: () => true,
     adapter: {
       readSource: () => ({
         platform: "SOOP",
@@ -380,6 +417,46 @@ test("companion shortcut은 VIDEO 포커스만 허용하고 INPUT·IME·modifier
     "source",
     "type"
   ]);
+  dispose();
+});
+
+test("companion shortcut은 synthetic KeyboardEvent를 서명·전달하지 않는다", async () => {
+  const harness = fakeChildWindow();
+  const dispose = installStreamingBridgeContentEndpoint({
+    allowedParentOrigins: ["http://127.0.0.1:4320"],
+    hostWindow: harness.hostWindow,
+    isTrustedMessageEvent: () => true,
+    adapter: {
+      readSource: () => ({
+        platform: "SOOP",
+        contentType: "vod",
+        contentId: "169475287"
+      }),
+      snapshot: () => snapshot(),
+      seekAbsolute: () => undefined,
+      setPlaybackRate: () => undefined
+    }
+  });
+  harness.dispatch("message", {
+    source: harness.parentWindow,
+    origin: "http://127.0.0.1:4320",
+    data: request()
+  });
+  await flushTasks();
+  harness.posted.length = 0;
+  let prevented = false;
+  harness.dispatch("keydown", {
+    isTrusted: false,
+    key: "e",
+    code: "KeyE",
+    target: { tagName: "VIDEO" },
+    preventDefault: () => {
+      prevented = true;
+    }
+  });
+  await flushTasks();
+  assert.equal(prevented, false);
+  assert.deepEqual(harness.posted, []);
   dispose();
 });
 

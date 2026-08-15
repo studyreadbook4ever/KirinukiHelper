@@ -48,7 +48,8 @@ import type {
   SoopVodSourceClockIdentity
 } from "../src/lib/soop-vod-source-clock.js";
 import {
-  acquireExternalVodDirectSection
+  acquireExternalVodDirectSection,
+  writePrivateNodeRootCaFile
 } from "./external-vod-direct-acquirer.js";
 import type {
   ExternalVodDirectSectionEvidence
@@ -94,11 +95,17 @@ import {
   fetchExternalVodBytes
 } from "./external-vod-transfer.js";
 import {
+  terminatePosixProcessGroup,
+  terminateWindowsProcessTreeWithTaskkill
+} from "./process-tree-termination.js";
+import {
   MAX_VOD_CONSUMER_ID_LENGTH,
   VOD_CONSUMER_SCOPE_HASH_DOMAIN,
   normalizeVodConsumerId,
+  vodMaterializationPathSegment,
   vodConsumerMaterializationDirectory,
-  vodConsumerScopeHash
+  vodConsumerScopeHash,
+  vodConsumerScopePathSegment
 } from "./vod-consumer-scope.js";
 
 export const LEGACY_EXTERNAL_VOD_CACHE_SCHEMA =
@@ -124,6 +131,8 @@ export const MAX_EXTERNAL_VOD_SOURCE_MS = 7 * 24 * 60 * 60 * 1_000;
 export const MAX_EXTERNAL_VOD_MATERIALIZED_MS = 6 * 60 * 60 * 1_000;
 /** Sections plus the concurrently-present final mux may consume at most 64 GiB. */
 export const MAX_EXTERNAL_VOD_WORK_BYTES = 64 * 1024 * 1024 * 1024;
+const ATOMIC_DESTINATION_STABILIZATION_ATTEMPTS = 64;
+const ATOMIC_DESTINATION_STABILIZATION_MAX_DELAY_MS = 8;
 /** Keep this much filesystem capacity unused beyond the conservative estimate. */
 export const MIN_EXTERNAL_VOD_DISK_HEADROOM_BYTES = 512 * 1024 * 1024;
 const ESTIMATED_EXTERNAL_VOD_WORK_BYTES_PER_SECOND = 2 * 1024 * 1024;
@@ -174,6 +183,7 @@ const PUBLIC_AVAILABILITY = new Set(["public", "unlisted"]);
 const ALLOWED_LIVE_STATUS = new Set(["not_live", "was_live"]);
 const SAFE_ENVIRONMENT_KEYS = new Set([
   "COMSPEC",
+  "ELECTRON_RUN_AS_NODE",
   "LANG",
   "LC_ALL",
   "LC_CTYPE",
@@ -349,6 +359,12 @@ export interface ExternalProcessRunOptions {
   workingDirectoryByteLimit?: number;
   /** The default runner keeps this many filesystem bytes free while writing. */
   minimumAvailableDiskBytes?: number;
+  /**
+   * Maps an already-open regular file into child fd/handle 3. This is used
+   * only by the final ffprobe publication check so macOS and Windows retain
+   * the same handle-bound TOCTOU protection as Linux.
+   */
+  inheritedInputFileDescriptor?: number;
 }
 
 export type ExternalProcessRunner = (
@@ -457,6 +473,7 @@ export interface ExternalVodMaterializerDependencies {
   ) => Promise<ExternalMediaInspection>;
   hashFile?: (filePath: string, signal?: AbortSignal) => Promise<string>;
   ytDlpBinary?: string;
+  ytDlpMode?: ExternalYtDlpMode;
   pythonBinary?: string;
   nodeBinary?: string;
   ffmpegBinary?: string;
@@ -470,9 +487,11 @@ export interface ExternalVodMaterializerDependencies {
       runProcess: ExternalProcessRunner;
       processEnv: NodeJS.ProcessEnv;
       ytDlpBinary: string;
-      pythonBinary: string;
+      ytDlpMode: ExternalYtDlpMode;
+      pythonBinary?: string;
       nodeBinary: string;
       ffprobeBinary: string;
+      tlsCaFile: string;
       fetchImpl?: typeof globalThis.fetch;
       signal?: AbortSignal;
     }
@@ -484,6 +503,13 @@ export interface ExternalVodMaterializerDependencies {
     bsize: number | bigint;
   }>;
 }
+
+export const EXTERNAL_YT_DLP_MODES = Object.freeze([
+  "python-zipimport",
+  "standalone"
+] as const);
+
+export type ExternalYtDlpMode = typeof EXTERNAL_YT_DLP_MODES[number];
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -914,6 +940,47 @@ function isolatedYtDlpInvocationArgs(
     verifiedAbsoluteToolPath(ytDlpArtifact, "yt-dlp artifact"),
     ...ytDlpArgs
   ];
+}
+
+function externalYtDlpMode(value: unknown): ExternalYtDlpMode {
+  const normalized = String(value || "python-zipimport").trim();
+  if ((EXTERNAL_YT_DLP_MODES as readonly string[]).includes(normalized)) {
+    return normalized as ExternalYtDlpMode;
+  }
+  fail(
+    "yt-dlp 실행 방식은 python-zipimport 또는 standalone이어야 합니다.",
+    "INVALID_PROCESS_BINARY"
+  );
+}
+
+export function externalYtDlpCommand({
+  mode,
+  ytDlpBinary,
+  pythonBinary,
+  args
+}: {
+  mode: ExternalYtDlpMode;
+  ytDlpBinary: unknown;
+  pythonBinary?: unknown;
+  args: readonly string[];
+}): Readonly<{ executable: string; args: readonly string[] }> {
+  const resolvedMode = externalYtDlpMode(mode);
+  const artifact = verifiedAbsoluteToolPath(
+    ytDlpBinary,
+    resolvedMode === "standalone"
+      ? "yt-dlp standalone"
+      : "yt-dlp artifact"
+  );
+  if (resolvedMode === "standalone") {
+    return Object.freeze({
+      executable: artifact,
+      args: Object.freeze([...args])
+    });
+  }
+  return Object.freeze({
+    executable: verifiedAbsoluteToolPath(pythonBinary, "Python"),
+    args: Object.freeze(isolatedYtDlpInvocationArgs(artifact, args))
+  });
 }
 
 function nodeRuntimeArgument(value: unknown = process.execPath): string {
@@ -1688,6 +1755,67 @@ function availableFileSystemBytes(fileSystem: {
 }
 
 /** Default process boundary. It never invokes a shell. */
+export function windowsProcessTreeTerminationCommand(
+  processId: number,
+  environment: NodeJS.ProcessEnv = process.env
+): Readonly<{ command: string; args: readonly string[] }> {
+  if (!Number.isSafeInteger(processId) || processId <= 0) {
+    fail("Windows 외부 도구 process tree 식별자가 올바르지 않습니다.", "INVALID_PROCESS_BINARY");
+  }
+  const systemRoot = String(environment.SystemRoot || environment.SYSTEMROOT || "");
+  if (
+    !systemRoot
+    || systemRoot.trim() !== systemRoot
+    || !path.win32.isAbsolute(systemRoot)
+    || /[\u0000-\u001f\u007f]/u.test(systemRoot)
+  ) {
+    fail("Windows SystemRoot 경로를 안전하게 확인하지 못했습니다.", "INVALID_PROCESS_BINARY");
+  }
+  return Object.freeze({
+    command: path.win32.join(systemRoot, "System32", "taskkill.exe"),
+    args: Object.freeze(["/PID", String(processId), "/T", "/F"])
+  });
+}
+
+export async function terminateWindowsExternalProcessTree(
+  processId: number,
+  {
+    spawnImpl = spawn,
+    setTimeoutImpl = setTimeout,
+    clearTimeoutImpl = clearTimeout,
+    timeoutMs = EXTERNAL_PROCESS_KILL_GRACE_MS,
+    environment = process.env,
+    probeProcessImpl = (pid: number) => process.kill(pid, 0),
+    confirmTargetIdentityImpl
+  }: {
+    spawnImpl?: typeof spawn;
+    setTimeoutImpl?: typeof setTimeout;
+    clearTimeoutImpl?: typeof clearTimeout;
+    timeoutMs?: number;
+    environment?: NodeJS.ProcessEnv;
+    probeProcessImpl?: (pid: number) => void;
+    confirmTargetIdentityImpl?: () => Promise<boolean>;
+  } = {}
+): Promise<void> {
+  const invocation = windowsProcessTreeTerminationCommand(processId, environment);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    fail("Windows process tree 종료 시간 제한이 올바르지 않습니다.", "INVALID_PROCESS_TIMEOUT");
+  }
+  await terminateWindowsProcessTreeWithTaskkill({
+    processId,
+    command: invocation.command,
+    args: invocation.args,
+    spawnImpl,
+    probeProcessImpl,
+    ...(confirmTargetIdentityImpl
+      ? { confirmTargetIdentityImpl }
+      : {}),
+    setTimeoutImpl,
+    clearTimeoutImpl,
+    timeoutMs
+  });
+}
+
 export async function runExternalProcess(
   command: string,
   args: readonly string[],
@@ -1697,6 +1825,7 @@ export async function runExternalProcess(
     setTimeoutImpl = setTimeout,
     clearTimeoutImpl = clearTimeout,
     killProcessGroupImpl = (pid, signal) => process.kill(-pid, signal),
+    probeProcessGroupImpl = (pid) => process.kill(-pid, 0),
     killGraceMs = EXTERNAL_PROCESS_KILL_GRACE_MS,
     platform = process.platform,
     statFileSystemImpl = statFileSystem
@@ -1705,6 +1834,7 @@ export async function runExternalProcess(
     setTimeoutImpl?: typeof setTimeout;
     clearTimeoutImpl?: typeof clearTimeout;
     killProcessGroupImpl?: (pid: number, signal: NodeJS.Signals) => void;
+    probeProcessGroupImpl?: (pid: number) => void;
     killGraceMs?: number;
     platform?: NodeJS.Platform;
     statFileSystemImpl?: (directory: string) => Promise<{
@@ -1740,6 +1870,15 @@ export async function runExternalProcess(
   ) {
     fail("외부 도구 디스크 여유 상한이 올바르지 않습니다.", "DISK_SPACE_CHECK_FAILED");
   }
+  if (
+    options.inheritedInputFileDescriptor !== undefined
+    && (
+      !Number.isSafeInteger(options.inheritedInputFileDescriptor)
+      || options.inheritedInputFileDescriptor < 0
+    )
+  ) {
+    fail("외부 도구에 전달할 파일 디스크립터가 올바르지 않습니다.", "INVALID_PROCESS_BINARY");
+  }
   return await new Promise<ExternalProcessResult>((resolve, reject) => {
     const useProcessGroup = platform !== "win32";
     const privateWorkingDirectory = path.resolve(options.cwd);
@@ -1748,6 +1887,7 @@ export async function runExternalProcess(
         !TEMPORARY_ENVIRONMENT_KEYS.has(key.toUpperCase())
       ))
     );
+    const inheritedInputFileDescriptor = options.inheritedInputFileDescriptor;
     const spawnOptions = {
       cwd: privateWorkingDirectory,
       env: {
@@ -1757,7 +1897,14 @@ export async function runExternalProcess(
         TMPDIR: privateWorkingDirectory
       },
       shell: false as const,
-      stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+      stdio: inheritedInputFileDescriptor === undefined
+        ? ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"]
+        : ["ignore", "pipe", "pipe", inheritedInputFileDescriptor] as [
+          "ignore",
+          "pipe",
+          "pipe",
+          number
+        ],
       windowsHide: true,
       ...(useProcessGroup ? { detached: true } : {})
     };
@@ -1776,7 +1923,9 @@ export async function runExternalProcess(
     let closed = false;
     let childError: Error | undefined;
     let terminationError: Error | undefined;
+    let cleanupError: Error | undefined;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    let windowsCloseDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let resourceMonitor: ReturnType<typeof setInterval> | undefined;
     let resourceInspectionPromise: Promise<void> | undefined;
@@ -1792,45 +1941,95 @@ export async function runExternalProcess(
         clearTimeoutImpl(timer);
       }
     };
-    const sendSignal = (signal: NodeJS.Signals) => {
-      const pid = child.pid;
-      if (useProcessGroup && Number.isSafeInteger(pid) && Number(pid) > 0) {
-        try {
-          killProcessGroupImpl(Number(pid), signal);
-          return;
-        } catch (error) {
-          if (isRecord(error) && error.code === "ESRCH") {
-            return;
-          }
-        }
-      }
+    const processId = (): number | undefined => (
+      Number.isSafeInteger(child.pid) && Number(child.pid) > 0
+        ? Number(child.pid)
+        : undefined
+    );
+    const signalLeader = (signal: NodeJS.Signals): boolean => {
       if (closed) {
-        return;
+        return true;
       }
       try {
-        child.kill(signal);
+        return child.kill(signal);
       } catch {
-        // A close/error event owns settlement; a concurrently exited child is safe.
+        return false;
       }
+    };
+    const recordCleanupError = (error: unknown): void => {
+      cleanupError ??= error instanceof Error
+        ? error
+        : new Error("외부 도구 process tree를 종료하지 못했습니다.");
+    };
+    const ensurePosixProcessGroupCleanup = (
+      pid: number
+    ): Promise<void> => {
+      if (!processGroupCleanupPromise) {
+        processGroupCleanupPromise = terminatePosixProcessGroup({
+          processGroupId: pid,
+          signalProcessGroupImpl: killProcessGroupImpl,
+          probeProcessGroupImpl,
+          graceMs: killGraceMs,
+          setTimeoutImpl
+        }).catch(recordCleanupError);
+      }
+      return processGroupCleanupPromise;
     };
     const terminate = (error: Error) => {
       if (terminationError) {
         return;
       }
       terminationError = error;
-      sendSignal("SIGTERM");
-      if (useProcessGroup) {
-        processGroupCleanupPromise = new Promise<void>((resolveCleanup) => {
-          forceKillTimer = setTimeoutImpl(() => {
-            sendSignal("SIGKILL");
-            resolveCleanup();
-          }, killGraceMs);
-        });
-      } else {
-        forceKillTimer = setTimeoutImpl(() => {
-          sendSignal("SIGKILL");
-        }, killGraceMs);
+      const pid = processId();
+      if (platform === "win32") {
+        // Kill only the process HANDLE retained by this ChildProcess. A
+        // PID-based taskkill fallback can race PID reuse and terminate an
+        // unrelated process tree after the original tool exits.
+        if (!signalLeader("SIGKILL")) {
+          recordCleanupError(new Error(
+            "Windows 외부 도구의 exact child handle 종료 요청이 실패했습니다."
+          ));
+        }
+        windowsCloseDeadlineTimer = setTimeoutImpl(() => {
+          if (settled) {
+            return;
+          }
+          recordCleanupError(Object.assign(
+            new Error("Windows 외부 도구가 exact child 종료 요청 뒤 닫히지 않았습니다."),
+            { code: "EPROCESSCLOSEDEADLINE" }
+          ));
+          settled = true;
+          clearTimer(timeoutTimer);
+          clearTimer(forceKillTimer);
+          if (resourceMonitor !== undefined) {
+            clearInterval(resourceMonitor);
+          }
+          options.signal?.removeEventListener("abort", abortListener);
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          (child as typeof child & { unref?: () => void }).unref?.();
+          const finalError = terminationError
+            ?? childError
+            ?? resourceInspectionError
+            ?? cleanupError!;
+          if (cleanupError && cleanupError !== finalError && finalError.cause === undefined) {
+            Object.defineProperty(finalError, "cause", {
+              configurable: true,
+              value: cleanupError
+            });
+          }
+          reject(finalError);
+        }, Math.max(1, killGraceMs));
+        return;
       }
+      if (useProcessGroup && pid !== undefined) {
+        void ensurePosixProcessGroupCleanup(pid);
+        return;
+      }
+      signalLeader("SIGTERM");
+      forceKillTimer = setTimeoutImpl(() => {
+        signalLeader("SIGKILL");
+      }, killGraceMs);
     };
     const normalizedResourceInspectionError = (error: unknown): Error => (
       error instanceof Error
@@ -1912,11 +2111,16 @@ export async function runExternalProcess(
       closed = true;
       settled = true;
       clearTimer(timeoutTimer);
+      clearTimer(windowsCloseDeadlineTimer);
       if (resourceMonitor !== undefined) {
         clearInterval(resourceMonitor);
       }
       options.signal?.removeEventListener("abort", abortListener);
       void (async () => {
+        const pid = processId();
+        if (useProcessGroup && pid !== undefined) {
+          await ensurePosixProcessGroupCleanup(pid);
+        }
         const inFlightInspection = resourceInspectionPromise;
         if (inFlightInspection) {
           await inFlightInspection;
@@ -1938,8 +2142,18 @@ export async function runExternalProcess(
           await processGroupCleanupPromise;
         }
         clearTimer(forceKillTimer);
-        const error = terminationError ?? childError ?? resourceInspectionError;
+        clearTimer(windowsCloseDeadlineTimer);
+        const error = terminationError
+          ?? childError
+          ?? resourceInspectionError
+          ?? cleanupError;
         if (error) {
+          if (cleanupError && cleanupError !== error && error.cause === undefined) {
+            Object.defineProperty(error, "cause", {
+              configurable: true,
+              value: cleanupError
+            });
+          }
           reject(error);
         } else {
           resolve({
@@ -2025,7 +2239,22 @@ async function checkedProcess(
   return result;
 }
 
-export function buildExternalFfprobeArgs(filePath: string): string[] {
+export function buildExternalFfprobeArgs(
+  filePath: string,
+  {
+    inheritedInputFileDescriptor
+  }: {
+    inheritedInputFileDescriptor?: number;
+  } = {}
+): string[] {
+  const inputPath = inheritedInputFileDescriptor === undefined
+    ? path.resolve(filePath)
+    : filePath === "/dev/fd/3" || filePath === "pipe:3"
+      ? filePath
+      : fail(
+        "열린 파일 핸들 검사 입력이 허용된 ffprobe descriptor가 아닙니다.",
+        "MEDIA_VERIFICATION_FAILED"
+      );
   return [
     "-v", "error",
     "-show_streams",
@@ -2034,7 +2263,7 @@ export function buildExternalFfprobeArgs(filePath: string): string[] {
     "-show_data_hash", "sha256",
     "-of", "json",
     "--",
-    path.resolve(filePath)
+    inputPath
   ];
 }
 
@@ -2481,7 +2710,11 @@ export async function inspectExternalMp4(
   const result = await checkedProcess(
     runProcess,
     executableName(ffprobeBinary, "ffprobe"),
-    buildExternalFfprobeArgs(filePath),
+    buildExternalFfprobeArgs(filePath, {
+      ...(options.inheritedInputFileDescriptor === undefined
+        ? {}
+        : { inheritedInputFileDescriptor: options.inheritedInputFileDescriptor })
+    }),
     {
       ...options,
       timeoutMs: EXTERNAL_FFPROBE_TIMEOUT_MS
@@ -2498,6 +2731,7 @@ export async function probeExternalVodMetadata(
     runProcess = runExternalProcess,
     processEnv = process.env,
     ytDlpBinary = processEnv.KIRINUKI_YT_DLP_BINARY,
+    ytDlpMode = externalYtDlpMode(processEnv.KIRINUKI_YT_DLP_MODE),
     pythonBinary = processEnv.KIRINUKI_YT_DLP_PYTHON_BINARY,
     nodeBinary = process.execPath,
     cwd = process.cwd(),
@@ -2505,6 +2739,7 @@ export async function probeExternalVodMetadata(
   }: {
     runProcess?: ExternalProcessRunner;
     ytDlpBinary?: string;
+    ytDlpMode?: ExternalYtDlpMode;
     pythonBinary?: string;
     nodeBinary?: string;
     processEnv?: NodeJS.ProcessEnv;
@@ -2515,13 +2750,16 @@ export async function probeExternalVodMetadata(
   const source = typeof sourceValue === "string"
     ? normalizeExternalVodUrl(sourceValue)
     : normalizeExternalVodUrl(sourceValue.canonicalUrl, sourceValue.platform);
+  const command = externalYtDlpCommand({
+    mode: ytDlpMode,
+    ytDlpBinary,
+    ...(pythonBinary === undefined ? {} : { pythonBinary }),
+    args: buildExternalMetadataProbeArgs(source, { nodeBinary })
+  });
   const result = await checkedProcess(
     runProcess,
-    verifiedAbsoluteToolPath(pythonBinary, "Python"),
-    isolatedYtDlpInvocationArgs(
-      ytDlpBinary,
-      buildExternalMetadataProbeArgs(source, { nodeBinary })
-    ),
+    command.executable,
+    command.args,
     processOptions(cwd, processEnv, signal, EXTERNAL_METADATA_TIMEOUT_MS),
     "METADATA_PROBE_FAILED",
     `${source.platform} 공개 VOD 정보를 yt-dlp로 확인하지 못했습니다.`
@@ -2572,13 +2810,24 @@ function directClockProbeHeaderBlock(
 }
 
 export function buildExternalDirectClockProbeArgs(
-  input: ExternalVodSelectedDirectInput
+  input: ExternalVodSelectedDirectInput,
+  tlsCaFile: string
 ): string[] {
   const url = assertExternalVodTransferUrl("YOUTUBE", input.url);
   const headerBlock = directClockProbeHeaderBlock(input.publicHeaders);
+  if (
+    !path.isAbsolute(tlsCaFile)
+    || tlsCaFile.trim() !== tlsCaFile
+    || /[\0\r\n]/u.test(tlsCaFile)
+  ) {
+    fail("ffprobe TLS 신뢰 루트 경로가 올바르지 않습니다.", "INVALID_SELECTED_SOURCE");
+  }
   return [
     "-v", "error",
     "-protocol_whitelist", "https,tls,tcp",
+    "-tls_verify", "1",
+    "-ca_file", tlsCaFile,
+    "-max_redirects", "0",
     "-rw_timeout", "30000000",
     ...(headerBlock ? ["-headers", headerBlock] : []),
     "-show_entries",
@@ -2596,9 +2845,11 @@ async function resolveExternalVodClockProofs(
     runProcess: ExternalProcessRunner;
     processEnv: NodeJS.ProcessEnv;
     ytDlpBinary: string;
-    pythonBinary: string;
+    ytDlpMode: ExternalYtDlpMode;
+    pythonBinary?: string;
     nodeBinary: string;
     ffprobeBinary: string;
+    tlsCaFile: string;
     fetchImpl?: typeof globalThis.fetch;
     signal?: AbortSignal;
   }
@@ -2606,19 +2857,24 @@ async function resolveExternalVodClockProofs(
   const resolveSelectedPart = async (
     part: ExternalVodClockMetadataPart
   ) => {
+    const command = externalYtDlpCommand({
+      mode: context.ytDlpMode,
+      ytDlpBinary: context.ytDlpBinary,
+      ...(context.pythonBinary === undefined
+        ? {}
+        : { pythonBinary: context.pythonBinary }),
+      args: buildExternalSelectedSourceProbeArgs({
+        source: metadata,
+        ...(part.playlistItem === undefined
+          ? {}
+          : { playlistItem: part.playlistItem }),
+        nodeBinary: context.nodeBinary
+      })
+    });
     const selected = await checkedProcess(
       context.runProcess,
-      context.pythonBinary,
-      isolatedYtDlpInvocationArgs(
-        context.ytDlpBinary,
-        buildExternalSelectedSourceProbeArgs({
-          source: metadata,
-          ...(part.playlistItem === undefined
-            ? {}
-            : { playlistItem: part.playlistItem }),
-          nodeBinary: context.nodeBinary
-        })
-      ),
+      command.executable,
+      command.args,
       processOptions(
         context.cwd,
         context.processEnv,
@@ -2640,7 +2896,7 @@ async function resolveExternalVodClockProofs(
         const probed = await checkedProcess(
           context.runProcess,
           context.ffprobeBinary,
-          buildExternalDirectClockProbeArgs(input),
+          buildExternalDirectClockProbeArgs(input, context.tlsCaFile),
           processOptions(
             context.cwd,
             context.processEnv,
@@ -2881,6 +3137,31 @@ function sameExternalFileIdentity(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+/**
+ * Node 22/libuv before libuv #4698 exposes a Windows path-stat volume serial
+ * as 64 bits while fstat exposes its unsigned low 32 bits. Normalize only that
+ * representation mismatch; inode, size, and link count still bind the named
+ * path directly to the already-open file descriptor.
+ */
+export function normalizedExternalFileDeviceId(
+  value: bigint,
+  platform: NodeJS.Platform | string = process.platform
+): bigint {
+  return platform === "win32" ? BigInt.asUintN(32, value) : value;
+}
+
+export function sameExternalFileCrossApiObjectIdentity(
+  left: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">,
+  right: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">,
+  platform: NodeJS.Platform | string = process.platform
+): boolean {
+  return normalizedExternalFileDeviceId(left.dev, platform)
+      === normalizedExternalFileDeviceId(right.dev, platform)
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.nlink === right.nlink;
+}
+
 function sameExternalFileSnapshot(
   left: BigIntStats,
   right: BigIntStats
@@ -2905,16 +3186,74 @@ function sameExternalFileContentSnapshot(
     && right.nlink > 0n;
 }
 
+export function externalVodSourceRootCacheFileName(
+  hashSha256: string,
+  platform: NodeJS.Platform | string = process.platform
+): string {
+  if (!/^[a-f0-9]{64}$/u.test(hashSha256)) {
+    throw new TypeError("외부 VOD source root 해시가 올바르지 않습니다.");
+  }
+  return platform === "win32"
+    ? `r-${vodConsumerScopePathSegment(hashSha256, platform)}.mp4`
+    : `root-${hashSha256}.mp4`;
+}
+
+export function externalVodArtifactCacheFileName(
+  hashSha256: string,
+  nonceHex: string,
+  platform: NodeJS.Platform | string = process.platform
+): string {
+  if (
+    !/^[a-f0-9]{64}$/u.test(hashSha256)
+    || (platform === "win32"
+      ? !/^[a-f0-9]{32}$/u.test(nonceHex)
+      : !/^[a-f0-9]{16}$/u.test(nonceHex))
+  ) {
+    throw new TypeError("외부 VOD artifact 캐시 이름 입력이 올바르지 않습니다.");
+  }
+  return platform === "win32"
+    ? `m-${vodMaterializationPathSegment(nonceHex, platform)}.mp4`
+    : `materialized-${hashSha256}-${nonceHex}.mp4`;
+}
+
+function validExternalVodArtifactCacheFileName(
+  cacheFileName: string,
+  hashSha256: string
+): boolean {
+  if (!/^[a-f0-9]{64}$/u.test(hashSha256)) {
+    return false;
+  }
+  if (process.platform === "win32") {
+    return /^m-[0-9a-v]{26}\.mp4$/u.test(cacheFileName);
+  }
+  const prefix = `materialized-${hashSha256}-`;
+  return cacheFileName.startsWith(prefix)
+    && /^[a-f0-9]{16}\.mp4$/u.test(cacheFileName.slice(prefix.length));
+}
+
 function validatedOpenRegularFileStatus(
   status: BigIntStats,
   {
     maximumBytes,
-    requireSingleLink = false
+    requireSingleLink = false,
+    unlinkedSingleLinkIsTransient = false
   }: {
     maximumBytes: number;
     requireSingleLink?: boolean;
+    unlinkedSingleLinkIsTransient?: boolean;
   }
 ): number {
+  if (
+    requireSingleLink
+    && unlinkedSingleLinkIsTransient
+    && status.isFile()
+    && status.nlink === 0n
+  ) {
+    fail(
+      "원자 게시 목적지가 동시 게시자에 의해 교체되어 다시 검증합니다.",
+      "CACHE_INTEGRITY_FAILED"
+    );
+  }
   if (
     !status.isFile()
     || status.size <= 0n
@@ -2930,6 +3269,15 @@ function validatedOpenRegularFileStatus(
     );
   }
   return Number(status.size);
+}
+
+function externalReadOnlyOpenFlags(): number {
+  // Windows/libuv does not implement O_NOFOLLOW as an open flag. On that
+  // platform adjacent lstat snapshots plus direct dev/ino/size/nlink binding
+  // reject reparse/path swaps. POSIX retains kernel-level O_NOFOLLOW too.
+  return process.platform === "win32"
+    ? fsConstants.O_RDONLY
+    : fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
 }
 
 async function hashExternalFileHandle(
@@ -2958,10 +3306,7 @@ async function hashExternalFileHandle(
 
 async function openExternalRegularFileNoFollow(filePath: string): Promise<FileHandle> {
   try {
-    return await open(
-      filePath,
-      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
-    );
+    return await open(filePath, externalReadOnlyOpenFlags());
   } catch {
     fail(
       "외부 VOD 파일을 심볼릭 링크 없이 안전하게 열지 못했습니다.",
@@ -2974,16 +3319,33 @@ async function assertNamedPathMatchesOpenFile(
   filePath: string,
   status: BigIntStats
 ): Promise<void> {
-  let namedStatus: BigIntStats;
+  let pathBefore: BigIntStats;
   try {
-    namedStatus = await lstat(filePath, { bigint: true });
+    pathBefore = await lstat(filePath, { bigint: true });
   } catch {
     fail("외부 VOD 파일 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
   }
   if (
-    namedStatus.isSymbolicLink()
-    || !sameExternalFileContentSnapshot(status, namedStatus)
+    pathBefore.isSymbolicLink()
+    || !pathBefore.isFile()
+    || !sameExternalFileCrossApiObjectIdentity(pathBefore, status)
   ) {
+    fail("외부 VOD 파일 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+  try {
+    const pathAfter = await lstat(filePath, { bigint: true });
+    if (
+      pathAfter.isSymbolicLink()
+      || !pathAfter.isFile()
+      || !sameExternalFileSnapshot(pathBefore, pathAfter)
+      || !sameExternalFileCrossApiObjectIdentity(pathAfter, status)
+    ) {
+      fail("외부 VOD 파일 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+    }
+  } catch (error) {
+    if (error instanceof ExternalVodMaterializationError) {
+      throw error;
+    }
     fail("외부 VOD 파일 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
   }
 }
@@ -2994,11 +3356,13 @@ async function inspectOpenedExternalRegularFile(
   {
     maximumBytes,
     requireSingleLink = false,
+    unlinkedSingleLinkIsTransient = false,
     supplementalHashFile,
     signal
   }: {
     maximumBytes: number;
     requireSingleLink?: boolean;
+    unlinkedSingleLinkIsTransient?: boolean;
     supplementalHashFile?: NonNullable<
       ExternalVodMaterializerDependencies["hashFile"]
     >;
@@ -3009,7 +3373,8 @@ async function inspectOpenedExternalRegularFile(
   const before = await handle.stat({ bigint: true });
   const sizeBytes = validatedOpenRegularFileStatus(before, {
     maximumBytes,
-    requireSingleLink
+    requireSingleLink,
+    unlinkedSingleLinkIsTransient
   });
   const hashSha256 = await hashExternalFileHandle(handle, sizeBytes, signal);
   if (supplementalHashFile) {
@@ -3035,6 +3400,7 @@ async function inspectExternalRegularFileNoFollow(
   options: {
     maximumBytes: number;
     requireSingleLink?: boolean;
+    unlinkedSingleLinkIsTransient?: boolean;
     supplementalHashFile?: NonNullable<
       ExternalVodMaterializerDependencies["hashFile"]
     >;
@@ -3546,7 +3912,7 @@ function normalizedSourceRootReceipts(
       || sizeBytes > MAX_EXTERNAL_VOD_WORK_BYTES
       || !Number.isSafeInteger(durationMs)
       || durationMs !== sourceEndMs - sourceStartMs
-      || cacheFileName !== `root-${hashSha256}.mp4`
+      || cacheFileName !== externalVodSourceRootCacheFileName(hashSha256)
       || !streamSignature
       || !clockEvidence
       || clockEvidence.sectionId !== [
@@ -3855,12 +4221,10 @@ async function reusableExternalVodReceipt({
       }, sourceRoots);
     }
     const cacheFileName = String(artifact.cacheFileName);
-    if (
-      !new RegExp(
-        `^materialized-${artifact.hashSha256}-[a-f0-9]{16}\\.mp4$`,
-        "u"
-      ).test(cacheFileName)
-    ) {
+    if (!validExternalVodArtifactCacheFileName(
+      cacheFileName,
+      String(artifact.hashSha256)
+    )) {
       return undefined;
     }
     const artifactPath = path.resolve(jobDirectory, cacheFileName);
@@ -3969,11 +4333,10 @@ async function publishExternalVodArtifact({
     for (let attempt = 0; attempt < 4; attempt += 1) {
       // Never expose one shared uncommitted pathname. A failed publisher can
       // therefore remove only its own immutable artifact, even cross-process.
-      cacheFileName = "materialized-"
-        + sourceSnapshot.hashSha256
-        + "-"
-        + randomBytes(8).toString("hex")
-        + ".mp4";
+      cacheFileName = externalVodArtifactCacheFileName(
+        sourceSnapshot.hashSha256,
+        randomBytes(process.platform === "win32" ? 16 : 8).toString("hex")
+      );
       artifactPath = path.join(jobDirectory, cacheFileName);
       try {
         await link(sourcePath, artifactPath);
@@ -4055,12 +4418,31 @@ async function removeCreatedArtifactIfIdentityMatches({
     return;
   }
   try {
-    const currentArtifact = await lstat(artifactPath, { bigint: true });
+    const pathBefore = await lstat(artifactPath, { bigint: true });
     if (
-      currentArtifact.isFile()
-      && sameExternalFileIdentity(currentArtifact, status)
+      pathBefore.isSymbolicLink()
+      || !pathBefore.isFile()
+      || normalizedExternalFileDeviceId(pathBefore.dev)
+        !== normalizedExternalFileDeviceId(status.dev)
+      || pathBefore.ino !== status.ino
     ) {
-      await rm(artifactPath, { force: true });
+      return;
+    }
+    const handle = await openExternalRegularFileNoFollow(artifactPath);
+    try {
+      const currentArtifact = await handle.stat({ bigint: true });
+      const pathAfter = await lstat(artifactPath, { bigint: true });
+      if (
+        currentArtifact.isFile()
+        && sameExternalFileIdentity(currentArtifact, status)
+        && sameExternalFileCrossApiObjectIdentity(pathBefore, currentArtifact)
+        && sameExternalFileSnapshot(pathBefore, pathAfter)
+        && sameExternalFileCrossApiObjectIdentity(pathAfter, currentArtifact)
+      ) {
+        await rm(artifactPath, { force: true });
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
     }
   } catch {
     // Never mask the validation error and never remove a replacement inode.
@@ -4140,27 +4522,112 @@ function sourceRootId(
   }));
 }
 
-async function copyOpenFileNoClobber(
-  sourcePath: string,
-  destinationPath: string,
-  signal?: AbortSignal
-): Promise<void> {
+async function existingAtomicDestinationSnapshot({
+  destinationPath,
+  expectedHash,
+  expectedSize,
+  signal
+}: {
+  destinationPath: string;
+  expectedHash: string;
+  expectedSize: number;
+  signal?: AbortSignal;
+}): Promise<ExternalFileSnapshot | undefined> {
+  try {
+    const existing = await inspectExternalRegularFileNoFollow(destinationPath, {
+      maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES,
+      requireSingleLink: true,
+      ...(signal ? { signal } : {})
+    });
+    return existing.hashSha256 === expectedHash
+      && existing.sizeBytes === expectedSize
+      ? existing
+      : undefined;
+  } catch (error) {
+    if (error instanceof ExternalVodMaterializationError) {
+      if (error.code === "CANCELLED") {
+        throw error;
+      }
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Copies one already-proven content-addressed root into invocation-owned
+ * staging, verifies its bytes before publication, then atomically replaces the
+ * deterministic destination. Concurrent publishers can replace one another
+ * only with the same expected bytes. A crash before rename leaves data only in
+ * the invocation's attempt directory; a crash after rename leaves a complete,
+ * verified destination and no link-count recovery window.
+ */
+export async function copyVerifiedExternalVodFileAtomic({
+  sourcePath,
+  destinationPath,
+  stagingDirectory,
+  expectedHash,
+  expectedSize,
+  signal
+}: {
+  sourcePath: string;
+  destinationPath: string;
+  stagingDirectory: string;
+  expectedHash: string;
+  expectedSize: number;
+  signal?: AbortSignal;
+}): Promise<ExternalFileSnapshot> {
+  if (
+    !path.isAbsolute(sourcePath)
+    || !path.isAbsolute(destinationPath)
+    || !path.isAbsolute(stagingDirectory)
+    || !/^[a-f0-9]{64}$/u.test(expectedHash)
+    || !Number.isSafeInteger(expectedSize)
+    || expectedSize <= 0
+    || expectedSize > MAX_EXTERNAL_VOD_WORK_BYTES
+  ) {
+    fail("원본 조각의 원자 게시 입력이 올바르지 않습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+  await ensurePrivateDirectory(stagingDirectory);
+  const existingDestination = await existingAtomicDestinationSnapshot({
+    destinationPath,
+    expectedHash,
+    expectedSize,
+    ...(signal ? { signal } : {})
+  });
+  if (existingDestination) {
+    return existingDestination;
+  }
   const source = await openExternalRegularFileNoFollow(sourcePath);
   let destination: FileHandle | undefined;
+  let temporaryPath = "";
   try {
     const before = await source.stat({ bigint: true });
     const sizeBytes = validatedOpenRegularFileStatus(before, {
       maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES
     });
-    try {
-      destination = await open(destinationPath, "wx", 0o600);
-    } catch (error) {
-      if (isRecord(error) && error.code === "EEXIST") {
-        return;
+    if (sizeBytes !== expectedSize) {
+      fail("재사용할 원본 조각의 크기가 다릅니다.", "CACHE_INTEGRITY_FAILED");
+    }
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      temporaryPath = path.join(
+        stagingDirectory,
+        `.t-${randomBytes(16).toString("hex")}`
+      );
+      try {
+        destination = await open(temporaryPath, "wx", 0o600);
+        break;
+      } catch (error) {
+        if (!(isRecord(error) && error.code === "EEXIST")) {
+          throw error;
+        }
       }
-      throw error;
+    }
+    if (!destination) {
+      fail("원본 조각의 고유 임시 파일을 만들지 못했습니다.", "CACHE_INTEGRITY_FAILED");
     }
     const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const digest = createHash("sha256");
     let position = 0;
     while (position < sizeBytes) {
       abortIfRequested(signal);
@@ -4169,6 +4636,7 @@ async function copyOpenFileNoClobber(
       if (bytesRead <= 0) {
         fail("재사용할 원본 조각을 끝까지 읽지 못했습니다.", "CACHE_INTEGRITY_FAILED");
       }
+      digest.update(buffer.subarray(0, bytesRead));
       let written = 0;
       while (written < bytesRead) {
         const result = await destination.write(
@@ -4185,17 +4653,118 @@ async function copyOpenFileNoClobber(
       position += bytesRead;
     }
     await destination.sync();
+    const temporaryStatus = await destination.stat({ bigint: true });
+    if (
+      !temporaryStatus.isFile()
+      || temporaryStatus.nlink !== 1n
+      || temporaryStatus.size !== BigInt(expectedSize)
+    ) {
+      fail("복사한 원본 조각 임시 파일이 안전하지 않습니다.", "CACHE_INTEGRITY_FAILED");
+    }
     const after = await source.stat({ bigint: true });
-    if (!sameExternalFileSnapshot(before, after)) {
+    if (
+      !sameExternalFileSnapshot(before, after)
+      || digest.digest("hex") !== expectedHash
+    ) {
       fail("재사용할 원본 조각이 복사 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
     }
+    await assertNamedPathMatchesOpenFile(temporaryPath, temporaryStatus);
+    await destination.close();
+    destination = undefined;
+    // A concurrent publisher may have completed while this invocation copied.
+    // Preserve its already-correct inode and avoid disrupting active readers.
+    const concurrentlyPublished = await existingAtomicDestinationSnapshot({
+      destinationPath,
+      expectedHash,
+      expectedSize,
+      ...(signal ? { signal } : {})
+    });
+    if (concurrentlyPublished) {
+      await rm(temporaryPath, { force: true });
+      temporaryPath = "";
+      return concurrentlyPublished;
+    }
+    try {
+      await rename(temporaryPath, destinationPath);
+    } catch (error) {
+      // Windows can refuse replacement while another native reader has not
+      // granted delete sharing. Accept only a destination independently proven
+      // to contain the same expected immutable bytes; otherwise preserve the
+      // original rename failure.
+      const lockedDestination = await existingAtomicDestinationSnapshot({
+        destinationPath,
+        expectedHash,
+        expectedSize,
+        ...(signal ? { signal } : {})
+      });
+      if (lockedDestination) {
+        await rm(temporaryPath, { force: true });
+        temporaryPath = "";
+        return lockedDestination;
+      }
+      throw error;
+    }
+    temporaryPath = "";
+
+    // Another verified publisher may atomically install the same content
+    // between our rename and validation. Retry only transient path/fd races;
+    // every accepted destination is independently hashed and single-linked.
+    let lastRaceError: ExternalVodMaterializationError | undefined;
+    for (
+      let attempt = 0;
+      attempt < ATOMIC_DESTINATION_STABILIZATION_ATTEMPTS;
+      attempt += 1
+    ) {
+      abortIfRequested(signal);
+      try {
+        const published = await inspectExternalRegularFileNoFollow(
+          destinationPath,
+          {
+            maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES,
+            requireSingleLink: true,
+            unlinkedSingleLinkIsTransient: true,
+            ...(signal ? { signal } : {})
+          }
+        );
+        if (
+          published.hashSha256 !== expectedHash
+          || published.sizeBytes !== expectedSize
+        ) {
+          fail("원자 게시된 원본 조각의 해시 또는 크기가 다릅니다.", "CACHE_INTEGRITY_FAILED");
+        }
+        return published;
+      } catch (error) {
+        if (
+          !(error instanceof ExternalVodMaterializationError)
+          || error.code !== "CACHE_INTEGRITY_FAILED"
+          || attempt === ATOMIC_DESTINATION_STABILIZATION_ATTEMPTS - 1
+        ) {
+          throw error;
+        }
+        lastRaceError = error;
+      }
+      // A finite fan-out of verified publishers can successively unlink each
+      // other's just-opened inode. Give every publisher enough bounded time
+      // to observe the final name after that finite rename burst settles.
+      const delayMs = Math.min(
+        ATOMIC_DESTINATION_STABILIZATION_MAX_DELAY_MS,
+        2 ** Math.min(attempt, 3)
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+    throw lastRaceError ?? new ExternalVodMaterializationError(
+      "원자 게시된 원본 조각을 안정적으로 재검증하지 못했습니다.",
+      "CACHE_INTEGRITY_FAILED"
+    );
   } catch (error) {
     await destination?.close().catch(() => undefined);
     destination = undefined;
-    await rm(destinationPath, { force: true }).catch(() => undefined);
     throw error;
   } finally {
     await destination?.close().catch(() => undefined);
+    if (temporaryPath) {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
     await source.close().catch(() => undefined);
   }
 }
@@ -4203,6 +4772,7 @@ async function copyOpenFileNoClobber(
 async function inheritVerifiedRootFile({
   sourcePath,
   destinationPath,
+  stagingDirectory,
   expectedHash,
   expectedSize,
   hashFile,
@@ -4210,26 +4780,31 @@ async function inheritVerifiedRootFile({
 }: {
   sourcePath: string;
   destinationPath: string;
+  stagingDirectory: string;
   expectedHash: string;
   expectedSize: number;
   hashFile?: NonNullable<ExternalVodMaterializerDependencies["hashFile"]>;
   signal?: AbortSignal;
 }): Promise<void> {
   await ensurePrivateDirectory(path.dirname(destinationPath));
-  try {
-    await link(sourcePath, destinationPath);
-  } catch (error) {
-    if (isRecord(error) && error.code === "EXDEV") {
-      await copyOpenFileNoClobber(sourcePath, destinationPath, signal);
-    } else if (!(isRecord(error) && error.code === "EEXIST")) {
-      throw error;
-    }
-  }
-  const inherited = await inspectExternalRegularFileNoFollow(destinationPath, {
-    maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES,
-    ...(hashFile ? { supplementalHashFile: hashFile } : {}),
+  // Source roots are shared across concurrent attempts. Copying keeps every
+  // verified path at nlink=1, so the mandatory path↔fd nlink binding cannot be
+  // invalidated merely because a sibling stages or removes another hard link.
+  let inherited = await copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory,
+    expectedHash,
+    expectedSize,
     ...(signal ? { signal } : {})
   });
+  if (hashFile) {
+    inherited = await inspectExternalRegularFileNoFollow(destinationPath, {
+      maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES,
+      supplementalHashFile: hashFile,
+      ...(signal ? { signal } : {})
+    });
+  }
   if (
     inherited.hashSha256 !== expectedHash
     || inherited.sizeBytes !== expectedSize
@@ -4244,6 +4819,7 @@ async function publishExternalSourceRoot({
   streamSignature,
   clockEvidence,
   jobDirectory,
+  stagingDirectory,
   hashFile,
   signal
 }: {
@@ -4256,6 +4832,7 @@ async function publishExternalSourceRoot({
   streamSignature: ExternalSectionStreamSignature;
   clockEvidence: ExternalVodPersistedSectionClockEvidence;
   jobDirectory: string;
+  stagingDirectory: string;
   hashFile?: NonNullable<ExternalVodMaterializerDependencies["hashFile"]>;
   signal?: AbortSignal;
 }): Promise<{ receipt: ExternalVodSourceRootReceipt; path: string }> {
@@ -4272,12 +4849,13 @@ async function publishExternalSourceRoot({
   ) {
     fail("게시할 원본 조각과 시간축 취득 증거가 다릅니다.", "CLOCK_EVIDENCE_MISMATCH");
   }
-  const cacheFileName = `root-${source.hashSha256}.mp4`;
+  const cacheFileName = externalVodSourceRootCacheFileName(source.hashSha256);
   const rootsDirectory = path.join(jobDirectory, "roots");
   const rootPath = path.join(rootsDirectory, cacheFileName);
   await inheritVerifiedRootFile({
     sourcePath,
     destinationPath: rootPath,
+    stagingDirectory,
     expectedHash: source.hashSha256,
     expectedSize: source.sizeBytes,
     ...(hashFile ? { hashFile } : {}),
@@ -4315,12 +4893,14 @@ async function inheritExternalSourceRoots({
   roots,
   sourcePaths,
   jobDirectory,
+  stagingDirectory,
   hashFile,
   signal
 }: {
   roots: readonly ExternalVodSourceRootReceipt[];
   sourcePaths: ReadonlyMap<string, string>;
   jobDirectory: string;
+  stagingDirectory: string;
   hashFile?: NonNullable<ExternalVodMaterializerDependencies["hashFile"]>;
   signal?: AbortSignal;
 }): Promise<Map<string, string>> {
@@ -4334,6 +4914,7 @@ async function inheritExternalSourceRoots({
     await inheritVerifiedRootFile({
       sourcePath,
       destinationPath,
+      stagingDirectory,
       expectedHash: root.hashSha256,
       expectedSize: root.sizeBytes,
       ...(hashFile ? { hashFile } : {}),
@@ -4344,18 +4925,55 @@ async function inheritExternalSourceRoots({
   return inherited;
 }
 
+export function externalPublishedArtifactInspectionBinding({
+  platform,
+  processId,
+  fileDescriptor
+}: {
+  platform: NodeJS.Platform | string;
+  processId: number;
+  fileDescriptor: number;
+}): Readonly<{
+  inputPath: string;
+  inheritedInputFileDescriptor?: number;
+}> {
+  if (!(["linux", "darwin", "win32"] as const).includes(
+    platform as "linux" | "darwin" | "win32"
+  )) {
+    fail(
+      "게시된 로컬 MP4를 열린 파일 핸들에 결속해 검사할 수 없는 운영체제입니다.",
+      "MEDIA_VERIFICATION_FAILED"
+    );
+  }
+  if (!Number.isSafeInteger(processId) || processId <= 0) {
+    fail(
+      "게시된 로컬 MP4 검사 프로세스 식별자가 올바르지 않습니다.",
+      "MEDIA_VERIFICATION_FAILED"
+    );
+  }
+  if (!Number.isSafeInteger(fileDescriptor) || fileDescriptor < 0) {
+    fail(
+      "게시된 로컬 MP4의 파일 디스크립터를 확인하지 못했습니다.",
+      "MEDIA_VERIFICATION_FAILED"
+    );
+  }
+  if (platform === "linux") {
+    return Object.freeze({
+      inputPath: `/proc/${processId}/fd/${fileDescriptor}`
+    });
+  }
+  return Object.freeze({
+    inputPath: platform === "darwin" ? "/dev/fd/3" : "pipe:3",
+    inheritedInputFileDescriptor: fileDescriptor
+  });
+}
+
 async function inspectPublishedExternalVodArtifact(
   published: PublishedExternalVodArtifact,
   inspectMedia: NonNullable<ExternalVodMaterializerDependencies["inspectMedia"]>,
   options: ExternalProcessRunOptions,
   signal?: AbortSignal
 ): Promise<ExternalMediaInspection> {
-  if (process.platform !== "linux") {
-    fail(
-      "게시된 로컬 MP4를 파일 디스크립터에 결속해 검사할 수 없는 운영체제입니다.",
-      "MEDIA_VERIFICATION_FAILED"
-    );
-  }
   const handle = await openExternalRegularFileNoFollow(published.artifactPath);
   try {
     const before = await inspectOpenedExternalRegularFile(
@@ -4382,8 +5000,20 @@ async function inspectPublishedExternalVodArtifact(
         "MEDIA_VERIFICATION_FAILED"
       );
     }
-    const descriptorPath = `/proc/${process.pid}/fd/${handle.fd}`;
-    const inspection = await inspectMedia(descriptorPath, options);
+    const binding = externalPublishedArtifactInspectionBinding({
+      platform: process.platform,
+      processId: process.pid,
+      fileDescriptor: handle.fd
+    });
+    const inspection = await inspectMedia(
+      binding.inputPath,
+      binding.inheritedInputFileDescriptor === undefined
+        ? options
+        : {
+          ...options,
+          inheritedInputFileDescriptor: binding.inheritedInputFileDescriptor
+        }
+    );
     const after = await inspectOpenedExternalRegularFile(
       handle,
       published.artifactPath,
@@ -5272,11 +5902,15 @@ export async function materializeExternalVod(
       ?? processEnv.KIRINUKI_YT_DLP_BINARY,
     "yt-dlp artifact"
   );
-  const pythonBinary = verifiedAbsoluteToolPath(
-    dependencies.pythonBinary
-      ?? processEnv.KIRINUKI_YT_DLP_PYTHON_BINARY,
-    "Python"
+  const ytDlpMode = externalYtDlpMode(
+    dependencies.ytDlpMode
+      ?? processEnv.KIRINUKI_YT_DLP_MODE
   );
+  const configuredPythonBinary = dependencies.pythonBinary
+    ?? processEnv.KIRINUKI_YT_DLP_PYTHON_BINARY;
+  const pythonBinary = ytDlpMode === "python-zipimport"
+    ? verifiedAbsoluteToolPath(configuredPythonBinary, "Python")
+    : undefined;
   const nodeBinary = executableName(
     dependencies.nodeBinary
       ?? processEnv.KIRINUKI_YT_DLP_NODE_BINARY
@@ -5325,7 +5959,8 @@ export async function materializeExternalVod(
       return await probeExternalVodMetadata(source, {
         runProcess,
         ytDlpBinary,
-        pythonBinary,
+        ytDlpMode,
+        ...(pythonBinary === undefined ? {} : { pythonBinary }),
         nodeBinary,
         processEnv,
         cwd: metadataProbeDirectory,
@@ -5343,15 +5978,18 @@ export async function materializeExternalVod(
     cwd: string
   ): Promise<ExternalVodClockProofSetResolution> => {
     try {
+      const tlsCaFile = await writePrivateNodeRootCaFile(cwd);
       const prove = async (): Promise<ExternalVodClockProofSetResolution> => (
         await clockResolver(candidateMetadata, parts, {
           cwd,
           runProcess,
           processEnv,
           ytDlpBinary,
-          pythonBinary,
+          ytDlpMode,
+          ...(pythonBinary === undefined ? {} : { pythonBinary }),
           nodeBinary,
           ffprobeBinary,
+          tlsCaFile,
           ...(dependencies.fetchImpl ? { fetchImpl: dependencies.fetchImpl } : {}),
           ...(request.signal ? { signal: request.signal } : {})
         })
@@ -5569,7 +6207,9 @@ export async function materializeExternalVod(
   await ensurePrivateDirectory(attemptsDirectory);
   const attemptDirectory = path.join(
     attemptsDirectory,
-    `attempt-${randomBytes(16).toString("hex")}`
+    process.platform === "win32"
+      ? `.a-${randomBytes(16).toString("hex")}`
+      : `attempt-${randomBytes(16).toString("hex")}`
   );
   await mkdir(attemptDirectory, { mode: 0o700 });
   const concatListPath = path.join(attemptDirectory, "sections.concat.txt");
@@ -5641,6 +6281,7 @@ export async function materializeExternalVod(
         roots: baseMaterialization.receipt.sourceRoots,
         sourcePaths: baseMaterialization.sourceRootPaths,
         jobDirectory,
+        stagingDirectory: attemptDirectory,
         ...(request.signal ? { signal: request.signal } : {})
       });
       sourceRoots.push(
@@ -5705,6 +6346,7 @@ export async function materializeExternalVod(
             streamSignature,
             clockEvidence,
             jobDirectory,
+            stagingDirectory: attemptDirectory,
             ...(request.signal ? { signal: request.signal } : {})
           });
           sourceRoots.push(publishedRoot.receipt);
@@ -5731,7 +6373,8 @@ export async function materializeExternalVod(
     const completionRawMetadata = await probeExternalVodMetadata(source, {
       runProcess,
       ytDlpBinary,
-      pythonBinary,
+      ytDlpMode,
+      ...(pythonBinary === undefined ? {} : { pythonBinary }),
       nodeBinary,
       processEnv,
       cwd: attemptDirectory,
@@ -5804,6 +6447,7 @@ export async function materializeExternalVod(
       await inheritVerifiedRootFile({
         sourcePath: rootPath,
         destinationPath: concatPath,
+        stagingDirectory: attemptDirectory,
         expectedHash: root.hashSha256,
         expectedSize: root.sizeBytes,
         ...(request.signal ? { signal: request.signal } : {})

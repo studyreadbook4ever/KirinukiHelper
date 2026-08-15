@@ -202,11 +202,12 @@ test("package 진입점과 compiler strict 하위 옵션 우회를 막는다", (
 
   const requiredScripts = {
     build: "node --import tsx scripts/build-web.ts",
+    "build:desktop": "node --import tsx scripts/build-desktop.ts",
     validate: "node --import tsx scripts/validate-local-studio.ts",
     typecheck: "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.web.source.json",
     "migration:check": "node --import tsx scripts/check-typescript-migration.ts",
     test: "node --import tsx scripts/run-tests.ts",
-    check: "npm run typecheck && npm run migration:check && npm run build && npm run validate && npm run license:check && npm test && npm run audit"
+    check: "npm run typecheck && npm run migration:check && npm run build && npm run build:desktop && npm run validate && npm run license:check && npm test && npm run audit"
   };
   assert.doesNotThrow(() => assertRootTypeSafetyScripts({ scripts: requiredScripts }));
   assert.throws(

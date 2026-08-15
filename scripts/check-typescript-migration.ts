@@ -9,6 +9,8 @@ import { GENERATED_JAVASCRIPT_BANNER } from "./generated-javascript.js";
 import {
   SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
   SOOP_STREAMING_COMPANION_SOURCE_PATH,
+  STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
+  STUDIO_STREAMING_RELAY_SOURCE_PATH,
   STREAMING_COMPANION_JAVASCRIPT_PATH,
   STREAMING_COMPANION_JAVASCRIPT_PATHS,
   STREAMING_COMPANION_SOURCE_PATH,
@@ -31,7 +33,7 @@ const ignoredDependencyDirectoryNames = new Set([
   "node_modules",
   "venv"
 ]);
-const ignoredRootDirectories = new Set([".git", "coverage", "dist"]);
+const ignoredRootDirectories = new Set([".artifacts", ".git", "coverage", "dist"]);
 const javaScriptFamilyPattern = /\.(?:cjs|js|jsx|mjs)$/iu;
 const typeScriptFamilyPattern = /\.(?:cts|mts|ts|tsx)$/iu;
 const declarationFilePattern = /\.d\.(?:cts|mts|ts)$/iu;
@@ -243,11 +245,12 @@ export function assertRootTypeSafetyScripts(manifest: unknown): void {
   const scriptRecord = scripts as Record<string, unknown>;
   const requiredScripts = {
     build: "node --import tsx scripts/build-web.ts",
+    "build:desktop": "node --import tsx scripts/build-desktop.ts",
     validate: "node --import tsx scripts/validate-local-studio.ts",
     typecheck: "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.web.source.json",
     "migration:check": "node --import tsx scripts/check-typescript-migration.ts",
     test: "node --import tsx scripts/run-tests.ts",
-    check: "npm run typecheck && npm run migration:check && npm run build && npm run validate && npm run license:check && npm test && npm run audit"
+    check: "npm run typecheck && npm run migration:check && npm run build && npm run build:desktop && npm run validate && npm run license:check && npm test && npm run audit"
   } as const;
   for (const [name, expected] of Object.entries(requiredScripts)) {
     assert(
@@ -588,6 +591,10 @@ async function assertGeneratedJavaScript(
         {
           sourcePath: SOOP_STREAMING_COMPANION_SOURCE_PATH,
           outputPath: SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH
+        },
+        {
+          sourcePath: STUDIO_STREAMING_RELAY_SOURCE_PATH,
+          outputPath: STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH
         }
       ],
       result: await buildStreamingCompanion({

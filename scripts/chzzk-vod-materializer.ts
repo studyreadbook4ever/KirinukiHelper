@@ -4,12 +4,15 @@ import {
   constants as fsConstants,
   createReadStream
 } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import {
   chmod,
   copyFile,
+  lstat,
   mkdir,
   open,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -19,6 +22,7 @@ import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createRequire } from "node:module";
 
 import {
   CHZZK_VOD_MATERIALIZATION_SCHEMA,
@@ -47,6 +51,9 @@ import {
   vodConsumerMaterializationDirectory,
   vodConsumerScopeHash
 } from "./vod-consumer-scope.js";
+import {
+  terminatePosixProcessGroup
+} from "./process-tree-termination.js";
 
 export const LEGACY_CHZZK_VOD_MATERIALIZATION_SCHEMA_ID =
   "chzzk-kirinuki/chzzk-vod-materialization-v1";
@@ -70,7 +77,12 @@ const MIN_TS_PACKETS = 3;
 const TS_PACKET_BYTES = 188;
 const MAX_SEGMENT_BYTES = 256 * 1024 * 1024;
 const MAX_SAFE_REDIRECTS = 5;
-const INVALID_LOCK_GRACE_MS = 5 * 60_000;
+const CHZZK_JOB_LEASE_SCHEMA_ID = "chzzk-kirinuki/chzzk-vod-job-lease-v3";
+const CHZZK_JOB_LEASE_DATABASE_FILENAME = ".materializing-lock.sqlite3";
+const CHZZK_STORAGE_GENERATION = "v3";
+const CHZZK_JOB_LOCK_HEARTBEAT_INTERVAL_MS = 1_000;
+const CHZZK_JOB_LOCK_LEASE_MS = 30_000;
+const CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS = 5_000;
 const CHZZK_PUBLIC_ORIGIN = `https://${CHZZK_PAGE_HOST}`;
 const CHZZK_PUBLIC_USER_AGENT =
   "KirinukiHelper/1.0 (local authorized editing)";
@@ -204,6 +216,7 @@ export interface ProcessResult {
 export interface ProcessRunOptions {
   cwd: string;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface ChzzkVodMaterializerDependencies {
@@ -216,6 +229,8 @@ export interface ChzzkVodMaterializerDependencies {
   ffmpegBinary?: string;
   ffprobeBinary?: string;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+  /** Deterministic concurrency barrier used by the lock protocol tests. */
+  beforeStaleJobLeaseCompareAndSwap?: () => Promise<void>;
 }
 
 export class ChzzkVodMaterializationError extends Error {
@@ -227,6 +242,10 @@ export class ChzzkVodMaterializationError extends Error {
     this.code = code;
   }
 }
+
+export const DEFAULT_CHZZK_PROCESS_TIMEOUT_MS = 30 * 60 * 1_000;
+export const CHZZK_PROCESS_KILL_GRACE_MS = 5_000;
+export const MAX_CHZZK_PROCESS_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 interface XmlElement {
   name: string;
@@ -1496,7 +1515,7 @@ export function chzzkVodConsumerScopeHash(value: unknown): string {
   }
 }
 
-function scopedChzzkJobDirectory(
+function legacyScopedChzzkJobDirectory(
   stateDirectory: string,
   consumerScopeHash: string,
   materializationId: string
@@ -1511,6 +1530,23 @@ function scopedChzzkJobDirectory(
   } catch {
     fail("CHZZK 로컬 편집 작업 경로 식별자가 올바르지 않습니다.", "INVALID_CONSUMER_ID");
   }
+}
+
+function scopedChzzkJobDirectory(
+  stateDirectory: string,
+  consumerScopeHash: string,
+  materializationId: string
+): string {
+  const legacyDirectory = legacyScopedChzzkJobDirectory(
+    stateDirectory,
+    consumerScopeHash,
+    materializationId
+  );
+  return path.join(
+    path.dirname(legacyDirectory),
+    CHZZK_STORAGE_GENERATION,
+    path.basename(legacyDirectory)
+  );
 }
 
 function materializationPlanFingerprint(
@@ -1586,36 +1622,167 @@ export function sleepWithMaterializerAbort(
 export async function runMaterializerProcess(
   command: string,
   args: readonly string[],
-  options: ProcessRunOptions
+  options: ProcessRunOptions,
+  {
+    spawnImpl = spawn,
+    setTimeoutImpl = setTimeout,
+    clearTimeoutImpl = clearTimeout,
+    killProcessGroupImpl = (pid, signal) => process.kill(-pid, signal),
+    probeProcessGroupImpl = (pid) => process.kill(-pid, 0),
+    killGraceMs = CHZZK_PROCESS_KILL_GRACE_MS,
+    platform = process.platform
+  }: {
+    spawnImpl?: typeof spawn;
+    setTimeoutImpl?: typeof setTimeout;
+    clearTimeoutImpl?: typeof clearTimeout;
+    killProcessGroupImpl?: (pid: number, signal: NodeJS.Signals) => void;
+    probeProcessGroupImpl?: (pid: number) => void;
+    killGraceMs?: number;
+    platform?: NodeJS.Platform;
+  } = {}
 ): Promise<ProcessResult> {
   abortIfRequested(options.signal);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_CHZZK_PROCESS_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    fail("로컬 미디어 도구의 실행 시간 제한이 올바르지 않습니다.", "INVALID_PROCESS_TIMEOUT");
+  }
+  if (!Number.isSafeInteger(killGraceMs) || killGraceMs < 0) {
+    fail("로컬 미디어 도구의 종료 대기 시간이 올바르지 않습니다.", "INVALID_PROCESS_TIMEOUT");
+  }
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], {
-      cwd: options.cwd,
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-      ...(options.signal ? { signal: options.signal } : {})
-    });
+    const useProcessGroup = platform !== "win32";
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawnImpl(command, [...args], {
+        cwd: options.cwd,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        ...(useProcessGroup ? { detached: true } : {})
+      });
+    } catch {
+      reject(new ChzzkVodMaterializationError(
+        "필요한 로컬 ffmpeg/ffprobe 도구를 실행하지 못했습니다.",
+        "PROCESS_START_FAILED"
+      ));
+      return;
+    }
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let totalOutputBytes = 0;
-    let settled = false;
-    const finishReject = (error: Error): void => {
-      if (settled) {
+    let closed = false;
+    let finalizing = false;
+    let childError: Error | undefined;
+    let terminationError: Error | undefined;
+    let cleanupError: Error | undefined;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    let windowsCloseDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let processTreeCleanupPromise: Promise<void> | undefined;
+
+    const clearTimer = (timer: ReturnType<typeof setTimeout> | undefined): void => {
+      if (timer !== undefined) {
+        clearTimeoutImpl(timer);
+      }
+    };
+    const processId = (): number | undefined => (
+      Number.isSafeInteger(child.pid) && Number(child.pid) > 0
+        ? Number(child.pid)
+        : undefined
+    );
+    const signalLeader = (signal: NodeJS.Signals): boolean => {
+      if (closed) {
+        return true;
+      }
+      try {
+        return child.kill(signal);
+      } catch {
+        return false;
+      }
+    };
+    const recordCleanupError = (error: unknown): void => {
+      cleanupError ??= error instanceof Error
+        ? error
+        : new Error("CHZZK 도구 process tree를 종료하지 못했습니다.");
+    };
+    const ensurePosixProcessGroupCleanup = (
+      pid: number
+    ): Promise<void> => {
+      if (!processTreeCleanupPromise) {
+        processTreeCleanupPromise = terminatePosixProcessGroup({
+          processGroupId: pid,
+          signalProcessGroupImpl: killProcessGroupImpl,
+          probeProcessGroupImpl,
+          graceMs: killGraceMs,
+          setTimeoutImpl
+        }).catch(recordCleanupError);
+      }
+      return processTreeCleanupPromise;
+    };
+    const terminate = (error: Error): void => {
+      if (terminationError) {
         return;
       }
-      settled = true;
-      reject(error);
+      terminationError = error;
+      const pid = processId();
+      if (platform === "win32") {
+        // Node/libuv keeps the spawned Windows process HANDLE on this exact
+        // ChildProcess. Never reopen a numeric PID with taskkill: the target
+        // could exit and its PID could be reassigned before that second open.
+        if (!signalLeader("SIGKILL")) {
+          recordCleanupError(new Error(
+            "Windows CHZZK 도구의 exact child handle 종료 요청이 실패했습니다."
+          ));
+        }
+        windowsCloseDeadlineTimer = setTimeoutImpl(() => {
+          if (finalizing) {
+            return;
+          }
+          recordCleanupError(Object.assign(
+            new Error("Windows CHZZK 도구가 exact child 종료 요청 뒤 닫히지 않았습니다."),
+            { code: "EPROCESSCLOSEDEADLINE" }
+          ));
+          finalizing = true;
+          clearTimer(timeoutTimer);
+          clearTimer(forceKillTimer);
+          options.signal?.removeEventListener("abort", abortListener);
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          (child as typeof child & { unref?: () => void }).unref?.();
+          const finalError = terminationError ?? cleanupError!;
+          if (cleanupError && cleanupError !== finalError && finalError.cause === undefined) {
+            Object.defineProperty(finalError, "cause", {
+              configurable: true,
+              value: cleanupError
+            });
+          }
+          reject(finalError);
+        }, Math.max(1, killGraceMs));
+        return;
+      }
+      if (useProcessGroup && pid !== undefined) {
+        void ensurePosixProcessGroupCleanup(pid);
+        return;
+      }
+      signalLeader("SIGTERM");
+      forceKillTimer = setTimeoutImpl(() => {
+        signalLeader("SIGKILL");
+      }, killGraceMs);
+    };
+    const abortListener = (): void => {
+      terminate(new ChzzkVodMaterializationError(
+        "CHZZK VOD 편집 구간 준비가 취소되었습니다.",
+        "CANCELLED"
+      ));
     };
     const collect = (target: Buffer[], chunk: Buffer | string): void => {
-      if (settled) {
+      if (closed || terminationError) {
         return;
       }
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       totalOutputBytes += buffer.length;
-      if (totalOutputBytes > 16 * 1024 * 1024) {
-        child.kill("SIGKILL");
-        finishReject(new ChzzkVodMaterializationError(
+      if (totalOutputBytes > MAX_CHZZK_PROCESS_OUTPUT_BYTES) {
+        terminate(new ChzzkVodMaterializationError(
           "로컬 미디어 검사 도구의 출력이 허용 크기를 초과했습니다.",
           "PROCESS_OUTPUT_LIMIT"
         ));
@@ -1626,27 +1793,63 @@ export async function runMaterializerProcess(
     child.stdout?.on("data", (chunk: Buffer | string) => collect(stdout, chunk));
     child.stderr?.on("data", (chunk: Buffer | string) => collect(stderr, chunk));
     child.once("error", () => {
-      finishReject(options.signal?.aborted
-        ? new ChzzkVodMaterializationError(
-          "CHZZK VOD 편집 구간 준비가 취소되었습니다.",
-          "CANCELLED"
-        )
-        : new ChzzkVodMaterializationError(
-          "필요한 로컬 ffmpeg/ffprobe 도구를 실행하지 못했습니다.",
-          "PROCESS_START_FAILED"
-        ));
+      childError ??= new ChzzkVodMaterializationError(
+        "필요한 로컬 ffmpeg/ffprobe 도구를 실행하지 못했습니다.",
+        "PROCESS_START_FAILED"
+      );
+      if (processId() !== undefined) {
+        terminate(childError);
+      }
     });
-    child.once("exit", (exitCode) => {
-      if (settled) {
+    child.once("close", (exitCode) => {
+      if (finalizing) {
         return;
       }
-      settled = true;
-      resolve({
-        exitCode: exitCode ?? -1,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8")
-      });
+      closed = true;
+      finalizing = true;
+      clearTimer(timeoutTimer);
+      clearTimer(windowsCloseDeadlineTimer);
+      options.signal?.removeEventListener("abort", abortListener);
+      void (async () => {
+        const pid = processId();
+        if (useProcessGroup && pid !== undefined) {
+          await ensurePosixProcessGroupCleanup(pid);
+        }
+        if (processTreeCleanupPromise) {
+          await processTreeCleanupPromise;
+        }
+        clearTimer(forceKillTimer);
+        clearTimer(windowsCloseDeadlineTimer);
+        const error = terminationError ?? childError ?? cleanupError;
+        if (error) {
+          if (cleanupError && cleanupError !== error && error.cause === undefined) {
+            Object.defineProperty(error, "cause", {
+              configurable: true,
+              value: cleanupError
+            });
+          }
+          reject(error);
+          return;
+        }
+        resolve({
+          exitCode: exitCode ?? -1,
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8")
+        });
+      })().catch(reject);
     });
+    options.signal?.addEventListener("abort", abortListener, { once: true });
+    if (options.signal?.aborted) {
+      abortListener();
+    }
+    if (!terminationError) {
+      timeoutTimer = setTimeoutImpl(() => {
+        terminate(new ChzzkVodMaterializationError(
+          `로컬 미디어 도구가 ${timeoutMs}ms 시간 제한을 넘었습니다.`,
+          "PROCESS_TIMEOUT"
+        ));
+      }, timeoutMs);
+    }
   });
 }
 
@@ -1679,7 +1882,11 @@ async function ensurePrivateDirectory(directory: string): Promise<void> {
   await chmod(directory, 0o700);
 }
 
-async function atomicWriteJson(filePath: string, value: unknown): Promise<void> {
+async function atomicWriteJson(
+  filePath: string,
+  value: unknown,
+  beforePublish?: () => void
+): Promise<void> {
   const temporary = `${filePath}.tmp-${randomBytes(8).toString("hex")}`;
   try {
     await writeFile(temporary, `${JSON.stringify(value)}\n`, {
@@ -1687,6 +1894,7 @@ async function atomicWriteJson(filePath: string, value: unknown): Promise<void> 
       mode: 0o600,
       flag: "wx"
     });
+    beforePublish?.();
     await rename(temporary, filePath);
   } finally {
     await rm(temporary, { force: true }).catch(() => undefined);
@@ -1811,7 +2019,8 @@ async function loadCheckpoint(
 async function saveCheckpoint(
   checkpointPath: string,
   resolved: ResolvedChzzkVod,
-  entries: ReadonlyMap<string, SegmentCheckpointEntry>
+  entries: ReadonlyMap<string, SegmentCheckpointEntry>,
+  beforePublish?: () => void
 ): Promise<void> {
   const value: MaterializationCheckpoint = {
     schemaId: "chzzk-kirinuki/chzzk-vod-checkpoint-v2",
@@ -1822,7 +2031,7 @@ async function saveCheckpoint(
     qualityIdentity: qualityIdentity(resolved.quality),
     segments: [...entries.values()].sort((left, right) => left.key.localeCompare(right.key))
   };
-  await atomicWriteJson(checkpointPath, value);
+  await atomicWriteJson(checkpointPath, value, beforePublish);
 }
 
 class ExpiredTransferAuthorization extends Error {}
@@ -1831,7 +2040,8 @@ async function downloadSegmentAttempt(
   fetchImpl: typeof globalThis.fetch,
   url: URL,
   targetPath: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  assertLeaseOwned?: () => void
 ): Promise<SegmentCheckpointEntry> {
   abortIfRequested(signal);
   const response = await fetchWithValidatedRedirects(
@@ -1904,6 +2114,7 @@ async function downloadSegmentAttempt(
       fail("CHZZK 미디어 조각 길이가 응답 정보와 다릅니다.", "INVALID_SEGMENT");
     }
     await validateTransportStreamFile(temporary);
+    assertLeaseOwned?.();
     await rename(temporary, targetPath);
   } catch (error) {
     throw error;
@@ -1945,7 +2156,8 @@ async function ensureDownloadedSegment({
   currentResolved,
   refreshResolved,
   sleep,
-  signal
+  signal,
+  assertLeaseOwned
 }: {
   segment: ExpandedMpdSegment;
   segmentDirectory: string;
@@ -1955,6 +2167,7 @@ async function ensureDownloadedSegment({
   refreshResolved: () => Promise<void>;
   sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   signal?: AbortSignal;
+  assertLeaseOwned?: () => void;
 }): Promise<{ filePath: string; downloadedBytes: number; reused: boolean }> {
   const key = segmentSemanticKey(segment);
   const filePath = path.join(segmentDirectory, segmentCacheFilename(segment));
@@ -1962,6 +2175,7 @@ async function ensureDownloadedSegment({
   if (await reusableSegment(filePath, checkpointEntry)) {
     return { filePath, downloadedBytes: 0, reused: true };
   }
+  assertLeaseOwned?.();
   await rm(filePath, { force: true }).catch(() => undefined);
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_SEGMENT_DOWNLOAD_ATTEMPTS; attempt += 1) {
@@ -1971,7 +2185,13 @@ async function ensureDownloadedSegment({
       fail("갱신된 CHZZK 재생 정보에 필요한 조각이 없습니다.", "SOURCE_CHANGED");
     }
     try {
-      const entry = await downloadSegmentAttempt(fetchImpl, url, filePath, signal);
+      const entry = await downloadSegmentAttempt(
+        fetchImpl,
+        url,
+        filePath,
+        signal,
+        assertLeaseOwned
+      );
       const completed: SegmentCheckpointEntry = { ...entry, key };
       checkpoint.set(key, completed);
       return {
@@ -2291,7 +2511,8 @@ async function remuxRuns({
   runProcess,
   ffmpegBinary,
   ffprobeBinary,
-  signal
+  signal,
+  assertLeaseOwned
 }: {
   runs: readonly PlannedSegmentRun[];
   segmentPaths: ReadonlyMap<string, string>;
@@ -2301,6 +2522,7 @@ async function remuxRuns({
   ffmpegBinary: string;
   ffprobeBinary: string;
   signal?: AbortSignal;
+  assertLeaseOwned?: () => void;
 }): Promise<void> {
   const runMp4Paths: string[] = [];
   const runDurationsMs: number[] = [];
@@ -2320,7 +2542,9 @@ async function remuxRuns({
     });
     const tsPath = path.join(jobDirectory, `run-${index}.ts`);
     const mp4Path = path.join(jobDirectory, `run-${index}.mp4`);
+    assertLeaseOwned?.();
     await rm(tsPath, { force: true }).catch(() => undefined);
+    assertLeaseOwned?.();
     await rm(mp4Path, { force: true }).catch(() => undefined);
     await concatenateTransportStreams(inputPaths, tsPath, signal);
     await runCheckedProcess(
@@ -2351,6 +2575,7 @@ async function remuxRuns({
       await copyFile(runMp4Paths[0]!, temporaryArtifact, fsConstants.COPYFILE_EXCL);
     } else {
       const descriptionPath = path.join(jobDirectory, "runs.concat.txt");
+      assertLeaseOwned?.();
       await writeFile(
         descriptionPath,
         buildConcatDescription(runMp4Paths, runDurationsMs, runInpointsMs),
@@ -2370,6 +2595,7 @@ async function remuxRuns({
       fail("최종 로컬 MP4 파일이 비어 있습니다.", "MEDIA_MUX_FAILED");
     }
     await chmod(temporaryArtifact, 0o600);
+    assertLeaseOwned?.();
     await rename(temporaryArtifact, artifactPath);
   } finally {
     await rm(temporaryArtifact, { force: true }).catch(() => undefined);
@@ -2955,37 +3181,46 @@ export async function reopenChzzkVodMaterialization(
   const clips = coreClipRanges(request.clips);
   const desiredEditableRanges = coreDesiredEditableRanges(request.editableRanges);
   const stateDirectory = resolveChzzkVodStateDirectory(request.stateDir);
-  const jobDirectory = scopedChzzkJobDirectory(
-    stateDirectory,
-    consumerScopeHash,
-    identity.materializationId
-  );
-  const artifactPath = path.join(jobDirectory, "materialized.mp4");
-  const receipt = await reusableCompletedMaterialization(
-    path.join(jobDirectory, "manifest.json"),
-    artifactPath,
-    {
-      canonicalUrl: `https://${CHZZK_PAGE_HOST}/video/${identity.contentId}`,
-      contentId: identity.contentId,
-      planFingerprint: identity.planFingerprint,
-      materializationId: identity.materializationId
-    },
-    request.signal
-  );
-  if (!receipt || !receiptExactlyContainsRequestedClips(
-    receipt,
-    clips,
-    handleMs,
-    desiredEditableRanges
-  )) {
-    return undefined;
+  const jobDirectories = [
+    scopedChzzkJobDirectory(
+      stateDirectory,
+      consumerScopeHash,
+      identity.materializationId
+    ),
+    legacyScopedChzzkJobDirectory(
+      stateDirectory,
+      consumerScopeHash,
+      identity.materializationId
+    )
+  ];
+  for (const jobDirectory of jobDirectories) {
+    const artifactPath = path.join(jobDirectory, "materialized.mp4");
+    const receipt = await reusableCompletedMaterialization(
+      path.join(jobDirectory, "manifest.json"),
+      artifactPath,
+      {
+        canonicalUrl: `https://${CHZZK_PAGE_HOST}/video/${identity.contentId}`,
+        contentId: identity.contentId,
+        planFingerprint: identity.planFingerprint,
+        materializationId: identity.materializationId
+      },
+      request.signal
+    );
+    if (receipt && receiptExactlyContainsRequestedClips(
+      receipt,
+      clips,
+      handleMs,
+      desiredEditableRanges
+    )) {
+      return {
+        manifest: manifestMaterialization(receipt),
+        receipt,
+        artifactPath,
+        reused: true
+      };
+    }
   }
-  return {
-    manifest: manifestMaterialization(receipt),
-    receipt,
-    artifactPath,
-    reused: true
-  };
+  return undefined;
 }
 
 function baseReceiptIsMonotonicSubset(
@@ -3016,22 +3251,34 @@ async function validateBaseMaterialization(
   handleMs: number,
   signal?: AbortSignal
 ): Promise<void> {
-  const jobDirectory = scopedChzzkJobDirectory(
-    stateDirectory,
-    consumerScopeHash,
-    base.materializationId
-  );
-  const receipt = await reusableCompletedMaterialization(
-    path.join(jobDirectory, "manifest.json"),
-    path.join(jobDirectory, "materialized.mp4"),
-    {
-      canonicalUrl: resolved.canonicalUrl,
-      contentId: base.contentId,
-      planFingerprint: base.planFingerprint,
-      materializationId: base.materializationId
-    },
-    signal
-  );
+  let receipt: ChzzkVodMaterializationManifest | undefined;
+  for (const jobDirectory of [
+    scopedChzzkJobDirectory(
+      stateDirectory,
+      consumerScopeHash,
+      base.materializationId
+    ),
+    legacyScopedChzzkJobDirectory(
+      stateDirectory,
+      consumerScopeHash,
+      base.materializationId
+    )
+  ]) {
+    receipt = await reusableCompletedMaterialization(
+      path.join(jobDirectory, "manifest.json"),
+      path.join(jobDirectory, "materialized.mp4"),
+      {
+        canonicalUrl: resolved.canonicalUrl,
+        contentId: base.contentId,
+        planFingerprint: base.planFingerprint,
+        materializationId: base.materializationId
+      },
+      signal
+    );
+    if (receipt) {
+      break;
+    }
+  }
   if (!receipt) {
     fail("기준 로컬 편집본의 영수증 또는 파일을 검증하지 못했습니다.", "MEDIA_VERIFICATION_FAILED");
   }
@@ -3086,76 +3333,508 @@ async function linuxProcessStartMarker(pid: number): Promise<string | undefined>
   }
 }
 
-async function existingJobLockIsActive(lockPath: string): Promise<boolean> {
-  let status: Awaited<ReturnType<typeof stat>>;
+interface JobLockLease {
+  readonly signal: AbortSignal;
+  readonly failure: Error | undefined;
+  assertOwned(): void;
+  release(): Promise<void>;
+}
+
+type JobLeaseSqliteValue = string | number | bigint | null | Uint8Array;
+
+interface JobLeaseSqliteRunResult {
+  changes: number | bigint;
+}
+
+interface JobLeaseSqliteStatement {
+  all(...parameters: readonly JobLeaseSqliteValue[]): unknown[];
+  get(...parameters: readonly JobLeaseSqliteValue[]): unknown;
+  run(...parameters: readonly JobLeaseSqliteValue[]): JobLeaseSqliteRunResult;
+}
+
+interface JobLeaseSqliteDatabase {
+  close(): void;
+  exec(sql: string): void;
+  prepare(sql: string): JobLeaseSqliteStatement;
+}
+
+interface NodeSqliteModule {
+  DatabaseSync: new (location: string) => JobLeaseSqliteDatabase;
+}
+
+interface JobLeaseSnapshot {
+  schemaId: typeof CHZZK_JOB_LEASE_SCHEMA_ID;
+  ownerId: string;
+  revision: number;
+  pid: number;
+  createdAtUnixMs: number;
+  heartbeatAtBootMs: number;
+  processStartMarker?: string;
+}
+
+const requireNodeBuiltin = createRequire(import.meta.url);
+const MAX_JOB_LEASE_DATABASE_BYTES = 1024 * 1024;
+const JOB_LEASE_DATABASE_APPLICATION_ID = 0x4b524e4b;
+const JOB_LEASE_TABLE_SQL = `CREATE TABLE materialization_job_lease (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  schema_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  pid INTEGER NOT NULL CHECK (pid >= 1),
+  created_at_unix_ms INTEGER NOT NULL CHECK (created_at_unix_ms >= 1),
+  heartbeat_at_boot_ms INTEGER NOT NULL CHECK (heartbeat_at_boot_ms >= 0),
+  process_start_marker TEXT
+) STRICT`;
+
+function jobLeaseBootClockMs(): number {
+  const milliseconds = Math.floor(os.uptime() * 1_000);
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 0) {
+    throw new Error("Operating-system boot clock is unavailable.");
+  }
+  return milliseconds;
+}
+
+function sqliteChanges(result: JobLeaseSqliteRunResult): number {
+  const changes = Number(result.changes);
+  if (!Number.isSafeInteger(changes) || changes < 0) {
+    throw new Error("Job lease SQLite returned an invalid change count.");
+  }
+  return changes;
+}
+
+async function assertSafeJobLeaseDatabasePath(
+  databasePath: string,
+  stateDirectory: string
+): Promise<void> {
+  if (
+    !path.isAbsolute(databasePath)
+    || !path.isAbsolute(stateDirectory)
+    || path.basename(databasePath) !== CHZZK_JOB_LEASE_DATABASE_FILENAME
+  ) {
+    throw new Error("Job lease database path is not an exact direct-child path.");
+  }
+  const directoryStatus = await lstat(path.dirname(databasePath), { bigint: true });
+  if (
+    !directoryStatus.isDirectory()
+    || directoryStatus.isSymbolicLink()
+    || (process.platform !== "win32" && (directoryStatus.mode & 0o077n) !== 0n)
+  ) {
+    throw new Error("Job lease database directory is not a real directory.");
+  }
+  const [canonicalStateDirectory, canonicalDatabaseDirectory] = await Promise.all([
+    realpath(stateDirectory),
+    realpath(path.dirname(databasePath))
+  ]);
+  const relativeDirectory = path.relative(
+    canonicalStateDirectory,
+    canonicalDatabaseDirectory
+  );
+  if (
+    relativeDirectory === ""
+    || relativeDirectory === ".."
+    || relativeDirectory.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeDirectory)
+  ) {
+    throw new Error("Job lease database resolves outside its state directory.");
+  }
+  for (const candidate of [
+    databasePath,
+    `${databasePath}-journal`,
+    `${databasePath}-wal`,
+    `${databasePath}-shm`
+  ]) {
+    let status: BigIntStats;
+    try {
+      status = await lstat(candidate, { bigint: true });
+    } catch (error) {
+      if (nodeErrorCode(error) === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    if (
+      !status.isFile()
+      || status.isSymbolicLink()
+      || status.nlink !== 1n
+      || status.size > BigInt(MAX_JOB_LEASE_DATABASE_BYTES)
+    ) {
+      throw new Error("Job lease database has an unsafe filesystem shape.");
+    }
+  }
+}
+
+async function openJobLeaseDatabase(
+  databasePath: string,
+  stateDirectory: string
+): Promise<JobLeaseSqliteDatabase> {
+  await assertSafeJobLeaseDatabasePath(databasePath, stateDirectory);
+  let database: JobLeaseSqliteDatabase | undefined;
   try {
-    status = await stat(lockPath);
-  } catch {
+    const sqlite = requireNodeBuiltin("node:sqlite") as NodeSqliteModule;
+    database = new sqlite.DatabaseSync(databasePath);
+    await assertSafeJobLeaseDatabasePath(databasePath, stateDirectory);
+    database.exec(`
+      PRAGMA busy_timeout = ${CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS};
+      PRAGMA journal_mode = DELETE;
+      PRAGMA synchronous = FULL;
+      PRAGMA trusted_schema = OFF;
+    `);
+    database.exec("BEGIN IMMEDIATE;");
+    try {
+      const applicationIdRecord = objectRecord(
+        database.prepare("PRAGMA application_id").get()
+      );
+      const applicationId = applicationIdRecord?.application_id;
+      if (
+        typeof applicationId !== "number"
+        || ![0, JOB_LEASE_DATABASE_APPLICATION_ID].includes(applicationId)
+      ) {
+        throw new Error("Job lease database application identity is invalid.");
+      }
+      const existingObjects = database.prepare(`
+        SELECT name, type
+        FROM sqlite_schema
+        WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY type, name
+      `).all();
+      if (applicationId === 0 && existingObjects.length !== 0) {
+        throw new Error("Unidentified job lease database is not empty.");
+      }
+      if (applicationId === 0) {
+        database.exec(`PRAGMA application_id = ${JOB_LEASE_DATABASE_APPLICATION_ID};`);
+      }
+      database.exec(`${JOB_LEASE_TABLE_SQL.replace(
+        "CREATE TABLE",
+        "CREATE TABLE IF NOT EXISTS"
+      )};`);
+      const identifiedObjects = database.prepare(`
+        SELECT name, type
+        FROM sqlite_schema
+        WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY type, name
+      `).all();
+      const tableDefinition = objectRecord(database.prepare(`
+        SELECT sql
+        FROM sqlite_schema
+        WHERE type = 'table' AND name = 'materialization_job_lease'
+      `).get());
+      if (
+        identifiedObjects.length !== 1
+        || objectRecord(identifiedObjects[0])?.name !== "materialization_job_lease"
+        || objectRecord(identifiedObjects[0])?.type !== "table"
+        || tableDefinition?.sql !== JOB_LEASE_TABLE_SQL
+      ) {
+        throw new Error("Job lease database schema is not exact.");
+      }
+      database.exec("COMMIT;");
+    } catch (error) {
+      try {
+        database.exec("ROLLBACK;");
+      } catch {
+        // Preserve the schema/identity failure.
+      }
+      throw error;
+    }
+    await assertSafeJobLeaseDatabasePath(databasePath, stateDirectory);
+    return database;
+  } catch (error) {
+    try {
+      database?.close();
+    } catch {
+      // Preserve the first initialization failure.
+    }
+    throw error;
+  }
+}
+
+function readJobLeaseSnapshot(
+  database: JobLeaseSqliteDatabase
+): JobLeaseSnapshot | undefined {
+  const value = database.prepare(`
+    SELECT
+      schema_id AS schemaId,
+      owner_id AS ownerId,
+      revision,
+      pid,
+      created_at_unix_ms AS createdAtUnixMs,
+      heartbeat_at_boot_ms AS heartbeatAtBootMs,
+      process_start_marker AS processStartMarker
+    FROM materialization_job_lease
+    WHERE singleton = 1
+  `).get();
+  if (value === undefined) {
+    return undefined;
+  }
+  const record = objectRecord(value);
+  const processStartMarker = record?.processStartMarker;
+  if (
+    !record
+    || !hasExactKeys(record, [
+      "schemaId",
+      "ownerId",
+      "revision",
+      "pid",
+      "createdAtUnixMs",
+      "heartbeatAtBootMs",
+      "processStartMarker"
+    ])
+    || record.schemaId !== CHZZK_JOB_LEASE_SCHEMA_ID
+    || typeof record.ownerId !== "string"
+    || !/^[a-f0-9]{48}$/u.test(record.ownerId)
+    || typeof record.revision !== "number"
+    || !Number.isSafeInteger(record.revision)
+    || record.revision < 1
+    || typeof record.pid !== "number"
+    || !Number.isSafeInteger(record.pid)
+    || record.pid < 1
+    || typeof record.createdAtUnixMs !== "number"
+    || !Number.isSafeInteger(record.createdAtUnixMs)
+    || record.createdAtUnixMs < 1
+    || typeof record.heartbeatAtBootMs !== "number"
+    || !Number.isSafeInteger(record.heartbeatAtBootMs)
+    || record.heartbeatAtBootMs < 0
+    || (processStartMarker !== null && (
+      typeof processStartMarker !== "string"
+      || !/^\d+$/u.test(processStartMarker)
+    ))
+  ) {
+    throw new Error("Job lease database contains an invalid owner row.");
+  }
+  return {
+    schemaId: CHZZK_JOB_LEASE_SCHEMA_ID,
+    ownerId: record.ownerId,
+    revision: record.revision,
+    pid: record.pid,
+    createdAtUnixMs: record.createdAtUnixMs,
+    heartbeatAtBootMs: record.heartbeatAtBootMs,
+    ...(typeof processStartMarker === "string" ? { processStartMarker } : {})
+  };
+}
+
+async function jobLeaseIsActive(snapshot: JobLeaseSnapshot): Promise<boolean> {
+  if (!processAppearsAlive(snapshot.pid)) {
     return false;
   }
-  try {
-    const record = objectRecord(JSON.parse(await readFile(lockPath, "utf8")) as unknown);
-    const pid = Number(record?.pid);
-    const createdAt = typeof record?.createdAt === "string"
-      ? Date.parse(record.createdAt)
-      : Number.NaN;
-    if (
-      record?.schemaId === "chzzk-kirinuki/chzzk-vod-job-lock-v1"
-      && Number.isSafeInteger(pid)
-      && pid > 0
-      && Number.isFinite(createdAt)
-    ) {
-      if (!processAppearsAlive(pid)) {
-        return false;
-      }
-      if (typeof record.processStartMarker === "string") {
-        const currentStartMarker = await linuxProcessStartMarker(pid);
-        if (currentStartMarker && currentStartMarker !== record.processStartMarker) {
-          return false;
-        }
-      }
-      return true;
+  if (snapshot.processStartMarker) {
+    const currentStartMarker = await linuxProcessStartMarker(snapshot.pid);
+    if (currentStartMarker && currentStartMarker !== snapshot.processStartMarker) {
+      return false;
     }
-  } catch {
-    // A creator can briefly expose an empty lock before writing its receipt.
   }
-  return Date.now() - status.mtimeMs < INVALID_LOCK_GRACE_MS;
+  const currentBootClockMs = jobLeaseBootClockMs();
+  if (snapshot.heartbeatAtBootMs > currentBootClockMs) {
+    return false;
+  }
+  return currentBootClockMs - snapshot.heartbeatAtBootMs
+    <= CHZZK_JOB_LOCK_LEASE_MS;
+}
+
+function jobLockFailure(cause?: unknown): ChzzkVodMaterializationError {
+  return new ChzzkVodMaterializationError(
+    cause
+      ? "CHZZK 편집 구간 작업 잠금의 heartbeat를 유지하지 못했습니다."
+      : "CHZZK 편집 구간 작업 잠금을 안전하게 정리하지 못했습니다.",
+    "LOCK_FAILED"
+  );
+}
+
+function createJobLockLease(
+  database: JobLeaseSqliteDatabase,
+  ownerId: string,
+  initialRevision: number
+): JobLockLease {
+  const leaseAbort = new AbortController();
+  let revision = initialRevision;
+  let failure: Error | undefined;
+  let stopped = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let releasePromise: Promise<void> | undefined;
+  const recordHeartbeatFailure = (error: unknown): void => {
+    if (failure) {
+      return;
+    }
+    failure = error instanceof Error ? error : new Error("Job lease heartbeat failed.");
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
+    leaseAbort.abort(failure);
+  };
+  const renewOwnership = (): void => {
+    if (stopped || failure) {
+      throw failure ?? new Error("Job lease has already stopped.");
+    }
+    try {
+      const now = jobLeaseBootClockMs();
+      if (!Number.isSafeInteger(revision + 1)) {
+        throw new Error("Job lease revision overflowed.");
+      }
+      const updated = sqliteChanges(database.prepare(`
+        UPDATE materialization_job_lease
+        SET heartbeat_at_boot_ms = ?, revision = revision + 1
+        WHERE singleton = 1 AND schema_id = ? AND owner_id = ? AND revision = ?
+      `).run(now, CHZZK_JOB_LEASE_SCHEMA_ID, ownerId, revision));
+      if (updated !== 1) {
+        throw new Error("Job lease ownership was lost before heartbeat.");
+      }
+      revision += 1;
+    } catch (error) {
+      recordHeartbeatFailure(error);
+      throw failure;
+    }
+  };
+  const heartbeat = (): void => {
+    try {
+      renewOwnership();
+    } catch {
+      // renewOwnership recorded and broadcast the ownership failure.
+    }
+  };
+  heartbeatTimer = setInterval(heartbeat, CHZZK_JOB_LOCK_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref?.();
+
+  return {
+    signal: leaseAbort.signal,
+    get failure() {
+      return failure;
+    },
+    assertOwned: renewOwnership,
+    release: () => {
+      releasePromise ??= (async () => {
+        stopped = true;
+        if (heartbeatTimer) {
+          clearInterval(heartbeatTimer);
+        }
+        let releaseError = failure;
+        try {
+          const removed = sqliteChanges(database.prepare(`
+            DELETE FROM materialization_job_lease
+            WHERE singleton = 1 AND schema_id = ? AND owner_id = ?
+          `).run(CHZZK_JOB_LEASE_SCHEMA_ID, ownerId));
+          if (removed !== 1) {
+            releaseError ??= new Error("Job lease ownership was lost before release.");
+          }
+        } catch (error) {
+          releaseError ??= error instanceof Error
+            ? error
+            : new Error("Job lease release failed.");
+        }
+        try {
+          database.close();
+        } catch (error) {
+          releaseError ??= error instanceof Error
+            ? error
+            : new Error("Job lease database close failed.");
+        }
+        if (releaseError) {
+          throw jobLockFailure(releaseError);
+        }
+      })();
+      return releasePromise;
+    }
+  };
 }
 
 async function acquireJobLock(
-  lockPath: string
-): Promise<Awaited<ReturnType<typeof open>>> {
+  databasePath: string,
+  stateDirectory: string,
+  beforeStaleCompareAndSwap?: () => Promise<void>
+): Promise<JobLockLease> {
   const processStartMarker = await linuxProcessStartMarker(process.pid);
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    let handle: Awaited<ReturnType<typeof open>>;
-    try {
-      handle = await open(lockPath, "wx", 0o600);
-    } catch (error) {
-      if (nodeErrorCode(error) !== "EEXIST") {
-        fail("CHZZK 편집 구간 작업 잠금을 만들지 못했습니다.", "LOCK_FAILED");
+  const ownerId = randomBytes(24).toString("hex");
+  const createdAtUnixMs = Date.now();
+  let database: JobLeaseSqliteDatabase;
+  try {
+    database = await openJobLeaseDatabase(databasePath, stateDirectory);
+  } catch {
+    fail("CHZZK 편집 구간 작업 잠금 DB를 열지 못했습니다.", "LOCK_FAILED");
+  }
+  try {
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      const inserted = sqliteChanges(database.prepare(`
+        INSERT INTO materialization_job_lease (
+          singleton,
+          schema_id,
+          owner_id,
+          revision,
+          pid,
+          created_at_unix_ms,
+          heartbeat_at_boot_ms,
+          process_start_marker
+        ) VALUES (1, ?, ?, 1, ?, ?, ?, ?)
+        ON CONFLICT(singleton) DO NOTHING
+      `).run(
+        CHZZK_JOB_LEASE_SCHEMA_ID,
+        ownerId,
+        process.pid,
+        createdAtUnixMs,
+        jobLeaseBootClockMs(),
+        processStartMarker ?? null
+      ));
+      if (inserted === 1) {
+        return createJobLockLease(database, ownerId, 1);
       }
-      if (await existingJobLockIsActive(lockPath)) {
+      if (inserted !== 0) {
+        throw new Error("Job lease insert changed an unexpected number of rows.");
+      }
+      const observed = readJobLeaseSnapshot(database);
+      if (!observed) {
+        continue;
+      }
+      if (await jobLeaseIsActive(observed)) {
+        database.close();
         fail("같은 CHZZK 편집 구간을 이미 준비하고 있습니다.", "ALREADY_RUNNING");
       }
-      await rm(lockPath, { force: true }).catch(() => undefined);
-      continue;
+      await beforeStaleCompareAndSwap?.();
+      if (!Number.isSafeInteger(observed.revision + 1)) {
+        throw new Error("Job lease revision overflowed.");
+      }
+      const replacementRevision = observed.revision + 1;
+      const replaced = sqliteChanges(database.prepare(`
+        UPDATE materialization_job_lease
+        SET
+          schema_id = ?,
+          owner_id = ?,
+          revision = ?,
+          pid = ?,
+          created_at_unix_ms = ?,
+          heartbeat_at_boot_ms = ?,
+          process_start_marker = ?
+        WHERE
+          singleton = 1
+          AND schema_id = ?
+          AND owner_id = ?
+          AND revision = ?
+      `).run(
+        CHZZK_JOB_LEASE_SCHEMA_ID,
+        ownerId,
+        replacementRevision,
+        process.pid,
+        createdAtUnixMs,
+        jobLeaseBootClockMs(),
+        processStartMarker ?? null,
+        observed.schemaId,
+        observed.ownerId,
+        observed.revision
+      ));
+      if (replaced === 1) {
+        return createJobLockLease(database, ownerId, replacementRevision);
+      }
+      if (replaced !== 0) {
+        throw new Error("Job lease CAS changed an unexpected number of rows.");
+      }
     }
+    throw new Error("Job lease ownership did not stabilize.");
+  } catch (error) {
     try {
-      await handle.writeFile(`${JSON.stringify({
-        schemaId: "chzzk-kirinuki/chzzk-vod-job-lock-v1",
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        ...(processStartMarker ? { processStartMarker } : {})
-      })}\n`, "utf8");
-      await handle.sync();
-      return handle;
+      database.close();
     } catch {
-      await handle.close().catch(() => undefined);
-      await rm(lockPath, { force: true }).catch(() => undefined);
-      fail("CHZZK 편집 구간 작업 잠금을 기록하지 못했습니다.", "LOCK_FAILED");
+      // Preserve the ownership error.
     }
+    if (error instanceof ChzzkVodMaterializationError) {
+      throw error;
+    }
+    fail("CHZZK 편집 구간 작업 잠금을 안전하게 획득하지 못했습니다.", "LOCK_FAILED");
   }
-  fail("CHZZK 편집 구간 작업 잠금을 안전하게 회수하지 못했습니다.", "LOCK_FAILED");
 }
 
 function emitProgress(
@@ -3295,7 +3974,7 @@ export async function materializeChzzkVod(
   const contentDirectory = path.join(
     vodConsumerChzzkContentRoot(stateDirectory, consumerScopeHash),
     currentResolved.contentId,
-    "v2",
+    CHZZK_STORAGE_GENERATION,
     currentResolved.sourceVersionId,
     sha256Text(qualityIdentity(currentResolved.quality)).slice(0, 24)
   );
@@ -3347,14 +4026,25 @@ export async function materializeChzzkVod(
     };
   }
 
-  const lockPath = path.join(jobDirectory, ".materializing.lock");
-  const lockHandle = await acquireJobLock(lockPath);
+  const lockDatabasePath = path.join(
+    jobDirectory,
+    CHZZK_JOB_LEASE_DATABASE_FILENAME
+  );
+  const lockLease = await acquireJobLock(
+    lockDatabasePath,
+    stateDirectory,
+    dependencies.beforeStaleJobLeaseCompareAndSwap
+  );
+  const jobSignal = request.signal
+    ? AbortSignal.any([request.signal, lockLease.signal])
+    : lockLease.signal;
+  let jobFailed = false;
   try {
     const afterLockExisting = await reusableCompletedMaterialization(
       manifestPath,
       artifactPath,
       expectedIdentity,
-      request.signal
+      jobSignal
     );
     if (
       afterLockExisting
@@ -3380,7 +4070,7 @@ export async function materializeChzzkVod(
     );
     let downloadedBytes = 0;
     const refreshResolved = async (): Promise<void> => {
-      const refreshed = await resolveChzzkVod(canonicalUrl, fetchImpl, request.signal);
+      const refreshed = await resolveChzzkVod(canonicalUrl, fetchImpl, jobSignal);
       if (!sameResolvedIdentity(currentResolved, refreshed)) {
         fail("CHZZK VOD의 품질 또는 타임라인이 준비 도중 바뀌었습니다.", "SOURCE_CHANGED");
       }
@@ -3401,13 +4091,19 @@ export async function materializeChzzkVod(
         currentResolved: () => currentResolved,
         refreshResolved,
         sleep,
-        ...(request.signal ? { signal: request.signal } : {})
+        signal: jobSignal,
+        assertLeaseOwned: lockLease.assertOwned
       });
       segmentPaths.set(key, result.filePath);
       completedSegmentKeys.add(key);
       downloadedBytes += result.downloadedBytes;
       if (!result.reused) {
-        await saveCheckpoint(checkpointPath, currentResolved, checkpoint);
+        await saveCheckpoint(
+          checkpointPath,
+          currentResolved,
+          checkpoint,
+          lockLease.assertOwned
+        );
       }
       emitProgress(request.onProgress, {
         phase: "downloading",
@@ -3455,7 +4151,7 @@ export async function materializeChzzkVod(
           runProcess,
           ffprobeBinary,
           jobDirectory,
-          request.signal
+          jobSignal
         )) {
           accepted = candidate;
           break;
@@ -3483,6 +4179,7 @@ export async function materializeChzzkVod(
       totalSegments: plannedSegmentKeys.size,
       completedBytes: downloadedBytes
     });
+    lockLease.assertOwned();
     await rm(artifactPath, { force: true }).catch(() => undefined);
     await remuxRuns({
       runs: mergedRuns,
@@ -3492,7 +4189,8 @@ export async function materializeChzzkVod(
       runProcess,
       ffmpegBinary,
       ffprobeBinary,
-      ...(request.signal ? { signal: request.signal } : {})
+      signal: jobSignal,
+      assertLeaseOwned: lockLease.assertOwned
     });
     const boundariesMs = windows.slice(0, -1).map((window) => window.mediaEndMs);
     const artifactDurationMs = await inspectFinalArtifact(
@@ -3502,7 +4200,7 @@ export async function materializeChzzkVod(
       runProcess,
       ffprobeBinary,
       jobDirectory,
-      request.signal
+      jobSignal
     );
     const artifactStatus = await stat(artifactPath);
     const preparedAt = new Date().toISOString();
@@ -3521,20 +4219,23 @@ export async function materializeChzzkVod(
       clips: createReceiptClips(clipRanges),
       windows,
       artifact: {
-        hashSha256: await sha256File(artifactPath, request.signal),
+        hashSha256: await sha256File(artifactPath, jobSignal),
         sizeBytes: artifactStatus.size,
         durationMs: artifactDurationMs
       },
       preparedAt
     };
     assertPublicManifestIsSecretFree(manifest);
-    await atomicWriteJson(manifestPath, manifest);
+    await atomicWriteJson(manifestPath, manifest, lockLease.assertOwned);
     for (let index = 0; index < mergedRuns.length; index += 1) {
+      lockLease.assertOwned();
       await rm(path.join(jobDirectory, `run-${index}.ts`), { force: true })
         .catch(() => undefined);
+      lockLease.assertOwned();
       await rm(path.join(jobDirectory, `run-${index}.mp4`), { force: true })
         .catch(() => undefined);
     }
+    lockLease.assertOwned();
     await rm(path.join(jobDirectory, "runs.concat.txt"), { force: true })
       .catch(() => undefined);
     emitProgress(request.onProgress, {
@@ -3549,8 +4250,19 @@ export async function materializeChzzkVod(
       artifactPath,
       reused: false
     };
+  } catch (error) {
+    jobFailed = true;
+    if (lockLease.failure) {
+      throw jobLockFailure(lockLease.failure);
+    }
+    throw error;
   } finally {
-    await lockHandle.close().catch(() => undefined);
-    await rm(lockPath, { force: true }).catch(() => undefined);
+    try {
+      await lockLease.release();
+    } catch (error) {
+      if (!jobFailed) {
+        throw error;
+      }
+    }
   }
 }

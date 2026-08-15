@@ -362,7 +362,9 @@ test("archive mode 검증은 commit의 0644/0755와 다른 header를 거절한�
   );
 });
 
-test("commit snapshot은 index 변조와 worktree ABA 뒤에도 같은 tree/blob만 읽는다", async () => {
+test("commit snapshot은 index 변조와 worktree ABA 뒤에도 같은 tree/blob만 읽는다", {
+  skip: process.platform !== "linux"
+}, async () => {
   const fixture = await createPackageFixture();
   try {
     const revision = (await run("git", ["rev-parse", "HEAD"], fixture.root)).stdout.trim();
@@ -423,7 +425,7 @@ test("README와 HELP는 기본 요구사항과 Whisper 전용 빌드 도구를 �
   for (const document of documents) {
     assert.match(
       document,
-      /기본[^\n]*도구[\s\S]*Node\.js 22 이상[\s\S]*FFmpeg와 ffprobe/u
+      /기본[^\n]*도구[\s\S]*Node\.js 22\.17\.0 이상[\s\S]*FFmpeg와 ffprobe/u
     );
     assert.match(
       document,
@@ -432,7 +434,9 @@ test("README와 HELP는 기본 요구사항과 Whisper 전용 빌드 도구를 �
   }
 });
 
-test("Linux source-app tar.gz는 재현 가능하고 checksum 및 비독립형 metadata가 정확하다", async () => {
+test("Linux source-app tar.gz는 재현 가능하고 checksum 및 비독립형 metadata가 정확하다", {
+  skip: process.platform !== "linux"
+}, async () => {
   const fixture = await createPackageFixture();
   try {
     const first = await createLinuxAppPackage({ repositoryRoot: fixture.root });
@@ -511,7 +515,9 @@ test("Linux source-app tar.gz는 재현 가능하고 checksum 및 비독립형 m
   }
 });
 
-test("Linux verifier는 archive의 실행 mode가 release commit과 다르면 npm 전에 거절한다", async () => {
+test("Linux verifier는 archive의 실행 mode가 release commit과 다르면 npm 전에 거절한다", {
+  skip: process.platform !== "linux"
+}, async () => {
   const fixture = await createPackageFixture();
   try {
     const packaged = await createLinuxAppPackage({ repositoryRoot: fixture.root });
@@ -542,7 +548,9 @@ test("Linux verifier는 archive의 실행 mode가 release commit과 다르면 np
   }
 });
 
-test("Linux verifier는 archive blob bytes가 release commit과 다르면 npm 전에 거절한다", async () => {
+test("Linux verifier는 archive blob bytes가 release commit과 다르면 npm 전에 거절한다", {
+  skip: process.platform !== "linux"
+}, async () => {
   const fixture = await createPackageFixture();
   try {
     const packaged = await createLinuxAppPackage({ repositoryRoot: fixture.root });

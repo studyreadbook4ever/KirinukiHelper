@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   writeFile
@@ -172,8 +173,15 @@ test("release record 직렬화는 고정 순서와 LF로 결정적이다", () =>
   );
 });
 
-test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 readback한다", async () => {
-  const repositoryRoot = await mkdtemp(path.join(os.tmpdir(), "kirinuki-release-record-test-"));
+// This integration asserts the Linux release's exact 0644 artifact modes;
+// platform-neutral manifest serialization stays enabled on Windows above.
+test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 readback한다", {
+  skip: process.platform === "win32"
+}, async () => {
+  const repositoryRoot = await realpath(await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-release-record-test-"
+  )));
   const distDirectory = path.join(repositoryRoot, "dist");
   try {
     await mkdir(distDirectory);
@@ -337,7 +345,10 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
 });
 
 test("Linux verifier는 packager SHA와 다른 archive를 tar 또는 npm 실행 전에 거절한다", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-release-verify-test-"));
+  const root = await realpath(await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-release-verify-test-"
+  )));
   try {
     const filename = `kirinuki-linux-v${VERSION}.tar.gz`;
     const archivePath = path.join(root, filename);

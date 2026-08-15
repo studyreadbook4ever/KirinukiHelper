@@ -44,7 +44,9 @@ async function executableScript(filePath: string, contents: string): Promise<voi
   await chmod(filePath, 0o755);
 }
 
-test("desktop 시작 실패는 URL·비밀 값을 지운 최신 1건 로그와 zenity 복구 안내를 남긴다", async (t) => {
+test("desktop 시작 실패는 URL·비밀 값을 지운 최신 1건 로그와 zenity 복구 안내를 남긴다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-startup-error-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const dialogCapture = path.join(root, "zenity-args.txt");
@@ -94,7 +96,9 @@ test("desktop 시작 실패는 URL·비밀 값을 지운 최신 1건 로그와 z
   assert.match(stderr.text(), /Kirinuki 앱 실행 실패/u);
 });
 
-test("zenity가 실패하면 notify-send로 복구 안내하고 일반 CLI에는 알림을 띄우지 않는다", async (t) => {
+test("zenity가 실패하면 notify-send로 복구 안내하고 일반 CLI에는 알림을 띄우지 않는다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-startup-notify-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const notifyCapture = path.join(root, "notify-args.txt");
@@ -142,7 +146,9 @@ test("zenity가 실패하면 notify-send로 복구 안내하고 일반 CLI에는
   await assert.rejects(readFile(notifyCapture), { code: "ENOENT" });
 });
 
-test("Terminal=false desktop 진입점의 실제 fatal 경로가 알림과 0600 로그를 끝까지 기다린다", async (t) => {
+test("Terminal=false desktop 진입점의 실제 fatal 경로가 알림과 0600 로그를 끝까지 기다린다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-startup-main-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const dialogCapture = path.join(root, "dialog.txt");

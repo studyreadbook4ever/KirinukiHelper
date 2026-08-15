@@ -24,7 +24,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22"
+          node-version: "22.17.0"
           cache: npm
 
       - name: Install locked dependencies without lifecycle scripts
@@ -49,11 +49,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22"
+          node-version: "22.17.0"
           cache: npm
 
       - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
+
+      - name: Prepare the pinned FFmpeg used by the browser smoke
+        run: npm run tools:desktop -- linux-x64
 
       - name: Install Chrome for Testing and matching ChromeDriver
         id: setup-chrome
@@ -67,8 +70,81 @@ jobs:
         env:
           CHROMIUM_BINARY: ${{ steps.setup-chrome.outputs.chrome-path }}
           CHROMEDRIVER_BINARY: ${{ steps.setup-chrome.outputs.chromedriver-path }}
+          FFMPEG_BINARY: ${{ github.workspace }}/.artifacts/desktop-tools/linux-x64/ffmpeg
 
       - name: Prove release packaging kept tracked sources clean
         run: |
           git diff --check
           git diff --exit-code
+
+  native-desktop:
+    name: Native desktop · ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x64
+          - runner: windows-2025
+            target: win32-x64
+          - runner: macos-15
+            target: darwin-arm64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.17.0"
+          cache: npm
+
+      - name: Verify the native package target
+        env:
+          EXPECTED_DESKTOP_TARGET: ${{ matrix.target }}
+        run: >-
+          node -e "const actual=process.platform+'-'+process.arch;
+          if(actual!==process.env.EXPECTED_DESKTOP_TARGET)
+          throw new Error('expected '+process.env.EXPECTED_DESKTOP_TARGET+', got '+actual)"
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck the complete cross-platform source
+        run: npm run typecheck
+
+      - name: Run the complete unit test suite natively
+        run: npm test
+
+      - name: Build and validate the unsigned native desktop package
+        run: npm run package:desktop
+
+      - name: Install the Linux sandbox helper in the unsigned package copy
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sandbox_path="dist/desktop/${{ matrix.target }}/Kirinuki-${{ matrix.target }}/chrome-sandbox"
+          test -f "$sandbox_path"
+          test ! -L "$sandbox_path"
+          sudo chown root:root -- "$sandbox_path"
+          sudo chmod 4755 -- "$sandbox_path"
+          test "$(stat -c '%u:%g:%a' -- "$sandbox_path")" = "0:0:4755"
+
+      - name: Run the packaged desktop liveness smoke on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:package:desktop
+
+      - name: Run the packaged desktop liveness smoke natively
+        if: runner.os != 'Linux'
+        run: npm run test:package:desktop
+
+      - name: Prove native packaging kept tracked sources clean
+        run: |
+          git diff --check
+          git diff --exit-code -- web streaming-companion
+
+      # Deliberately no upload-artifact or release step: these packages remain
+      # unsigned development evidence until the binary license and signing gates
+      # in legal/DESKTOP_BINARY_RELEASE_GATE.md are complete.

@@ -15,9 +15,11 @@ import {
   lstat,
   mkdir,
   mkdtemp,
-  rm
+  rm,
+  writeFile
 } from "node:fs/promises";
 import path from "node:path";
+import { rootCertificates } from "node:tls";
 
 export const EXTERNAL_VOD_DIRECT_SECTION_EVIDENCE_SCHEMA =
   "chzzk-kirinuki/external-vod-direct-section-evidence-v2";
@@ -38,6 +40,7 @@ const SAFE_HEADER_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9-]{0,63}$/u;
 const MAX_RUNTIME_URL_LENGTH = 16 * 1024;
 const MAX_HEADER_VALUE_LENGTH = 4 * 1024;
 const MAX_HEADER_BLOCK_BYTES = 16 * 1024;
+const MAX_NODE_ROOT_CA_BUNDLE_BYTES = 1024 * 1024;
 const ALLOWED_PUBLIC_HEADER_NAMES = new Set([
   "accept",
   "accept-language",
@@ -482,13 +485,73 @@ function formatSecondsFromUs(valueUs: number): string {
   return `${whole}.${fraction}`;
 }
 
+function nodeRootCaBundle(): string {
+  if (rootCertificates.length === 0 || rootCertificates.length > 1_024) {
+    fail("Node TLS 신뢰 루트 목록이 올바르지 않습니다.", "MEDIA_MUX_FAILED");
+  }
+  const certificates = rootCertificates.map((certificate) => {
+    const normalized = certificate.trim();
+    if (
+      !normalized.startsWith("-----BEGIN CERTIFICATE-----\n")
+      || !normalized.endsWith("\n-----END CERTIFICATE-----")
+      || /\r|\0/u.test(normalized)
+    ) {
+      fail("Node TLS 신뢰 루트 형식이 올바르지 않습니다.", "MEDIA_MUX_FAILED");
+    }
+    return normalized;
+  });
+  const bundle = `${certificates.join("\n")}\n`;
+  if (Buffer.byteLength(bundle, "utf8") > MAX_NODE_ROOT_CA_BUNDLE_BYTES) {
+    fail("Node TLS 신뢰 루트 묶음이 허용 크기를 넘었습니다.", "MEDIA_MUX_FAILED");
+  }
+  return bundle;
+}
+
+/**
+ * Materializes the trust store used by FFmpeg/ffprobe into an already-private
+ * job directory. The caller owns the directory lifetime, so no persistent
+ * certificate file or platform-specific system path is required.
+ */
+export async function writePrivateNodeRootCaFile(
+  privateDirectory: string
+): Promise<string> {
+  if (
+    !path.isAbsolute(privateDirectory)
+    || privateDirectory.trim() !== privateDirectory
+    || /[\0\r\n]/u.test(privateDirectory)
+  ) {
+    fail("Node TLS 신뢰 루트를 둘 private 경로가 올바르지 않습니다.", "UNSAFE_OUTPUT_PATH");
+  }
+  const tlsCaFile = path.join(privateDirectory, "node-root-ca.pem");
+  const tlsCaBundle = nodeRootCaBundle();
+  await writeFile(tlsCaFile, tlsCaBundle, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600
+  });
+  const tlsCaStatus = await lstat(tlsCaFile);
+  if (
+    !tlsCaStatus.isFile()
+    || tlsCaStatus.isSymbolicLink()
+    || tlsCaStatus.nlink !== 1
+    || tlsCaStatus.size !== Buffer.byteLength(tlsCaBundle, "utf8")
+  ) {
+    fail("FFmpeg TLS 신뢰 루트 파일이 안전하지 않습니다.", "UNSAFE_OUTPUT_PATH");
+  }
+  return tlsCaFile;
+}
+
 function directInputArgs(
   input: NormalizedExternalVodDirectRuntimeInput,
   sourceStartUs: number,
-  durationUs: number
+  durationUs: number,
+  tlsCaFile: string
 ): string[] {
   return [
     "-protocol_whitelist", "https,tls,tcp",
+    "-tls_verify", "1",
+    "-ca_file", tlsCaFile,
+    "-max_redirects", "0",
     "-rw_timeout", "30000000",
     "-accurate_seek",
     "-ss", formatSecondsFromUs(sourceStartUs),
@@ -502,12 +565,14 @@ export function buildExternalVodDirectFfmpegArgs({
   inputs,
   outputPath,
   sourceStartUs,
-  durationUs
+  durationUs,
+  tlsCaFile
 }: {
   inputs: NormalizedExternalVodDirectInputs;
   outputPath: string;
   sourceStartUs: number;
   durationUs: number;
+  tlsCaFile: string;
 }): string[] {
   if (
     !Number.isSafeInteger(sourceStartUs)
@@ -518,14 +583,23 @@ export function buildExternalVodDirectFfmpegArgs({
   ) {
     fail("직접 미디어 정밀 취득 범위가 올바르지 않습니다.", "INVALID_SECTION");
   }
+  if (
+    !path.isAbsolute(tlsCaFile)
+    || tlsCaFile.trim() !== tlsCaFile
+    || /[\0\r\n]/u.test(tlsCaFile)
+  ) {
+    fail("FFmpeg TLS 신뢰 루트 경로가 올바르지 않습니다.", "INVALID_SECTION");
+  }
   const audioInputIndex = inputs.audio ? 1 : 0;
   return [
     "-hide_banner",
     "-loglevel", "error",
     "-nostdin",
     "-n",
-    ...directInputArgs(inputs.video, sourceStartUs, durationUs),
-    ...(inputs.audio ? directInputArgs(inputs.audio, sourceStartUs, durationUs) : []),
+    ...directInputArgs(inputs.video, sourceStartUs, durationUs, tlsCaFile),
+    ...(inputs.audio
+      ? directInputArgs(inputs.audio, sourceStartUs, durationUs, tlsCaFile)
+      : []),
     "-map", "0:v:0",
     "-map", `${audioInputIndex}:a:0?`,
     "-map_metadata", "-1",
@@ -846,11 +920,18 @@ export async function acquireExternalVodDirectSection(
   assertPrivateOutputPath(workDirectory, outputPath);
   await mkdir(workDirectory, { recursive: true, mode: 0o700 });
   await mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-  const acquisitionDirectory = await mkdtemp(path.join(workDirectory, ".direct-acquire-"));
+  const acquisitionDirectory = await mkdtemp(path.join(
+    workDirectory,
+    process.platform === "win32" ? ".d-" : ".direct-acquire-"
+  ));
   await chmod(acquisitionDirectory, 0o700);
   let published = false;
   try {
-    const temporaryOutputPath = path.join(acquisitionDirectory, "section.mp4");
+    const tlsCaFile = await writePrivateNodeRootCaFile(acquisitionDirectory);
+    const temporaryOutputPath = path.join(
+      acquisitionDirectory,
+      process.platform === "win32" ? "s.mp4" : "section.mp4"
+    );
     const processOptions: ExternalVodDirectProcessOptions = {
       cwd: acquisitionDirectory,
       timeoutMs: processTimeoutMs,
@@ -864,7 +945,8 @@ export async function acquireExternalVodDirectSection(
           inputs,
           outputPath: temporaryOutputPath,
           sourceStartUs,
-          durationUs
+          durationUs,
+          tlsCaFile
         }),
         processOptions
       );

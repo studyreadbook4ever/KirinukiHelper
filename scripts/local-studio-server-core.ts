@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import {
   lstat,
   open,
@@ -46,8 +47,8 @@ const BASE_SECURITY_HEADERS = Object.freeze({
   "Cross-Origin-Resource-Policy": "same-origin",
   "Permissions-Policy":
     "camera=(), display-capture=(), geolocation=(), microphone=()",
-  // YouTube IFrame Player error 153 requires the embedding client to identify
-  // its localhost origin. Cross-origin requests still receive no path/query.
+  // The YouTube privacy-enhanced embed requires the embedding client to
+  // identify its localhost origin. Cross-origin requests receive no path/query.
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY"
@@ -60,7 +61,7 @@ const HTML_CONTENT_SECURITY_POLICY = [
   "frame-src https://chzzk.naver.com https://www.youtube-nocookie.com https://vod.sooplive.com",
   "frame-ancestors 'none'",
   "form-action 'self'",
-  "script-src 'self' https://www.youtube.com",
+  "script-src 'self'",
   "style-src 'self'",
   "font-src 'self'",
   "img-src 'self' blob: data:",
@@ -175,6 +176,8 @@ export interface OpenedStaticAsset {
   handle: FileHandle;
   size: number;
   etag: string;
+  /** Exact fd-family snapshot used again immediately before responding. */
+  status: BigIntStats;
 }
 
 export type StudioEndpointOwnership = "down" | "foreign" | "managed";
@@ -598,6 +601,46 @@ function isWithinRoot(candidate: string, root: string): boolean {
   );
 }
 
+export function normalizedStudioStaticAssetDeviceId(
+  value: bigint,
+  platform: NodeJS.Platform | string = process.platform
+): bigint {
+  // Node 22/libuv before libuv #4698 can expose a Windows path-stat volume
+  // serial at 64 bits but fstat at 32 bits for the same object.
+  return platform === "win32" ? BigInt.asUintN(32, value) : value;
+}
+
+export function sameStudioStaticAssetCrossApiObjectIdentity(
+  pathStatus: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">,
+  handleStatus: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">,
+  platform: NodeJS.Platform | string = process.platform
+): boolean {
+  return normalizedStudioStaticAssetDeviceId(pathStatus.dev, platform)
+      === normalizedStudioStaticAssetDeviceId(handleStatus.dev, platform)
+    && pathStatus.ino === handleStatus.ino
+    && pathStatus.size === handleStatus.size
+    && pathStatus.nlink === handleStatus.nlink;
+}
+
+function sameStudioStaticAssetSnapshot(
+  left: BigIntStats,
+  right: BigIntStats
+): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode
+    && left.nlink === right.nlink
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs;
+}
+
+function studioStaticAssetReadOnlyFlags(): number {
+  return process.platform === "win32"
+    ? fsConstants.O_RDONLY
+    : fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
+}
+
 /** Open a public asset only after every path component is proven non-symlink. */
 export async function openStudioStaticAsset(
   repoRoot: string,
@@ -611,11 +654,17 @@ export async function openStudioStaticAsset(
 
   const relativeParts = path.relative(root, candidate).split(path.sep);
   let cursor = root;
+  let openedHandle: FileHandle | undefined;
   try {
+    const rootStatus = await lstat(root, { bigint: true });
+    if (rootStatus.isSymbolicLink() || !rootStatus.isDirectory()) {
+      return null;
+    }
     const realRoot = await realpath(root);
+    let finalPathStatus: BigIntStats | null = null;
     for (let index = 0; index < relativeParts.length; index += 1) {
       cursor = path.join(cursor, relativeParts[index]!);
-      const stats = await lstat(cursor);
+      const stats = await lstat(cursor, { bigint: true });
       if (stats.isSymbolicLink()) {
         return null;
       }
@@ -625,35 +674,77 @@ export async function openStudioStaticAsset(
       if (index === relativeParts.length - 1 && !stats.isFile()) {
         return null;
       }
+      if (index === relativeParts.length - 1) {
+        finalPathStatus = stats;
+      }
     }
     const realCandidate = await realpath(candidate);
     if (!isWithinRoot(realCandidate, realRoot)) {
       return null;
     }
-    const handle = await open(
+    openedHandle = await open(
       candidate,
-      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+      studioStaticAssetReadOnlyFlags()
     );
-    const stats = await handle.stat();
+    const stats = await openedHandle.stat({ bigint: true });
     if (
-      !stats.isFile()
-      || stats.nlink !== 1
-      || stats.size > MAX_STATIC_ASSET_BYTES
+      !finalPathStatus
+      || !stats.isFile()
+      || finalPathStatus.nlink !== 1n
+      || stats.nlink !== 1n
+      || stats.size < 0n
+      || stats.size > BigInt(MAX_STATIC_ASSET_BYTES)
+      || !sameStudioStaticAssetCrossApiObjectIdentity(finalPathStatus, stats)
     ) {
-      await handle.close();
+      await openedHandle.close();
+      openedHandle = undefined;
       return null;
     }
-    const modifiedAtMs = Math.max(0, Math.trunc(stats.mtimeMs));
-    return {
-      handle,
-      size: stats.size,
+    const pathAfter = await lstat(candidate, { bigint: true });
+    if (
+      pathAfter.isSymbolicLink()
+      || !pathAfter.isFile()
+      || !sameStudioStaticAssetSnapshot(finalPathStatus, pathAfter)
+      || !sameStudioStaticAssetCrossApiObjectIdentity(pathAfter, stats)
+    ) {
+      await openedHandle.close();
+      openedHandle = undefined;
+      return null;
+    }
+    const size = Number(stats.size);
+    const modifiedAtMs = Math.max(
+      0,
+      Math.trunc(Number(stats.mtimeNs) / 1_000_000)
+    );
+    const result = {
+      handle: openedHandle,
+      size,
+      status: stats,
       // Size+mtime is a cheap revalidation hint rather than a byte identity,
       // so advertise it as a weak validator.
-      etag: `W/"${stats.size.toString(16)}-${modifiedAtMs.toString(16)}"`
+      etag: `W/"${size.toString(16)}-${modifiedAtMs.toString(16)}"`
     };
+    openedHandle = undefined;
+    return result;
   } catch {
+    await openedHandle?.close().catch(() => undefined);
     return null;
   }
+}
+
+export async function readVerifiedStudioStaticAsset(
+  opened: Readonly<OpenedStaticAsset>,
+  readBytes: boolean
+): Promise<Buffer | null> {
+  const bytes = readBytes ? await opened.handle.readFile() : null;
+  const after = await opened.handle.stat({ bigint: true });
+  if (
+    !sameStudioStaticAssetSnapshot(opened.status, after)
+    || (bytes !== null && bytes.byteLength !== opened.size)
+  ) {
+    throw new Error("Studio 정적 파일이 응답 준비 중 바뀌었습니다.");
+  }
+  return bytes;
 }
 
 export function studioSecurityHeaders({
@@ -708,6 +799,7 @@ async function serveStaticAsset(
       );
     });
     if (!descriptor.html && validatorMatches) {
+      await readVerifiedStudioStaticAsset(opened, false);
       response.writeHead(304, {
         ...studioSecurityHeaders(),
         ETag: opened.etag
@@ -717,12 +809,16 @@ async function serveStaticAsset(
     }
     const requiresOriginBinding = descriptor.relativePath === "web/index.html"
       || descriptor.relativePath === "web/editor.html";
-    let bytes: Buffer | null = requestMethod === "HEAD"
-      ? null
-      : await opened.handle.readFile();
+    let bytes = await readVerifiedStudioStaticAsset(
+      opened,
+      requestMethod !== "HEAD" || requiresOriginBinding
+    );
     let contentLength = bytes?.byteLength ?? opened.size;
     if (requiresOriginBinding) {
-      const source = bytes ?? await opened.handle.readFile();
+      const source = bytes;
+      if (!source) {
+        throw new Error("Studio HTML 파일을 검증해 읽지 못했습니다.");
+      }
       const html = source.toString("utf8");
       const firstPlaceholder = html.indexOf(
         KIRINUKI_STUDIO_ORIGIN_PLACEHOLDER

@@ -153,10 +153,10 @@ async function rawLifecycleRequest(
   }
 }
 
-test("버전 하한은 Node 22와 Chromium 120 경계를 정확히 구분한다", () => {
-  assert.equal(versionAtLeast("21.99.9", "22.0.0"), false);
-  assert.equal(versionAtLeast("22.0.0", "22.0.0"), true);
-  assert.equal(versionAtLeast("23.0.0", "22.0.0"), true);
+test("버전 하한은 Node 22.17과 Chromium 120 경계를 정확히 구분한다", () => {
+  assert.equal(versionAtLeast("22.16.99", "22.17.0"), false);
+  assert.equal(versionAtLeast("22.17.0", "22.17.0"), true);
+  assert.equal(versionAtLeast("23.0.0", "22.17.0"), true);
   assert.equal(parseBrowserMajor("Chromium 119.0.1"), 119);
   assert.equal(parseBrowserMajor("Google Chrome 120.0.1"), 120);
   assert.equal(parseBrowserMajor("unknown"), null);
@@ -296,7 +296,9 @@ test("fresh와 orphan browser만 앱 생명주기 claim 후보이고 정리는 �
   assert.equal(calls, 1);
 });
 
-test("동시 open은 같은 프로필의 primary 생명주기를 하나만 획득한다", async (t) => {
+test("동시 open은 같은 프로필의 primary 생명주기를 하나만 획득한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-lifecycle-claim-")
   );
@@ -339,7 +341,9 @@ test("동시 open은 같은 프로필의 primary 생명주기를 하나만 획�
   await afterRelease.release();
 });
 
-test("긴 상태 경로도 private directory FD alias로 lifecycle을 유지한다", async (t) => {
+test("긴 상태 경로도 private directory FD alias로 lifecycle을 유지한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "kl-long-root-"));
   t.after(() => rm(tempRoot, { recursive: true, force: true }));
   const stateRootA = path.join(
@@ -402,7 +406,9 @@ test("긴 상태 경로도 private directory FD alias로 lifecycle을 유지한�
   await takeover.release();
 });
 
-test("lifecycle IPC는 symlink 상태 폴더와 비-socket endpoint를 삭제하지 않고 거부한다", async (t) => {
+test("lifecycle IPC는 symlink 상태 폴더와 비-socket endpoint를 삭제하지 않고 거부한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kl-untrusted-")
   );
@@ -429,7 +435,9 @@ test("lifecycle IPC는 symlink 상태 폴더와 비-socket endpoint를 삭제하
   assert.equal(await readFile(socketName, "utf8"), "do-not-delete");
 });
 
-test("lifecycle IPC는 동일 사용자의 끊어진 socket inode만 회수한다", async (t) => {
+test("lifecycle IPC는 동일 사용자의 끊어진 socket inode만 회수한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-lifecycle-stale-")
   );
@@ -464,7 +472,9 @@ test("lifecycle IPC는 동일 사용자의 끊어진 socket inode만 회수한�
   await owner.release();
 });
 
-test("owner open IPC는 closing을 먼저 공개하고 수락 요청 drain 뒤에만 정리한다", async (t) => {
+test("owner open IPC는 closing을 먼저 공개하고 수락 요청 drain 뒤에만 정리한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-lifecycle-open-drain-")
   );
@@ -553,7 +563,9 @@ test("owner open IPC는 closing을 먼저 공개하고 수락 요청 drain 뒤�
   await takeover.release();
 });
 
-test("lifecycle IPC는 초과·비정형 payload와 requestId를 fail-closed한다", async (t) => {
+test("lifecycle IPC는 초과·비정형 payload와 requestId를 fail-closed한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-lifecycle-bounds-")
   );
@@ -604,7 +616,9 @@ test("lifecycle IPC는 초과·비정형 payload와 requestId를 fail-closed한�
   await owner.release();
 });
 
-test("브라우저 인자는 전용 profile과 앱 내부 origin만 사용한다", () => {
+test("브라우저 인자는 전용 profile과 앱 내부 origin만 사용한다", {
+  skip: process.platform !== "linux"
+}, () => {
   const args = browserLaunchArgs({
     profileRoot: "/tmp/Kirinuki Profile",
     streamingCompanionRoot: "/opt/Kirinuki Helper/streaming-companion",
@@ -698,7 +712,9 @@ test("Kirinuki 앱 링크는 open과 지원 원본 하나만 엄격하게 허용
   );
 });
 
-test("전용 브라우저 identity는 clean·최소 companion·정확한 legacy를 구분한다", () => {
+test("전용 브라우저 identity는 clean·최소 companion·정확한 legacy를 구분한다", {
+  skip: process.platform !== "linux"
+}, () => {
   const profileRoot = "/tmp/Kirinuki Profile";
   const streamingCompanionRoot = "/opt/Kirinuki Helper/streaming-companion";
   const legacyExtensionRoot = "/opt/Kirinuki Helper/extension";
@@ -950,7 +966,9 @@ test("전용 브라우저 identity는 clean·최소 companion·정확한 legacy�
   );
 });
 
-test("Chromium wrapper 종료는 새로 파생된 정확한 Snap app root에만 감독을 인계한다", () => {
+test("Chromium wrapper 종료는 새로 파생된 정확한 Snap app root에만 감독을 인계한다", {
+  skip: process.platform !== "linux"
+}, () => {
   const profileRoot = "/tmp/Kirinuki Profile";
   const streamingCompanionRoot = "/opt/Kirinuki Helper/streaming-companion";
   const legacyExtensionRoot = "/opt/Kirinuki Helper/extension";
@@ -1118,7 +1136,9 @@ test("Whisper 시작은 설치·Origin·ready 뒤 systemd/foreground를 정확�
   }, KIRINUKI_PUBLIC_STUDIO_ORIGIN), false);
 });
 
-test("XDG 경로는 repository 밖의 안정적인 사용자 profile을 고른다", () => {
+test("XDG 경로는 repository 밖의 안정적인 사용자 profile을 고른다", {
+  skip: process.platform !== "linux"
+}, () => {
   const defaultPaths = resolveLinuxHelperPaths({
     env: {},
     homeDir: "/home/kirinuki-user",
@@ -1186,7 +1206,9 @@ test("XDG 경로는 repository 밖의 안정적인 사용자 profile을 고른�
   }
 });
 
-test("setup용 사용자 명령과 desktop entry는 원자적으로 최신 경로만 가리킨다", async (t) => {
+test("setup용 사용자 명령과 desktop entry는 원자적으로 최신 경로만 가리킨다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-entrypoints-")
   );
@@ -1479,7 +1501,9 @@ test("setup용 사용자 명령과 desktop entry는 원자적으로 최신 경�
   );
 });
 
-test("설치된 bare kirinuki는 open으로, 명시 인자는 그대로 전달한다", async (t) => {
+test("설치된 bare kirinuki는 open으로, 명시 인자는 그대로 전달한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-wrapper-forwarding-")
   );
@@ -1546,7 +1570,9 @@ test("설치된 bare kirinuki는 open으로, 명시 인자는 그대로 전달�
   assert.match(explicit.stdout, /^args=status --json$/mu);
 });
 
-test("사용자의 unrelated 파일과 symlink는 setup이 절대 덮어쓰지 않는다", async (t) => {
+test("사용자의 unrelated 파일과 symlink는 setup이 절대 덮어쓰지 않는다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-entrypoint-ownership-")
   );
@@ -1770,7 +1796,7 @@ test("도움말은 사람이 쓸 모든 명령과 안전 경계를 노출한다"
   assert.match(text, /KIRINUKI_BROWSER_PROFILE_ROOT/u);
   assert.match(
     text,
-    /기본:[^\n]*Node\.js 22\+[^\n]*FFmpeg[^\n]*ffprobe/u
+    /기본:[^\n]*Node\.js 22\.17\.0\+[^\n]*FFmpeg[^\n]*ffprobe/u
   );
   assert.match(
     text,
@@ -1780,7 +1806,9 @@ test("도움말은 사람이 쓸 모든 명령과 안전 경계를 노출한다"
   assert.doesNotMatch(text, /curl\s*\|\s*(?:ba)?sh/iu);
 });
 
-test("fresh Linux dry-run은 외부 변경 없이 정확한 setup과 open 명령을 보여준다", async (t) => {
+test("fresh Linux dry-run은 외부 변경 없이 정확한 setup과 open 명령을 보여준다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-linux-helper-")
   );
@@ -1897,7 +1925,9 @@ test("fresh Linux dry-run은 외부 변경 없이 정확한 setup과 open 명령
   );
 });
 
-test("자동 companion 로드는 Chromium만 허용하고 branded Chrome은 fail-closed한다", async (t) => {
+test("자동 companion 로드는 Chromium만 허용하고 branded Chrome은 fail-closed한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-browser-brand-")
   );
@@ -1932,7 +1962,9 @@ test("자동 companion 로드는 Chromium만 허용하고 branded Chrome은 fail
   assert.equal(stored.binary, chromium);
 });
 
-test("누락된 fresh Linux 의존성은 변경 없이 실행 가능한 설치 안내로 실패한다", async (t) => {
+test("누락된 fresh Linux 의존성은 변경 없이 실행 가능한 설치 안내로 실패한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-missing-dependencies-")
   );
@@ -1963,7 +1995,9 @@ test("누락된 fresh Linux 의존성은 변경 없이 실행 가능한 설치 �
   assert.match(result.stdout, /자동 실행하지 않습니다/u);
 });
 
-test("AudSeg status와 stop은 모든 앱 엔진 lifecycle을 함께 다룬다", async (t) => {
+test("AudSeg status와 stop은 모든 앱 엔진 lifecycle을 함께 다룬다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const tempRoot = await mkdtemp(
     path.join(os.tmpdir(), "kirinuki-audseg-status-")
   );
@@ -2008,7 +2042,9 @@ test("AudSeg status와 stop은 모든 앱 엔진 lifecycle을 함께 다룬다",
   assert.ok(captionIndex > vodIndex);
 });
 
-test("셸 진입점은 ZIP의 0644 권한에서도 setup을 열고 성공 뒤 실행권한을 복원한다", async (t) => {
+test("셸 진입점은 ZIP의 0644 권한에서도 setup을 열고 성공 뒤 실행권한을 복원한다", {
+  skip: process.platform !== "linux"
+}, async (t) => {
   const [launcher, setup] = await Promise.all([
     readFile(path.join(packageRoot, "kirinuki.sh"), "utf8"),
     readFile(path.join(packageRoot, "setup.sh"), "utf8")
@@ -2064,7 +2100,7 @@ test("셸 진입점은 ZIP의 0644 권한에서도 setup을 열고 성공 뒤 �
       [
         "#!/bin/sh",
         "if [ \"$1\" = \"--version\" ]; then",
-        "  printf '%s\\n' 'v22.0.0'",
+        "  printf '%s\\n' 'v22.17.0'",
         "  exit 0",
         "fi",
         "printf '%s\\n' \"$@\"",

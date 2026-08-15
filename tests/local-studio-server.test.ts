@@ -3,6 +3,8 @@ import {
   link,
   mkdir,
   mkdtemp,
+  readFile,
+  rename,
   rm,
   symlink,
   writeFile
@@ -26,12 +28,16 @@ import {
   hasExactStudioHost,
   isManagedStudioHealthPayload,
   isValidStudioInstanceNonce,
+  normalizedStudioStaticAssetDeviceId,
+  openStudioStaticAsset,
   parseProcStartTime,
+  readVerifiedStudioStaticAsset,
   resolveStudioServerPaths,
   resolveStudioStaticAsset,
   studioRequestPath,
   studioHealthPayload,
   studioSecurityHeaders,
+  sameStudioStaticAssetCrossApiObjectIdentity,
   validStudioPidRecord,
   withoutStaticContentSecurityPolicyMeta
 } from "../scripts/local-studio-server-core.js";
@@ -61,6 +67,33 @@ import {
 
 const TEST_NONCE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ";
 const TEST_MIGRATION_NONCE = "Zyxwvutsrqponmlkjihgfedcba9876543210_-ABCDE";
+
+test("Windows Studio static path/fd identity는 low32 dev만 정규화한다", () => {
+  const low32 = 0x89abcdefn;
+  const pathDevice = (0x12345678n << 32n) | low32;
+  const pathIdentity = { dev: pathDevice, ino: 7n, size: 11n, nlink: 1n };
+  const handleIdentity = { ...pathIdentity, dev: low32 };
+  assert.equal(normalizedStudioStaticAssetDeviceId(pathDevice, "win32"), low32);
+  assert.equal(normalizedStudioStaticAssetDeviceId(pathDevice, "linux"), pathDevice);
+  assert.equal(sameStudioStaticAssetCrossApiObjectIdentity(
+    pathIdentity,
+    handleIdentity,
+    "win32"
+  ), true);
+  assert.equal(sameStudioStaticAssetCrossApiObjectIdentity(
+    pathIdentity,
+    handleIdentity,
+    "linux"
+  ), false);
+  assert.equal(sameStudioStaticAssetCrossApiObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    ino: 8n
+  }, "win32"), false);
+  assert.equal(sameStudioStaticAssetCrossApiObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    nlink: 2n
+  }, "win32"), false);
+});
 
 interface HttpResult {
   status: number;
@@ -209,27 +242,31 @@ async function createStaticFixture(): Promise<string> {
 test("localhost studio는 고정 loopback 주소와 독립 XDG PID/log 경로를 쓴다", () => {
   assert.equal(STUDIO_LOOPBACK_HOST, "127.0.0.1");
   assert.equal(DEFAULT_STUDIO_PORT, 4320);
+  const fixtureRoot = path.resolve(os.tmpdir(), "kirinuki-studio-test");
+  const repositoryRoot = path.join(fixtureRoot, "repository");
+  const stateHome = path.join(fixtureRoot, "state");
+  const runtimeDirectory = path.join(fixtureRoot, "run");
   const paths = resolveStudioServerPaths({
     env: {
-      XDG_STATE_HOME: "/tmp/kirinuki-studio-test/state",
-      XDG_RUNTIME_DIR: "/tmp/kirinuki-studio-test/run"
+      XDG_STATE_HOME: stateHome,
+      XDG_RUNTIME_DIR: runtimeDirectory
     },
-    homeDir: "/tmp/kirinuki-studio-test/home",
-    repoRoot: "/opt/kirinuki"
+    homeDir: path.join(fixtureRoot, "home"),
+    repoRoot: repositoryRoot
   });
-  assert.equal(paths.repoRoot, "/opt/kirinuki");
+  assert.equal(paths.repoRoot, repositoryRoot);
   assert.equal(
     paths.pidPath,
-    "/tmp/kirinuki-studio-test/run/kirinuki-studio/localhost-server.pid"
+    path.join(runtimeDirectory, "kirinuki-studio", "localhost-server.pid")
   );
   assert.equal(
     paths.logPath,
-    "/tmp/kirinuki-studio-test/state/kirinuki-studio/localhost-server.log"
+    path.join(stateHome, "kirinuki-studio", "localhost-server.log")
   );
   assert.throws(() => resolveStudioServerPaths({
     env: { XDG_STATE_HOME: "relative" },
-    homeDir: "/tmp/home",
-    repoRoot: "/opt/kirinuki"
+    homeDir: path.join(fixtureRoot, "home"),
+    repoRoot: repositoryRoot
   }), /절대 경로/u);
 });
 
@@ -334,7 +371,7 @@ test("health와 PID는 예측 불가능한 nonce 및 정확한 process identity�
     studioOrigin: KIRINUKI_PUBLIC_STUDIO_ORIGIN
   }), false);
 
-  const cli = "/opt/kirinuki/scripts/local-studio-server.ts";
+  const cli = path.resolve("/opt/kirinuki/scripts/local-studio-server.ts");
   const record: StudioServerPidRecord = {
     schema: LOCAL_STUDIO_PID_SCHEMA,
     pid: 3210,
@@ -354,13 +391,15 @@ test("health와 PID는 예측 불가능한 nonce 및 정확한 process identity�
   assert.equal(commandLineRunsExactStudioCli({
     commandLine:
       `/usr/bin/node\0--import\0tsx\0${cli}\0start\0--foreground\0`,
-    processCwd: "/opt/kirinuki",
+    processCwd: path.resolve("/opt/kirinuki"),
     expectedCliPath: cli
   }), true);
   assert.equal(commandLineRunsExactStudioCli({
     commandLine:
-      "/usr/bin/node\0--import\0tsx\0/opt/foreign/server.ts\0start\0--foreground\0",
-    processCwd: "/opt/foreign",
+      `/usr/bin/node\0--import\0tsx\0${path.resolve(
+        "/opt/foreign/server.ts"
+      )}\0start\0--foreground\0`,
+    processCwd: path.resolve("/opt/foreign"),
     expectedCliPath: cli
   }), false);
 
@@ -597,7 +636,11 @@ test("HTML 보안 헤더는 CSP, no-store, COOP, nosniff와 origin-only referrer
   assert.match(headers["Content-Security-Policy"] || "", /frame-ancestors 'none'/u);
   assert.match(
     headers["Content-Security-Policy"] || "",
-    /script-src 'self' https:\/\/www\.youtube\.com(?:;|$)/u
+    /script-src 'self'(?:;|$)/u
+  );
+  assert.doesNotMatch(
+    headers["Content-Security-Policy"] || "",
+    /script-src[^;]*https:/u
   );
   assert.match(
     headers["Content-Security-Policy"] || "",
@@ -841,6 +884,46 @@ test("regular file이 아닌 symlink와 symlink parent는 allowlist 경로여도
       rm(root, { recursive: true, force: true }),
       rm(externalRoot, { recursive: true, force: true })
     ]);
+  }
+});
+
+test("Studio static fd는 path ABA와 same-inode tamper를 모두 응답 전에 거부한다", async () => {
+  const root = await createStaticFixture();
+  const descriptor = resolveStudioStaticAsset("/assets/app-a1.js");
+  assert.ok(descriptor);
+  const assetPath = path.join(root, descriptor.relativePath);
+  const originalBytes = await readFile(assetPath);
+  try {
+    const tampered = await openStudioStaticAsset(root, descriptor);
+    assert.ok(tampered);
+    try {
+      await writeFile(assetPath, Buffer.alloc(originalBytes.byteLength, 0x78));
+      await assert.rejects(
+        readVerifiedStudioStaticAsset(tampered, true),
+        /응답 준비 중 바뀌었습니다/u
+      );
+    } finally {
+      await tampered.handle.close();
+      await writeFile(assetPath, originalBytes);
+    }
+
+    const opened = await openStudioStaticAsset(root, descriptor);
+    assert.ok(opened);
+    const backupPath = `${assetPath}.verified-backup`;
+    try {
+      await rename(assetPath, backupPath);
+      await writeFile(assetPath, Buffer.alloc(originalBytes.byteLength, 0x79));
+      await assert.rejects(
+        readVerifiedStudioStaticAsset(opened, true),
+        /응답 준비 중 바뀌었습니다/u
+      );
+    } finally {
+      await opened.handle.close();
+      await rm(assetPath, { force: true });
+      await rename(backupPath, assetPath);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

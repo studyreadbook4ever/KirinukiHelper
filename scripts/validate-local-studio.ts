@@ -7,6 +7,7 @@ import {
 } from "./web-javascript-build.js";
 import {
   SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
+  STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
   STREAMING_COMPANION_JAVASCRIPT_PATH,
   STREAMING_COMPANION_MANIFEST_PATH,
   buildStreamingCompanion
@@ -88,13 +89,14 @@ const companionManifest = JSON.parse(await read(
   readonly host_permissions?: readonly string[];
   readonly content_scripts?: ReadonlyArray<{
     readonly matches?: readonly string[];
+    readonly include_globs?: readonly string[];
     readonly js?: readonly string[];
     readonly all_frames?: boolean;
     readonly run_at?: string;
     readonly world?: string;
   }>;
 };
-const [companionContentScript, soopCompanionContentScript] =
+const [studioRelayContentScript, companionContentScript, soopCompanionContentScript] =
   companionManifest.content_scripts || [];
 assert(
   companionManifest.manifest_version === 3
@@ -102,9 +104,20 @@ assert(
     && companionManifest.background === undefined
     && companionManifest.action === undefined
     && companionManifest.side_panel === undefined
-    && companionManifest.permissions === undefined
+    && JSON.stringify(companionManifest.permissions) === JSON.stringify(["storage"])
     && companionManifest.host_permissions === undefined
-    && companionManifest.content_scripts?.length === 2
+    && companionManifest.content_scripts?.length === 3
+    && studioRelayContentScript?.all_frames === false
+    && studioRelayContentScript.run_at === "document_start"
+    && studioRelayContentScript.world === undefined
+    && JSON.stringify(studioRelayContentScript.js)
+      === JSON.stringify([STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH])
+    && JSON.stringify(studioRelayContentScript.matches) === JSON.stringify([
+      "http://127.0.0.1/*"
+    ])
+    && JSON.stringify(studioRelayContentScript.include_globs) === JSON.stringify([
+      "http://127.0.0.1:4320/*"
+    ])
     && companionContentScript?.all_frames === true
     && companionContentScript.run_at === "document_start"
     && JSON.stringify(companionContentScript.js)
@@ -122,13 +135,21 @@ assert(
     && JSON.stringify(soopCompanionContentScript.matches) === JSON.stringify([
       "https://vod.sooplive.com/*"
     ]),
-  "최소 스트리밍 companion manifest가 SOOP 전용 MAIN-world 브리지와 두 exact generic frame origin만 허용해야 합니다."
+  "최소 스트리밍 companion manifest가 storage 전용 권한, exact top-frame Studio relay, SOOP MAIN-world 브리지와 두 generic frame origin만 허용해야 합니다."
+);
+const studioRelayJavaScript = await read(
+  `streaming-companion/${STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH}`
 );
 const companionJavaScript = await read(
   `streaming-companion/${STREAMING_COMPANION_JAVASCRIPT_PATH}`
 );
 const soopCompanionJavaScript = await read(
   `streaming-companion/${SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH}`
+);
+assert(
+  studioRelayJavaScript.includes(KIRINUKI_LOCAL_STUDIO_ORIGIN)
+    && studioRelayJavaScript.includes("KIRINUKI_STREAMING_BRIDGE_STUDIO_DELIVERY"),
+  "top-frame Studio relay 생성물이 exact 앱 Origin과 인증 전달 프로토콜을 포함해야 합니다."
 );
 
 const companionRoot = path.join(root, "streaming-companion");
@@ -404,13 +425,14 @@ const securityHeaders = studioSecurityHeaders({ html: true });
 const csp = securityHeaders["Content-Security-Policy"] || "";
 assert(
   securityHeaders["Referrer-Policy"] === "strict-origin-when-cross-origin",
-  "YouTube IFrame client identity를 보존할 origin-only referrer policy가 없습니다."
+  "YouTube privacy-enhanced embed identity를 보존할 origin-only referrer policy가 없습니다."
 );
 assert(
   csp.includes("default-src 'self'")
     && csp.includes("frame-ancestors 'none'")
     && csp.includes("http://127.0.0.1:4319")
-    && csp.includes("script-src 'self' https://www.youtube.com")
+    && csp.includes("script-src 'self'")
+    && !/script-src[^;]*https:/u.test(csp)
     && csp.includes("frame-src https://chzzk.naver.com")
     && csp.includes("https://www.youtube-nocookie.com")
     && csp.includes("https://vod.sooplive.com")

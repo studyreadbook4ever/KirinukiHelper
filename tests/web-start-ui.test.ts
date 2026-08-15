@@ -276,7 +276,7 @@ test("실제 공개 배포 트리는 무스크립트 shell과 강제 보안 헤�
   ]);
   assert.equal(hosts, "kirinuki.eff0rtchung.kr\n");
   assert.match(html, /href="kirinuki:\/\/open"/u);
-  assert.match(html, /Node\.js 22 이상과 npm[\s\S]*Chromium 120 이상[\s\S]*Python 3\.11 이상[\s\S]*FFmpeg와 ffprobe/u);
+  assert.match(html, /Node\.js 22\.17\.0 이상과 npm[\s\S]*Chromium 120 이상[\s\S]*Python 3\.11 이상[\s\S]*FFmpeg와 ffprobe/u);
   assert.match(html, /Whisper[\s\S]*CMake[\s\S]*tar[\s\S]*C\+\+ 컴파일러/u);
   assert.doesNotMatch(html, /<script\b|editor\.html|local-app-surface|127\.0\.0\.1|localhost|:4319/iu);
   assert.doesNotMatch(`${css}\n${notices}`, /studio\.js|audseg-worker|\/v1\//iu);

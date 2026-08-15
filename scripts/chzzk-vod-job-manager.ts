@@ -38,7 +38,9 @@ import {
 } from "../src/lib/chzzk-vod-materialization.js";
 import {
   normalizeVodConsumerId,
+  vodMaterializationPathSegment,
   vodConsumerScopeHash,
+  vodConsumerScopePathSegment,
   vodConsumerScopeRoot
 } from "./vod-consumer-scope.js";
 
@@ -62,7 +64,8 @@ export const DEFAULT_MAX_QUEUED_VOD_JOBS = 32;
 export const DEFAULT_COMPLETED_VOD_JOB_TTL_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_FAILED_VOD_JOB_TTL_MS = 5 * 60 * 1_000;
 export const VOD_ARTIFACT_CHUNK_BYTES = 1024 * 1024;
-export const VOD_CONSUMER_PURGE_QUARANTINE_DIRECTORY = ".purge-quarantine";
+export const VOD_CONSUMER_PURGE_QUARANTINE_DIRECTORY =
+  process.platform === "win32" ? ".q" : ".purge-quarantine";
 
 export type ChzzkVodJobStage =
   | "queued"
@@ -260,8 +263,12 @@ export interface ChzzkVodPublicStatus {
 export interface ChzzkVodArtifactIdentity {
   size: number;
   mtimeMs: number;
+  /** Raw same-API-family device identity; never used for path↔fd comparison. */
+  rawDev: string;
+  /** Cross-API canonical device identity (Windows unsigned low 32 bits). */
   dev: string;
   ino: string;
+  nlink: string;
   mtimeNs: string;
   ctimeNs: string;
   regular: boolean;
@@ -317,8 +324,40 @@ const ALLOWED_STAGES = new Set<ChzzkVodJobStage>([
   "verifying",
   "muxing"
 ]);
-const VOD_CONSUMER_PURGE_QUARANTINE_CHILD_PATTERN =
-  /^consumer-([a-f0-9]{64})-([a-f0-9]{32})$/u;
+export function vodConsumerPurgeQuarantineChildName(
+  consumerScopeHash: string,
+  quarantineNonce: string,
+  platform: NodeJS.Platform | string = process.platform
+): string {
+  if (
+    !/^[a-f0-9]{64}$/u.test(consumerScopeHash)
+    || !/^[a-f0-9]{32}$/u.test(quarantineNonce)
+  ) {
+    throw new TypeError("VOD 세션 캐시 quarantine 이름 입력이 올바르지 않습니다.");
+  }
+  return platform === "win32"
+    ? `q-${vodConsumerScopePathSegment(consumerScopeHash, platform)}-${vodMaterializationPathSegment(quarantineNonce, platform)}`
+    : `consumer-${consumerScopeHash}-${quarantineNonce}`;
+}
+
+export function parseVodConsumerPurgeQuarantineChildName(
+  value: string,
+  platform: NodeJS.Platform | string = process.platform
+): Readonly<{
+  consumerScopePathSegment: string;
+  quarantineNoncePathSegment: string;
+}> | null {
+  const match = (platform === "win32"
+    ? /^q-([0-9a-v]{52})-([0-9a-v]{26})$/u
+    : /^consumer-([a-f0-9]{64})-([a-f0-9]{32})$/u
+  ).exec(value);
+  return match?.[1] && match[2]
+    ? Object.freeze({
+      consumerScopePathSegment: match[1],
+      quarantineNoncePathSegment: match[2]
+    })
+    : null;
+}
 const PUBLIC_MATERIALIZATION_ERROR_CODES = new Set([
   "ALREADY_RUNNING",
   "BUSY",
@@ -1048,6 +1087,7 @@ function artifactIdentityFromStats(
   const bigintStatus = status as unknown as {
     dev: bigint;
     ino: bigint;
+    nlink: bigint;
     size: bigint;
     mtimeNs: bigint;
     ctimeNs: bigint;
@@ -1057,8 +1097,10 @@ function artifactIdentityFromStats(
   return {
     size,
     mtimeMs: Number(bigintStatus.mtimeNs) / 1_000_000,
-    dev: bigintStatus.dev.toString(),
+    rawDev: bigintStatus.dev.toString(),
+    dev: normalizedChzzkVodArtifactDeviceId(bigintStatus.dev),
     ino: bigintStatus.ino.toString(),
+    nlink: bigintStatus.nlink.toString(),
     mtimeNs: bigintStatus.mtimeNs.toString(),
     ctimeNs: bigintStatus.ctimeNs.toString(),
     regular: bigintStatus.isFile(),
@@ -1066,7 +1108,46 @@ function artifactIdentityFromStats(
   };
 }
 
+/**
+ * Node 22/libuv before libuv #4698 exposes the Windows path-stat volume serial
+ * as 64 bits but fstat as its unsigned low 32 bits. Normalize only that known
+ * representation difference so path and handle identities remain directly
+ * bound by dev+ino+size+nlink.
+ */
+export function normalizedChzzkVodArtifactDeviceId(
+  value: bigint,
+  platform: NodeJS.Platform | string = process.platform
+): string {
+  return (platform === "win32" ? BigInt.asUintN(32, value) : value).toString();
+}
+
 function sameArtifactIdentity(
+  left: Readonly<ChzzkVodArtifactIdentity>,
+  right: Readonly<ChzzkVodArtifactIdentity>
+): boolean {
+  return (
+    sameArtifactObjectIdentity(left, right)
+    && left.rawDev === right.rawDev
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+  );
+}
+
+/**
+ * Compares the stable object fields shared by path-based lstat and fd-based
+ * fstat. Windows can report timestamp metadata differently through those two
+ * APIs, so cross-API checks bind the opened handle to the same file object and
+ * keep timestamp checks within one API family. The fd is still hashed and
+ * checked before/after, while the final path is lstat again.
+ */
+export function sameChzzkVodArtifactObjectIdentity(
+  left: Readonly<ChzzkVodArtifactIdentity>,
+  right: Readonly<ChzzkVodArtifactIdentity>
+): boolean {
+  return sameArtifactObjectIdentity(left, right);
+}
+
+function sameArtifactObjectIdentity(
   left: Readonly<ChzzkVodArtifactIdentity>,
   right: Readonly<ChzzkVodArtifactIdentity>
 ): boolean {
@@ -1076,9 +1157,17 @@ function sameArtifactIdentity(
     && left.size === right.size
     && left.dev === right.dev
     && left.ino === right.ino
-    && left.mtimeNs === right.mtimeNs
-    && left.ctimeNs === right.ctimeNs
+    && left.nlink === right.nlink
   );
+}
+
+function artifactReadOnlyOpenFlags(): number {
+  // libuv maps O_NOFOLLOW to zero on Windows. Keep the Windows call explicit:
+  // symlink/reparse rejection is proven with lstat snapshots there, while
+  // POSIX kernels enforce the no-follow boundary in open(2) as well.
+  return process.platform === "win32"
+    ? fsConstants.O_RDONLY
+    : fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
 }
 
 async function inspectExactArtifactIdentity(
@@ -1091,6 +1180,7 @@ async function inspectExactArtifactIdentity(
   if (
     !identity.regular
     || identity.symlink
+    || pathStatus.nlink <= 0n
     || !Number.isSafeInteger(identity.size)
     || identity.size <= 0
   ) {
@@ -1110,14 +1200,14 @@ async function hashExactArtifact(
   signal?.throwIfAborted();
   const handle = await open(
     artifactPath,
-    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0)
+    artifactReadOnlyOpenFlags()
   );
   try {
     const before = artifactIdentityFromStats(
       await handle.stat({ bigint: true })
     );
     if (
-      !sameArtifactIdentity(before, expectedIdentity)
+      !sameArtifactObjectIdentity(before, expectedIdentity)
       || !before.regular
       || before.symlink
     ) {
@@ -1168,7 +1258,7 @@ async function hashExactArtifact(
     });
     if (
       !sameArtifactIdentity(after, before)
-      || !sameArtifactIdentity(pathAfter, before)
+      || !sameArtifactIdentity(pathAfter, expectedIdentity)
     ) {
       throw new ChzzkVodJobManagerError(
         "검증 중 로컬 편집 미디어 파일이 바뀌었습니다.",
@@ -1241,7 +1331,7 @@ async function purgeExactManagedArtifact(
   try {
     handle = await open(
       resolvedArtifact,
-      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0)
+      artifactReadOnlyOpenFlags()
     );
     const handleStatus = await handle.stat({ bigint: true });
     const handleIdentity = artifactIdentityFromStats(
@@ -1256,7 +1346,7 @@ async function purgeExactManagedArtifact(
       || handleIdentity.symlink
       || handleStatus.nlink !== 1n
       || pathStatus.nlink !== 1n
-      || !sameArtifactIdentity(handleIdentity, expectedIdentity)
+      || !sameArtifactObjectIdentity(handleIdentity, expectedIdentity)
       || !sameArtifactIdentity(pathIdentity, expectedIdentity)
     ) {
       throw new ChzzkVodJobManagerError(
@@ -1548,10 +1638,10 @@ async function scavengeManagedConsumerQuarantine({
     inventory: ConsumerScopeInventory;
   }> = [];
   for (const entry of entries) {
-    const match = VOD_CONSUMER_PURGE_QUARANTINE_CHILD_PATTERN.exec(entry.name);
+    const parsedName = parseVodConsumerPurgeQuarantineChildName(entry.name);
     const candidatePath = path.join(quarantineRoot, entry.name);
     if (
-      !match
+      !parsedName
       || !pathWithinRoot(candidatePath, quarantineRoot)
       || entry.isSymbolicLink()
     ) {
@@ -1577,7 +1667,11 @@ async function scavengeManagedConsumerQuarantine({
         "PURGE_NOT_ALLOWED"
       );
     }
-    if (consumerScopeHash !== undefined && match[1] !== consumerScopeHash) {
+    if (
+      consumerScopeHash !== undefined
+      && parsedName.consumerScopePathSegment
+        !== vodConsumerScopePathSegment(consumerScopeHash)
+    ) {
       continue;
     }
     const inventory = await inspectConsumerScopeTree(candidatePath);
@@ -1702,8 +1796,11 @@ async function purgeExactManagedConsumerScope({
     );
   }
   const quarantinePath = path.join(
-    quarantineRoot,
-    `consumer-${vodConsumerScopeHash(consumerId)}-${quarantineNonce}`
+    canonicalQuarantineRoot,
+    vodConsumerPurgeQuarantineChildName(
+      vodConsumerScopeHash(consumerId),
+      quarantineNonce
+    )
   );
   if (!pathWithinRoot(quarantinePath, canonicalQuarantineRoot)) {
     throw new ChzzkVodJobManagerError(

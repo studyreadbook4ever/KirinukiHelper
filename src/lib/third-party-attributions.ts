@@ -13,6 +13,8 @@
  */
 export const COMMERCIAL_USE_APPROVED_LICENSE_IDS = Object.freeze([
   "Apache-2.0",
+  "BlueOak-1.0.0",
+  "BSD-2-Clause",
   "ISC",
   "MIT",
   "MIT-or-Unlicense",
@@ -218,6 +220,16 @@ export interface DevelopmentOnlyAttribution
   readonly lockfile: "package-lock.json";
 }
 
+export interface DesktopPreviewBundleAttribution
+  extends AttributionBase<"mixed-see-packages"> {
+  readonly kind: "desktop-preview-bundle";
+  readonly redistributed: true;
+  readonly publicReleaseBlocked: true;
+  readonly packages: readonly [string, ...string[]];
+  readonly lockfile: "package-lock.json";
+  readonly releaseGate: "legal/DESKTOP_BINARY_RELEASE_GATE.md";
+}
+
 export interface LocalCompanionRuntimeAttribution
   extends AttributionBase<CommercialUseApprovedLicenseId> {
   readonly kind: "local-companion-runtime";
@@ -260,6 +272,7 @@ export interface ExternalReferenceAttribution
 export type ThirdPartyAttribution =
   | CiOnlyAttribution
   | DevelopmentOnlyAttribution
+  | DesktopPreviewBundleAttribution
   | WebBundledAttribution
   | ExternalReferenceAttribution
   | LocalCompanionRuntimeAttribution
@@ -597,6 +610,26 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
     executionScope: "repository-local-node-modules"
   },
   {
+    id: "desktop-preview-runtime",
+    kind: "desktop-preview-bundle",
+    name: "Electron desktop development preview runtime",
+    version: "Electron 43.4.0 / asar 4.2.1 / packager 20.3.0 / fuses 2.1.3",
+    license: "mixed-see-packages",
+    upstream: "https://github.com/electron/electron/tree/v43.4.0",
+    purpose: "Linux·Windows·macOS 네이티브 개발 프리뷰를 패키징하고 실행합니다.",
+    redistributed: true,
+    publicReleaseBlocked: true,
+    packages: [
+      "electron@43.4.0 (MIT plus bundled Chromium/Node notices)",
+      "@electron/asar@4.2.1 (MIT)",
+      "@electron/packager@20.3.0 (BSD-2-Clause)",
+      "@electron/fuses@2.1.3 (MIT)",
+      "package-lock.json에 고정된 Electron packaging transitive dependencies"
+    ],
+    lockfile: "package-lock.json",
+    releaseGate: "legal/DESKTOP_BINARY_RELEASE_GATE.md"
+  },
+  {
     id: "typescript-toolchain",
     kind: "development-only",
     name: "TypeScript build and type toolchain",
@@ -673,7 +706,7 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
     version: "external service",
     license: "external-terms",
     upstream: "https://www.youtube.com/",
-    purpose: "공식 No-Cookie embed와 IFrame Player API를 통한 client-side 원본 확인에 사용합니다.",
+    purpose: "공식 No-Cookie embed와 앱에 포함된 격리 Player Bridge를 통한 client-side 원본 확인에 사용합니다.",
     redistributed: false,
     trademarkOwner: "Google LLC and/or its licensors",
     affiliationClaimed: false

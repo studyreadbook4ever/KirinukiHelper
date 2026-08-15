@@ -8,6 +8,9 @@ import {
   createHtmlVideoStreamingBridgeAdapter,
   installStreamingBridgeContentEndpoint
 } from "./web/streaming-bridge-content.js";
+import {
+  createAuthenticatedStreamingBridgeContentTransport
+} from "./web/streaming-bridge-auth.js";
 
 declare global {
   var __kirinukiStreamingCompanionLoaded: boolean | undefined;
@@ -90,11 +93,14 @@ function sourceIdentityFromFrameUrl() {
 if (!globalThis.__kirinukiStreamingCompanionLoaded) {
   globalThis.__kirinukiStreamingCompanionLoaded = true;
   if (window.parent !== window) {
+    const allowedParentOrigins = configuredStudioOrigins();
     installStreamingBridgeContentEndpoint({
-      allowedParentOrigins:
-        configuredStudioOrigins(),
+      allowedParentOrigins,
       adapter: createHtmlVideoStreamingBridgeAdapter({
         readSource: sourceIdentityFromFrameUrl
+      }),
+      messageTransport: createAuthenticatedStreamingBridgeContentTransport({
+        allowedParentOrigins
       })
     });
   }

@@ -631,7 +631,8 @@ function formatSecondsFromUs(valueUs: number): string {
 }
 
 export function buildExternalVodHlsConcatDescription(
-  segments: readonly Pick<ExternalVodHlsTimelineSegment, "durationUs">[]
+  segments: readonly Pick<ExternalVodHlsTimelineSegment, "durationUs">[],
+  platform: NodeJS.Platform | string = process.platform
 ): string {
   if (segments.length === 0 || segments.length > MAX_EXTERNAL_VOD_HLS_SEGMENTS) {
     fail("HLS 연결 목록에 세그먼트가 없습니다.", "INVALID_SECTION");
@@ -640,9 +641,26 @@ export function buildExternalVodHlsConcatDescription(
     if (!Number.isSafeInteger(segment.durationUs) || segment.durationUs <= 0) {
       fail("HLS 연결 목록의 시간이 올바르지 않습니다.", "INVALID_HLS_TIMELINE");
     }
-    const fileName = `fragment-${String(index + 1).padStart(6, "0")}.mp4`;
+    const fileName = externalVodHlsFragmentFileName(index, platform);
     return `file '${fileName}'\nduration ${formatSecondsFromUs(segment.durationUs)}`;
   }).join("\n")}\n`;
+}
+
+export function externalVodHlsFragmentFileName(
+  zeroBasedIndex: number,
+  platform: NodeJS.Platform | string = process.platform
+): string {
+  if (
+    !Number.isSafeInteger(zeroBasedIndex)
+    || zeroBasedIndex < 0
+    || zeroBasedIndex >= MAX_EXTERNAL_VOD_HLS_SEGMENTS
+  ) {
+    fail("HLS 조각 파일 번호가 올바르지 않습니다.", "INVALID_SECTION");
+  }
+  const sequence = String(zeroBasedIndex + 1).padStart(6, "0");
+  return platform === "win32"
+    ? `f-${sequence}.mp4`
+    : `fragment-${sequence}.mp4`;
 }
 
 export function buildExternalVodHlsTrimArgs({
@@ -1530,7 +1548,10 @@ export async function acquireExternalVodHlsSection(
     request.sourceStartMs,
     request.sourceEndMs
   );
-  const acquisitionDirectory = await mkdtemp(path.join(workDirectory, ".hls-acquire-"));
+  const acquisitionDirectory = await mkdtemp(path.join(
+    workDirectory,
+    process.platform === "win32" ? ".h-" : ".hls-acquire-"
+  ));
   await chmod(acquisitionDirectory, 0o700);
   let published = false;
   try {
@@ -1567,7 +1588,7 @@ export async function acquireExternalVodHlsSection(
       if (workBytes > MAX_EXTERNAL_VOD_HLS_SECTION_BYTES) {
         fail("HLS 구간 작업 파일이 안전 상한을 넘었습니다.", "HLS_RESOURCE_TOO_LARGE");
       }
-      const fileName = `fragment-${String(index + 1).padStart(6, "0")}.mp4`;
+      const fileName = externalVodHlsFragmentFileName(index);
       await writeFile(
         path.join(acquisitionDirectory, fileName),
         Buffer.concat([Buffer.from(fetchedInit.bytes), Buffer.from(fetched.bytes)]),
@@ -1625,13 +1646,19 @@ export async function acquireExternalVodHlsSection(
       };
     }
 
-    const concatListPath = path.join(acquisitionDirectory, "fragments.ffconcat");
+    const concatListPath = path.join(
+      acquisitionDirectory,
+      process.platform === "win32" ? "f.txt" : "fragments.ffconcat"
+    );
     await writeFile(
       concatListPath,
       buildExternalVodHlsConcatDescription(selected.segments),
       { flag: "wx", mode: 0o600, encoding: "utf8" }
     );
-    const temporaryOutputPath = path.join(acquisitionDirectory, "section.mp4");
+    const temporaryOutputPath = path.join(
+      acquisitionDirectory,
+      process.platform === "win32" ? "s.mp4" : "section.mp4"
+    );
     const durationUs = selected.sourceEndUs - selected.sourceStartUs;
     const processOptions: ExternalVodHlsProcessOptions = {
       cwd: acquisitionDirectory,

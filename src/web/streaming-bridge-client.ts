@@ -14,6 +14,10 @@ import type {
   StreamingBridgeShortcutMessage,
   StreamingBridgeSourceIdentity
 } from "./streaming-bridge-protocol.js";
+import {
+  createStreamingBridgeStudioRequest,
+  parseStreamingBridgeStudioDelivery
+} from "./streaming-bridge-auth.js";
 
 export interface StreamingBridgeClientOptions {
   readonly source: unknown;
@@ -351,12 +355,10 @@ export class StreamingBridgeClient {
       return;
     }
     this.#seenShortcutEventIds.add(message.eventId);
-    if (this.#seenShortcutEventIds.size > 512) {
-      const oldest = this.#seenShortcutEventIds.values().next().value;
-      if (typeof oldest === "string") {
-        this.#seenShortcutEventIds.delete(oldest);
-      }
-    }
+    // Unlike high-frequency clock request IDs, shortcut IDs are produced only
+    // by trusted physical key events. Keep every ID for this document/source
+    // generation so a platform page cannot replay a captured signed shortcut
+    // after an arbitrary eviction threshold.
     for (const listener of this.#shortcutListeners) {
       listener(message);
     }
@@ -384,6 +386,12 @@ export interface StreamingBridgeWindowTransportOptions {
 export interface StreamingBridgeWindowTransport {
   readonly send: StreamingBridgeClientOptions["send"];
   readonly subscribe: StreamingBridgeClientOptions["subscribe"];
+}
+
+export interface AuthenticatedStreamingBridgeWindowTransportOptions {
+  readonly targetOrigin: string;
+  readonly studioOrigin: string;
+  readonly hostWindow?: Window;
 }
 
 function exactTargetOrigin(value: unknown): string {
@@ -437,6 +445,71 @@ export function createStreamingBridgeWindowTransport({
           return;
         }
         listener(event.data);
+      };
+      hostWindow.addEventListener("message", onMessage);
+      return () => hostWindow.removeEventListener("message", onMessage);
+    }
+  });
+}
+
+/**
+ * CHZZK/YouTube transport. Requests go only to the same top window, where the
+ * isolated Studio relay binds them to the exact current iframe. Deliveries are
+ * accepted only back from that same WindowProxy and exact Studio origin after
+ * the relay has verified the iframe HMAC.
+ */
+export function createAuthenticatedStreamingBridgeWindowTransport({
+  targetOrigin: rawTargetOrigin,
+  studioOrigin: rawStudioOrigin,
+  hostWindow = window
+}: AuthenticatedStreamingBridgeWindowTransportOptions): StreamingBridgeWindowTransport {
+  const targetOrigin = exactTargetOrigin(rawTargetOrigin);
+  if (targetOrigin === "https://vod.sooplive.com") {
+    throw new TypeError(
+      "SOOP은 인증 Studio 릴레이가 아닌 전용 직접 브리지를 사용합니다."
+    );
+  }
+  const studioOrigin = String(rawStudioOrigin || "");
+  let parsedStudioOrigin: URL;
+  try {
+    parsedStudioOrigin = new URL(studioOrigin);
+  } catch {
+    throw new TypeError("Studio relay origin이 올바르지 않습니다.");
+  }
+  const loopback = parsedStudioOrigin.protocol === "http:"
+    && (
+      parsedStudioOrigin.hostname === "127.0.0.1"
+      || parsedStudioOrigin.hostname === "[::1]"
+    );
+  if (
+    studioOrigin !== parsedStudioOrigin.origin
+    || (!loopback && parsedStudioOrigin.protocol !== "https:")
+    || parsedStudioOrigin.username
+    || parsedStudioOrigin.password
+    || hostWindow.parent !== hostWindow
+    || hostWindow.location.origin !== studioOrigin
+  ) {
+    throw new TypeError(
+      "인증 스트리밍 브리지는 현재 top-frame의 exact Studio origin만 허용합니다."
+    );
+  }
+  return Object.freeze({
+    send(request: StreamingBridgeRequest): void {
+      hostWindow.postMessage(
+        createStreamingBridgeStudioRequest(request, targetOrigin),
+        studioOrigin
+      );
+    },
+    subscribe(listener: (response: unknown) => void): () => void {
+      const onMessage = (event: MessageEvent<unknown>): void => {
+        if (event.source !== hostWindow || event.origin !== studioOrigin) {
+          return;
+        }
+        const delivery = parseStreamingBridgeStudioDelivery(event.data);
+        if (!delivery || delivery.targetOrigin !== targetOrigin) {
+          return;
+        }
+        listener(delivery.inner);
       };
       hostWindow.addEventListener("message", onMessage);
       return () => hostWindow.removeEventListener("message", onMessage);

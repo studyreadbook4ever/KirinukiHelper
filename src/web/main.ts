@@ -83,6 +83,7 @@ import type {
 import {
   StreamingBridgeClient,
   StreamingBridgeRequestError,
+  createAuthenticatedStreamingBridgeWindowTransport,
   createStreamingBridgeWindowTransport
 } from "./streaming-bridge-client.js";
 import type {
@@ -94,14 +95,6 @@ import {
   createStreamingBridgeSourceIdentity,
   sameStreamingBridgeSourceIdentity
 } from "./streaming-bridge-protocol.js";
-import {
-  loadYouTubeIframeApi,
-  readYouTubePlayerSnapshot
-} from "./youtube-iframe-api.js";
-import type {
-  YouTubeIframePlayer,
-  YouTubeIframePlayerEvent
-} from "./youtube-iframe-api.js";
 import {
   sessionArchiveCaptureFromJson
 } from "./session-archive-capture.js";
@@ -264,10 +257,6 @@ let streamPreviewTimer: number | null = null;
 let activeStreamEmbedUrl = "";
 let activeStreamPlatform = "";
 let streamLoadTimer: number | null = null;
-let youtubePlayerReady = false;
-let youtubePlayer: YouTubeIframePlayer | null = null;
-let youtubePlayerGeneration = 0;
-let youtubeConnectGeneration: number | null = null;
 let activeClipRow: HTMLElement | null = null;
 
 function explainMobileEditorBlock(): void {
@@ -340,77 +329,19 @@ function captureConsoleButton(targetId: string): HTMLButtonElement {
   return requiredElement<HTMLButtonElement>(`#${targetId}`);
 }
 
-function resetYouTubeIframePlayer({
-  replaceFrame = false
-}: {
-  replaceFrame?: boolean;
-} = {}): void {
-  youtubePlayerGeneration += 1;
-  youtubeConnectGeneration = null;
-  youtubePlayerReady = false;
-  if (replaceFrame) {
-    const oldFrame = elements.streamFrame;
-    const replacement = oldFrame.cloneNode(false) as HTMLIFrameElement;
-    replacement.removeAttribute("src");
-    replacement.hidden = true;
-    const player = youtubePlayer;
-    youtubePlayer = null;
-    if (player) {
-      try {
-        player.destroy();
-      } catch {
-        // The cross-origin player may already have navigated away.
-      }
-    }
-    if (oldFrame.isConnected) {
-      oldFrame.replaceWith(replacement);
-    } else {
-      elements.streamPlaceholder.before(replacement);
-    }
-    elements.streamFrame = replacement;
-    installStreamFrameLoadHandler(replacement);
+function replaceStreamFrame(): void {
+  const oldFrame = elements.streamFrame;
+  const replacement = oldFrame.cloneNode(false) as HTMLIFrameElement;
+  replacement.removeAttribute("src");
+  replacement.hidden = true;
+  if (oldFrame.isConnected) {
+    oldFrame.replaceWith(replacement);
+  } else {
+    elements.streamPlaceholder.before(replacement);
   }
+  elements.streamFrame = replacement;
+  installStreamFrameLoadHandler(replacement);
   updateCaptureConsoleAvailability();
-}
-
-function currentYouTubePlayerSnapshot() {
-  return youtubePlayerReady && youtubePlayer
-    ? readYouTubePlayerSnapshot(youtubePlayer)
-    : null;
-}
-
-function currentYouTubePlayerTime(): number | null {
-  return currentYouTubePlayerSnapshot()?.currentTime ?? null;
-}
-
-async function waitForYouTubePlayerState(
-  player: YouTubeIframePlayer,
-  generation: number,
-  predicate: (
-    snapshot: NonNullable<ReturnType<typeof readYouTubePlayerSnapshot>>
-  ) => boolean,
-  failureMessage: string,
-  timeoutMs = 1_200
-): Promise<NonNullable<ReturnType<typeof readYouTubePlayerSnapshot>>> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() <= deadline) {
-    if (
-      generation !== youtubePlayerGeneration
-      || player !== youtubePlayer
-      || !youtubePlayerReady
-    ) {
-      throw new DOMException(
-        "원본 변경으로 오래된 YouTube 제어를 중단했습니다.",
-        "AbortError"
-      );
-    }
-    const snapshot = readYouTubePlayerSnapshot(player);
-    if (snapshot && predicate(snapshot)) {
-      return snapshot;
-    }
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 25));
-  }
-  throw new Error(failureMessage);
 }
 
 function currentStreamingSourceIdentity(): StreamingBridgeSourceIdentity | null {
@@ -583,10 +514,15 @@ function syncStreamingBridgeSource(): void {
     return;
   }
   resetStreamingBridge();
-  const transport = createStreamingBridgeWindowTransport({
-    targetOrigin,
-    targetWindow: () => elements.streamFrame.contentWindow
-  });
+  const transport = activeStreamPlatform === SOURCE_PLATFORM_SOOP
+    ? createStreamingBridgeWindowTransport({
+      targetOrigin,
+      targetWindow: () => elements.streamFrame.contentWindow
+    })
+    : createAuthenticatedStreamingBridgeWindowTransport({
+      targetOrigin,
+      studioOrigin: activeStudioOrigin
+    });
   streamingBridgeClient = new StreamingBridgeClient({
     source,
     ...transport,
@@ -697,49 +633,10 @@ async function connectStreamingBridge(
   );
 }
 
-async function connectStreamingShortcutBridge(
-  frame: HTMLIFrameElement,
-  expectedEmbedUrl: string
-): Promise<void> {
-  syncStreamingBridgeSource();
-  const client = streamingBridgeClient;
-  const generation = streamingBridgeGeneration;
-  if (!client || activeStreamPlatform !== SOURCE_PLATFORM_YOUTUBE) {
-    return;
-  }
-  try {
-    // A snapshot is only a same-source handshake here. YouTube playback stays
-    // exclusively on the official IFrame API; the app-owned bridge forwards keys.
-    await client.snapshot();
-    if (
-      client !== streamingBridgeClient
-      || generation !== streamingBridgeGeneration
-      || frame !== elements.streamFrame
-      || activeStreamEmbedUrl !== expectedEmbedUrl
-    ) {
-      return;
-    }
-    elements.streamStatus.textContent =
-      "YouTube 플레이어와 단축키를 연결했습니다.";
-  } catch (error) {
-    if (
-      client !== streamingBridgeClient
-      || generation !== streamingBridgeGeneration
-      || frame !== elements.streamFrame
-      || activeStreamEmbedUrl !== expectedEmbedUrl
-    ) {
-      return;
-    }
-    elements.streamStatus.textContent =
-      `YouTube 영상은 열렸지만 Kirinuki의 원본 플레이어 연결부가 단축키에 응답하지 않습니다: ${errorMessage(error)}`;
-  }
-}
-
 async function pollStreamingBridgeClock(): Promise<void> {
   const client = streamingBridgeClient;
   if (
-    activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
-    || !client
+    !client
     || !streamingBridgeClockPollingEnabled
     || streamingBridgeClockPollInFlight
   ) {
@@ -795,8 +692,6 @@ async function pollStreamingBridgeClock(): Promise<void> {
 
 function streamingBridgeReady(): boolean {
   return Boolean(
-    activeStreamPlatform !== SOURCE_PLATFORM_YOUTUBE
-    &&
     streamingBridgeClient
     && latestStreamingSnapshot?.found
     && latestStreamingSnapshot.currentTime !== null
@@ -804,9 +699,6 @@ function streamingBridgeReady(): boolean {
 }
 
 function currentControllablePlayerTime(): number | null {
-  if (activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
-    return currentYouTubePlayerTime();
-  }
   return streamingBridgeReady()
     ? latestStreamingSnapshot?.currentTime ?? null
     : null;
@@ -820,13 +712,9 @@ function updatePlayerClockDisplay(): void {
 }
 
 function updateCaptureConsoleAvailability(): void {
-  const isYouTube = activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE;
   const bridgeReady = streamingBridgeReady();
   const hasCurrentTime = currentControllablePlayerTime() !== null;
-  const hasControllablePlayer = (
-    (isYouTube && youtubePlayerReady)
-    || bridgeReady
-  );
+  const hasControllablePlayer = bridgeReady;
   elements.streamCutConsole.setAttribute(
     "aria-busy",
     String(sourceClockOperationQueue.pendingCount > 0)
@@ -847,9 +735,7 @@ function updateCaptureConsoleAvailability(): void {
   ]) {
     captureConsoleButton(targetId).disabled = !hasControllablePlayer;
   }
-  const playbackRate = isYouTube
-    ? currentYouTubePlayerSnapshot()?.playbackRate ?? null
-    : latestStreamingSnapshot?.playbackRate ?? null;
+  const playbackRate = latestStreamingSnapshot?.playbackRate ?? null;
   captureConsoleButton("playback-rate-quarter").setAttribute(
     "aria-pressed",
     String(playbackRate === 0.25)
@@ -859,76 +745,6 @@ function updateCaptureConsoleAvailability(): void {
     String(playbackRate === 2)
   );
   updatePlayerClockDisplay();
-}
-
-function applyYouTubeReady(
-  event: YouTubeIframePlayerEvent,
-  generation: number,
-  frame: HTMLIFrameElement
-): void {
-  if (
-    generation !== youtubePlayerGeneration
-    || frame !== elements.streamFrame
-    || activeStreamPlatform !== SOURCE_PLATFORM_YOUTUBE
-  ) {
-    try {
-      event.target.destroy();
-    } catch {
-      // A stale player can already be detached.
-    }
-    return;
-  }
-  youtubePlayer = event.target;
-  youtubePlayerReady = true;
-  updateCaptureConsoleAvailability();
-  setStreamCutStatus(currentYouTubePlayerTime() === null
-    ? "YouTube 공식 플레이어 연결 완료 · 현재 시각을 기다리는 중입니다."
-    : "YouTube 공식 플레이어 연결 완료 · E/R 캡처와 D/F/Y/U 제어를 사용할 수 있습니다.");
-}
-
-async function connectYouTubeIframePlayer(
-  frame: HTMLIFrameElement,
-  generation: number
-): Promise<void> {
-  if (youtubeConnectGeneration === generation) {
-    return;
-  }
-  youtubeConnectGeneration = generation;
-  try {
-    const api = await loadYouTubeIframeApi();
-    if (
-      generation !== youtubePlayerGeneration
-      || frame !== elements.streamFrame
-      || activeStreamPlatform !== SOURCE_PLATFORM_YOUTUBE
-    ) {
-      return;
-    }
-    youtubePlayer = new api.Player(frame, {
-      events: {
-        onReady: (event) => applyYouTubeReady(event, generation, frame),
-        onStateChange: () => updateCaptureConsoleAvailability(),
-        onPlaybackRateChange: () => updateCaptureConsoleAvailability(),
-        onError: () => {
-          if (generation !== youtubePlayerGeneration) {
-            return;
-          }
-          youtubePlayerReady = false;
-          updateCaptureConsoleAvailability();
-          setStreamCutStatus(
-            "이 YouTube 영상의 공식 임베드를 재생하지 못했습니다. 원본 공개·임베드 허용 상태를 확인해 주세요."
-          );
-        }
-      }
-    });
-  } catch (error) {
-    if (generation !== youtubePlayerGeneration) {
-      return;
-    }
-    youtubeConnectGeneration = null;
-    youtubePlayerReady = false;
-    updateCaptureConsoleAvailability();
-    setStreamCutStatus(`YouTube 공식 플레이어 연결 실패: ${errorMessage(error)}`);
-  }
 }
 
 function explainUnavailablePlayerControl(): void {
@@ -1391,7 +1207,7 @@ function clearStreamPreview(message: string): void {
   activeStreamEmbedUrl = "";
   activeStreamPlatform = "";
   resetStreamingBridge();
-  resetYouTubeIframePlayer({ replaceFrame: true });
+  replaceStreamFrame();
   elements.streamFrame.removeAttribute("src");
   elements.streamFrame.hidden = true;
   elements.streamPlaceholder.hidden = false;
@@ -1427,7 +1243,7 @@ function updateStreamPreview({ force = false }: { force?: boolean } = {}): void 
   activeStreamEmbedUrl = descriptor.embedUrl;
   activeStreamPlatform = descriptor.platform;
   resetStreamingBridge();
-  resetYouTubeIframePlayer({ replaceFrame: true });
+  replaceStreamFrame();
   elements.streamKind.textContent = descriptor.label;
   elements.streamKind.classList.add("valid");
   elements.streamStatus.textContent = descriptor.kind === "official-embed"
@@ -1917,18 +1733,14 @@ function writeCapturedPlayerTime(
 async function captureCurrentPlayerTime(
   field: "start" | "end"
 ): Promise<void> {
-  let currentTime: number | null;
-  if (activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
-    currentTime = currentYouTubePlayerTime();
-  } else if (streamingBridgeClient) {
+  let currentTime: number | null = null;
+  if (streamingBridgeClient) {
     const client = streamingBridgeClient;
     latestStreamingSnapshot = await runTransientSafeStreamingAction(
       client,
       () => client.snapshot()
     );
     currentTime = latestStreamingSnapshot.currentTime;
-  } else {
-    currentTime = null;
   }
   if (currentTime === null) {
     explainUnavailablePlayerControl();
@@ -1974,39 +1786,6 @@ function finalizeCurrentDraftRow(): void {
 }
 
 async function seekPlayerBy(deltaSeconds: -5 | 5): Promise<void> {
-  if (activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
-    const snapshot = currentYouTubePlayerSnapshot();
-    const player = youtubePlayer;
-    if (!snapshot || !player) {
-      explainUnavailablePlayerControl();
-      return;
-    }
-    const target = Math.max(
-      0,
-      Math.min(
-        snapshot.duration ?? Number.POSITIVE_INFINITY,
-        snapshot.currentTime + deltaSeconds
-      )
-    );
-    const generation = youtubePlayerGeneration;
-    try {
-      player.seekTo(target, true);
-    } catch {
-      explainUnavailablePlayerControl();
-      return;
-    }
-    const confirmed = await waitForYouTubePlayerState(
-      player,
-      generation,
-      (current) => Math.abs(current.currentTime - target) <= 0.25,
-      "YouTube 플레이어가 요청한 탐색 위치를 확인하지 못했습니다."
-    );
-    updateCaptureConsoleAvailability();
-    setStreamCutStatus(
-      `YouTube 플레이어를 ${formatStudioTimecode(confirmed.currentTime)}로 이동했습니다.`
-    );
-    return;
-  }
   if (!streamingBridgeClient || !streamingBridgeReady()) {
     explainUnavailablePlayerControl();
     return;
@@ -2039,29 +1818,6 @@ async function seekPlayerBy(deltaSeconds: -5 | 5): Promise<void> {
 }
 
 async function setPlayerRate(playbackRate: 0.25 | 2): Promise<void> {
-  if (activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
-    const player = youtubePlayer;
-    if (!youtubePlayerReady || !player) {
-      explainUnavailablePlayerControl();
-      return;
-    }
-    const generation = youtubePlayerGeneration;
-    try {
-      player.setPlaybackRate(playbackRate);
-    } catch {
-      explainUnavailablePlayerControl();
-      return;
-    }
-    await waitForYouTubePlayerState(
-      player,
-      generation,
-      (snapshot) => snapshot.playbackRate === playbackRate,
-      `YouTube 플레이어가 ${playbackRate}배속 적용을 확인하지 못했습니다.`
-    );
-    updateCaptureConsoleAvailability();
-    setStreamCutStatus(`YouTube 플레이어를 ${playbackRate}배속으로 설정했습니다.`);
-    return;
-  }
   if (!streamingBridgeClient || !streamingBridgeReady()) {
     explainUnavailablePlayerControl();
     return;
@@ -2087,24 +1843,10 @@ function studioCaptureActionNeedsPlayer(
 }
 
 function playerControlAvailable(): boolean {
-  const youtubeDirectlyControllable = Boolean(
-    activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
-    && youtubePlayerReady
-    && youtubePlayer
-  );
-  return streamingBridgeReady() || youtubeDirectlyControllable;
+  return streamingBridgeReady();
 }
 
 async function refreshActivePlayerContext(): Promise<void> {
-  if (activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
-    if (!currentYouTubePlayerSnapshot()) {
-      explainUnavailablePlayerControl();
-      return;
-    }
-    updateCaptureConsoleAvailability();
-    setStreamCutStatus("현재 YouTube 플레이어 시각을 다시 읽었습니다.");
-    return;
-  }
   syncStreamingBridgeSource();
   const client = streamingBridgeClient;
   if (!client) {
@@ -2387,7 +2129,6 @@ elements.sourceUrl.addEventListener("input", () => {
   clearResumeMode();
   resetStreamingBridge();
   activeStreamPlatform = "";
-  resetYouTubeIframePlayer();
   setStreamCutStatus("원본 주소 변경을 확인하는 중입니다…");
   updateSourcePlatform();
   scheduleStreamPreview();
@@ -2498,11 +2239,6 @@ function installStreamFrameLoadHandler(frame: HTMLIFrameElement): void {
     }
     elements.streamStatus.textContent =
       "플랫폼 문서를 브라우저에 직접 불러왔습니다. 플레이어 제어 연결을 확인하는 중입니다.";
-    if (activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
-      void connectStreamingShortcutBridge(frame, activeStreamEmbedUrl);
-      void connectYouTubeIframePlayer(frame, youtubePlayerGeneration);
-      return;
-    }
     void connectStreamingBridge(frame, activeStreamEmbedUrl);
   });
 }

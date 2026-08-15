@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile
@@ -25,9 +26,11 @@ import {
   createPublicShellHttpServer,
   hasExactPublicShellHost,
   loadPublicShellSecurityHeaders,
+  normalizedPublicShellDeviceId,
   parsePublicShellHeaders,
   publicShellRequestPath,
-  resolvePublicShellStaticAsset
+  resolvePublicShellStaticAsset,
+  samePublicShellFileObjectIdentity
 } from "../scripts/public-shell-server-core.js";
 import {
   PUBLIC_SHELL_BIND_ENV,
@@ -50,8 +53,38 @@ interface HttpResult {
 
 const repositoryPublicShell = new URL("../public-shell/", import.meta.url);
 
+test("Windows public-shell path/fd identity는 low32 dev만 정규화한다", () => {
+  const low32 = 0x89abcdefn;
+  const pathDevice = (0x12345678n << 32n) | low32;
+  const pathIdentity = { dev: pathDevice, ino: 7n, size: 11n, nlink: 1n };
+  const handleIdentity = { ...pathIdentity, dev: low32 };
+  assert.equal(normalizedPublicShellDeviceId(pathDevice, "win32"), low32);
+  assert.equal(normalizedPublicShellDeviceId(pathDevice, "linux"), pathDevice);
+  assert.equal(samePublicShellFileObjectIdentity(
+    pathIdentity,
+    handleIdentity,
+    "win32"
+  ), true);
+  assert.equal(samePublicShellFileObjectIdentity(
+    pathIdentity,
+    handleIdentity,
+    "linux"
+  ), false);
+  assert.equal(samePublicShellFileObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    ino: 8n
+  }, "win32"), false);
+  assert.equal(samePublicShellFileObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    nlink: 2n
+  }, "win32"), false);
+});
+
 async function createPublicShellFixture(): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-public-shell-"));
+  const root = await realpath(await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-public-shell-"
+  )));
   await mkdir(path.join(root, "licenses"));
   for (const relativePath of [
     ".popovic-hosts",
@@ -270,7 +303,7 @@ test("공개 Host는 raw Host 하나의 exact domain만 허용한다", () => {
 
 test("_headers는 HSTS를 포함한 exact 보안 계약만 파싱한다", async () => {
   const actual = await loadPublicShellSecurityHeaders(
-    fileURLToPath(repositoryPublicShell)
+    await realpath(fileURLToPath(repositoryPublicShell))
   );
   assert.deepEqual(actual, PUBLIC_SHELL_SECURITY_HEADERS);
   assert.equal(
