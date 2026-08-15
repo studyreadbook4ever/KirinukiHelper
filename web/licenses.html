@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'none'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; media-src 'none'; worker-src 'none'">
+    <title>오픈소스·라이선스 — 키리누키 스튜디오</title>
+    <link rel="stylesheet" href="licenses.css?v=2.7.0">
+  </head>
+  <body>
+    <a class="skip-link" href="#license-content">라이선스 내용으로 건너뛰기</a>
+    <header class="page-header">
+      <p class="eyebrow">KIRINUKI PROVENANCE</p>
+      <h1>오픈소스·라이선스</h1>
+      <p>
+        이 페이지는 현재 Kirinuki 웹 배포물에 포함된 코드와 글꼴의
+        출처를 보여 줍니다.
+      </p>
+    </header>
+
+    <main id="license-content">
+      <section class="scope" aria-labelledby="scope-title">
+        <h2 id="scope-title">이 패키지의 범위</h2>
+        <p>
+          KirinukiHelper가 직접 작성한 코드는
+          <a href="licenses/UNLICENSE.txt">The Unlicense 원문</a>을 따릅니다. 아래의 제3자
+          구성요소와 별도 라이선스 소스는 그 퍼블릭 도메인 헌정 대상이 아니며
+          각각 표시한 라이선스를 유지합니다.
+        </p>
+        <p>
+          PC 도우미가 나중에 내려받는 yt-dlp·whisper.cpp·모델과 시스템
+          FFmpeg 등은 웹 정적 배포물에 들어 있지 않습니다. 전체 실행 구성은
+          <a
+            href="https://github.com/studyreadbook4ever/KirinukiHelper/blob/main/legal/RUNTIME_DEPENDENCIES.md"
+            target="_blank"
+            rel="noreferrer noopener"
+          >저장소 runtime 인벤토리</a>에서 확인할 수 있습니다.
+        </p>
+      </section>
+
+      <section aria-labelledby="components-title">
+        <h2 id="components-title">포함된 구성요소</h2>
+        <div class="license-grid">
+          <article id="mediabunny" class="license-card">
+            <div class="card-heading">
+              <h3>Mediabunny <span>1.51.0</span></h3>
+              <strong>MPL-2.0</strong>
+            </div>
+            <p>로컬 미디어 읽기, 인코딩과 mux에 사용하는 브라우저 라이브러리.</p>
+            <ul>
+              <li><a href="licenses/MEDIABUNNY-MPL-2.0.txt">MPL-2.0 원문</a></li>
+              <li><a href="THIRD_PARTY_NOTICES.md?v=2.7.0">대응 소스·무결성 고지</a></li>
+              <li><a href="https://github.com/Vanilagy/mediabunny" target="_blank" rel="noreferrer noopener">Upstream source</a></li>
+            </ul>
+          </article>
+
+          <article id="audseg" class="license-card">
+            <div class="card-heading">
+              <h3>AudSeg browser port <span>0.1.0</span></h3>
+              <strong>MIT</strong>
+            </div>
+            <p>모델 없이 오디오 활동 구간과 빈 자막 타이밍을 만드는 별도 라이선스 소스.</p>
+            <ul>
+              <li><a href="licenses/AUDSEG-MIT.txt">MIT 원문</a></li>
+              <li><a href="THIRD_PARTY_NOTICES.md?v=2.7.0">port·대응 소스 고지</a></li>
+              <li><a href="https://github.com/studyreadbook4ever/KirinukiHelper/tree/eef841a336613fe8fe825ab231d9bbe770751ee2/AudSeg" target="_blank" rel="noreferrer noopener">Corresponding source</a></li>
+            </ul>
+          </article>
+
+          <article id="pretendard" class="license-card">
+            <div class="card-heading">
+              <h3>Pretendard ExtraBold <span>1.3.9</span></h3>
+              <strong>OFL-1.1</strong>
+            </div>
+            <p>기본 한국어 자막 글꼴. Reserved Font Name은 Pretendard입니다.</p>
+            <ul>
+              <li><a href="licenses/PRETENDARD-OFL-1.1.txt">OFL-1.1 원문</a></li>
+              <li><a href="THIRD_PARTY_NOTICES.md?v=2.7.0">파일 SHA-256 고지</a></li>
+              <li><a href="https://github.com/orioncactus/pretendard/tree/v1.3.9" target="_blank" rel="noreferrer noopener">Upstream v1.3.9</a></li>
+            </ul>
+          </article>
+
+          <article id="paperlogy" class="license-card">
+            <div class="card-heading">
+              <h3>Paperlogy 8 ExtraBold <span>1.001</span></h3>
+              <strong>OFL-1.1</strong>
+            </div>
+            <p>고정한 공식 upstream commit의 선택형 한국어 자막 글꼴.</p>
+            <ul>
+              <li><a href="licenses/PAPERLOGY-OFL-1.1.txt">OFL-1.1 원문</a></li>
+              <li><a href="THIRD_PARTY_NOTICES.md?v=2.7.0">commit·파일 SHA-256 고지</a></li>
+              <li><a href="https://github.com/Freesentation/paperlogy/tree/8ef35f53b318c7ca914c52b1b382b9a8bad07a61" target="_blank" rel="noreferrer noopener">Pinned upstream</a></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="notice" aria-labelledby="notice-title">
+        <h2 id="notice-title">상세 고지</h2>
+        <p>
+          버전, exact corresponding source, byte size와 SHA-256은
+          <a href="THIRD_PARTY_NOTICES.md?v=2.7.0">Web third-party notices</a>에
+          기록되어 있습니다. 새 외부 구성요소나 파일을 배포할 때는 최종
+          산출물을 다시 감사합니다.
+        </p>
+        <p>
+          이 목록은 출처와 배포 경계를 투명하게 보여 주기 위한 공학적
+          인벤토리이며 법률 자문이나 법적 무위험 보증이 아닙니다.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

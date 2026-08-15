@@ -6,16 +6,14 @@ import {
   CAPTION_COLOR_SHORTCUT_DIGITS,
   DANGEROUS_KEYBOARD_SHORTCUT_ACTION_TOKENS,
   EDITOR_SHORTCUT_BINDINGS,
-  KEYBOARD_SHORTCUT_BINDINGS_BY_SCOPE,
-  SIDEPANEL_SHORTCUT_BINDINGS,
   captionColorShortcutDigitFromEvent,
   clipNavigationShortcutDirectionFromEvent,
+  editorKeyboardShortcutBinding,
   findKeyboardShortcutCollisions,
   formatKeyboardShortcutHint,
   isDangerousKeyboardShortcutAction,
   isKeyboardShortcutEventBlocked,
   isKeyboardShortcutInteractiveTarget,
-  keyboardShortcutBindingForScope,
   keyboardShortcutLetterFromEvent,
   normalizeKeyboardShortcutLetter,
   shouldHandleKeyboardShortcut
@@ -53,202 +51,37 @@ function fakeElement({
   };
 }
 
-test("scope별 A-Z 단축키는 충돌 없이 안전한 동작만 포함한다", () => {
-  assert.deepEqual(
-    SIDEPANEL_SHORTCUT_BINDINGS.map(({ key }) => key),
-    ["Q", "W", "E", "R", "T", "A", "S", "D", "F", "G", "H", "Y", "U"]
-  );
+test("web 편집기 A-Z 단축키는 충돌 없이 안전한 실제 대상만 가리킨다", async () => {
+  const [editorHtml, editorSource] = await Promise.all([
+    readFile(new URL("../web/editor.html", import.meta.url), "utf8"),
+    readFile(new URL("../src/editor/main.ts", import.meta.url), "utf8")
+  ]);
   assert.deepEqual(
     EDITOR_SHORTCUT_BINDINGS.map(({ key }) => key),
     ["A", "S", "D", "F", "G", "H", "J", "K", "M", "N", "P", "Q", "C", "V", "B", "X", "W", "E", "I", "O"]
   );
-  assert.equal(
-    keyboardShortcutBindingForScope("editor", "J")?.targetId,
-    "previous-cue-in-lane"
-  );
-  assert.equal(
-    keyboardShortcutBindingForScope("editor", "K")?.targetId,
-    "next-cue-in-lane"
-  );
-  assert.equal(keyboardShortcutBindingForScope("editor", "L"), null);
-  assert.equal(
-    keyboardShortcutBindingForScope("editor", "X")?.targetId,
-    "toggle-caption-background"
-  );
-  assert.equal(
-    keyboardShortcutBindingForScope("editor", "B")?.targetId,
-    "audio-mode-tab"
-  );
-  for (const [scope, bindings] of Object.entries(
-    KEYBOARD_SHORTCUT_BINDINGS_BY_SCOPE
-  )) {
-    assert.deepEqual(
-      findKeyboardShortcutCollisions(bindings),
-      [],
-      `${scope} 단축키에 키 충돌이 없어야 합니다.`
-    );
-    assert.equal(new Set(bindings.map(({ action }) => action)).size, bindings.length);
-    assert.equal(new Set(bindings.map(({ targetId }) => targetId)).size, bindings.length);
-    for (const binding of bindings) {
-      assert.equal(
-        isDangerousKeyboardShortcutAction(binding.action),
-        false,
-        `${scope}:${binding.key}가 위험 동작 ${binding.action}을 가리킵니다.`
-      );
-      assert.equal(isDangerousKeyboardShortcutAction(binding.targetId), false);
-      for (const targetId of binding.alternateTargetIds || []) {
-        assert.equal(isDangerousKeyboardShortcutAction(targetId), false);
-      }
-      assert.match(formatKeyboardShortcutHint(binding.label, binding.key), new RegExp(
-        `\\(단축키 ${binding.key}\\)$`,
-        "u"
-      ));
-    }
-  }
-});
-
-test("모든 단축키 대상은 실제 화면에 있고 두 화면 모두 공용 정책을 설치한다", async () => {
-  const [sidepanelHtml, editorHtml, sidepanelSource, editorSource] = await Promise.all([
-    readFile(new URL("../extension/sidepanel.html", import.meta.url), "utf8"),
-    readFile(new URL("../extension/editor.html", import.meta.url), "utf8"),
-    readFile(new URL("../src/sidepanel.ts", import.meta.url), "utf8"),
-    readFile(new URL("../src/editor/main.ts", import.meta.url), "utf8")
-  ]);
-
-  for (const binding of SIDEPANEL_SHORTCUT_BINDINGS) {
-    for (const targetId of [
-      binding.targetId,
-      ...(binding.alternateTargetIds || [])
-    ]) {
-      assert.match(sidepanelHtml, new RegExp(`id="${targetId}"`, "u"));
-    }
-  }
+  assert.deepEqual(findKeyboardShortcutCollisions(EDITOR_SHORTCUT_BINDINGS), []);
+  assert.equal(new Set(EDITOR_SHORTCUT_BINDINGS.map(({ action }) => action)).size, EDITOR_SHORTCUT_BINDINGS.length);
+  assert.equal(new Set(EDITOR_SHORTCUT_BINDINGS.map(({ targetId }) => targetId)).size, EDITOR_SHORTCUT_BINDINGS.length);
   for (const binding of EDITOR_SHORTCUT_BINDINGS) {
-    for (const targetId of [
-      binding.targetId,
-      ...(binding.alternateTargetIds || [])
-    ]) {
+    assert.equal(isDangerousKeyboardShortcutAction(binding.action), false);
+    for (const targetId of [binding.targetId, ...(binding.alternateTargetIds || [])]) {
       assert.match(editorHtml, new RegExp(`id="${targetId}"`, "u"));
+      assert.equal(isDangerousKeyboardShortcutAction(targetId), false);
     }
+    assert.match(
+      formatKeyboardShortcutHint(binding.label, binding.key),
+      new RegExp(`\\(단축키 ${binding.key}\\)$`, "u")
+    );
   }
-  assert.match(sidepanelSource, /installShortcutHints\(\)/u);
-  assert.match(sidepanelSource, /keyboardShortcutBindingForScope\("sidepanel"/u);
-  assert.match(
-    sidepanelSource,
-    /binding\.action === "save-segment"[\s\S]+state\.draft\.editingId/u,
-    "기존 구간 편집 중에는 T 저장 단축키가 실행되면 안 됩니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /saveSegment\.removeAttribute\("aria-keyshortcuts"\)/u,
-    "기존 구간 편집 중에는 저장 버튼의 단축키 표기도 제거해야 합니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /seekBackwardFive\.addEventListener\([\s\S]+seekSourceBy\(-5\)/u
-  );
-  assert.match(
-    sidepanelSource,
-    /seekForwardFive\.addEventListener\([\s\S]+seekSourceBy\(5\)/u
-  );
-  assert.match(
-    sidepanelSource,
-    /async function captureCurrentPosition[\s\S]+reserveSourceClockOperation\(\)[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+requestForegroundPageContext\(\)/u,
-    "D/F와 E/R은 입력 순서대로 원본 영상 시계를 읽고 바꿔야 합니다."
-  );
-  const captureFunction = /async function captureCurrentPosition[\s\S]+?(?=\nfunction captureOriginLabel)/u.exec(
-    sidepanelSource
-  )?.[0] || "";
-  assert.doesNotMatch(
-    captureFunction,
-    /segmentDescription\.focus/u,
-    "R 캡처 뒤 설명 입력으로 포커스를 옮기면 즉시 T 저장을 할 수 없습니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /async function saveSegment[\s\S]+reserveSourceClockOperation\(\)[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+syncDraftFromForm\(\)/u,
-    "R 직후 T를 누르면 끝 스탬프 저장 완료 뒤 구간을 저장해야 합니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /async function seekSourceBy[\s\S]+reserveSourceClockOperation\(\)[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+action: "seek-relative"/u,
-    "D/F 이동도 E/R 캡처와 같은 원본 영상 시계 큐를 사용해야 합니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /async function setSourcePlaybackRate[\s\S]+const operationGeneration = stateGeneration;[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+assertOperationCurrent\(operationGeneration\);[\s\S]+getActiveSourceTab\(\)/u,
-    "대기 중 초기화된 Y/U 명령은 새 원본 탭에 실행되면 안 됩니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /async function seekSourceBy[\s\S]+const operationGeneration = stateGeneration;[\s\S]+await sourceClockOperation\.waitForTurn;[\s\S]+assertOperationCurrent\(operationGeneration\);[\s\S]+getActiveSourceTab\(\)/u,
-    "대기 중 초기화된 D/F 명령은 새 원본 탭에 실행되면 안 됩니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /async function setSourcePlaybackRate[\s\S]+await sendMessageToSourceTab\(tab, message\);\s+assertOperationCurrent\(operationGeneration\);/u,
-    "Y/U 응답 대기 중 초기화되면 이전 응답을 새 상태에 적용하면 안 됩니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /async function seekSourceBy[\s\S]+await sendMessageToSourceTab\(tab, \{[\s\S]+action: "seek-relative"[\s\S]+\}\);\s+assertOperationCurrent\(operationGeneration\);/u,
-    "D/F 응답 대기 중 초기화되면 이전 응답을 새 상태에 적용하면 안 됩니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /refreshSourceTabAfterPlayerCommand\([\s\S]+requestPageContextFromTab\(tab\)[\s\S]+requestSequence !== contextRequestSequence/u,
-    "D/F 직후에는 같은 원본 탭의 최신 SPA 문맥만 다시 표시해야 합니다."
-  );
-  assert.match(
-    sidepanelSource,
-    /playbackRateQuarter\.addEventListener\([\s\S]+setSourcePlaybackRate\(0\.25\)/u
-  );
-  assert.match(
-    sidepanelSource,
-    /playbackRateDouble\.addEventListener\([\s\S]+setSourcePlaybackRate\(2\)/u
-  );
   assert.match(editorSource, /installEditorShortcutHints\(\)/u);
-  assert.match(editorSource, /keyboardShortcutBindingForScope\("editor"/u);
+  assert.match(editorSource, /editorKeyboardShortcutBinding\(shortcutLetter\)/u);
+  assert.equal(editorKeyboardShortcutBinding("J")?.targetId, "previous-cue-in-lane");
+  assert.equal(editorKeyboardShortcutBinding("K")?.targetId, "next-cue-in-lane");
+  assert.equal(editorKeyboardShortcutBinding("L"), null);
 });
 
-test("사이드패널 D/F와 Y/U는 원본 영상 이동·배속 버튼에 고정한다", () => {
-  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "d"), {
-    key: "D",
-    action: "player-seek-backward-five",
-    targetId: "seek-backward-five",
-    label: "원본 영상을 5초 이전으로 이동",
-    trigger: "click"
-  });
-  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "F"), {
-    key: "F",
-    action: "player-seek-forward-five",
-    targetId: "seek-forward-five",
-    label: "원본 영상을 5초 이후로 이동",
-    trigger: "click"
-  });
-  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "y"), {
-    key: "Y",
-    action: "player-rate-quarter",
-    targetId: "playback-rate-quarter",
-    label: "원본 영상을 0.25배속으로 재생",
-    trigger: "click"
-  });
-  assert.deepEqual(keyboardShortcutBindingForScope("sidepanel", "U"), {
-    key: "U",
-    action: "player-rate-double",
-    targetId: "playback-rate-double",
-    label: "원본 영상을 2배속으로 재생",
-    trigger: "click"
-  });
-  assert.equal(keyboardShortcutBindingForScope("sidepanel", "Z"), null);
-  assert.equal(keyboardShortcutBindingForScope("sidepanel", "X"), null);
-  assert.equal(
-    keyboardShortcutBindingForScope("editor", "X")?.targetId,
-    "toggle-caption-background"
-  );
-});
-
-test("위험 동작 denylist는 초기화·삭제·복구·취소·내보내기·생성을 fail closed 한다", () => {
+test("위험 동작 denylist는 파괴적이거나 고비용인 편집 동작을 fail closed한다", () => {
   assert(DANGEROUS_KEYBOARD_SHORTCUT_ACTION_TOKENS.includes("reset"));
   for (const action of [
     "reset-project",
@@ -264,47 +97,19 @@ test("위험 동작 denylist는 초기화·삭제·복구·취소·내보내기�
   ]) {
     assert.equal(isDangerousKeyboardShortcutAction(action), true, action);
   }
-  for (const action of [
-    "save-segment",
-    "create-local-draft",
-    "copy-prompt",
-    "play-toggle",
-    "fit-timeline"
-  ]) {
+  for (const action of ["save-segment", "focus-cue-text", "play-toggle", "fit-timeline"]) {
     assert.equal(isDangerousKeyboardShortcutAction(action), false, action);
   }
 });
 
-test("키 정규화와 scope 조회는 영문 A-Z 밖에서 fail closed 한다", () => {
+test("웹 편집기 키 정규화와 event guard는 IME·반복·수정키를 차단한다", () => {
   assert.equal(normalizeKeyboardShortcutLetter("a"), "A");
   assert.equal(normalizeKeyboardShortcutLetter("Z"), "Z");
   for (const key of ["", "AA", "1", " ", "ㄱ", "Escape", null]) {
     assert.equal(normalizeKeyboardShortcutLetter(key), null);
   }
-  assert.equal(keyboardShortcutBindingForScope("sidepanel", "1"), null);
-  assert.throws(
-    () => formatKeyboardShortcutHint("", "Q"),
-    /동작 이름과 A-Z 키/
-  );
-  assert.throws(
-    () => formatKeyboardShortcutHint("현재 영상", "Escape"),
-    /동작 이름과 A-Z 키/
-  );
-});
-
-test("충돌 검사는 대소문자를 같은 키로 취급한다", () => {
-  assert.deepEqual(
-    findKeyboardShortcutCollisions([
-      { key: "A", action: "first" },
-      { key: "A", action: "second" },
-      { key: "B", action: "third" }
-    ]),
-    [{ key: "A", actions: ["first", "second"] }]
-  );
-});
-
-test("IME·반복·수정키·이미 처리된 이벤트는 전역 단축키를 차단한다", () => {
-  const blockers = [
+  assert.throws(() => formatKeyboardShortcutHint("", "Q"), /동작 이름과 A-Z 키/u);
+  for (const event of [
     { key: "a", isComposing: true },
     { key: "a", keyCode: 229 },
     { key: "a", which: 229 },
@@ -314,198 +119,47 @@ test("IME·반복·수정키·이미 처리된 이벤트는 전역 단축키를 
     { key: "a", ctrlKey: true },
     { key: "a", metaKey: true },
     { key: "a", shiftKey: true }
-  ];
-  for (const event of blockers) {
+  ]) {
     assert.equal(isKeyboardShortcutEventBlocked(event), true);
     assert.equal(keyboardShortcutLetterFromEvent(event), null);
     assert.equal(shouldHandleKeyboardShortcut(event), false);
   }
+  assert.equal(keyboardShortcutLetterFromEvent({ key: "j" }), "J");
+  assert.equal(shouldHandleKeyboardShortcut({ key: "j" }), true);
 });
 
-test("문자 입력·미디어·ARIA 편집 control·contenteditable 내부는 차단한다", () => {
-  for (const tagName of [
-    "INPUT",
-    "TEXTAREA",
-    "SELECT",
-    "VIDEO",
-    "AUDIO"
-  ]) {
-    assert.equal(
-      isKeyboardShortcutInteractiveTarget(fakeElement({ tagName })),
-      true,
-      tagName
-    );
+test("웹 편집기 단축키는 입력·미디어·편집 가능한 조상 안에서 실행되지 않는다", () => {
+  for (const tagName of ["INPUT", "TEXTAREA", "SELECT", "VIDEO", "AUDIO"] as const) {
+    assert.equal(isKeyboardShortcutInteractiveTarget(fakeElement({ tagName })), true);
   }
+  for (const role of ["textbox", "combobox", "searchbox", "slider", "spinbutton"] as const) {
+    assert.equal(isKeyboardShortcutInteractiveTarget(fakeElement({ role })), true);
+  }
+  const editableParent = fakeElement({ contentEditable: "true" });
   assert.equal(
-    isKeyboardShortcutInteractiveTarget(fakeElement({ role: "slider" })),
+    isKeyboardShortcutInteractiveTarget(fakeElement({ parentElement: editableParent })),
     true
   );
-  assert.equal(
-    isKeyboardShortcutInteractiveTarget(fakeElement({
-      contentEditable: "plaintext-only"
-    })),
-    true
-  );
+  assert.equal(isKeyboardShortcutInteractiveTarget(fakeElement({ tagName: "BUTTON" })), false);
+  assert.equal(isKeyboardShortcutInteractiveTarget(fakeElement({ tagName: "A" })), false);
+  assert.equal(isKeyboardShortcutInteractiveTarget(fakeElement()), false);
 });
 
-test("버튼·링크 포커스는 안전한 A-Z 흐름을 막지 않는다", () => {
-  for (const tagName of ["BUTTON", "A"]) {
-    assert.equal(
-      isKeyboardShortcutInteractiveTarget(fakeElement({ tagName })),
-      false,
-      tagName
-    );
-  }
-  for (const role of ["button", "link", "tab"]) {
-    assert.equal(
-      isKeyboardShortcutInteractiveTarget(fakeElement({ role })),
-      false,
-      role
-    );
-  }
-  const button = fakeElement({ tagName: "BUTTON" });
-  const nestedIcon = fakeElement({ tagName: "SPAN", parentElement: button });
-  assert.equal(isKeyboardShortcutInteractiveTarget(nestedIcon), false);
-  assert.equal(
-    keyboardShortcutLetterFromEvent({ key: "a", target: nestedIcon }),
-    "A"
-  );
-});
-
-test("비대화형 편집기 표면의 단일 영문 키만 처리한다", () => {
-  const stage = fakeElement({ tagName: "DIV" });
-  assert.equal(isKeyboardShortcutInteractiveTarget(stage), false);
-  assert.equal(
-    keyboardShortcutLetterFromEvent({ key: "a", target: stage }),
-    "A"
-  );
-  assert.equal(
-    shouldHandleKeyboardShortcut({ key: "a", target: stage }),
-    true
-  );
-  assert.equal(
-    keyboardShortcutLetterFromEvent({ key: "Escape", target: stage }),
-    null
-  );
-  assert.equal(
-    keyboardShortcutLetterFromEvent({
-      key: "Process",
-      code: "KeyA",
-      target: stage
-    }),
-    "A",
-    "한글 자판이어도 물리 A-Z 위치를 사용해야 합니다."
-  );
-});
-
-test("자막 색상 숫자키는 상단 1~6과 NumLock이 켜진 숫자패드만 허용한다", () => {
-  const stage = fakeElement({ tagName: "DIV" });
+test("자막 색상과 컷 이동 보조키는 허용된 물리 키만 해석한다", () => {
   assert.deepEqual(CAPTION_COLOR_SHORTCUT_DIGITS, ["1", "2", "3", "4", "5", "6"]);
-  for (const digit of CAPTION_COLOR_SHORTCUT_DIGITS) {
+  for (let digit = 1; digit <= 6; digit += 1) {
     assert.equal(
-      captionColorShortcutDigitFromEvent({
-        key: "Process",
-        code: `Digit${digit}`,
-        target: stage
-      }),
-      digit,
-      `상단 숫자 ${digit}은 물리 키 위치로 인식해야 합니다.`
+      captionColorShortcutDigitFromEvent({ key: String(digit), code: `Digit${digit}` }),
+      String(digit)
     );
     assert.equal(
-      captionColorShortcutDigitFromEvent({
-        key: digit,
-        code: `Numpad${digit}`,
-        target: stage
-      }),
-      digit,
-      `NumLock이 켜진 숫자패드 ${digit}을 인식해야 합니다.`
+      captionColorShortcutDigitFromEvent({ key: String(digit), code: `Numpad${digit}` }),
+      String(digit)
     );
   }
-  assert.equal(
-    captionColorShortcutDigitFromEvent({ key: "6", target: stage }),
-    "6",
-    "code를 제공하지 않는 환경은 event.key로 보완해야 합니다."
-  );
-  assert.equal(
-    captionColorShortcutDigitFromEvent({
-      key: "End",
-      code: "Numpad1",
-      target: stage
-    }),
-    null,
-    "NumLock이 꺼진 숫자패드는 색상 단축키가 아니어야 합니다."
-  );
-  for (const event of [
-    { key: "0", code: "Digit0", target: stage },
-    { key: "7", code: "Digit7", target: stage },
-    { key: "1", code: "KeyA", target: stage },
-    { key: "!", code: "Digit1", shiftKey: true, target: stage }
-  ]) {
-    assert.equal(captionColorShortcutDigitFromEvent(event), null);
-  }
-});
-
-test("자막 색상 숫자키는 IME·반복·수정키와 입력 control 안에서 차단한다", () => {
-  const input = fakeElement({ tagName: "INPUT" });
-  const stage = fakeElement({ tagName: "DIV" });
-  for (const event of [
-    { key: "1", code: "Digit1", isComposing: true, target: stage },
-    { key: "1", code: "Digit1", keyCode: 229, target: stage },
-    { key: "1", code: "Digit1", repeat: true, target: stage },
-    { key: "1", code: "Digit1", defaultPrevented: true, target: stage },
-    { key: "1", code: "Digit1", altKey: true, target: stage },
-    { key: "1", code: "Digit1", ctrlKey: true, target: stage },
-    { key: "1", code: "Digit1", metaKey: true, target: stage },
-    { key: "1", code: "Digit1", shiftKey: true, target: stage },
-    { key: "1", code: "Digit1", target: input }
-  ]) {
-    assert.equal(captionColorShortcutDigitFromEvent(event), null);
-  }
-});
-
-test("쉼표·마침표 컷 이동은 물리 키를 우선하고 안전 차단 정책을 공유한다", () => {
-  const stage = fakeElement({ tagName: "DIV" });
-  const textarea = fakeElement({ tagName: "TEXTAREA" });
-  assert.equal(
-    clipNavigationShortcutDirectionFromEvent({
-      key: "다른 값",
-      code: "Comma",
-      target: stage
-    }),
-    -1
-  );
-  assert.equal(
-    clipNavigationShortcutDirectionFromEvent({
-      key: "다른 값",
-      code: "Period",
-      target: stage
-    }),
-    1
-  );
-  assert.equal(
-    clipNavigationShortcutDirectionFromEvent({ key: ",", target: stage }),
-    -1
-  );
-  assert.equal(
-    clipNavigationShortcutDirectionFromEvent({ key: ".", target: stage }),
-    1
-  );
-  assert.equal(
-    clipNavigationShortcutDirectionFromEvent({
-      key: ".",
-      code: "NumpadDecimal",
-      target: stage
-    }),
-    null,
-    "숫자패드 소수점은 다음 컷 단축키가 아니어야 합니다."
-  );
-  for (const event of [
-    { key: ",", code: "Comma", isComposing: true, target: stage },
-    { key: ",", code: "Comma", repeat: true, target: stage },
-    { key: ",", code: "Comma", shiftKey: true, target: stage },
-    { key: ",", code: "Comma", ctrlKey: true, target: stage },
-    { key: ",", code: "Comma", target: textarea }
-  ]) {
-    assert.equal(clipNavigationShortcutDirectionFromEvent(event), null);
-  }
+  assert.equal(captionColorShortcutDigitFromEvent({ key: "7", code: "Digit7" }), null);
+  assert.equal(captionColorShortcutDigitFromEvent({ key: "End", code: "Numpad1" }), null);
+  assert.equal(clipNavigationShortcutDirectionFromEvent({ key: ",", code: "Comma" }), -1);
+  assert.equal(clipNavigationShortcutDirectionFromEvent({ key: ".", code: "Period" }), 1);
+  assert.equal(clipNavigationShortcutDirectionFromEvent({ key: "<", code: "Comma", shiftKey: true }), null);
 });

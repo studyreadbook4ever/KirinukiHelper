@@ -15,9 +15,8 @@ const DEFAULT_SPEAKER_PALETTE = Object.freeze([
 ]);
 
 export const KR_VTUBER_CLEAN_PROFILE = Object.freeze({
-  id: "kr-vtuber-clean-v1",
+  id: "kr-vtuber-clean-v2",
   locale: "ko-KR",
-  maxCueDurationMs: 4_000,
   targetMinCueDurationMs: 650,
   maxLines: 1,
   targetLineWidthUnits: 20,
@@ -39,14 +38,13 @@ export const KR_VTUBER_CLEAN_PROFILE = Object.freeze({
 
 export const CAPTION_QUALITY_PROFILE_ID = KR_VTUBER_CLEAN_PROFILE.id;
 export const CAPTION_HARNESS_FINGERPRINT =
-  "kr-vtuber-clean-v1:segment-word-v3:context-v1:quality-gate-v2";
+  "kr-vtuber-clean-v2:segment-word-v4:context-v1:quality-gate-v4:source-timing-within-clip";
 
 type DynamicRecord = Record<string, unknown>;
 
 export interface CaptionQualityProfile {
   id: string;
   locale: string;
-  maxCueDurationMs: number;
   targetMinCueDurationMs: number;
   maxLines: number;
   targetLineWidthUnits: number;
@@ -644,8 +642,7 @@ function expandRange(
 
 function distributeDurations(
   totalDurationMs: number,
-  minimumDurations: number[],
-  maximumDurationMs: number
+  minimumDurations: number[]
 ): number[] {
   const count = minimumDurations.length;
   if (count === 0) {
@@ -671,26 +668,15 @@ function distributeDurations(
 
   const durations = [...minimumDurations];
   let remaining = totalDurationMs - minimumTotal;
-  while (remaining > 0) {
-    const eligible = durations
-      .map((value, index) => ({ value, index }))
-      .filter(({ value }) => value < maximumDurationMs);
-    if (eligible.length === 0) {
-      break;
+  for (let index = 0; index < count; index += 1) {
+    const slots = count - index;
+    const addition = Math.floor(remaining / slots);
+    const duration = durations[index];
+    if (duration === undefined) {
+      throw new RangeError("duration distribution index is out of range");
     }
-    const share = Math.max(1, Math.floor(remaining / eligible.length));
-    for (const { value, index } of eligible) {
-      const addition = Math.min(
-        share,
-        remaining,
-        maximumDurationMs - value
-      );
-      durations[index] = value + addition;
-      remaining -= addition;
-      if (remaining === 0) {
-        break;
-      }
-    }
+    durations[index] = duration + addition;
+    remaining -= addition;
   }
   return durations;
 }
@@ -706,6 +692,7 @@ function wordBoundaryAlignedDurations(
     parts.length < 2
     || !Array.isArray(wordUnits)
     || wordUnits.length < parts.length
+    || minimumDurations.length !== parts.length
   ) {
     return null;
   }
@@ -737,12 +724,16 @@ function wordBoundaryAlignedDurations(
       measureKoreanWidthUnits(parts[partIndex])
     );
     const targetRatio = partWidthCursor / totalPartWidth;
-    const minimumBoundary = (boundaries.at(-1) ?? startMs)
-      + (minimumDurations[partIndex] ?? 0);
+    const previousBoundary = boundaries.at(-1) ?? startMs;
     const remainingMinimum = minimumDurations
       .slice(partIndex + 1)
       .reduce((sum, value) => sum + value, 0);
+    const minimumBoundary = previousBoundary
+      + (minimumDurations[partIndex] ?? 0);
     const maximumBoundary = endMs - remainingMinimum;
+    if (minimumBoundary > maximumBoundary) {
+      return null;
+    }
     let anchorWidthCursor = 0;
     const candidates = [];
     for (let anchorIndex = 0; anchorIndex < anchors.length - 1; anchorIndex += 1) {
@@ -788,111 +779,10 @@ function wordBoundaryAlignedDurations(
     }
     durations.push(boundary - previousBoundary);
   }
+  if (durations.some((duration) => duration < 1)) {
+    return null;
+  }
   return durations;
-}
-
-function wordAnchoredLongCueParts(
-  text: unknown,
-  startMs: number,
-  endMs: number,
-  wordUnits: CanonicalTranscriptUnit[],
-  profile: CaptionQualityProfile
-): Array<Pick<WorkingCaptionCue, "startMs" | "endMs" | "text">> | null {
-  const anchors = (Array.isArray(wordUnits) ? wordUnits : [])
-    .filter((word) => (
-      word.startMs >= startMs
-      && word.endMs <= endMs
-      && word.endMs > word.startMs
-      && textSignature(word.text)
-    ))
-    .sort((first, second) => (
-      first.startMs - second.startMs
-      || first.endMs - second.endMs
-    ));
-  if (anchors.length === 0) {
-    return null;
-  }
-
-  const sourceText = normalizeCaptionDisplayText(text);
-  const sourceSignature = textSignature(sourceText);
-  const anchorSignatures = anchors.map((anchor) => textSignature(anchor.text));
-  if (
-    !sourceSignature
-    || anchorSignatures.join("") !== sourceSignature
-  ) {
-    return null;
-  }
-
-  const sourceGraphemes = graphemes(sourceText);
-  const signaturePositions = sourceGraphemes
-    .map((grapheme, index) => ({ grapheme, index }))
-    .filter(({ grapheme }) => !/[\s\p{P}\p{S}]/u.test(grapheme))
-    .map(({ index }) => index);
-  if (signaturePositions.length !== graphemes(sourceSignature).length) {
-    return null;
-  }
-
-  const anchoredParts: Array<{
-    startMs: number;
-    endMs: number;
-    rawText: string;
-  }> = [];
-  let signatureCursor = 0;
-  let sourceCursor = 0;
-  for (const [anchorIndex, anchor] of anchors.entries()) {
-    signatureCursor += graphemes(anchorSignatures[anchorIndex]).length;
-    const sourceEnd = anchorIndex === anchors.length - 1
-      ? sourceGraphemes.length
-      : signaturePositions[signatureCursor];
-    if (sourceEnd === undefined) {
-      return null;
-    }
-    const rawPart = sourceGraphemes
-      .slice(sourceCursor, sourceEnd)
-      .join("");
-    sourceCursor = sourceEnd;
-    const partText = normalizeCaptionDisplayText(rawPart);
-    if (!partText || anchor.endMs - anchor.startMs > profile.maxCueDurationMs) {
-      return null;
-    }
-    anchoredParts.push({
-      startMs: anchor.startMs,
-      endMs: anchor.endMs,
-      rawText: rawPart
-    });
-  }
-
-  const grouped: typeof anchoredParts = [];
-  for (const part of anchoredParts) {
-    const previous = grouped.at(-1);
-    const combinedText = previous
-      ? normalizeCaptionDisplayText(previous.rawText + part.rawText)
-      : "";
-    if (
-      previous
-      && part.endMs - previous.startMs <= profile.maxCueDurationMs
-      && measureKoreanWidthUnits(combinedText) <= profile.maxTotalWidthUnits
-    ) {
-      previous.endMs = part.endMs;
-      previous.rawText += part.rawText;
-      continue;
-    }
-    grouped.push({ ...part });
-  }
-
-  const finalized = grouped.map(({ rawText, ...range }) => ({
-    ...range,
-    text: normalizeCaptionDisplayText(rawText)
-  }));
-  if (finalized.some((part) => (
-    !part.text
-    || part.endMs - part.startMs < 100
-    || part.endMs - part.startMs > profile.maxCueDurationMs
-    || measureKoreanWidthUnits(part.text) > profile.maxTotalWidthUnits
-  ))) {
-    return null;
-  }
-  return finalized;
 }
 
 function splitRawCue(
@@ -925,11 +815,7 @@ function splitRawCue(
   if (range.repaired) {
     collector.add("HARNESS_REPAIRED_CUE_RANGE", cueIndex);
   }
-  const timeParts = Math.max(
-    1,
-    Math.ceil((range.endMs - range.startMs) / profile.maxCueDurationMs)
-  );
-  const parts = splitTextForCueCapacity(text, timeParts, profile);
+  const parts = splitTextForCueCapacity(text, 1, profile);
   if (parts.length > 1) {
     collector.add("HARNESS_SPLIT_CUE", cueIndex);
   }
@@ -943,7 +829,7 @@ function splitRawCue(
     )
   ));
   const desiredTotal = minimumDurations.reduce((sum, value) => sum + value, 0);
-  let expanded = preserveTimedBoundaries
+  const expanded = preserveTimedBoundaries
     ? { startMs: range.startMs, endMs: range.endMs }
     : expandRange(
       range.startMs,
@@ -957,48 +843,6 @@ function splitRawCue(
   ) {
     collector.add("HARNESS_EXPANDED_CUE_RANGE", cueIndex);
   }
-  const maximumAggregateDuration = parts.length * profile.maxCueDurationMs;
-  if (
-    preserveTimedBoundaries
-    && expanded.endMs - expanded.startMs > maximumAggregateDuration
-  ) {
-    const anchoredParts = wordAnchoredLongCueParts(
-      text,
-      expanded.startMs,
-      expanded.endMs,
-      wordUnits,
-      profile
-    );
-    if (anchoredParts) {
-      collector.add("HARNESS_CONSTRAINED_LONG_CUE_TO_WORD_ANCHORS", cueIndex);
-      return anchoredParts.map((part) => ({
-        ...part,
-        speakerId: normalizeSpeaker(
-          rawCue?.speakerId
-          ?? rawCue?.speaker_id
-          ?? rawCue?.speaker,
-          editorialContext
-        ),
-        reviewRequired: (
-          rawCue?.reviewRequired === true
-          || rawCue?.review_required === true
-          || /\[불명확\]/u.test(part.text)
-        ),
-        placement: String(rawCue?.placement || "").toLowerCase(),
-        sourceCueIndex: cueIndex
-      }));
-    }
-  }
-  if (
-    !preserveTimedBoundaries
-    && expanded.endMs - expanded.startMs > maximumAggregateDuration
-  ) {
-    expanded = {
-      startMs: expanded.startMs,
-      endMs: expanded.startMs + maximumAggregateDuration
-    };
-    collector.add("HARNESS_TRIMMED_EXCESSIVE_CUE_RANGE", cueIndex);
-  }
   const wordAligned = wordBoundaryAlignedDurations(
     parts,
     expanded.startMs,
@@ -1008,8 +852,7 @@ function splitRawCue(
   );
   const distributed = wordAligned || distributeDurations(
     expanded.endMs - expanded.startMs,
-    minimumDurations,
-    profile.maxCueDurationMs
+    minimumDurations
   );
   if (wordAligned) {
     collector.add("HARNESS_ALIGNED_SPLIT_TO_WORD_BOUNDARY", cueIndex);
@@ -1181,9 +1024,9 @@ function expandShortCuesWithoutSpeakerOverlap(
         * 1_000
         / profile.maxReadingRateUnitsPerSecond
       );
-      const targetDuration = Math.min(
-        profile.maxCueDurationMs,
-        Math.max(profile.targetMinCueDurationMs, readingMinimum)
+      const targetDuration = Math.max(
+        profile.targetMinCueDurationMs,
+        readingMinimum
       );
       let missing = targetDuration - (cue.endMs - cue.startMs);
       if (missing <= 0) {
@@ -1295,7 +1138,6 @@ const REJECTED_QUALITY_CODES = new Set([
   "HARNESS_EMPTY_TEXT",
   "HARNESS_TERMINAL_PERIOD",
   "HARNESS_CUE_OUT_OF_RANGE",
-  "HARNESS_CUE_TOO_LONG",
   "HARNESS_TOO_MANY_LINES",
   "HARNESS_LINE_TOO_WIDE",
   "HARNESS_CUE_TEXT_TOO_WIDE",
@@ -1409,9 +1251,6 @@ export function evaluateCaptionCues(cues: unknown, {
       || endMs > duration
     ) {
       appendViolation(violations, "HARNESS_CUE_OUT_OF_RANGE", cueIndex);
-    }
-    if (cueDuration > profile.maxCueDurationMs) {
-      appendViolation(violations, "HARNESS_CUE_TOO_LONG", cueIndex);
     }
     if (cueDuration > 0 && cueDuration < profile.targetMinCueDurationMs) {
       appendViolation(

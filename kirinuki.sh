@@ -15,7 +15,7 @@ fi
 KIRINUKI_NODE_COMMAND="${KIRINUKI_NODE_BINARY:-node}"
 if ! KIRINUKI_RESOLVED_NODE="$(command -v -- "$KIRINUKI_NODE_COMMAND" 2>/dev/null)"; then
   printf '%s\n' \
-    "Node.js 20.9 이상을 찾지 못했습니다." \
+    "Node.js 22 이상을 찾지 못했습니다." \
     "배포판 패키지 관리자나 https://nodejs.org/ 에서 Node.js와 npm을 설치한 뒤 다시 실행하세요." \
     "이 도우미는 관리자 권한을 자동으로 얻거나 시스템 패키지를 임의로 설치하지 않습니다." >&2
   exit 1
@@ -27,11 +27,10 @@ IFS=. read -r KIRINUKI_NODE_MAJOR KIRINUKI_NODE_MINOR _ \
   <<< "$KIRINUKI_NODE_NUMBERS"
 if [[ ! "$KIRINUKI_NODE_MAJOR" =~ ^[0-9]+$ \
   || ! "$KIRINUKI_NODE_MINOR" =~ ^[0-9]+$ \
-  || "$KIRINUKI_NODE_MAJOR" -lt 20 \
-  || ( "$KIRINUKI_NODE_MAJOR" -eq 20 && "$KIRINUKI_NODE_MINOR" -lt 9 ) ]]; then
+  || "$KIRINUKI_NODE_MAJOR" -lt 22 ]]; then
   printf '%s\n' \
     "현재 Node.js는 ${KIRINUKI_NODE_VERSION:-알 수 없음}입니다." \
-    "Kirinuki에는 Node.js 20.9 이상이 필요합니다." >&2
+    "Kirinuki에는 Node.js 22 이상이 필요합니다." >&2
   exit 1
 fi
 

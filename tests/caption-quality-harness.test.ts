@@ -27,7 +27,6 @@ function assertCleanCue(cue: CaptionCue, clipDurationMs: number) {
   assert(cue.startMs >= 0);
   assert(cue.endMs <= clipDurationMs);
   assert(cue.endMs > cue.startMs);
-  assert(cue.endMs - cue.startMs <= 4_000);
   assert.equal(cue.text.includes("\n"), false);
   assert(measureKoreanWidthUnits(cue.text) <= 20);
   assert.equal(/[.\u3002\uff0e]$/u.test(cue.text), false);
@@ -45,14 +44,14 @@ function assertCleanCue(cue: CaptionCue, clipDurationMs: number) {
   );
 }
 
-test("kr-vtuber-clean-v1은 실측 레퍼런스에 맞춘 한 줄·하단·4초 프로필이다", () => {
-  assert.equal(CAPTION_QUALITY_PROFILE_ID, "kr-vtuber-clean-v1");
+test("kr-vtuber-clean-v2는 한 줄·하단을 유지하고 전역 최대 표시 시간을 두지 않는다", () => {
+  assert.equal(CAPTION_QUALITY_PROFILE_ID, "kr-vtuber-clean-v2");
   assert.equal(KR_VTUBER_CLEAN_PROFILE.id, CAPTION_QUALITY_PROFILE_ID);
   assert.equal(KR_VTUBER_CLEAN_PROFILE.maxLines, 1);
   assert.equal(KR_VTUBER_CLEAN_PROFILE.targetLineWidthUnits, 20);
   assert.equal(KR_VTUBER_CLEAN_PROFILE.maxLineWidthUnits, 20);
   assert.equal(KR_VTUBER_CLEAN_PROFILE.maxTotalWidthUnits, 20);
-  assert.equal(KR_VTUBER_CLEAN_PROFILE.maxCueDurationMs, 4_000);
+  assert.equal(Object.hasOwn(KR_VTUBER_CLEAN_PROFILE, "maxCueDurationMs"), false);
   assert.equal(KR_VTUBER_CLEAN_PROFILE.targetMinCueDurationMs, 650);
   assert.equal(
     KR_VTUBER_CLEAN_PROFILE.maxReadingRateUnitsPerSecond,
@@ -266,7 +265,122 @@ test("긴 cue 분할 시 균등 나눗셈 대신 실제 STT word 경계를 사�
   ));
 });
 
-test("4초 초과 짧은 segment는 일치하는 word anchor 범위가 있을 때만 안전하게 축소한다", () => {
+test("Whisper의 4초 초과 원본 segment는 임의 경계로 자르지 않고 보존한다", () => {
+  const text = "한식비페에서 제육볶음 먹고 왔어. 잘했지?";
+  const wordRanges: Array<[number, number, string]> = [
+    [0, 420, "한"],
+    [420, 840, "식"],
+    [840, 1_260, "비"],
+    [1_260, 1_680, "페"],
+    [1_680, 2_530, "에서"],
+    [2_530, 2_950, "제"],
+    [2_950, 3_360, "육"],
+    [3_370, 3_540, "�"],
+    [3_660, 3_790, "�"],
+    [3_790, 4_210, "음"],
+    [4_210, 5_060, "먹고"],
+    [5_060, 5_480, "왔"],
+    [5_480, 5_840, "어"],
+    [6_410, 6_560, "잘"],
+    [6_560, 6_690, "했"],
+    [6_890, 7_120, "지"],
+    [7_120, 7_440, "?"]
+  ];
+  const words = wordRanges.map(([startMs, endMs, word]) => ({
+    startMs,
+    endMs,
+    text: word
+  }));
+  const input = [{
+    startMs: 140,
+    endMs: 7_940,
+    text,
+    speakerId: "main",
+    reviewRequired: false,
+    placement: "bottom"
+  }];
+  const options = {
+    clipDurationMs: 8_911,
+    transcript: {
+      segments: [{ startMs: 140, endMs: 7_940, text }],
+      words
+    },
+    timingPolicy: "stt-boundaries"
+  };
+
+  const repaired = repairCaptionDraft(input, options);
+
+  assert.deepEqual(
+    repaired.cues.map(({ startMs, endMs }) => ({ startMs, endMs })),
+    [{ startMs: 140, endMs: 7_940 }]
+  );
+  const [longCue] = repaired.cues;
+  assert.ok(longCue);
+  assert.equal(longCue.endMs - longCue.startMs, 7_800);
+  assert.equal(repaired.report.disposition, "accepted");
+  assert.equal(repaired.warnings.some(
+    ({ code }) => code === "HARNESS_ALIGNED_SPLIT_TO_WORD_BOUNDARY"
+  ), false);
+
+  const repeated = repairCaptionDraft(repaired.cues, options);
+  assert.deepEqual(repeated.cues, repaired.cues);
+  assert.deepEqual(repeated.report, repaired.report);
+});
+
+test("4초 주변의 word 경계는 Whisper cue를 임의 분할하지 않는다", () => {
+  const text = "한식비페에서 제육볶음 먹고 왔어. 잘했지?";
+  const baseWords: Array<[number, number, string]> = [
+    [0, 420, "한"],
+    [420, 840, "식"],
+    [840, 1_260, "비"],
+    [1_260, 1_680, "페"],
+    [1_680, 2_530, "에서"],
+    [2_530, 2_950, "제"],
+    [2_950, 3_360, "육"],
+    [3_370, 3_540, "�"],
+    [3_660, 3_790, "�"],
+    [3_790, 4_210, "음"],
+    [4_210, 5_060, "먹고"],
+    [5_060, 5_480, "왔"],
+    [5_480, 5_840, "어"],
+    [6_410, 6_560, "잘"],
+    [6_560, 6_690, "했"],
+    [6_890, 7_120, "지"],
+    [7_120, 7_440, "?"]
+  ];
+  const repairAtBoundary = (boundary: number) => repairCaptionDraft([{
+    startMs: 140,
+    endMs: 7_940,
+    text,
+    speakerId: "main",
+    reviewRequired: false,
+    placement: "bottom"
+  }], {
+    clipDurationMs: 8_911,
+    transcript: {
+      segments: [{ startMs: 140, endMs: 7_940, text }],
+      words: baseWords.map(([startMs, endMs, word], index) => ({
+        startMs: index === 10 ? boundary : startMs,
+        endMs: index === 9 ? boundary : endMs,
+        text: word
+      }))
+    },
+    timingPolicy: "stt-boundaries"
+  });
+
+  for (const boundary of [3_939, 3_940, 4_140, 4_141]) {
+    const repaired = repairAtBoundary(boundary);
+    assert.deepEqual(
+      repaired.cues.map(({ startMs, endMs }) => ({ startMs, endMs })),
+      [{ startMs: 140, endMs: 7_940 }]
+    );
+    assert.equal(repaired.warnings.some(
+      ({ code }) => code === "HARNESS_ALIGNED_SPLIT_TO_WORD_BOUNDARY"
+    ), false);
+  }
+});
+
+test("4초 초과 짧은 Whisper segment도 word anchor로 축소하지 않는다", () => {
   const repaired = repairCaptionDraft([{
     startMs: 0,
     endMs: 10_000,
@@ -299,18 +413,18 @@ test("4초 초과 짧은 segment는 일치하는 word anchor 범위가 있을 �
       text
     })),
     [{
-      startMs: 3_000,
-      endMs: 3_500,
+      startMs: 0,
+      endMs: 10_000,
       text: "아!"
     }]
   );
-  assert(repaired.warnings.some(
+  assert.equal(repaired.warnings.some(
     ({ code }) => code === "HARNESS_CONSTRAINED_LONG_CUE_TO_WORD_ANCHORS"
-  ));
-  assert.notEqual(repaired.report.disposition, "rejected");
+  ), false);
+  assert.equal(repaired.report.disposition, "accepted");
 });
 
-test("4초 초과 짧은 segment에 word anchor가 없으면 시간을 발명하지 않고 구조 실패로 남긴다", () => {
+test("word anchor가 없어도 4초 초과 Whisper segment는 유효하다", () => {
   const repaired = repairCaptionDraft([{
     startMs: 0,
     endMs: 10_000,
@@ -342,10 +456,7 @@ test("4초 초과 짧은 segment에 word anchor가 없으면 시간을 발명하
     ),
     false
   );
-  assert.equal(repaired.report.disposition, "rejected");
-  assert(repaired.report.violations.some(
-    ({ code }) => code === "HARNESS_CUE_TOO_LONG"
-  ));
+  assert.equal(repaired.report.disposition, "accepted");
 });
 
 test("STT 경계 보존 모드는 짧은 발화를 늘리지 않고 unknown 화자를 main으로 정리한다", () => {

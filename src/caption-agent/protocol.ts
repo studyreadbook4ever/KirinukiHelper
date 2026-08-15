@@ -26,7 +26,7 @@ export const CAPTION_RESPONSE_PROVIDERS = Object.freeze([
   "local-whispercpp"
 ]);
 
-export const MAX_CAPTION_CUE_DURATION_MS = 4_000;
+export const CAPTION_CUE_DURATION_POLICY = "source-timing-within-clip";
 export const MIN_CAPTION_CUE_DURATION_MS = 100;
 export const MAX_CAPTION_CUES = 4_000;
 export const MAX_CAPTION_WARNINGS = 4_000;
@@ -205,7 +205,7 @@ export const CAPTION_AGENT_REQUEST_JSON_SCHEMA = Object.freeze({
         "audience",
         "includeAllRecognizableSpeech",
         "uncertainSpeech",
-        "maxCueDurationMs",
+        "cueDurationPolicy",
         "terminalPeriod",
         "questionAndExclamationMarks"
       ],
@@ -213,7 +213,7 @@ export const CAPTION_AGENT_REQUEST_JSON_SCHEMA = Object.freeze({
         audience: { const: "korean-vtuber-kirinuki" },
         includeAllRecognizableSpeech: { const: true },
         uncertainSpeech: { const: "keep-and-mark-for-review" },
-        maxCueDurationMs: { const: MAX_CAPTION_CUE_DURATION_MS },
+        cueDurationPolicy: { const: CAPTION_CUE_DURATION_POLICY },
         terminalPeriod: { const: "omit" },
         questionAndExclamationMarks: { const: "keep" }
       }
@@ -265,7 +265,7 @@ const CAPTION_CUE_SCHEMA = Object.freeze({
     endMs: {
       type: "integer",
       minimum: 1,
-      description: "클립 시작을 0으로 한 자막 종료 시각(ms), startMs보다 크고 최대 4초"
+      description: "클립 시작을 0으로 한 자막 종료 시각(ms), startMs보다 크고 클립 길이 이내"
     },
     text: {
       type: "string",
@@ -587,7 +587,7 @@ export function validateCaptionAgentRequest(value: unknown): CaptionAgentRequest
     "audience",
     "includeAllRecognizableSpeech",
     "uncertainSpeech",
-    "maxCueDurationMs",
+    "cueDurationPolicy",
     "terminalPeriod",
     "questionAndExclamationMarks"
   ]);
@@ -629,7 +629,7 @@ export function validateCaptionAgentRequest(value: unknown): CaptionAgentRequest
     audience: "korean-vtuber-kirinuki",
     includeAllRecognizableSpeech: true,
     uncertainSpeech: "keep-and-mark-for-review",
-    maxCueDurationMs: MAX_CAPTION_CUE_DURATION_MS,
+    cueDurationPolicy: CAPTION_CUE_DURATION_POLICY,
     terminalPeriod: "omit",
     questionAndExclamationMarks: "keep"
   };
@@ -698,23 +698,6 @@ function normalizedPlacement(_value?: unknown): "bottom" {
   return "bottom";
 }
 
-function splitTextIntoParts(text: string, requestedParts: number): string[] {
-  if (requestedParts <= 1) {
-    return [text];
-  }
-  const words = text.split(" ").filter(Boolean);
-  const units = words.length >= requestedParts ? words : Array.from(text);
-  const separator = words.length >= requestedParts ? " " : "";
-  const partCount = Math.max(1, Math.min(requestedParts, units.length));
-  const parts: string[] = [];
-  for (let index = 0; index < partCount; index += 1) {
-    const from = Math.floor(index * units.length / partCount);
-    const to = Math.floor((index + 1) * units.length / partCount);
-    parts.push(units.slice(from, to).join(separator).trim());
-  }
-  return parts.filter(Boolean);
-}
-
 function rawCueField(
   cue: JsonObject | null | undefined,
   camelName: string,
@@ -750,13 +733,6 @@ export function validateCaptionCue(
     && endMs > duration
   ) {
     errors.push("clipDurationMs");
-  }
-  if (
-    validStartMs
-    && validEndMs
-    && endMs - startMs > MAX_CAPTION_CUE_DURATION_MS
-  ) {
-    errors.push("maxDurationMs");
   }
   if (!String(cue.text || "").trim()) {
     errors.push("text");
@@ -884,49 +860,20 @@ export function normalizeCaptionCuesDetailed(
     if (boundedText !== text) {
       appendWarning({ code: "TRIMMED_LONG_TEXT", cueIndex });
     }
-    const requestedParts = Math.ceil(
-      (endMs - startMs) / MAX_CAPTION_CUE_DURATION_MS
-    );
-    const parts = splitTextIntoParts(boundedText, requestedParts);
-    if (parts.length > 1 || endMs - startMs > MAX_CAPTION_CUE_DURATION_MS) {
-      appendWarning({ code: "SPLIT_LONG_CUE", cueIndex });
-    }
-    const sourceDuration = endMs - startMs;
-    for (const [partIndex, part] of parts.entries()) {
-      if (normalized.length >= MAX_CAPTION_CUES) {
-        appendWarning({ code: "TRIMMED_CUE_COUNT", cueIndex });
-        break;
-      }
-      const partStartMs = startMs + Math.floor(
-        partIndex * sourceDuration / parts.length
-      );
-      const nextSlotMs = partIndex === parts.length - 1
-        ? endMs
-        : startMs + Math.floor(
-          (partIndex + 1) * sourceDuration / parts.length
-        );
-      const partEndMs = Math.min(
-        nextSlotMs,
-        partStartMs + MAX_CAPTION_CUE_DURATION_MS
-      );
-      if (partEndMs <= partStartMs) {
-        continue;
-      }
-      normalized.push({
-        startMs: partStartMs,
-        endMs: partEndMs,
-        text: stripTerminalPeriods(part),
-        speakerId: normalizedSpeaker(
-          rawCueField(rawCue, "speakerId", "speaker_id")
-          ?? rawCue.speaker
-        ),
-        reviewRequired: (
-          rawCueField(rawCue, "reviewRequired", "review_required") === true
-          || /\[불명확\]/u.test(part)
-        ),
-        placement: normalizedPlacement(rawCue.placement)
-      });
-    }
+    normalized.push({
+      startMs,
+      endMs,
+      text: stripTerminalPeriods(boundedText),
+      speakerId: normalizedSpeaker(
+        rawCueField(rawCue, "speakerId", "speaker_id")
+        ?? rawCue.speaker
+      ),
+      reviewRequired: (
+        rawCueField(rawCue, "reviewRequired", "review_required") === true
+        || /\[불명확\]/u.test(boundedText)
+      ),
+      placement: normalizedPlacement(rawCue.placement)
+    });
   }
 
   normalized.sort((first, second) => (

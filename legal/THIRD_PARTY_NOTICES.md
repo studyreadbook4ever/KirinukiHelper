@@ -1,142 +1,207 @@
-# Third-party notices
+# Third-party notices — source, web distribution and local runtime
 
-KirinukiHelper의 프로젝트 작성 코드는 배포물의 `LICENSE`에 적힌 MIT
-라이선스로 제공됩니다. 아래 구성요소는 그 MIT 라이선스로 재허가되는 것이
-아니며, 각각 표시된 MPL-2.0, OFL-1.1 또는 MIT 조건과 저작권 고지를 그대로
-유지합니다.
+이 문서는 KirinukiHelper 저장소, localhost web 정적 배포물, 선택적으로 설치되는
+로컬 runtime까지 포함하는 전체 고지입니다. 정상 web ZIP 자체의 더 좁은 범위는
+`web/THIRD_PARTY_NOTICES.md`를 기준으로 합니다. 최소 `streaming-companion/`은
+first-party bridge 코드만 포함하며 제3자 runtime을 번들하지 않습니다.
 
-CHZZK Kirinuki Studio bundles the following third-party browser libraries. No
-third-party Node.js native module is shipped in the extension archive.
+KirinukiHelper가 직접 작성한 코드는 루트 `UNLICENSE`에 따라 퍼블릭 도메인에
+헌정됩니다. Popovic 정적 배포에는 같은 원문을
+`web/licenses/UNLICENSE.txt`로 싣습니다. 아래 구성요소는 그 헌정 대상이 아니며
+각각의 라이선스와 저작권 고지를 유지합니다. 인벤토리와 자동 검사는 법률 자문이나 법적 무위험 보증이
+아닙니다. 실제 웹·컨테이너·companion 배포 산출물은 출시 때 다시 감사해야
+합니다.
 
-## Mediabunny 1.51.0
+## web 정적 배포물에 포함되는 구성요소
+
+<!-- attribution-id: mediabunny -->
+### Mediabunny 1.51.0
 
 - Copyright © 2026-present Vanilagy and contributors
-- License: Mozilla Public License 2.0
-- Upstream source: https://github.com/Vanilagy/mediabunny
-- Corresponding version: `mediabunny@1.51.0`, locked in `package-lock.json`
-- Exact source package: https://registry.npmjs.org/mediabunny/-/mediabunny-1.51.0.tgz
-- npm integrity: `sha512-u327374xU8Ho0gCaMII7fUK8t0PnqkabCox1k8uUwvgvGb9o6YQGZEG2Qr4DTe7nTMpzfL7ukgnHDvDROySZ+Q==`
+- License: Mozilla Public License 2.0 (`MPL-2.0`)
+- Upstream: https://github.com/Vanilagy/mediabunny
+- Exact corresponding source:
+  https://registry.npmjs.org/mediabunny/-/mediabunny-1.51.0.tgz
+- npm integrity:
+  `sha512-u327374xU8Ho0gCaMII7fUK8t0PnqkabCox1k8uUwvgvGb9o6YQGZEG2Qr4DTe7nTMpzfL7ukgnHDvDROySZ+Q==`
+- Distributed license: `web/licenses/MEDIABUNNY-MPL-2.0.txt`
+- License file size: `16726` bytes
+- License SHA-256:
+  `3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04`
 
-The extension uses Mediabunny to read, encode, and mux local media. The
-upstream files are bundled without a local patch. Corresponding TypeScript
-source is included in the exact npm source package above and can also be
-obtained from the upstream repository. The full MPL 2.0 text is included as
-`licenses/MEDIABUNNY-MPL-2.0.txt`.
+Mediabunny는 브라우저의 로컬 미디어 read/encode/mux 경로에 사용됩니다.
+upstream 코드는 로컬 patch 없이 번들되며, MPL-2.0 대응 소스는 위의 고정
+npm source package에서 받을 수 있습니다.
 
-## AudSeg 0.1.0
+<!-- attribution-id: audseg -->
+### AudSeg browser port 0.1.0
 
 - Copyright © 2026 AudSeg contributors
 - License: MIT
-- Source in this repository: `AudSeg/`
-- Browser port: `src/editor/audseg.ts`
+- Source: `AudSeg/` and `src/editor/audseg.ts`
+- Corresponding source:
+  https://github.com/studyreadbook4ever/KirinukiHelper/tree/eef841a336613fe8fe825ab231d9bbe770751ee2/AudSeg
+- Distributed license: `web/licenses/AUDSEG-MIT.txt`
+- License file size: `1076` bytes
+- License SHA-256:
+  `e492735a5732fcd497ce6854a6ee09ff7ff6a27977d5e54b2269a60788a98e25`
 
-The editor includes a TypeScript port of AudSeg's model-free audio-activity
-segmentation algorithm. It runs entirely in the browser and creates timing
-regions without transcribing speech. The full MIT text is included in the
-Extension package as `licenses/AUDSEG-MIT.txt`.
+별도 MIT 라이선스인 Python 알고리즘을 TypeScript로 port했습니다. 소스의
+`@license` 주석은 esbuild의 `legalComments: "eof"`를 통해 컴파일된
+`web/editor/editor.js`와 `web/editor/audseg-worker.js`에도 남습니다.
 
-## Pretendard 1.3.9 (ExtraBold)
+<!-- attribution-id: pretendard -->
+### Pretendard ExtraBold 1.3.9
 
 - Copyright © 2021 Kil Hyung-jin
-- License: SIL Open Font License 1.1
+- License: SIL Open Font License 1.1 (`OFL-1.1`)
 - Reserved Font Name: Pretendard
-- Font source: https://github.com/orioncactus/pretendard/blob/v1.3.9/packages/pretendard/dist/web/static/woff2/Pretendard-ExtraBold.woff2
-- License source: https://github.com/orioncactus/pretendard/blob/v1.3.9/LICENSE
-- Bundled file: `Pretendard-ExtraBold.woff2`
-- Font SHA-256: `dd7c1e156f508eb962acc7a33a7a1896d1e0b71e11156fad96e731689ceb6dc3`
-- License SHA-256: `d31ddd9f2bed32fd7e302a205cf2380ba0de6529152d239ef99cfb6f261bfc04`
+- Upstream: https://github.com/orioncactus/pretendard/tree/v1.3.9
+- Font: `web/editor/fonts/Pretendard-ExtraBold.woff2`
+- Font size: `793540` bytes
+- Font SHA-256:
+  `dd7c1e156f508eb962acc7a33a7a1896d1e0b71e11156fad96e731689ceb6dc3`
+- License: `web/licenses/PRETENDARD-OFL-1.1.txt`
+- License size: `4418` bytes
+- License SHA-256:
+  `d31ddd9f2bed32fd7e302a205cf2380ba0de6529152d239ef99cfb6f261bfc04`
 
-The extension bundles the official, unmodified ExtraBold WOFF2 from the
-upstream `v1.3.9` release. The copyright notice and full SIL Open Font License
-1.1 text are included as `licenses/PRETENDARD-OFL-1.1.txt`.
-
-## Paperlogy 1.001 (8 ExtraBold)
+<!-- attribution-id: paperlogy -->
+### Paperlogy 8 ExtraBold 1.001
 
 - Copyright © 2024 The PAPERLOGY Authors
-- License: SIL Open Font License 1.1
+- License: SIL Open Font License 1.1 (`OFL-1.1`)
 - Official project: https://freesentation.blog/paperlogyfont
-- Upstream source: https://github.com/Freesentation/paperlogy
 - Pinned commit: `8ef35f53b318c7ca914c52b1b382b9a8bad07a61`
-- Font source: https://github.com/Freesentation/paperlogy/blob/8ef35f53b318c7ca914c52b1b382b9a8bad07a61/woff2/Paperlogy-8ExtraBold.woff2
-- License source: https://github.com/Freesentation/paperlogy/blob/8ef35f53b318c7ca914c52b1b382b9a8bad07a61/OFL%20license.txt
-- Bundled file: `Paperlogy-8ExtraBold.woff2`
-- Font SHA-256: `5047db061c39ec5ed5c9d0b71c7aaad4b9547ed15ce48d1cd74090169f132bc0`
-- License SHA-256: `603b2e7ef9effb9037b0b67f0530cacdc05e71a4e569032d7e4d98c2e6763135`
+- Upstream:
+  https://github.com/Freesentation/paperlogy/tree/8ef35f53b318c7ca914c52b1b382b9a8bad07a61
+- Font: `web/editor/fonts/Paperlogy-8ExtraBold.woff2`
+- Font size: `430124` bytes
+- Font SHA-256:
+  `5047db061c39ec5ed5c9d0b71c7aaad4b9547ed15ce48d1cd74090169f132bc0`
+- License: `web/licenses/PAPERLOGY-OFL-1.1.txt`
+- License size: `4380` bytes
+- License SHA-256:
+  `603b2e7ef9effb9037b0b67f0530cacdc05e71a4e569032d7e4d98c2e6763135`
 
-The extension bundles the official 8 ExtraBold WOFF2 from the pinned upstream
-commit. The official OFL text is included byte-for-byte as
-`licenses/PAPERLOGY-OFL-1.1.txt`.
+두 WOFF2 모두 표시한 upstream revision의 파일을 수정 없이 포함합니다.
 
-## Development-only TypeScript toolchain
+## 사용자별 XDG 디렉터리에 내려받는 로컬 runtime
 
-The following exact npm packages are used only to type-check, run, and compile
-the repository's TypeScript sources. They are not included in the Extension
-ZIP. Their exact registry artifacts and integrity values are pinned in
-`package-lock.json`, and their license metadata is checked fail-closed by
-`npm run license:check`.
+아래 파일은 web 정적 ZIP에 포함되지 않습니다. setup 명령은 HTTPS URL,
+바이트 수와 SHA-256을 모두 고정하고, 검증에 실패하면 설치하지 않습니다.
+설치 위치와 운영 방식은 `legal/RUNTIME_DEPENDENCIES.md`를 확인하세요.
 
-- TypeScript 5.9.3 — Apache License 2.0 —
-  https://github.com/microsoft/TypeScript
-- tsx 4.23.1 — MIT —
-  https://github.com/privatenumber/tsx
-- esbuild 0.28.1 and its platform packages — MIT —
-  https://github.com/evanw/esbuild
-- `@types/chrome` 0.2.2, `@types/node` 20.19.43 and their pinned type-only
-  dependencies — MIT —
-  https://github.com/DefinitelyTyped/DefinitelyTyped
-- fsevents 2.3.3 — MIT, optional development dependency on macOS —
-  https://github.com/fsevents/fsevents
-
-## Runtime-downloaded local caption components
-
-The following components are **not bundled in the extension archive**. On
-Linux, `npm run caption-stack:setup` downloads them into the current user's
-XDG data directory, verifies the exact byte size and SHA-256, and copies this
-notice beside the installation.
-
+<!-- attribution-id: whisper-cpp -->
 ### whisper.cpp v1.8.6
 
 - Copyright © 2023-2026 The ggml authors
 - License: MIT
-- Upstream source: https://github.com/ggml-org/whisper.cpp
+- Upstream: https://github.com/ggml-org/whisper.cpp
 - Commit: `23ee03506a91ac3d3f0071b40e66a430eebdfa1d`
-- Source archive SHA-256: `c8b0de473e9ec47a74bdf6104425c709261beeada8d6d7c1fec7432be701d032`
-- License source: https://github.com/ggml-org/whisper.cpp/blob/23ee03506a91ac3d3f0071b40e66a430eebdfa1d/LICENSE
+- Artifact: `whisper.cpp-v1.8.6.tar.gz`
+- URL:
+  https://codeload.github.com/ggml-org/whisper.cpp/tar.gz/23ee03506a91ac3d3f0071b40e66a430eebdfa1d
+- Size: `8846418` bytes
+- SHA-256:
+  `c8b0de473e9ec47a74bdf6104425c709261beeada8d6d7c1fec7432be701d032`
+- License source:
+  https://github.com/ggml-org/whisper.cpp/blob/23ee03506a91ac3d3f0071b40e66a430eebdfa1d/LICENSE
 
-The setup command builds `whisper-server` locally without a repository patch.
+현재 setup은 이 source archive에서 `whisper-server`를 로컬 빌드합니다.
+archive와 서버 빌드에는 적어도 다음 upstream 또는 vendored 소스가 관련될 수
+있으므로, 완성된 바이너리를 배포할 때 실제 build/link 결과와 헤더 안의
+고지를 다시 수집해야 합니다.
 
+- ggml — `source at pinned whisper.cpp commit` — MIT —
+  https://github.com/ggml-org/ggml
+- cpp-httplib — `vendored header at pinned whisper.cpp commit` — MIT —
+  https://github.com/yhirose/cpp-httplib
+- nlohmann/json — `vendored header at pinned whisper.cpp commit` — MIT —
+  https://github.com/nlohmann/json
+- stb_vorbis — `vendored source at pinned whisper.cpp commit` —
+  `MIT-or-Unlicense` 선택지 —
+  https://github.com/nothings/stb
+- miniaudio — `vendored header at pinned whisper.cpp commit` —
+  `MIT-0-or-Unlicense` 선택지 —
+  https://github.com/mackron/miniaudio
+
+이 목록은 “archive 전체가 서버에 링크된다”는 뜻이 아닙니다. 반대로 최상위
+whisper.cpp MIT 한 줄만으로 향후 배포 바이너리의 모든 embedded 의무가
+끝난다고 가정해서도 안 됩니다. 서버 바이너리·동적 라이브러리·활성 backend를
+릴리스 산출물 그대로 감사하는 것이 배포 gate입니다.
+
+<!-- attribution-id: openai-whisper-models -->
 ### Quantized OpenAI Whisper models for whisper.cpp
 
 - Copyright © 2022 OpenAI
 - License: MIT
-- Model repository: https://huggingface.co/ggerganov/whisper.cpp
-- Repository revision: `5359861c739e955e79d9a303bcbc70fb988958b1`
-- Original model source: https://github.com/openai/whisper
-- Original license: https://github.com/openai/whisper/blob/main/LICENSE
+- Converted model repository: https://huggingface.co/ggerganov/whisper.cpp
+- Pinned revision: `5359861c739e955e79d9a303bcbc70fb988958b1`
+- Original source and license: https://github.com/openai/whisper
 
-The semantic profiles download exactly one of these converted multilingual
-model files:
+| Artifact | Size (bytes) | SHA-256 |
+| --- | ---: | --- |
+| [`ggml-tiny-q5_1.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny-q5_1.bin) | `32152673` | `818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7` |
+| [`ggml-base-q5_1.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base-q5_1.bin) | `59707625` | `422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898` |
+| [`ggml-small-q5_1.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small-q5_1.bin) | `190085487` | `ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb` |
+| [`ggml-medium-q5_0.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-medium-q5_0.bin) | `539212467` | `19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f` |
 
-- `ggml-tiny-q5_1.bin` — SHA-256 `818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7`
-- `ggml-base-q5_1.bin` — SHA-256 `422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898`
-- `ggml-small-q5_1.bin` — SHA-256 `ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb`
-- `ggml-medium-q5_0.bin` — SHA-256 `19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f`
+각 URL은 다음 고정 prefix와 artifact 이름을 결합합니다.
 
+`https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/`
+
+<!-- attribution-id: silero-vad -->
 ### Silero VAD 6.2 converted for whisper.cpp
 
 - Copyright © 2020-present Silero Team
 - License: MIT
-- Converted model repository: https://huggingface.co/ggml-org/whisper-vad
-- Repository revision: `9ffd54a1e1ee413ddf265af9913beaf518d1639b`
-- Installed file: `ggml-silero-v6.2.0.bin`
-- File SHA-256: `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987`
-- Original project and license: https://github.com/snakers4/silero-vad
+- Original project: https://github.com/snakers4/silero-vad
+- Converted repository: https://huggingface.co/ggml-org/whisper-vad
+- Pinned revision: `9ffd54a1e1ee413ddf265af9913beaf518d1639b`
+- Artifact: `ggml-silero-v6.2.0.bin`
+- URL:
+  https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin
+- Size: `885098` bytes
+- SHA-256:
+  `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987`
 
-### MIT license for the runtime components above
+<!-- attribution-id: yt-dlp -->
+### yt-dlp Unix zipimport executable 2026.07.04
+
+- License: Unlicense
+- Upstream: https://github.com/yt-dlp/yt-dlp
+- License source:
+  https://github.com/yt-dlp/yt-dlp/blob/2026.07.04/LICENSE
+- Official artifact: `yt-dlp`
+- URL:
+  https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp
+- Size: `3071553` bytes
+- SHA-256:
+  `495be29ff4d9d4e9be7eabdfef225221e5d5282e77f2f505abc6dca80349f3fd`
+
+이 exact zipimport artifact에는 YouTube JavaScript challenge 처리를 위한
+`yt-dlp-ejs` 0.8.0(Unlicense)가 포함됩니다. 그 생성된 JavaScript header가
+다음 bundled dependencies와 라이선스 원문을 함께 보존합니다.
+
+- Meriyah 6.1.4 — ISC — Copyright (c) 2019 and later, KFlash and others —
+  https://github.com/meriyah/meriyah
+- Astring 1.9.0 — MIT — Copyright (c) 2015 David Bonnet —
+  https://github.com/davidbonnet/astring
+- yt-dlp-ejs 0.8.0 — Unlicense — https://github.com/yt-dlp/ejs
+
+Meriyah의 ISC 조건은 저작권·허가 고지를 모든 사본에 보존하는 것이고,
+Astring의 MIT 조건은 저작권·허가 고지를 소프트웨어의 모든 사본 또는 상당
+부분에 포함하는 것입니다. 공식 zipimport 안의 `lib.min.js` header에 두
+원문이 들어 있지만, 재패키징하거나 분리 배포할 때 해당 header를 제거하면
+안 됩니다.
+
+### MIT notice for runtime components
 
 - Copyright (c) 2023-2026 The ggml authors
 - Copyright (c) 2022 OpenAI
 - Copyright (c) 2020-present Silero Team
+- Copyright (c) 2015 David Bonnet
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -156,9 +221,107 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## This extension's corresponding source
+## 운영체제가 제공하며 이 저장소가 재배포하지 않는 도구
 
-The extension source, TypeScript build scripts, exact dependency lockfile, and
-local patch-free bundling procedure are in:
+<!-- attribution-id: ffmpeg -->
+### FFmpeg
 
-https://github.com/studyreadbook4ever/KirinukiHelper
+`ffmpeg -version`과 `ffmpeg -buildconf`로 감지합니다. 이 저장소와 현재
+web 정적 ZIP은 FFmpeg를 재배포하지 않습니다. FFmpeg의 정확한 LGPL/GPL 및
+외부 라이브러리 의무는 사용한 build configuration에 따라 달라집니다.
+Upstream: https://ffmpeg.org/
+
+<!-- attribution-id: ffprobe -->
+### ffprobe
+
+`ffprobe -version`과 같은 FFmpeg build 정보를 확인합니다. 이 저장소가
+재배포하지 않으며 라이선스 범위는 설치된 FFmpeg build에 따라 달라집니다.
+Upstream: https://ffmpeg.org/ffprobe.html
+
+<!-- attribution-id: nodejs -->
+### Node.js
+
+`node --version`과 `node -p process.versions`로 감지합니다. 로컬 companion과
+빌드 도구의 host runtime일 뿐 web 정적 ZIP에는 포함되지 않습니다. Node.js
+배포본에는 여러 제3자 라이선스가 있으므로 향후 컨테이너에 넣을 때 해당
+배포본의 `LICENSE`를 함께 감사합니다. Upstream: https://github.com/nodejs/node
+
+<!-- attribution-id: python -->
+### Python
+
+`python3 --version`으로 감지하며 managed yt-dlp zipimport를 실행합니다.
+현재 web 정적 ZIP에는 포함되지 않습니다. Upstream: https://www.python.org/
+
+<!-- attribution-id: chromium -->
+### Chromium / Google Chrome / ChromeDriver
+
+localhost web 실행과 E2E 검증에 사용하는 외부 브라우저 도구입니다. 이 저장소가
+재배포하지 않으며 브라우저 배포본의 정확한 구성과 라이선스는 제공자·build에
+따라 달라집니다. Upstream: https://www.chromium.org/chromium-projects/
+
+## 로컬 companion npm runtime
+
+<!-- attribution-id: tsx-runtime -->
+현재 로컬 setup·caption/VOD gateway는 저장소의 TypeScript CLI를 직접
+실행하므로 다음 패키지는 단순 build tool이 아니라 **companion runtime**
+입니다. web 정적 ZIP에는 포함되지 않습니다.
+Upstream: https://github.com/privatenumber/tsx
+
+- tsx 4.23.1 — MIT
+- esbuild 0.28.1 및 실제 OS platform package — MIT
+- fsevents 2.3.3 — MIT, macOS optional dependency
+
+## 개발·build 전용 npm 도구
+
+<!-- attribution-id: typescript-toolchain -->
+정확한 artifact URL·integrity는 `package-lock.json`에 고정하며
+`npm run license:check`가 승인 목록 밖의 패키지를 거부합니다. 이 패키지는
+web 정적 ZIP에 들어가지 않습니다.
+TypeScript upstream: https://github.com/microsoft/TypeScript
+
+- TypeScript 5.9.3 — Apache-2.0
+- `@types/node` 20.19.43, `undici-types` 6.21.0 — MIT
+
+## CI-only GitHub Actions
+
+<!-- attribution-id: github-actions-ci -->
+아래 구성요소는 `.github/workflows/typescript-quality.yml`에서만 실행되며
+web·로컬 companion 산출물에 재배포하지 않습니다. workflow는 mutable
+major tag 대신 full commit SHA를 사용합니다. Upstream:
+https://docs.github.com/actions
+
+- `actions/checkout@11d5960a326750d5838078e36cf38b85af677262`
+  (`v4`) — MIT — 대응 소스·원문:
+  https://github.com/actions/checkout/tree/11d5960a326750d5838078e36cf38b85af677262
+- `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020`
+  (`v4`) — MIT — 대응 소스·원문:
+  https://github.com/actions/setup-node/tree/49933ea5288caeca8642d1e84afbd3f7d6820020
+- `browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd`
+  (`v2.1.2`/`v2`) — MIT — source release commit과 원문:
+  https://github.com/browser-actions/setup-chrome/tree/73954683cc80eced513145a42b668b9b91f753c3
+
+## 외부 서비스·상표 참조
+
+아래 이름은 지원하는 외부 원본 페이지를 식별하기 위한 참조입니다. 해당
+서비스의 코드·로고를 이 항목으로 재배포한다는 뜻이 아니며, 각 운영사와의
+제휴·보증을 주장하지 않습니다. 서비스 약관, 콘텐츠 권리와 API/페이지 접근
+허가는 오픈소스 라이선스와 별개의 문제입니다.
+
+<!-- attribution-id: chzzk-service -->
+- CHZZK — NAVER Corp. and/or its licensors — https://chzzk.naver.com/
+<!-- attribution-id: youtube-service -->
+- YouTube — Google LLC and/or its licensors — https://www.youtube.com/
+<!-- attribution-id: soop-service -->
+- SOOP — SOOP Co., Ltd. and/or its licensors — https://www.sooplive.co.kr/
+
+## Corresponding source
+
+web·최소 streaming companion 소스, TypeScript build scripts, runtime installers,
+exact lockfile와
+이 인벤토리의 canonical typed registry는 다음 위치에 있습니다.
+
+- Repository: https://github.com/studyreadbook4ever/KirinukiHelper
+- Registry: `src/lib/third-party-attributions.ts`
+- Human inventory: `legal/OPEN_SOURCE_INVENTORY.md`
+- Runtime boundary: `legal/RUNTIME_DEPENDENCIES.md`
+- Web release gate: `legal/WEB_DEPLOYMENT_CHECKLIST.md`

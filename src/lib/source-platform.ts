@@ -1,8 +1,10 @@
 export const SOURCE_PLATFORM_CHZZK = "CHZZK";
 export const SOURCE_PLATFORM_YOUTUBE = "YOUTUBE";
+export const SOURCE_PLATFORM_SOOP = "SOOP";
 
 const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/u;
 const CHZZK_CHANNEL_ID_PATTERN = /^[a-f0-9]{32}$/iu;
+const SOOP_VOD_ID_PATTERN = /^\d+$/u;
 
 export interface SourceIdentifiers {
   platform: string;
@@ -46,12 +48,21 @@ function parsedHttpsUrl(value: unknown): URL | null {
   }
   if (
     url.protocol !== "https:"
+    || url.port
     || url.username
     || url.password
   ) {
     return null;
   }
   return url;
+}
+
+function isSoopVodHostname(hostname: string): boolean {
+  return (
+    hostname === "vod.sooplive.com"
+    || hostname === "vod.sooplive.co.kr"
+    || hostname === "vod.afreecatv.com"
+  );
 }
 
 function normalizedHostname(url: URL): string {
@@ -79,12 +90,21 @@ export function sourcePlatformFromUrl(value: unknown): string {
   if (isYouTubeHostname(hostname)) {
     return SOURCE_PLATFORM_YOUTUBE;
   }
+  if (isSoopVodHostname(hostname)) {
+    return SOURCE_PLATFORM_SOOP;
+  }
   return "";
 }
 
 export function isSupportedSourceUrl(value: unknown): boolean {
   const identifiers = inferSourceIdentifiers(value);
   if (identifiers.platform === SOURCE_PLATFORM_YOUTUBE) {
+    return Boolean(
+      identifiers.contentType === "vod"
+      && identifiers.contentId
+    );
+  }
+  if (identifiers.platform === SOURCE_PLATFORM_SOOP) {
     return Boolean(
       identifiers.contentType === "vod"
       && identifiers.contentId
@@ -145,7 +165,8 @@ function expectedSourceIdentifiers(expectedSource: SourceIdentityInput | unknown
     .toUpperCase();
   const platform = [
     SOURCE_PLATFORM_CHZZK,
-    SOURCE_PLATFORM_YOUTUBE
+    SOURCE_PLATFORM_YOUTUBE,
+    SOURCE_PLATFORM_SOOP
   ].includes(explicitPlatform)
     ? explicitPlatform
     : inferred.platform;
@@ -182,27 +203,59 @@ function expectedSourceIdentifiers(expectedSource: SourceIdentityInput | unknown
 }
 
 export function selectSupportedSourceTab(tabs: readonly SourceTab[] | unknown, {
-  expectedSource = null
-}: { expectedSource?: SourceIdentityInput | null } = {}): SourceTab | null {
+  expectedSource = null,
+  preferExpectedSource = false,
+  preferredTabId = null
+}: {
+  expectedSource?: SourceIdentityInput | null;
+  preferExpectedSource?: boolean;
+  preferredTabId?: number | null;
+} = {}): SourceTab | null {
   const candidates = ((Array.isArray(tabs) ? tabs : []) as SourceTab[])
     .filter((tab) => (
       Number.isInteger(tab?.id)
       && isSupportedSourceUrl(tab?.url)
     ));
+  const expectedIdentity = expectedSourceIdentifiers(expectedSource);
+  const expectedMatches = expectedIdentity.platform
+    ? candidates.filter((tab) => sameSourceIdentity(
+      inferSourceIdentifiers(tab.url),
+      expectedIdentity
+    ))
+    : [];
+
+  if (preferExpectedSource) {
+    const preferredCandidate = candidates.find(
+      (tab) => tab.id === preferredTabId
+    );
+    if (preferredCandidate) {
+      return preferredCandidate;
+    }
+    if (expectedMatches.length === 0) {
+      const activeCandidate = candidates.find(
+        (tab) => tab.active === true
+      );
+      return activeCandidate
+        || (candidates.length === 1 ? candidates[0] ?? null : null);
+    }
+    const activeExpected = expectedMatches.find(
+      (tab) => tab.active === true
+    );
+    if (activeExpected) {
+      return activeExpected;
+    }
+    return expectedMatches.length === 1
+      ? expectedMatches[0] ?? null
+      : null;
+  }
+
   const active = candidates.find((tab) => tab.active === true);
   if (active) {
     return active;
   }
 
-  const expectedIdentity = expectedSourceIdentifiers(expectedSource);
-  if (expectedIdentity.platform) {
-    const matches = candidates.filter((tab) => sameSourceIdentity(
-      inferSourceIdentifiers(tab.url),
-      expectedIdentity
-    ));
-    if (matches.length === 1) {
-      return matches[0] ?? null;
-    }
+  if (expectedMatches.length === 1) {
+    return expectedMatches[0] ?? null;
   }
 
   return candidates.length === 1 ? candidates[0] ?? null : null;
@@ -332,6 +385,42 @@ function inferChzzkIdentifiers(url: URL, linkedUrls: readonly unknown[]): Source
   };
 }
 
+function inferSoopIdentifiers(
+  url: URL,
+  linkedUrls: readonly unknown[]
+): SourceIdentifiers {
+  const normalizedPath = url.pathname.replace(/\/+$/u, "") || "/";
+  const match = /^\/(?:player|PLAYER\/STATION)\/(\d+)$/u.exec(normalizedPath);
+  const contentId = match && SOOP_VOD_ID_PATTERN.test(match[1] || "")
+    ? match[1] || ""
+    : "";
+  const channelId = linkedUrls.flatMap((value) => {
+    const linkedUrl = parsedHttpsUrl(value);
+    if (!linkedUrl) {
+      return [];
+    }
+    const hostname = normalizedHostname(linkedUrl);
+    if (
+      hostname !== "sooplive.com"
+      && hostname !== "www.sooplive.com"
+      && hostname !== "afreecatv.com"
+      && hostname !== "www.afreecatv.com"
+    ) {
+      return [];
+    }
+    const linkedMatch = /^\/station\/([^/?#]+)(?:\/|$)/u.exec(
+      linkedUrl.pathname
+    );
+    return linkedMatch?.[1] ? [linkedMatch[1].slice(0, 128)] : [];
+  })[0] || "";
+  return {
+    platform: SOURCE_PLATFORM_SOOP,
+    channelId,
+    contentId,
+    contentType: contentId ? "vod" : "unknown"
+  };
+}
+
 export function inferSourceIdentifiers(
   value: unknown,
   { linkedUrls = [] }: { linkedUrls?: readonly unknown[] } = {}
@@ -349,9 +438,13 @@ export function inferSourceIdentifiers(
       contentType: "unknown"
     };
   }
-  return platform === SOURCE_PLATFORM_YOUTUBE
-    ? inferYouTubeIdentifiers(url, normalizedLinkedUrls)
-    : inferChzzkIdentifiers(url, normalizedLinkedUrls);
+  if (platform === SOURCE_PLATFORM_YOUTUBE) {
+    return inferYouTubeIdentifiers(url, normalizedLinkedUrls);
+  }
+  if (platform === SOURCE_PLATFORM_SOOP) {
+    return inferSoopIdentifiers(url, normalizedLinkedUrls);
+  }
+  return inferChzzkIdentifiers(url, normalizedLinkedUrls);
 }
 
 export function canonicalSourceUrl(
@@ -368,6 +461,12 @@ export function canonicalSourceUrl(
     && resolved.contentId
   ) {
     return `https://www.youtube.com/watch?v=${encodeURIComponent(resolved.contentId)}`;
+  }
+  if (
+    resolved.platform === SOURCE_PLATFORM_SOOP
+    && resolved.contentId
+  ) {
+    return `https://vod.sooplive.com/player/${encodeURIComponent(resolved.contentId)}`;
   }
   if (resolved.platform === SOURCE_PLATFORM_CHZZK) {
     const contentType = String(resolved.contentType || "").toLowerCase();
@@ -386,7 +485,13 @@ export function canonicalSourceUrl(
 }
 
 export function sourcePlatformLabel(platform: unknown): string {
-  return platform === SOURCE_PLATFORM_YOUTUBE ? "YouTube" : "치지직";
+  if (platform === SOURCE_PLATFORM_YOUTUBE) {
+    return "YouTube";
+  }
+  if (platform === SOURCE_PLATFORM_SOOP) {
+    return "SOOP";
+  }
+  return platform === SOURCE_PLATFORM_CHZZK ? "치지직" : "지원하지 않음";
 }
 
 export function sourcePlayerStatusText(context: SourcePlayerContext | null | undefined): string {

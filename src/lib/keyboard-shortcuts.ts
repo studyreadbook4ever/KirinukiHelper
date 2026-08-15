@@ -39,7 +39,6 @@ export const CAPTION_COLOR_SHORTCUT_DIGITS = Object.freeze([
 export type CaptionColorShortcutDigit =
   typeof CAPTION_COLOR_SHORTCUT_DIGITS[number];
 export type ClipNavigationShortcutDirection = -1 | 1;
-export type KeyboardShortcutScope = "sidepanel" | "editor";
 export type KeyboardShortcutTrigger = "click" | "focus";
 
 export interface KeyboardShortcutBinding {
@@ -340,7 +339,7 @@ export function findKeyboardShortcutCollisions(
 }
 
 function defineKeyboardShortcutBindings(
-  scope: KeyboardShortcutScope,
+  scope: "editor",
   bindings: readonly KeyboardShortcutBinding[]
 ): readonly KeyboardShortcutBinding[] {
   for (const binding of bindings) {
@@ -380,103 +379,6 @@ function defineKeyboardShortcutBindings(
       : { ...binding }
   )));
 }
-
-export const SIDEPANEL_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
-  "sidepanel",
-  [
-    {
-      key: "Q",
-      action: "refresh-recovery-sessions",
-      targetId: "refresh-recovery-sessions",
-      label: "최근 편집 다시 읽기",
-      trigger: "click"
-    },
-    {
-      key: "W",
-      action: "refresh-source",
-      targetId: "refresh-source",
-      label: "현재 영상 다시 읽기",
-      trigger: "click"
-    },
-    {
-      key: "E",
-      action: "capture-start",
-      targetId: "capture-start",
-      label: "현재 시각을 시작점으로 캡처",
-      trigger: "click"
-    },
-    {
-      key: "R",
-      action: "capture-end",
-      targetId: "capture-end",
-      label: "현재 시각을 끝점으로 캡처",
-      trigger: "click"
-    },
-    {
-      key: "T",
-      action: "save-segment",
-      targetId: "save-segment",
-      label: "구간 저장",
-      trigger: "click"
-    },
-    {
-      key: "A",
-      action: "open-editor",
-      targetId: "open-editor",
-      label: "편집기 열기",
-      trigger: "click"
-    },
-    {
-      key: "S",
-      action: "preview-prompt",
-      targetId: "generate-prompt",
-      label: "프롬프트 미리보기",
-      trigger: "click"
-    },
-    {
-      key: "D",
-      action: "player-seek-backward-five",
-      targetId: "seek-backward-five",
-      label: "원본 영상을 5초 이전으로 이동",
-      trigger: "click"
-    },
-    {
-      key: "F",
-      action: "player-seek-forward-five",
-      targetId: "seek-forward-five",
-      label: "원본 영상을 5초 이후로 이동",
-      trigger: "click"
-    },
-    {
-      key: "G",
-      action: "download-prompt",
-      targetId: "download-prompt",
-      label: "프롬프트 MD 다운로드",
-      trigger: "click"
-    },
-    {
-      key: "H",
-      action: "close-preview",
-      targetId: "close-preview",
-      label: "프롬프트 미리보기 접기",
-      trigger: "click"
-    },
-    {
-      key: "Y",
-      action: "player-rate-quarter",
-      targetId: "playback-rate-quarter",
-      label: "원본 영상을 0.25배속으로 재생",
-      trigger: "click"
-    },
-    {
-      key: "U",
-      action: "player-rate-double",
-      targetId: "playback-rate-double",
-      label: "원본 영상을 2배속으로 재생",
-      trigger: "click"
-    }
-  ]
-);
 
 export const EDITOR_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
   "editor",
@@ -627,22 +529,14 @@ export const EDITOR_SHORTCUT_BINDINGS = defineKeyboardShortcutBindings(
   ]
 );
 
-export const KEYBOARD_SHORTCUT_BINDINGS_BY_SCOPE = Object.freeze({
-  sidepanel: SIDEPANEL_SHORTCUT_BINDINGS,
-  editor: EDITOR_SHORTCUT_BINDINGS
-});
-
-export function keyboardShortcutBindingForScope(
-  scope: KeyboardShortcutScope,
+export function editorKeyboardShortcutBinding(
   key: unknown
 ): KeyboardShortcutBinding | null {
   const normalizedKey = normalizeKeyboardShortcutLetter(key);
   if (!normalizedKey) {
     return null;
   }
-  return (
-    KEYBOARD_SHORTCUT_BINDINGS_BY_SCOPE[scope]
-      .find((binding) => binding.key === normalizedKey)
-    || null
-  );
+  return EDITOR_SHORTCUT_BINDINGS.find(
+    (binding) => binding.key === normalizedKey
+  ) || null;
 }

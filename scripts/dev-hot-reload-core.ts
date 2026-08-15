@@ -5,9 +5,7 @@ export const DEV_RELOAD_SCHEMA = "chzzk-kirinuki-dev-reload/v1";
 const DEV_RELOAD_KINDS = [
   "initial",
   "style",
-  "editor",
-  "content",
-  "extension"
+  "editor"
 ] as const;
 export type DevReloadKind = typeof DEV_RELOAD_KINDS[number];
 
@@ -34,34 +32,16 @@ function hasErrorCode(
 
 const EDITOR_SOURCE_PREFIX = "src/editor/";
 const CAPTION_SOURCE_PREFIX = "src/caption-agent/";
-const STYLE_FILES = new Set([
-  "extension/editor/editor.css"
+const WEB_SOURCE_PREFIX = "src/web/";
+const LIB_SOURCE_PREFIX = "src/lib/";
+const WEB_STYLE_FILES = new Set([
+  "web/editor/editor.css"
 ]);
-const EDITOR_PAGE_FILES = new Set([
-  "extension/editor.html"
+const WEB_PAGE_FILES = new Set([
+  "web/editor.html",
+  "web/index.html",
+  "web/studio.css"
 ]);
-const CONTENT_FILES = new Set([
-  "src/content-script.ts"
-]);
-const EDITOR_DEPENDENCY_FILES = new Set([
-  "src/lib/caption-style.ts"
-]);
-const SHARED_EXTENSION_FILES = new Set([
-  "src/lib/core.ts",
-  "src/lib/editor-core.ts",
-  "src/lib/keyboard-shortcuts.ts",
-  "src/lib/serial-operation-gate.ts",
-  "src/lib/source-platform.ts"
-]);
-const EXTENSION_FILES = new Set([
-  "extension/manifest.json",
-  "extension/sidepanel.html",
-  "extension/sidepanel.css",
-  "src/service-worker.ts",
-  "src/sidepanel.ts",
-  "src/lib/session-recovery.ts"
-]);
-
 export function normalizeDevChangedPath(
   root: string,
   filePath: string
@@ -69,31 +49,22 @@ export function normalizeDevChangedPath(
   return path.relative(root, path.resolve(filePath)).split(path.sep).join("/");
 }
 
-export function classifyDevReload(
+/** Classify changes handled by the normal localhost web editor runner. */
+export function classifyWebDevReload(
   changedFiles: readonly unknown[]
 ): Exclude<DevReloadKind, "initial"> | "none" {
   const files = [...new Set(changedFiles.map((value) => String(value)))].sort();
   const hasEditorCode = files.some((file) => (
     file.startsWith(EDITOR_SOURCE_PREFIX)
     || file.startsWith(CAPTION_SOURCE_PREFIX)
-    || EDITOR_DEPENDENCY_FILES.has(file)
+    || file.startsWith(WEB_SOURCE_PREFIX)
+    || file.startsWith(LIB_SOURCE_PREFIX)
   ));
-  const hasEditorPage = files.some((file) => EDITOR_PAGE_FILES.has(file));
-  const hasStyle = files.some((file) => STYLE_FILES.has(file));
-  const hasContent = files.some((file) => CONTENT_FILES.has(file));
-  const hasExtension = files.some((file) => (
-    EXTENSION_FILES.has(file)
-    || SHARED_EXTENSION_FILES.has(file)
-  ));
+  const hasWebPage = files.some((file) => WEB_PAGE_FILES.has(file));
+  const hasStyle = files.some((file) => WEB_STYLE_FILES.has(file));
 
-  if (hasExtension) {
-    return "extension";
-  }
-  if (hasEditorCode || hasEditorPage || (hasStyle && hasContent)) {
+  if (hasEditorCode || hasWebPage) {
     return "editor";
-  }
-  if (hasContent) {
-    return "content";
   }
   if (hasStyle) {
     return "style";
@@ -101,16 +72,16 @@ export function classifyDevReload(
   return "none";
 }
 
-export function devChangeNeedsBuild(
+export function webDevChangeNeedsBuild(
   changedFiles: readonly unknown[]
 ): boolean {
-  return changedFiles.some((file) => (
-    String(file).startsWith(EDITOR_SOURCE_PREFIX)
-    || String(file).startsWith(CAPTION_SOURCE_PREFIX)
-    || EDITOR_DEPENDENCY_FILES.has(String(file))
-    || SHARED_EXTENSION_FILES.has(String(file))
-    || CONTENT_FILES.has(String(file))
-  ));
+  return changedFiles.some((file) => {
+    const changedPath = String(file);
+    return changedPath.startsWith(EDITOR_SOURCE_PREFIX)
+      || changedPath.startsWith(CAPTION_SOURCE_PREFIX)
+      || changedPath.startsWith(WEB_SOURCE_PREFIX)
+      || changedPath.startsWith(LIB_SOURCE_PREFIX);
+  });
 }
 
 export function createDevReloadMarker({

@@ -1,0 +1,4 @@
+interface:
+  display_name: "노래 가사 타이밍 맞추기"
+  short_description: "완성된 컷에 노래 자막을 1/60초 단위로 맞춰 삽입"
+  default_prompt: "Use $align-song-subtitles-60fps on this human-finished picture-locked cut. Time the supplied lyrics and apply one complete subtitle-only edit with bilingual text, line breaks, lanes, and placement; never change the cut, and leave the resulting edit pending human review."

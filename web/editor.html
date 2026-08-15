@@ -1,0 +1,1487 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: http://127.0.0.1:4319; worker-src 'self' blob:; connect-src 'self' http://127.0.0.1:4319">
+    <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <title>Kirinuki 영상 편집기</title>
+    <link rel="stylesheet" href="editor/editor.css?v=2.7.0">
+  </head>
+  <body>
+    <main id="editor-mobile-gate" class="editor-mobile-gate" aria-labelledby="editor-mobile-gate-title" hidden>
+      <div class="editor-mobile-gate-card">
+        <h1 id="editor-mobile-gate-title">편집기는 모바일에서 사용할 수 없습니다</h1>
+        <p>영상 편집과 내보내기는 키보드와 정밀 포인터를 사용할 수 있는 PC 브라우저에서 진행해 주세요.</p>
+        <a class="button primary" href="/">시작 화면으로 돌아가기</a>
+      </div>
+    </main>
+
+    <main id="editor-policy-gate" class="editor-policy-gate" aria-labelledby="editor-policy-gate-title" hidden>
+      <div class="editor-policy-gate-card">
+        <h1 id="editor-policy-gate-title">이번 사용의 사용자 권한 진술이 필요합니다</h1>
+        <p>이 편집기는 스트리머·소속사의 명시적 키리누키 허용, 별도 서면 허락, 또는 공식 편집 권한 중 하나를 시작 화면에서 매번 직접 확인한 뒤에만 열립니다.</p>
+        <p>Kirinuki가 실제 권리나 법적 적합성을 심사·보증하거나 게시를 승인하는 절차는 아닙니다.</p>
+        <p class="editor-policy-gate-liability">VOD 취득·편집·게시·수익화와 제3자 권리 확인 및 그 결과에 대한 책임은 전적으로(100%) 사용자에게 있습니다.</p>
+        <p id="editor-policy-gate-status" class="editor-policy-gate-status" role="alert">이번 편집기 열기의 사용자 진술을 확인하는 중…</p>
+        <a class="button primary" href="/" target="_blank" rel="noopener">새 탭에서 시작 화면 열기</a>
+        <p>저장된 프로젝트는 유지됩니다. 시작 화면에서 이번 사용 양식을 확인한 뒤 다시 열어 주세요.</p>
+      </div>
+    </main>
+
+    <div id="editor-shell" class="editor-shell" hidden>
+      <header class="topbar">
+        <h1 class="visually-hidden">Kirinuki 영상 편집기</h1>
+        <input id="project-name" type="hidden" value="키리누키 프로젝트">
+        <div class="editor-runtime-state" hidden aria-hidden="true">
+          <span id="source-kind"></span>
+          <span id="workspace-mode-badge" hidden></span>
+          <span id="source-title"></span>
+          <span id="usage-policy-status"></span>
+          <span id="source-link-state"></span>
+        </div>
+
+        <div class="topbar-media">
+          <div id="editor-brand-slot" class="editor-brand-slot" role="img" aria-label="Kirinuki 상표">
+            <svg class="kirinuki-mark" viewBox="0 0 100 90" aria-hidden="true" focusable="false">
+              <rect class="kirinuki-mark-frame" x="12.5" y="7.5" width="75" height="59" rx="9"/>
+              <path class="kirinuki-mark-perforation" d="M19 15h6v5h-6zm56 0h6v5h-6zM19 54h6v5h-6zm56 0h6v5h-6z"/>
+              <path class="kirinuki-mark-k" d="M32 17v40M34 38 60 17M46 29l17 28"/>
+              <path class="kirinuki-mark-cut" d="m42 33 5 5-5 5m16-10-5 5 5 5"/>
+              <text class="kirinuki-mark-word" x="50" y="81" text-anchor="middle">KIRINUKI</text>
+            </svg>
+          </div>
+          <div id="editor-leaderboard-ad-slot" class="editor-leaderboard-ad-slot" aria-hidden="true"></div>
+        </div>
+        <div class="top-actions">
+          <div class="top-actions-row top-actions-primary" role="group" aria-label="영상 준비와 내보내기">
+            <button id="prepare-chzzk-vod" class="button secondary vod-prepare-action" type="button" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4"/><path d="M5 19h14"/></svg>
+              편집 영상 준비
+            </button>
+            <button id="pick-media" class="button secondary" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+              내 파일 직접 연결
+            </button>
+            <button id="exit-short-form" class="button secondary short-form-exit-action" type="button" aria-label="본편 편집으로 돌아가기" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6-6 6 6 6"/><path d="M5 12h15"/></svg>
+              본편 편집으로
+            </button>
+            <button id="open-short-form" class="button secondary short-form-action" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M10 6h4M10 18h4"/></svg>
+              쇼츠 편집기 <span id="short-form-count" class="short-form-count">0</span>
+            </button>
+            <button id="export-video" class="button primary" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4"/><path d="M5 19h14"/></svg>
+              영상 내보내기
+            </button>
+          </div>
+          <div class="top-actions-row top-actions-secondary" role="group" aria-label="편집 실행 취소와 저장">
+            <button id="undo" class="icon-action" type="button" title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 8 4 12l5 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg>
+            </button>
+            <button id="redo" class="icon-action" type="button" title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 8 5 4-5 4"/><path d="M19 12h-8a6 6 0 0 0-6 6"/></svg>
+            </button>
+            <div class="local-draft-control">
+              <div class="local-draft-actions" role="group" aria-label="이 기기 저장">
+                <button id="create-local-draft" class="local-draft-button create" type="button" title="현재 편집 상태를 이 기기에 저장" aria-label="지금 이 기기에 저장">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5Z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/></svg>
+                  <span>지금 저장</span>
+                </button>
+                <button id="open-local-drafts" class="local-draft-button browse" type="button" title="최근 저장본 목록" aria-label="최근 저장본 목록 열기" aria-haspopup="dialog" aria-controls="local-draft-dialog">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M7 3v4m10-4v4M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="M8 11h3v3H8Z"/></svg>
+                  <span>저장본 목록</span>
+                </button>
+              </div>
+              <span id="local-draft-status" class="local-draft-status" role="status" aria-live="polite" aria-atomic="true">5분마다 자동 저장</span>
+            </div>
+            <button id="finish-editing-session" class="button secondary finish-editing-session" type="button" aria-haspopup="dialog" aria-controls="editing-session-exit-dialog" title="현재 작업을 저장하거나 폐기하고 시작 화면으로 돌아가기" hidden disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5"/><path d="m14 8 4 4-4 4"/><path d="M8 12h10"/></svg>
+              작업 끝내기
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="clip-sidebar panel">
+          <div id="desktop-ad-slot" class="desktop-ad-slot" aria-hidden="true"></div>
+          <section
+            id="clip-manager-popover"
+            class="clip-manager-popover"
+            popover="auto"
+            role="dialog"
+            aria-labelledby="clip-manager-title"
+          >
+          <div class="panel-heading">
+            <div>
+              <h2 id="clip-manager-title">선택한 구간</h2>
+            </div>
+            <div class="clip-manager-heading-actions">
+              <span id="clip-count" class="count">0</span>
+              <button
+                class="clip-manager-close"
+                type="button"
+                popovertarget="clip-manager-popover"
+                popovertargetaction="hide"
+                aria-label="컷·원본 관리 닫기"
+              >×</button>
+            </div>
+          </div>
+          <p class="panel-intro">본편 컷 재생 순서입니다. 위에서 아래 순서로 이어서 재생되며, 범위는 자동으로 늘어나거나 줄어들지 않습니다.</p>
+
+          <div id="media-card" class="media-card empty">
+            <div class="media-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 10 5-3v10l-5-3Z"/><rect x="3" y="5" width="12" height="14" rx="2"/></svg>
+            </div>
+            <div class="media-copy">
+              <strong id="media-name">편집 영상 준비 전</strong>
+              <span id="media-meta">선택한 구간에 필요한 영상만 이 기기에 가져옵니다</span>
+            </div>
+          </div>
+
+          <div class="alignment-card">
+            <label for="source-offset">
+              <span>페이지 시각 ↔ 이 기기의 원본 정렬</span>
+              <span class="alignment-input">
+                <input id="source-offset" type="number" step="0.001" value="0" inputmode="decimal">
+                <em>초</em>
+              </span>
+            </label>
+            <button id="apply-source-offset" type="button">적용</button>
+            <p>이 기기 원본 시각 = 페이지에서 찍은 시각 + 차이값</p>
+          </div>
+
+          <div id="clip-group-toolbar" class="clip-group-toolbar" hidden>
+            <span id="clip-group-status" role="status" aria-live="polite" aria-atomic="true">체크한 컷 없음</span>
+            <div class="clip-group-actions" role="group" aria-label="체크한 컷 순서 이동">
+              <button
+                id="move-selected-clips-up"
+                type="button"
+                aria-label="체크한 컷을 한 단계 위로 이동"
+                aria-describedby="clip-group-status"
+                aria-keyshortcuts="Alt+ArrowUp"
+                title="체크한 컷을 한 단계 위로 이동 (Alt+↑)"
+                disabled
+              >↑</button>
+              <button
+                id="move-selected-clips-down"
+                type="button"
+                aria-label="체크한 컷을 한 단계 아래로 이동"
+                aria-describedby="clip-group-status"
+                aria-keyshortcuts="Alt+ArrowDown"
+                title="체크한 컷을 한 단계 아래로 이동 (Alt+↓)"
+                disabled
+              >↓</button>
+              <button
+                id="clear-clip-group-selection"
+                class="clear"
+                type="button"
+                aria-label="컷 체크 전체 해제"
+                aria-describedby="clip-group-status"
+                title="컷 체크 전체 해제"
+                disabled
+              >해제</button>
+            </div>
+          </div>
+
+          <div id="clip-list" class="clip-list"></div>
+
+          <button id="focus-source" class="source-jump" type="button">
+            <span class="connection-dot"></span>
+            원래 영상 탭으로 돌아가기
+            <span class="css-chevron" aria-hidden="true"></span>
+          </button>
+          </section>
+        </aside>
+
+        <section class="canvas-column">
+          <div class="stage-toolbar">
+            <div class="mode-tabs" role="group" aria-label="미리보기 도구">
+              <span id="workspace-mode-title" class="active mode-label" aria-current="true">편집 미리보기</span>
+              <button id="preview-source-tab" type="button">원본 시각으로 이동</button>
+            </div>
+            <div class="stage-meta">
+              <button
+                id="start-short-source-composer"
+                class="short-source-start-action"
+                type="button"
+                aria-expanded="false"
+                aria-controls="short-source-composer"
+                title="현재 본편에서 시간과 화면 영역을 골라 쇼츠에 영상 추가"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="7" y="5" width="10" height="14" rx="2"/><path d="m10 10 4 2-4 2Z"/></svg>
+                쇼츠에 영상 추가
+              </button>
+              <button
+                id="open-subtitle-sync-guide"
+                class="subtitle-sync-guide-button short-form-workspace-copy"
+                type="button"
+                aria-haspopup="dialog"
+                aria-controls="subtitle-sync-guide-dialog"
+                hidden
+              >에이전트로 자막 넣기</button>
+            </div>
+          </div>
+
+          <div id="stage" class="stage" tabindex="0">
+            <video id="preview-video" class="preview-video preview-video-active" preload="metadata"></video>
+            <section
+              id="short-source-composer"
+              class="short-source-composer"
+              aria-labelledby="short-source-composer-title"
+              aria-describedby="short-source-composer-description"
+              hidden
+            >
+              <div
+                id="short-source-crop-surface"
+                class="short-source-crop-surface"
+                data-short-source-crop-surface
+                role="group"
+                aria-label="원본 영상 화면 영역 선택"
+              >
+                <div
+                  id="short-source-crop-box"
+                  class="short-source-crop-box"
+                  data-short-source-crop-box
+                  role="group"
+                  aria-label="쇼츠로 가져올 원본 영상 영역"
+                  aria-describedby="short-source-readout short-source-crop-keyboard-help"
+                >
+                  <button
+                    id="short-source-crop-move"
+                    class="short-source-crop-move"
+                    type="button"
+                    data-short-source-crop-move
+                    aria-label="선택 영역 이동. 방향키 1픽셀, Shift와 방향키 10픽셀"
+                  >
+                    <span aria-hidden="true">드래그해서 가져올 화면 선택</span>
+                  </button>
+                  <button class="short-source-crop-handle north-west" type="button" data-short-source-crop-handle="nw" aria-label="선택 영역 왼쪽 위 크기 조절"></button>
+                  <button class="short-source-crop-handle north" type="button" data-short-source-crop-handle="n" aria-label="선택 영역 위쪽 크기 조절"></button>
+                  <button class="short-source-crop-handle north-east" type="button" data-short-source-crop-handle="ne" aria-label="선택 영역 오른쪽 위 크기 조절"></button>
+                  <button class="short-source-crop-handle east" type="button" data-short-source-crop-handle="e" aria-label="선택 영역 오른쪽 크기 조절"></button>
+                  <button class="short-source-crop-handle south-east" type="button" data-short-source-crop-handle="se" aria-label="선택 영역 오른쪽 아래 크기 조절"></button>
+                  <button class="short-source-crop-handle south" type="button" data-short-source-crop-handle="s" aria-label="선택 영역 아래쪽 크기 조절"></button>
+                  <button class="short-source-crop-handle south-west" type="button" data-short-source-crop-handle="sw" aria-label="선택 영역 왼쪽 아래 크기 조절"></button>
+                  <button class="short-source-crop-handle west" type="button" data-short-source-crop-handle="w" aria-label="선택 영역 왼쪽 크기 조절"></button>
+                </div>
+              </div>
+
+              <div id="short-source-composer-panel" class="short-source-composer-panel" data-collapsed="false">
+                <header class="short-source-composer-heading">
+                  <div class="short-source-composer-heading-copy">
+                    <h2 id="short-source-composer-title">쇼츠로 가져올 구간과 화면</h2>
+                  </div>
+                  <div class="short-source-composer-heading-actions">
+                    <button
+                      id="toggle-short-source-composer-collapse"
+                      class="short-source-composer-collapse"
+                      type="button"
+                      aria-controls="short-source-composer-body"
+                      aria-expanded="true"
+                      aria-label="쇼츠 소스 설정 접기"
+                      title="설정 접기"
+                    >−</button>
+                    <button
+                      id="close-short-source-composer"
+                      class="short-source-composer-close"
+                      type="button"
+                      aria-label="쇼츠 소스 만들기 취소"
+                      title="취소"
+                    >×</button>
+                  </div>
+                </header>
+                <div id="short-source-composer-body" class="short-source-composer-body">
+                  <p id="short-source-composer-description" class="short-source-composer-description">
+                    본편의 시간 범위와 원본 화면 영역만 골라 보냅니다. 본편 컷은 바뀌지 않습니다.
+                  </p>
+                  <div id="short-source-layer-intent" class="short-source-layer-intent" role="status" hidden>
+                    <span>
+                      <strong>현재 쇼츠 화면에 영상 추가</strong>
+                      지금 고르는 구간은 기존 영상과 별개로 현재 재생 시각부터 배치됩니다.
+                    </span>
+                    <button id="cancel-short-video-layer-add" type="button">새 장면으로 만들기</button>
+                  </div>
+
+                  <fieldset id="short-source-time-controls" class="short-source-time-controls">
+                    <legend>1. 가져올 시간</legend>
+                    <div class="short-source-range-presets" role="group" aria-label="컷 기준 구간 빠른 선택">
+                      <button id="short-source-whole-clip" type="button">현재 컷 전체</button>
+                      <button id="short-source-to-clip-end" class="primary-preset" type="button">이 컷의 끝까지 가져오기</button>
+                    </div>
+
+                    <div class="short-source-boundary-card" role="group" aria-labelledby="short-source-start-label">
+                      <header>
+                        <strong id="short-source-start-label">시작</strong>
+                        <button id="preview-short-source-start" class="boundary-preview" type="button">시작 보기</button>
+                      </header>
+                      <input id="short-source-start-time" type="text" inputmode="decimal" value="00:00.000" aria-labelledby="short-source-start-label" aria-describedby="short-source-time-help">
+                      <div class="short-source-boundary-actions" role="group" aria-label="쇼츠 소스 시작 시각 조절">
+                        <button type="button" data-short-source-boundary="start" data-short-source-delta-ms="-1000">−1초</button>
+                        <button type="button" data-short-source-boundary="start" data-short-source-delta-ms="-100">−0.1초</button>
+                        <button id="set-short-source-start" type="button" data-short-source-time-boundary="start">현재 위치</button>
+                        <button type="button" data-short-source-boundary="start" data-short-source-delta-ms="100">+0.1초</button>
+                        <button type="button" data-short-source-boundary="start" data-short-source-delta-ms="1000">+1초</button>
+                        <button id="short-source-start-to-clip-start" class="boundary-anchor" type="button">이 시작점의 컷 시작</button>
+                      </div>
+                    </div>
+
+                    <div class="short-source-boundary-card" role="group" aria-labelledby="short-source-end-label">
+                      <header>
+                        <strong id="short-source-end-label">끝</strong>
+                        <button id="preview-short-source-end" class="boundary-preview" type="button">끝 직전 보기</button>
+                      </header>
+                      <input id="short-source-end-time" type="text" inputmode="decimal" value="00:03.000" aria-labelledby="short-source-end-label" aria-describedby="short-source-time-help">
+                      <div class="short-source-boundary-actions" role="group" aria-label="쇼츠 소스 끝 시각 조절">
+                        <button type="button" data-short-source-boundary="end" data-short-source-delta-ms="-1000">−1초</button>
+                        <button type="button" data-short-source-boundary="end" data-short-source-delta-ms="-100">−0.1초</button>
+                        <button id="set-short-source-end" type="button" data-short-source-time-boundary="end">현재 위치</button>
+                        <button type="button" data-short-source-boundary="end" data-short-source-delta-ms="100">+0.1초</button>
+                        <button type="button" data-short-source-boundary="end" data-short-source-delta-ms="1000">+1초</button>
+                        <button id="short-source-end-to-clip-end" class="boundary-anchor" type="button">이 끝점의 컷 끝</button>
+                      </div>
+                    </div>
+
+                    <small id="short-source-time-help">시각 입력에서 ↑/↓는 0.1초, Shift+↑/↓는 1초 이동합니다. ‘보기’로 실제 경계 프레임을 확인하고 타임라인의 보라색 손잡이로도 조절할 수 있습니다.</small>
+                  </fieldset>
+
+                  <fieldset class="short-source-crop-controls">
+                  <legend>2. 원본에서 가져올 화면</legend>
+                  <div class="short-source-pixel-grid">
+                    <label for="short-source-crop-x"><span>X</span><input id="short-source-crop-x" type="number" step="1" inputmode="numeric" value="0"></label>
+                    <label for="short-source-crop-y"><span>Y</span><input id="short-source-crop-y" type="number" step="1" inputmode="numeric" value="0"></label>
+                    <label for="short-source-crop-width"><span>너비</span><input id="short-source-crop-width" type="number" min="1" step="1" inputmode="numeric" value="1"></label>
+                    <label for="short-source-crop-height"><span>높이</span><input id="short-source-crop-height" type="number" min="1" step="1" inputmode="numeric" value="1"></label>
+                  </div>
+                  <div class="short-source-aspect-actions" role="group" aria-label="원본 화면 비율">
+                    <button id="short-source-aspect-free" type="button" data-short-source-aspect="free" aria-pressed="true">자유</button>
+                    <button id="short-source-aspect-portrait" type="button" data-short-source-aspect="9:16" aria-pressed="false">9:16</button>
+                    <button id="short-source-aspect-square" type="button" data-short-source-aspect="1:1" aria-pressed="false">1:1</button>
+                    <button id="short-source-crop-full" type="button" data-short-source-aspect="full">원본 전체</button>
+                  </div>
+                  <small id="short-source-crop-keyboard-help">선택 영역과 손잡이에 포커스한 뒤 방향키로 1픽셀, Shift+방향키로 10픽셀씩 조절할 수 있습니다.</small>
+                  </fieldset>
+
+                  <output id="short-source-readout" class="short-source-readout" aria-live="polite" aria-atomic="true">
+                    시간 00:00.000–00:03.000 · 화면 준비 중
+                  </output>
+                  <div class="short-source-composer-actions">
+                    <button id="cancel-short-source-composer" class="button secondary" type="button">취소</button>
+                    <button id="add-short-source-only" class="button secondary" type="button">쇼츠에 추가만</button>
+                    <button id="add-short-source-and-open" class="button primary" type="button">추가하고 쇼츠에서 배치</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <canvas
+              id="short-workspace-preview"
+              class="short-workspace-preview"
+              width="540"
+              height="960"
+              aria-label="쇼츠 전용 9대16 합성 미리보기"
+              hidden
+            ></canvas>
+            <div
+              id="short-workspace-transform-layer"
+              class="short-workspace-transform-layer"
+              role="group"
+              aria-label="1080×1920 쇼츠 화면 영상 배치"
+              hidden
+            >
+              <div
+                id="short-workspace-transform-box"
+                class="short-workspace-transform-box"
+                data-short-workspace-transform-box
+                role="group"
+                aria-roledescription="쇼츠 영상"
+                aria-label="선택 영상의 쇼츠 화면 배치 영역"
+                aria-describedby="short-workspace-transform-hint short-workspace-destination-readout"
+              >
+                <button
+                  id="short-workspace-transform-move"
+                  class="short-workspace-transform-move"
+                  type="button"
+                  data-short-workspace-transform-move
+                  aria-label="선택 영상 이동. 방향키 1픽셀, Shift와 방향키 10픽셀"
+                ><span aria-hidden="true">이동</span></button>
+                <button class="short-workspace-transform-handle north-west" type="button" data-short-workspace-transform-handle="nw" aria-label="영상 왼쪽 위 크기 조절"></button>
+                <button class="short-workspace-transform-handle north" type="button" data-short-workspace-transform-handle="n" aria-label="영상 위쪽 크기 조절"></button>
+                <button class="short-workspace-transform-handle north-east" type="button" data-short-workspace-transform-handle="ne" aria-label="영상 오른쪽 위 크기 조절"></button>
+                <button class="short-workspace-transform-handle east" type="button" data-short-workspace-transform-handle="e" aria-label="영상 오른쪽 크기 조절"></button>
+                <button class="short-workspace-transform-handle south-east" type="button" data-short-workspace-transform-handle="se" aria-label="영상 오른쪽 아래 크기 조절"></button>
+                <button class="short-workspace-transform-handle south" type="button" data-short-workspace-transform-handle="s" aria-label="영상 아래쪽 크기 조절"></button>
+                <button class="short-workspace-transform-handle south-west" type="button" data-short-workspace-transform-handle="sw" aria-label="영상 왼쪽 아래 크기 조절"></button>
+                <button class="short-workspace-transform-handle west" type="button" data-short-workspace-transform-handle="w" aria-label="영상 왼쪽 크기 조절"></button>
+              </div>
+            </div>
+            <div id="short-workspace-safe-area-overlay" class="short-workspace-safe-area-overlay" aria-hidden="true" hidden>
+              <span class="short-safe-title"></span>
+              <span class="short-safe-actions"></span>
+              <span class="short-safe-caption"></span>
+            </div>
+            <div id="stage-empty" class="stage-empty">
+              <div class="empty-visual" aria-hidden="true">
+                <span class="corner top-left"></span>
+                <span class="corner top-right"></span>
+                <span class="corner bottom-left"></span>
+                <span class="corner bottom-right"></span>
+                <svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/><circle cx="12" cy="12" r="9"/></svg>
+              </div>
+              <strong id="stage-empty-title">편집할 영상을 준비해 주세요</strong>
+              <span id="stage-empty-copy">선택한 구간을 기준으로 필요한 영상만 이 기기에 가져옵니다. 부족한 앞뒤 구간은 편집 중 더 준비할 수 있습니다</span>
+              <div class="stage-empty-actions">
+                <button id="prepare-chzzk-vod-empty" class="button primary" type="button" hidden>편집 영상 준비</button>
+                <button id="pick-media-empty" class="button secondary" type="button">내 파일 직접 연결</button>
+              </div>
+            </div>
+            <div id="image-asset-overlays" class="image-asset-overlays" aria-live="off"></div>
+            <div id="subtitle-overlays" class="subtitle-overlays" aria-live="off"></div>
+            <div class="safe-area" aria-hidden="true"></div>
+          </div>
+
+          <div class="transport">
+            <button id="previous-clip" class="transport-button" type="button" aria-label="이전 구간" aria-keyshortcuts="," title="이전 구간으로 이동 (단축키 ,)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14"/><path d="m18 6-9 6 9 6Z"/></svg>
+            </button>
+            <button id="play-toggle" class="play-button" type="button" aria-label="재생" aria-keyshortcuts="Space" title="미리보기 재생 또는 일시정지 (단축키 Space)">
+              <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>
+              <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>
+            </button>
+            <button id="next-clip" class="transport-button" type="button" aria-label="다음 구간" aria-keyshortcuts="." title="다음 구간으로 이동 (단축키 .)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14"/><path d="m6 6 9 6-9 6Z"/></svg>
+            </button>
+            <span id="current-time" class="timecode">00:00:00.000</span>
+            <div class="transport-divider"></div>
+            <span id="duration-time" class="duration-code">/ 00:00:00.000</span>
+            <button id="toggle-mute" class="transport-button push-right" type="button" aria-label="음소거">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h4l5-4v14l-5-4H5Z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg>
+            </button>
+            <input id="volume" class="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="볼륨">
+          </div>
+        </section>
+
+        <aside class="inspector panel">
+          <div class="property-mode-tabs" role="tablist" aria-label="속성 편집 종류">
+            <button id="caption-mode-tab" class="active" type="button" role="tab" aria-selected="true" aria-controls="caption-inspector-content">자막</button>
+            <button id="asset-mode-tab" type="button" role="tab" aria-selected="false" aria-controls="asset-inspector-content">
+              <span class="main-workspace-copy">이미지</span>
+              <span class="short-form-workspace-copy">이미지</span>
+            </button>
+            <button id="audio-mode-tab" type="button" role="tab" aria-selected="false" aria-controls="audio-inspector-content">음성</button>
+            <button id="short-framing-mode-tab" type="button" role="tab" aria-selected="false" aria-controls="short-framing-inspector-content" hidden>영상</button>
+          </div>
+          <div class="panel-heading inspector-heading">
+            <div>
+              <h2 id="inspector-title">한글 자막</h2>
+            </div>
+            <button id="add-cue-top" class="small-action" type="button">+ 직접 추가</button>
+          </div>
+
+          <div id="caption-inspector-content" role="tabpanel" aria-labelledby="caption-mode-tab">
+            <section class="ai-card">
+            <div class="ai-title">
+              <div>
+                <strong>자막 타이밍 자동 만들기</strong>
+                <span>설치 없이 타이밍만 만들거나, 이 PC의 Whisper로 음성을 받아쓸 수 있습니다</span>
+              </div>
+            </div>
+            <label class="select-field">
+              <span>자막 스타일</span>
+              <select id="caption-style-preset">
+                <option value="kr-vtuber-clean-v1" selected>완성본 기준 · Pretendard 클린</option>
+                <option value="kr-vtuber-black-box-v1">흰 자막 · 검은 사각 배경</option>
+                <option value="kr-vtuber-paperlogy-v1">OFL 대안 · Paperlogy 클린</option>
+                <option value="pretendard-legacy-v1">기존 프로젝트 사용자 설정</option>
+              </select>
+            </label>
+            <input id="caption-model" type="hidden" value="audseg-local">
+            <div class="caption-provider-tabs" role="tablist" aria-label="자막 타이밍 만들기 방식">
+              <button
+                id="audseg-provider-tab"
+                class="caption-provider-tab caption-provider-tab-audseg"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="audseg-provider-panel"
+              >
+                <span class="caption-provider-tab-copy">
+                  <strong>AudSeg 이용하기</strong>
+                  <small>설치 없이 빈 타이밍 만들기</small>
+                </span>
+                <span class="caption-provider-ready-badge">기본</span>
+              </button>
+              <button
+                id="whisper-provider-tab"
+                class="caption-provider-tab caption-provider-tab-whisper"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="whisper-provider-panel"
+                aria-expanded="false"
+                tabindex="-1"
+              >
+                <strong>Whisper</strong>
+                <small>내 PC 연결</small>
+              </button>
+            </div>
+
+            <section
+              id="audseg-provider-panel"
+              class="caption-provider-panel audseg-provider-panel"
+              role="tabpanel"
+              aria-labelledby="audseg-provider-tab"
+              tabindex="0"
+            >
+              <p id="caption-mode-description" class="caption-provider-description">
+                이 탭 안에서 소리가 있는 구간을 찾아 빈 자막 타이밍을 만듭니다.
+                음성을 글로 바꾸지는 않으므로 원음을 듣고 문구를 채워 주세요.
+              </p>
+              <p
+                id="caption-local-status"
+                class="caption-local-status"
+                data-state="ready"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >AudSeg는 별도 설치 없이 바로 사용할 수 있습니다</p>
+            </section>
+
+            <section
+              id="whisper-provider-panel"
+              class="caption-provider-panel whisper-provider-panel"
+              role="tabpanel"
+              aria-labelledby="whisper-provider-tab"
+              hidden
+            >
+              <div class="whisper-connect-heading">
+                <strong>이 PC의 Whisper로 글과 타이밍 만들기</strong>
+                <p>
+                  버튼을 누르면 Kirinuki PC 도우미를 백그라운드에서 바로 확인하고
+                  실행 중인 모델에 자동으로 연결합니다.
+                </p>
+              </div>
+              <button
+                id="connect-local-whisper"
+                class="button whisper-connect-button"
+                type="button"
+                aria-describedby="whisper-connection-help"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5M20 4v5h-5M20 12a8 8 0 0 1-14 5M4 20v-5h5"/></svg>
+                이 PC의 Whisper 자동 연결
+              </button>
+              <p id="whisper-connection-help" class="whisper-connection-help">
+                파일이나 실행 경로를 고를 필요가 없습니다. 연결 토큰은 현재 탭 메모리에만 있고,
+                음성은 인터넷으로 보내지 않고 이 PC 안의 Whisper에만 전달됩니다.
+              </p>
+              <details class="whisper-connection-location">
+                <summary>자동 연결이 되지 않아요</summary>
+                <div>
+                  <p>
+                    처음이면 Kirinuki 폴더에서 <code>npm run caption-stack:setup</code>,
+                    설치한 적이 있으면 <code>npm run caption-stack:start</code>를 실행하세요.
+                    다시 Kirinuki를 열면 이 브라우저의 프로젝트를 그대로 이어서 자동 연결합니다.
+                  </p>
+                </div>
+              </details>
+              <p
+                id="whisper-connection-status"
+                class="caption-local-status whisper-connection-status"
+                data-state="idle"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >아직 연결하지 않았습니다 · 버튼을 누르면 자동으로 확인합니다</p>
+
+              <div class="whisper-model-card" aria-labelledby="whisper-model-label">
+                <span id="whisper-model-label">연결된 모델</span>
+                <strong id="whisper-model-summary">연결 후 자동으로 확인합니다</strong>
+                <small>모델 이름은 PC 도우미가 보고한 실제 실행 상태를 검증한 뒤에만 표시됩니다.</small>
+              </div>
+
+              <details id="whisper-model-catalog" class="caption-agent-policy whisper-model-catalog">
+                <summary>지원되는 Whisper 모델 보기 <em>자동 감지</em></summary>
+                <div class="whisper-model-catalog-body">
+                  <p>여기에서 모델을 바꾸는 것은 아닙니다. 현재 이 PC에서 실행 중인 모델을 연결할 때 자동으로 구분합니다.</p>
+                  <ul>
+                    <li><strong>Tiny</strong><span>빠른 초안</span><code>tiny-q5_1</code></li>
+                    <li><strong>Base</strong><span>가벼운 작업</span><code>base-q5_1</code></li>
+                    <li><strong>Small</strong><span>속도와 품질의 균형</span><code>small-q5_1</code></li>
+                    <li><strong>Medium</strong><span>정확도 우선</span><code>medium-q5_0</code></li>
+                  </ul>
+                </div>
+              </details>
+
+              <details id="caption-advanced-settings" class="caption-agent-policy caption-provider-settings">
+                <summary>연결 문제 해결 <em>고급</em></summary>
+                <div class="caption-provider-fields">
+                  <p class="caption-agent-advanced-intro">
+                    자동 연결이 실패할 때만 아래 주소를 확인하세요.
+                    Whisper 연결 도우미는 이 기기 안에서만 실행됩니다.
+                  </p>
+                  <div class="caption-agent-row">
+                    <label class="select-field">
+                      <span>PC 도우미 연결 주소</span>
+                      <input id="caption-agent-endpoint" type="url" inputmode="url" spellcheck="false" value="http://127.0.0.1:4319/v1/captions" placeholder="http://127.0.0.1:4319/v1/captions">
+                    </label>
+                    <button id="test-caption-agent" class="small-action caption-agent-test" type="button">연결 확인</button>
+                  </div>
+                  <input id="caption-agent-token" type="hidden" value="">
+                  <strong class="caption-agent-rules-title">자동 자막 원칙</strong>
+                  <ul>
+                    <li>Whisper가 만든 자막은 알아듣기 어려운 발화도 확인 대상으로 남깁니다.</li>
+                    <li>AudSeg는 소리가 있는 구간을 찾으므로 음악·효과음이 포함될 수 있고 모든 문구를 사람이 채워야 합니다.</li>
+                    <li>완성본 기준 한 줄·하단 고정이며, 20자 폭을 넘으면 다음 시간 자막으로 나눕니다.</li>
+                    <li>최대 4초 분할은 AudSeg가 처음 만드는 빈 칸에만 적용됩니다. Whisper 자동 자막과 만들어진 모든 자막의 시작·끝에는 전역 최대 표시 시간을 강제하지 않습니다.</li>
+                    <li>문장 끝 마침표는 빼고 물음표·느낌표는 필요한 경우 유지합니다.</li>
+                    <li>화자별 색은 이 기기에서 일관되게 배정하며 기존 수동 자막은 보존합니다.</li>
+                  </ul>
+                  <p class="caption-agent-privacy">
+                    원본 음성·영상·프레임·이미지는 인터넷 서비스로 보내지 않습니다.
+                    연결용 비밀값은 프로젝트·저장본·브라우저 저장소에 기록하지 않습니다.
+                  </p>
+                </div>
+              </details>
+            </section>
+            <button id="generate-captions" class="button ai-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M8 7v10M4 10v4M16 6v12M20 9v6"/></svg>
+              AudSeg로 빈 타이밍 만들기
+            </button>
+            <button id="reset-ai-caption-positions" class="small-action ai-reset-button" type="button">
+              자동 생성 자막을 기본 위치로 정렬
+            </button>
+            <p class="ai-reset-help">자동 생성 자막의 글·시간·색상은 두고 화면 위치만 아래 중앙으로 맞춥니다.</p>
+            <div id="ai-progress" class="ai-progress" hidden>
+              <div class="progress-track"><span></span></div>
+              <div class="progress-label">
+                <span id="ai-progress-label">에이전트 연결 준비 중</span>
+                <strong id="ai-progress-value">0%</strong>
+              </div>
+            </div>
+            <p id="caption-agent-warning" class="caption-agent-warning" role="status" hidden></p>
+            </section>
+
+            <section class="caption-sheet-launch" aria-labelledby="caption-sheet-launch-title">
+              <div>
+                <strong id="caption-sheet-launch-title">자막 스타일 비교</strong>
+                <span>자막 문구는 표시하지 않고 위치·크기·색상·검은 상자 설정을 시간순으로 비교합니다.</span>
+              </div>
+              <button
+                id="open-caption-sheet"
+                class="secondary-action caption-sheet-open"
+                type="button"
+                aria-haspopup="dialog"
+                aria-controls="caption-sheet-dialog"
+              >스타일 비교 열기</button>
+            </section>
+
+            <div class="inspector-tabs" role="tablist" aria-label="자막 편집 보기">
+              <button id="cue-selected-tab" class="active" type="button" role="tab" aria-selected="true" aria-controls="cue-selected-panel">선택 자막</button>
+              <button id="cue-list-tab" type="button" role="tab" aria-selected="false" aria-controls="cue-list" tabindex="-1">전체 <span id="cue-count">0</span></button>
+            </div>
+
+            <div id="cue-selected-panel" role="tabpanel" aria-labelledby="cue-selected-tab">
+              <div id="cue-empty" class="inspector-empty">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H8l-4 4Z"/><path d="M8 9h8M8 13h5"/></svg>
+                <strong>자막을 선택해 주세요</strong>
+                <span>타임라인의 자막 블록을 누르면 텍스트와 위치를 수정할 수 있습니다.</span>
+              </div>
+
+              <div id="cue-editor" class="cue-editor" hidden>
+              <p id="cue-review-note" class="cue-review-note" hidden>
+                <strong>AI 재확인 필요</strong>
+                <span>불명확한 발화로 표시된 자막입니다. 원음을 듣고 텍스트를 한 번 확인해 주세요.</span>
+              </p>
+              <label class="field">
+                <span>자막 텍스트</span>
+                <textarea id="cue-text" rows="4" placeholder="자막 내용을 입력하세요"></textarea>
+              </label>
+
+              <div class="time-fields">
+                <label class="field">
+                  <span>시작</span>
+                  <input id="cue-start" type="text" inputmode="decimal" value="00:00.000">
+                </label>
+                <label class="field">
+                  <span>끝</span>
+                  <input id="cue-end" type="text" inputmode="decimal" value="00:02.000">
+                </label>
+              </div>
+              <p class="field-help">아래 타임라인 양끝 손잡이로도 조정할 수 있어요.</p>
+              <div class="timing-match-control">
+                <button id="match-cue-to-asset" class="secondary-action timing-match-button" type="button" disabled>
+                  선택 이미지 구간에 정확히 맞춤
+                </button>
+                <p id="cue-timing-match-help" class="field-help">같은 컷의 이미지를 선택하면 양끝 시각을 한 번에 맞출 수 있어요.</p>
+              </div>
+
+              <button id="toggle-caption-background" class="toggle-setting caption-background-toggle" type="button" aria-label="선택 자막 검은 사각 배경" aria-pressed="false">
+                <span class="caption-background-swatch" aria-hidden="true"></span>
+                <span id="caption-background-label">이 자막 검은 상자 켜기 · X</span>
+              </button>
+
+              <div class="cue-lane-navigation" role="group" aria-label="같은 자막 레인의 좌우 자막 이동">
+                <button id="previous-cue-in-lane" type="button" aria-label="같은 자막 레인의 왼쪽 자막으로 이동" disabled>← 왼쪽 자막 · J</button>
+                <button id="next-cue-in-lane" type="button" aria-label="같은 자막 레인의 오른쪽 자막으로 이동" disabled>오른쪽 자막 · K →</button>
+              </div>
+
+              <div class="field-group">
+                <span class="field-label">화면 위치</span>
+                <p class="field-help">영상 위 자막을 직접 끌어서 원하는 곳에 놓을 수 있습니다.</p>
+              </div>
+
+              <div class="position-values">
+                <label class="field">
+                  <span>가로 <b id="cue-x-value">50%</b></span>
+                  <input id="cue-x" type="range" min="5" max="95" value="50">
+                </label>
+                <label class="field">
+                  <span>세로 <b id="cue-y-value">84%</b></span>
+                  <input id="cue-y" type="range" min="5" max="95" value="84">
+                </label>
+              </div>
+
+              <div class="field-group">
+                <span class="field-label">스타일</span>
+                <div class="style-row">
+                  <label>
+                    <span>선택 자막 크기</span>
+                    <input id="font-size" type="range" min="3" max="9" step="0.25" value="6.75">
+                  </label>
+                  <label class="color-control">
+                    <span>선택 자막 색상</span>
+                    <span class="color-picker-register-row">
+                      <input id="font-color" type="color" value="#ffffff" aria-label="선택 자막 색상 고르기">
+                      <span id="caption-color-register" class="caption-color-register" role="group" aria-label="기본 흰색과 최근 자막 색상"></span>
+                    </span>
+                  </label>
+                </div>
+                <button id="reset-font-color" class="inline-reset" type="button">기본 흰색으로</button>
+              </div>
+
+              <button id="delete-cue" class="danger-action" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/></svg>
+                이 자막 삭제
+              </button>
+              </div>
+            </div>
+
+            <div id="cue-list" class="cue-list" hidden role="tabpanel" aria-labelledby="cue-list-tab"></div>
+          </div>
+
+          <div id="asset-inspector-content" role="tabpanel" aria-labelledby="asset-mode-tab" hidden>
+            <div class="asset-import-actions">
+              <button id="asset-paste" class="button asset-paste-button" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h8v3H8Z"/><path d="M7 7H5v14h14V7h-2"/><path d="m8 16 3-3 2 2 2-2 2 3"/><circle cx="15.5" cy="11" r="1"/></svg>
+                클립보드 이미지 붙여넣기
+              </button>
+              <button id="asset-pick-file" class="secondary-action" type="button">이미지 파일 선택</button>
+              <p class="field-help">웹에서 ‘이미지 복사’ 후 Ctrl/Cmd+V를 눌러도 됩니다. PNG·WebP의 투명 배경은 그대로 유지됩니다.</p>
+            </div>
+
+            <div id="asset-empty" class="inspector-empty">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m6 17 4-5 3 3 2-2 3 4"/><circle cx="16.5" cy="8.5" r="1.5"/></svg>
+              <strong>이미지를 추가해 주세요</strong>
+              <span>붙여넣은 이미지는 현재 재생 위치부터 영상 위에 표시됩니다.</span>
+            </div>
+
+            <div id="asset-editor" class="cue-editor" hidden>
+              <div class="asset-heading">
+                <div class="asset-thumbnail-wrap">
+                  <img id="asset-thumbnail" alt="">
+                </div>
+                <div>
+                  <strong id="asset-name">이미지</strong>
+                  <span id="asset-meta">투명 이미지 지원</span>
+                </div>
+              </div>
+
+              <div class="time-fields">
+                <label class="field">
+                  <span>시작</span>
+                  <input id="asset-start" type="text" inputmode="decimal" value="00:00.000">
+                </label>
+                <label class="field">
+                  <span>끝</span>
+                  <input id="asset-end" type="text" inputmode="decimal" value="00:02.000">
+                </label>
+              </div>
+              <p class="field-help">이미지 트랙 양끝 손잡이로도 표시 시간을 조정할 수 있어요.</p>
+              <div class="timing-match-control">
+                <button id="match-asset-to-cue" class="secondary-action timing-match-button" type="button" disabled>
+                  선택 자막 구간에 정확히 맞춤
+                </button>
+                <p id="asset-timing-match-help" class="field-help">같은 컷의 자막을 선택하면 양끝 시각을 한 번에 맞출 수 있어요.</p>
+              </div>
+
+              <div class="position-values asset-position-values">
+                <label class="field">
+                  <span>가로 <b id="asset-x-value">50%</b></span>
+                  <input id="asset-x" type="range" min="0" max="100" value="50">
+                </label>
+                <label class="field">
+                  <span>세로 <b id="asset-y-value">50%</b></span>
+                  <input id="asset-y" type="range" min="0" max="100" value="50">
+                </label>
+              </div>
+              <p class="field-help">영상 위 이미지를 직접 끌어서 위치를 바꿀 수도 있습니다.</p>
+
+              <label class="field asset-slider">
+                <span>크기 <b id="asset-scale-value">100%</b></span>
+                <input id="asset-scale" type="range" min="5" max="500" step="1" value="100">
+              </label>
+              <label class="field asset-slider">
+                <span>불투명도 <b id="asset-opacity-value">100%</b></span>
+                <input id="asset-opacity" type="range" min="0" max="100" step="1" value="100">
+              </label>
+
+              <button id="delete-asset" class="danger-action" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/></svg>
+                이 이미지 삭제
+              </button>
+            </div>
+          </div>
+
+          <div id="audio-inspector-content" role="tabpanel" aria-labelledby="audio-mode-tab" hidden>
+            <div id="audio-empty" class="inspector-empty">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h4l5-4v14l-5-4H5Z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg>
+              <strong>음성 구간을 선택해 주세요</strong>
+              <span>음성 트랙의 기본 블록을 누르거나 우클릭해 조절 구간을 만들 수 있습니다.</span>
+            </div>
+
+            <div id="audio-editor" class="cue-editor" hidden>
+              <div class="audio-region-heading">
+                <strong id="audio-region-label">선택 구간 음성</strong>
+              </div>
+
+              <div class="time-fields">
+                <label class="field">
+                  <span>시작</span>
+                  <input id="audio-start" type="text" inputmode="decimal" value="00:00.000">
+                </label>
+                <label class="field">
+                  <span>끝</span>
+                  <input id="audio-end" type="text" inputmode="decimal" value="00:02.000">
+                </label>
+              </div>
+
+              <label class="field audio-volume-field">
+                <span>구간 음량 <b id="audio-volume-value">100%</b></span>
+                <input id="audio-volume" type="range" min="0" max="100" step="1" value="100">
+              </label>
+
+              <button id="audio-mute" class="toggle-setting" type="button" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h4l5-4v14l-5-4H5Z"/><path d="m18 9 4 6M22 9l-4 6"/></svg>
+                <span id="audio-mute-label">이 구간 음소거</span>
+              </button>
+
+              <div class="position-values audio-fades">
+                <label class="field">
+                  <span>페이드 인 <b id="audio-fade-in-value">0.0초</b></span>
+                  <input id="audio-fade-in" type="range" min="0" max="3000" step="100" value="0">
+                </label>
+                <label class="field">
+                  <span>페이드 아웃 <b id="audio-fade-out-value">0.0초</b></span>
+                  <input id="audio-fade-out" type="range" min="0" max="3000" step="100" value="0">
+                </label>
+              </div>
+
+              <button id="reset-audio-region" class="secondary-action" type="button">음성 설정 초기화</button>
+              <button id="delete-audio-region" class="danger-action" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/></svg>
+                이 음성 설정 구간 삭제
+              </button>
+            </div>
+          </div>
+
+          <div id="short-framing-inspector-content" class="short-framing-inspector-content" role="tabpanel" aria-labelledby="short-framing-mode-tab" hidden>
+            <section id="short-workspace-projects" class="short-workspace-projects" aria-labelledby="short-workspace-projects-title">
+              <div class="short-workspace-projects-heading">
+                <div>
+                  <span class="overline">독립 저장</span>
+                  <h3 id="short-workspace-projects-title">쇼츠 작업</h3>
+                </div>
+                <span id="short-workspace-project-count" class="count">1</span>
+              </div>
+              <label for="short-workspace-select">현재 작업</label>
+              <select id="short-workspace-select" aria-describedby="short-workspace-project-help"></select>
+              <label for="short-workspace-name">작업 이름</label>
+              <input id="short-workspace-name" type="text" maxlength="80" autocomplete="off">
+              <p id="short-workspace-project-help">각 작업의 자막·영상·실행 취소·내보내기는 서로 섞이지 않습니다.</p>
+              <div class="short-workspace-project-actions" role="group" aria-label="쇼츠 작업 관리">
+                <button id="create-short-workspace" type="button">+ 새 작업</button>
+                <button id="duplicate-short-workspace" type="button">복제</button>
+                <button id="delete-short-workspace" class="danger" type="button">삭제</button>
+              </div>
+            </section>
+            <div class="short-framing-intro">
+              <strong>선택 영상</strong>
+              <p id="short-workspace-source">쇼츠 화면에서 편집할 영상을 선택해 주세요.</p>
+              <small id="short-workspace-duration">원본 구간과 길이가 여기에 표시됩니다.</small>
+            </div>
+
+            <section id="short-video-layer-panel" class="short-video-layer-panel" aria-labelledby="short-video-layer-title">
+              <header class="short-video-layer-heading">
+                <div>
+                  <span class="overline">영상 목록</span>
+                  <h3 id="short-video-layer-title">영상 <b id="short-video-layer-count">0</b></h3>
+                </div>
+                <button id="add-short-video-layer" class="small-action" type="button" aria-describedby="short-video-layer-help">
+                  + 영상 추가
+                </button>
+              </header>
+              <p id="short-video-layer-help" class="short-video-layer-help">
+                위쪽 영상일수록 화면 앞에 보입니다. 각 영상 행의 버튼으로 순서를 바꿀 수 있습니다.
+              </p>
+              <div class="short-preview-cache-feedback">
+                <small id="short-preview-cache-status" role="status" aria-live="polite" aria-atomic="true">이 기기에서 영상 미리보기를 준비합니다.</small>
+                <button id="retry-short-preview-cache" class="small-action" type="button" aria-describedby="short-preview-cache-status" hidden>
+                  미리보기 다시 만들기
+                </button>
+              </div>
+              <div
+                id="short-video-layer-list"
+                class="short-video-layer-list"
+                role="list"
+                aria-label="쇼츠 화면의 영상 목록"
+                aria-describedby="short-video-layer-help"
+              ></div>
+              <p id="short-video-layer-empty" class="short-video-layer-empty" hidden>
+                현재 쇼츠 화면이 비어 있습니다. ‘영상 추가’로 본편 구간을 가져오세요.
+              </p>
+
+              <div id="short-video-layer-controls" class="short-video-layer-controls" role="group" aria-label="선택 영상 설정">
+                <div class="time-fields short-video-layer-time-fields">
+                  <label class="field">
+                    <span>쇼츠 시작</span>
+                    <input id="short-video-layer-start" type="text" inputmode="decimal" value="00:00.000">
+                  </label>
+                  <label class="field">
+                    <span>쇼츠 끝</span>
+                    <input id="short-video-layer-end" type="text" inputmode="decimal" value="00:03.000">
+                  </label>
+                </div>
+                <label for="short-video-layer-opacity">
+                  <span>불투명도 <output id="short-video-layer-opacity-value" for="short-video-layer-opacity">100%</output></span>
+                  <input id="short-video-layer-opacity" type="range" min="0" max="100" step="1" value="100">
+                </label>
+                <label for="short-video-layer-volume">
+                  <span>영상 음량 <output id="short-video-layer-volume-value" for="short-video-layer-volume">100%</output></span>
+                  <input id="short-video-layer-volume" type="range" min="0" max="200" step="1" value="100" aria-describedby="short-video-layer-volume-help">
+                  <small id="short-video-layer-volume-help">원본 음량은 100%입니다. 100%를 넘기면 큰 소리가 찌그러질 수 있습니다.</small>
+                </label>
+                <div class="short-video-layer-actions" role="group" aria-label="선택 영상 표시와 삭제">
+                  <button id="toggle-short-video-layer-visibility" type="button" aria-pressed="true">표시 중</button>
+                  <button id="delete-short-video-layer" class="danger" type="button">영상 삭제</button>
+                </div>
+              </div>
+            </section>
+
+            <section id="short-workspace-transform-controls" class="short-workspace-transform-controls" aria-labelledby="short-workspace-transform-title">
+              <div class="short-workspace-transform-heading">
+                <h3 id="short-workspace-transform-title">선택 영상 배치 · 픽셀</h3>
+                <span>왼쪽 위 기준</span>
+              </div>
+              <p id="short-workspace-transform-hint">미리보기 영상의 테두리와 손잡이를 드래그하거나 값을 직접 입력하세요. 방향키는 1px, Shift+방향키는 10px입니다.</p>
+              <div class="short-workspace-pixel-grid">
+                <label for="short-workspace-destination-x"><span>X</span><input id="short-workspace-destination-x" type="number" step="1" inputmode="numeric" value="0" aria-describedby="short-workspace-transform-hint"></label>
+                <label for="short-workspace-destination-y"><span>Y</span><input id="short-workspace-destination-y" type="number" step="1" inputmode="numeric" value="0" aria-describedby="short-workspace-transform-hint"></label>
+                <label for="short-workspace-destination-width"><span>너비</span><input id="short-workspace-destination-width" type="number" min="1" step="1" inputmode="numeric" value="1080" aria-describedby="short-workspace-transform-hint"></label>
+                <label for="short-workspace-destination-height"><span>높이</span><input id="short-workspace-destination-height" type="number" min="1" step="1" inputmode="numeric" value="1920" aria-describedby="short-workspace-transform-hint"></label>
+              </div>
+              <label class="short-workspace-aspect-lock" for="short-workspace-destination-lock-aspect">
+                <input id="short-workspace-destination-lock-aspect" type="checkbox" checked>
+                <span>원본 화면 비율 유지</span>
+              </label>
+              <output id="short-workspace-destination-readout" class="short-workspace-destination-readout" aria-live="polite" aria-atomic="true">X 0 · Y 0 · 1080×1920px</output>
+            </section>
+
+            <section id="short-workspace-squeegee" class="short-workspace-squeegee" aria-labelledby="short-workspace-squeegee-title">
+              <div>
+                <strong id="short-workspace-squeegee-title">미세한 검은 틈 보정</strong>
+              </div>
+              <p id="short-workspace-edge-gap-status" role="status" aria-live="polite" aria-atomic="true">선택 영상의 화면 가장자리를 검사합니다.</p>
+              <div id="short-workspace-squeegee-actions" class="short-workspace-squeegee-actions" role="group" aria-label="선택 영상의 미세한 검은 틈 보정">
+                <button type="button" data-short-workspace-squeegee="left">← 왼쪽</button>
+                <button type="button" data-short-workspace-squeegee="right">오른쪽 →</button>
+                <button type="button" data-short-workspace-squeegee="top">↑ 위</button>
+                <button type="button" data-short-workspace-squeegee="bottom">아래 ↓</button>
+                <button class="all" type="button" data-short-workspace-squeegee="all">감지된 틈 모두 보정</button>
+              </div>
+              <small>1–24px의 작은 틈만 보정하며, 크게 비워 둔 의도적 여백과 원본 크롭은 건드리지 않습니다.</small>
+            </section>
+
+            <details id="short-workspace-legacy-framing" class="short-workspace-legacy-framing" data-short-framing-legacy>
+              <summary>기존 프로젝트 화면 맞춤</summary>
+              <div class="short-workspace-legacy-framing-body">
+                <p>이전 방식으로 저장된 쇼츠의 맞춤·초점 값을 조정합니다.</p>
+                <label class="short-workspace-control" for="short-workspace-fit">
+                  <span>영상 맞춤</span>
+                  <select id="short-workspace-fit">
+                    <option value="cover">화면 채움 · 추천</option>
+                    <option value="contain">전체 보이기 · 검은 여백</option>
+                  </select>
+                </label>
+
+                <label class="short-workspace-control" for="short-workspace-zoom">
+                  <span>원본 자르기 확대 <output id="short-workspace-zoom-value" for="short-workspace-zoom">1.00×</output></span>
+                  <input id="short-workspace-zoom" type="range" min="100" max="300" step="5" value="100">
+                </label>
+
+                <label class="short-workspace-control" for="short-workspace-crop-x">
+                  <span>자르기 가로 초점 <output id="short-workspace-crop-x-value" for="short-workspace-crop-x">50%</output></span>
+                  <input id="short-workspace-crop-x" type="range" min="0" max="100" step="1" value="50">
+                </label>
+
+                <label class="short-workspace-control" for="short-workspace-crop-y">
+                  <span>자르기 세로 초점 <output id="short-workspace-crop-y-value" for="short-workspace-crop-y">50%</output></span>
+                  <input id="short-workspace-crop-y" type="range" min="0" max="100" step="1" value="50">
+                </label>
+
+                <label class="short-workspace-control short-workspace-scale-control" for="short-workspace-scale">
+                  <span>쇼츠 화면 안 영상 크기 <output id="short-workspace-scale-value" for="short-workspace-scale">100%</output></span>
+                  <input id="short-workspace-scale" type="range" min="25" max="200" step="5" value="100">
+                </label>
+
+                <label class="short-workspace-control" for="short-workspace-position-x">
+                  <span>쇼츠 화면 가로 위치 <output id="short-workspace-position-x-value" for="short-workspace-position-x">50%</output></span>
+                  <input id="short-workspace-position-x" type="range" min="0" max="100" step="1" value="50">
+                </label>
+
+                <label class="short-workspace-control" for="short-workspace-position-y">
+                  <span>쇼츠 화면 세로 위치 <output id="short-workspace-position-y-value" for="short-workspace-position-y">50%</output></span>
+                  <input id="short-workspace-position-y" type="range" min="0" max="100" step="1" value="50">
+                </label>
+
+                <fieldset id="short-workspace-position-presets" class="short-workspace-position-presets">
+                  <legend>빠른 배치</legend>
+                  <button type="button" data-short-workspace-position data-x="0.2" data-y="0.2" aria-label="왼쪽 위">↖</button>
+                  <button type="button" data-short-workspace-position data-x="0.5" data-y="0.2" aria-label="가운데 위">↑</button>
+                  <button type="button" data-short-workspace-position data-x="0.8" data-y="0.2" aria-label="오른쪽 위">↗</button>
+                  <button type="button" data-short-workspace-position data-x="0.2" data-y="0.5" aria-label="왼쪽 가운데">←</button>
+                  <button type="button" data-short-workspace-position data-x="0.5" data-y="0.5" aria-label="정가운데">●</button>
+                  <button type="button" data-short-workspace-position data-x="0.8" data-y="0.5" aria-label="오른쪽 가운데">→</button>
+                  <button type="button" data-short-workspace-position data-x="0.2" data-y="0.8" aria-label="왼쪽 아래">↙</button>
+                  <button type="button" data-short-workspace-position data-x="0.5" data-y="0.8" aria-label="가운데 아래">↓</button>
+                  <button type="button" data-short-workspace-position data-x="0.8" data-y="0.8" aria-label="오른쪽 아래">↘</button>
+                </fieldset>
+              </div>
+            </details>
+
+            <label class="short-workspace-safe-area-control" for="short-workspace-safe-area">
+              <input id="short-workspace-safe-area" type="checkbox" checked>
+              <span>
+                <strong>플랫폼 UI 안전 영역</strong>
+                <small>제목·버튼·캡션이 가려질 수 있는 영역을 미리보기 위에 표시합니다.</small>
+              </span>
+            </label>
+
+            <div class="short-workspace-framing-actions" role="group" aria-label="쇼츠 화면 맞춤 작업">
+              <button id="reset-short-workspace-framing" class="button secondary" type="button">선택 영상 배치 초기화</button>
+              <button id="copy-short-workspace-framing" class="button secondary" type="button">모든 영상에 배치 복사</button>
+            </div>
+          </div>
+        </aside>
+
+        <section class="timeline-panel">
+          <div class="timeline-toolbar">
+            <div class="timeline-title">
+              <strong>
+                <span class="main-workspace-copy">영상 · 이미지 · 음성 · 자막</span>
+                <span class="short-form-workspace-copy">영상 · 이미지 · 자막 · 음성 설정</span>
+              </strong>
+              <button
+                class="timeline-clip-manager main-workspace-copy"
+                type="button"
+                popovertarget="clip-manager-popover"
+                aria-haspopup="dialog"
+                aria-controls="clip-manager-popover"
+              >컷·원본 관리</button>
+              <button id="toggle-timeline-collapse" class="timeline-collapse-button" type="button" aria-expanded="true" aria-controls="timeline-grid" title="타임라인 접기">접기</button>
+            </div>
+            <div class="timeline-tools">
+              <div class="range-tools" role="group" aria-label="영상 구간 삭제">
+                <button id="set-range-start" class="tool-button range-mark-button" type="button" aria-pressed="false" aria-keyshortcuts="I" title="현재 재생 위치를 삭제 시작점으로 지정 (I)">
+                  시작 <kbd>I</kbd>
+                </button>
+                <button id="set-range-end" class="tool-button range-mark-button" type="button" aria-pressed="false" aria-keyshortcuts="O" title="현재 재생 위치를 삭제 끝점으로 지정 (O)">
+                  끝 <kbd>O</kbd>
+                </button>
+                <button id="clear-range" class="tool-button range-clear-button" type="button" aria-keyshortcuts="Escape" title="삭제 구간 선택 해제 (Esc)" hidden>선택 해제</button>
+                <button id="delete-range" class="tool-button range-delete-button" type="button" aria-keyshortcuts="Delete" title="선택한 영상 구간 삭제 (Delete)" disabled>구간 삭제</button>
+              </div>
+              <button id="trim-short-canvas-empty-edges" class="tool-button short-canvas-empty-trim-button" type="button" title="영상·사진·자막·음성 중 가장 이른 시작과 가장 늦은 끝에 쇼츠 길이를 맞춥니다" hidden>앞뒤 빈 구간 제거</button>
+              <span class="timeline-tool-divider" aria-hidden="true"></span>
+              <button id="paste-image-asset" class="tool-button asset-tool-button" type="button">+ 이미지 붙여넣기</button>
+              <button id="add-audio-region" class="tool-button" type="button">+ 현재 위치 음성 설정</button>
+              <button id="add-cue" class="tool-button" type="button">+ 현재 위치에 자막</button>
+              <button id="fit-timeline" class="tool-button" type="button">전체 보기</button>
+              <button id="toggle-timeline-snap" class="tool-button snap-tool-button active" type="button" aria-pressed="true" title="타임라인 자석 켜짐 · 드래그 중 Alt로 잠시 해제">
+                자석
+              </button>
+              <svg class="zoom-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5M8 10h4"/></svg>
+              <input id="timeline-zoom" type="range" min="20" max="240" value="70" aria-label="타임라인 확대">
+            </div>
+          </div>
+
+          <div id="timeline-grid" class="timeline-grid">
+            <div class="track-labels">
+              <div class="ruler-spacer"></div>
+              <div class="track-label video-track-label">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 10 5-3v10l-5-3Z"/><rect x="3" y="5" width="12" height="14" rx="2"/></svg>
+                <span class="main-workspace-copy">영상</span>
+                <span class="short-form-workspace-copy">영상 <b id="video-lane-count">1</b></span>
+                <button id="add-video-lane" class="short-form-workspace-copy" type="button" title="영상 라인 추가" aria-label="영상 라인 추가">+</button>
+              </div>
+              <div class="track-label asset-track-label">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m6 17 4-5 3 3 2-2 3 4"/><circle cx="16.5" cy="8.5" r="1.5"/></svg>
+              <span class="main-workspace-copy">이미지</span>
+              <span class="short-form-workspace-copy">이미지</span>
+              </div>
+              <div class="track-label caption-track-label">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H8l-4 4Z"/><path d="M8 9h8M8 13h5"/></svg>
+                <span>자막 <b id="subtitle-lane-count">2</b></span>
+                <button id="add-subtitle-lane" type="button" title="자막 레인 추가" aria-label="자막 레인 추가">+</button>
+              </div>
+              <div class="track-label audio-track-label">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h4l5-4v14l-5-4H5Z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg>
+                <span class="main-workspace-copy">음성</span>
+                <span class="short-form-workspace-copy">음성 설정</span>
+              </div>
+              <div id="source-audio-track-label" class="track-label source-audio-track-label" aria-hidden="true" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4l4-3v16l-4-3H4Z"/><path d="M16 8c2 2 2 6 0 8M19 5c4 4 4 10 0 14"/></svg>
+                구형 원본 음성 호환
+              </div>
+            </div>
+            <div id="timeline-scroll" class="timeline-scroll">
+              <div id="timeline-content" class="timeline-content">
+                <div id="timeline-ruler" class="timeline-ruler"></div>
+                <div id="video-track" class="timeline-track video-track"></div>
+                <div id="asset-track" class="timeline-track asset-track" aria-label="이미지 트랙"></div>
+                <div id="caption-tracks" class="caption-tracks"></div>
+                <div id="audio-track" class="timeline-track audio-track"></div>
+                <div id="source-audio-track" class="timeline-track source-audio-track" aria-label="구형 쇼츠 원본 음성 호환 트랙" aria-hidden="true" hidden></div>
+                <output id="timeline-snap-guide" class="timeline-snap-guide" aria-live="polite" hidden></output>
+                <div id="timeline-range-selection" class="timeline-range-selection" hidden>
+                  <output id="timeline-range-summary" class="timeline-range-summary" aria-live="polite"></output>
+                  <button id="range-start-handle" class="range-handle start" type="button" role="slider" aria-label="삭제 구간 시작 시각" aria-orientation="horizontal" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="00:00:00.000"></button>
+                  <button id="range-end-handle" class="range-handle end" type="button" role="slider" aria-label="삭제 구간 끝 시각" aria-orientation="horizontal" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="00:00:00.000"></button>
+                </div>
+                <button id="playhead" class="playhead" type="button" role="slider" aria-label="편집 재생 시각" aria-orientation="horizontal" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="00:00:00.000">
+                  <span></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <input id="media-input" type="file" accept="video/*,audio/*" hidden>
+    <input id="asset-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+    <input id="session-archive-input" type="file" accept="application/json,.json" hidden>
+
+    <div id="timeline-context-menu" class="timeline-context-menu" hidden role="menu" aria-label="타임라인 메뉴">
+      <button id="context-set-range-start" type="button" role="menuitem">이 위치를 삭제 시작점으로</button>
+      <button id="context-set-range-end" type="button" role="menuitem">이 위치를 삭제 끝점으로</button>
+      <button id="context-delete-range" class="danger" type="button" role="menuitem">선택 구간 삭제</button>
+      <button id="context-add-cue" type="button" role="menuitem">이 위치에 자막 추가</button>
+      <button id="context-paste-asset" type="button" role="menuitem">이 위치에 이미지 붙여넣기</button>
+      <button id="context-pick-asset" type="button" role="menuitem">이 위치에 이미지 파일 선택…</button>
+      <button id="context-add-audio" type="button" role="menuitem">이 위치에 음성 설정 추가</button>
+      <button id="context-delete-cue" class="danger" type="button" role="menuitem">이 자막 삭제</button>
+      <button id="context-delete-asset" class="danger" type="button" role="menuitem">이 이미지 삭제</button>
+      <button id="context-delete-audio" class="danger" type="button" role="menuitem">이 음성 설정 삭제</button>
+      <button id="context-add-lane" type="button" role="menuitem">자막 레인 하나 더</button>
+    </div>
+
+    <dialog
+      id="caption-sheet-dialog"
+      class="caption-sheet-dialog"
+      aria-labelledby="caption-sheet-title"
+      aria-describedby="caption-sheet-description"
+    >
+      <header class="caption-sheet-header">
+        <div>
+          <h2 id="caption-sheet-title">자막 스타일 비교</h2>
+          <p id="caption-sheet-description">
+            자막 문구를 제외한 설정만 한눈에 비교합니다. 위치·크기·색상·검은 상자가 주변 자막과 다른지 검수해 보세요.
+          </p>
+        </div>
+        <button
+          id="close-caption-sheet-dialog"
+          class="icon-action caption-sheet-close"
+          type="button"
+          aria-label="자막 스타일 비교 닫기"
+          title="닫기"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+
+      <div class="caption-sheet-overview">
+        <p id="caption-sheet-summary" class="caption-sheet-summary" role="status" aria-live="polite" aria-atomic="true">
+          자막 속성을 시간순으로 준비합니다.
+        </p>
+        <p id="caption-sheet-common-style" class="caption-sheet-common-style">
+          위치·크기·글자색·검은 상자의 공통 설정과 개별 설정을 비교합니다.
+        </p>
+        <p class="caption-sheet-output-excluded" role="note">
+          이 비교표는 편집 화면에서만 보이며 영상 출력에는 포함되지 않습니다.
+        </p>
+      </div>
+
+      <div class="caption-sheet-scroll-region" tabindex="0" aria-label="자막 속성 비교표 스크롤 영역">
+        <table id="caption-sheet-table" class="caption-sheet-table">
+          <caption>자막 문구를 제외한 자막별 스타일 설정 비교표</caption>
+          <thead>
+            <tr>
+              <th scope="col">자막</th>
+              <th scope="col">컷</th>
+              <th scope="col">시작 시각</th>
+              <th scope="col">레인</th>
+              <th scope="col">위치 X/Y</th>
+              <th scope="col">설정 크기</th>
+              <th scope="col">글자색</th>
+              <th scope="col">검은 상자</th>
+              <th scope="col">설정 묶음</th>
+            </tr>
+          </thead>
+          <tbody id="caption-sheet-body"></tbody>
+        </table>
+        <p id="caption-sheet-empty" class="caption-sheet-empty">비교할 자막이 없습니다.</p>
+      </div>
+
+      <footer class="caption-sheet-footer">
+        <p>출력 중인 자막의 행 번호를 누르면 해당 자막 편집기로 이동합니다.</p>
+        <p>강조된 차이는 확인할 후보이며 확정된 오류가 아닙니다.</p>
+      </footer>
+    </dialog>
+
+    <dialog
+      id="subtitle-sync-guide-dialog"
+      class="subtitle-sync-guide-dialog"
+      aria-labelledby="subtitle-sync-guide-title"
+      aria-describedby="subtitle-sync-guide-description"
+    >
+      <header class="subtitle-sync-guide-header">
+        <div>
+          <h2 id="subtitle-sync-guide-title" tabindex="-1">반자동 노래 자막 편집 팁</h2>
+          <p id="subtitle-sync-guide-description">노래 가사를 넣을 때, 가사 타이밍을 자동으로 맞춰주는 프롬프트입니다</p>
+        </div>
+        <button id="close-subtitle-sync-guide" class="icon-action" type="button" aria-label="노래 자막 싱크 팁 닫기" title="닫기">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+      <div class="subtitle-sync-guide-scroll" tabindex="0" aria-label="노래 자막 싱크 사용법과 SKILL.md">
+        <section class="subtitle-sync-usage" aria-labelledby="subtitle-sync-usage-title">
+          <h3 id="subtitle-sync-usage-title">사용 방법</h3>
+          <ol>
+            <li>컷 순서·길이·크롭·영상/음성 구도를 사람이 먼저 완성한 뒤, 그 편집의 로컬 오디오와 줄 ID가 붙은 가사를 준비합니다.</li>
+            <li>아래 SKILL.md를 AI Agent에 넣고, ASR·강제정렬·VAD 같은 로컬 분석 근거와 함께 실행합니다.</li>
+            <li>에이전트가 자막 문구·싱크·레인·줄바꿈·위치를 완성편집으로 한 번에 넣으면, <strong>추정 확정·검수 우선순위 높음</strong> 큐부터 사람이 사후 검수합니다.</li>
+          </ol>
+          <p class="subtitle-sync-local-note" role="note">이 버튼은 사용 스킬만 보여 줍니다. 현재 영상·자막을 외부 모델로 보내거나 사용 기록을 저장하지 않으며, 에이전트도 영상 컷과 구도를 바꾸지 않습니다.</p>
+          <div class="subtitle-sync-guide-actions">
+            <button id="copy-subtitle-sync-skill" class="button primary" type="button">SKILL.md 복사</button>
+            <span id="subtitle-sync-copy-status" role="status" aria-live="polite" aria-atomic="true"></span>
+          </div>
+        </section>
+        <section class="subtitle-sync-skill-document" aria-labelledby="subtitle-sync-skill-title">
+          <div>
+            <h3 id="subtitle-sync-skill-title">align-song-subtitles-60fps / SKILL.md</h3>
+          </div>
+          <pre id="subtitle-sync-skill-content" tabindex="0" aria-label="SKILL.md 원문"></pre>
+        </section>
+      </div>
+    </dialog>
+
+    <dialog id="local-draft-dialog" class="local-draft-dialog" aria-labelledby="local-draft-title" aria-describedby="local-draft-description">
+      <div class="local-draft-dialog-header">
+        <div>
+          <h2 id="local-draft-title">최근 저장본 5개</h2>
+        </div>
+        <button id="close-local-draft-dialog" class="icon-action local-draft-close" type="button" aria-label="저장본 목록 닫기" title="닫기">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+
+      <div class="local-draft-dialog-body">
+        <div id="local-draft-description" class="local-draft-description">
+          <p>편집 상태는 최근 5개까지만 이 브라우저·이 기기에 보관됩니다.</p>
+          <p class="local-draft-device-note">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6Z"/><path d="M10 17h4"/></svg>
+            이 사이트의 기기 내 데이터를 지우면 저장본도 함께 삭제됩니다.
+          </p>
+        </div>
+
+        <div id="local-draft-list" class="local-draft-list" role="radiogroup" aria-label="불러올 저장본"></div>
+        <p id="local-draft-empty" class="local-draft-empty">아직 저장된 버전이 없습니다.</p>
+      </div>
+
+      <div class="local-draft-dialog-footer">
+        <p>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7v5c0 4.7 3.2 7.7 8 9 4.8-1.3 8-4.3 8-9V7Z"/><path d="m9 12 2 2 4-4"/></svg>
+          불러오기 직전의 현재 상태도 자동으로 저장합니다.
+        </p>
+        <p>저장본 불러오기는 시작 화면의 최근 편집에서 ‘저장본’을 선택하고 이번 사용의 사용자 진술을 다시 입력한 경우에만 활성화됩니다.</p>
+        <div class="local-draft-footer-actions">
+          <button id="open-session-archive-file" class="button secondary" type="button">내보낸 편집 복원 파일 열기</button>
+          <button id="restore-local-draft" class="button primary" type="button" disabled>선택한 버전 불러오기</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="export-options-dialog" class="export-options-dialog" aria-labelledby="export-options-title" aria-describedby="export-options-description">
+      <form method="dialog" class="export-options-card">
+        <header>
+          <div>
+            <h2 id="export-options-title">영상 내보내기</h2>
+          </div>
+          <button id="cancel-export-options" class="icon-action" type="button" aria-label="내보내기 설정 닫기" title="닫기">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </header>
+        <p id="export-options-description">영상과 다시 편집할 때 사용할 복원 파일을 함께 저장합니다. 원본 영상 자체는 복원 파일에 포함하지 않습니다.</p>
+        <label class="export-title-field" for="export-file-title">
+          <span>출력 영상 제목</span>
+          <input
+            id="export-file-title"
+            type="text"
+            maxlength="80"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="export-file-name-preview"
+            required
+          >
+          <small id="export-file-name-preview">내보낼 파일 이름을 먼저 정해 주세요.</small>
+        </label>
+        <div id="export-edge-gap-warning" class="export-edge-gap-warning" role="alert" hidden>
+          <strong>쇼츠 가장자리에 작은 검은 틈이 보일 수 있습니다.</strong>
+          <span id="export-edge-gap-summary">밀대 도구로 확인할 수 있습니다.</span>
+        </div>
+        <p class="export-cleanup-caveat">영상·편집 복원 파일·자막 파일이 제대로 저장됐는지 확인한 뒤, 이 작업에 사용한 임시 영상과 기기 내 편집 데이터를 지울지 별도로 묻습니다.</p>
+        <footer>
+          <button id="cancel-export-options-footer" class="button secondary" type="button">취소</button>
+          <button id="confirm-export-options" class="button primary" type="submit">저장 위치 선택하고 내보내기</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="cleanup-after-export-dialog" class="export-options-dialog" aria-labelledby="cleanup-after-export-title" aria-describedby="cleanup-after-export-summary">
+      <form method="dialog" class="export-options-card">
+        <header>
+          <div>
+            <h2 id="cleanup-after-export-title">내보내기를 검증했습니다</h2>
+          </div>
+          <button id="keep-export-session-cache-icon" class="icon-action" type="button" aria-label="현재 작업을 유지하고 닫기" title="유지하고 닫기">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </header>
+        <p id="cleanup-after-export-summary">영상과 복원 파일이 선택한 폴더에 정상 저장되었습니다.</p>
+        <div class="export-cleanup-result">
+          <strong>현재 편집을 완료하고 이 작업의 임시 자료를 지울까요?</strong>
+          <span>이 작업용으로 받은 VOD 구간·쇼츠 미리보기·저장본·이미지·파일 연결만 지웁니다. 다른 편집 작업과 사용자가 직접 선택한 원본 영상 파일은 삭제하지 않습니다.</span>
+        </div>
+        <p class="export-cleanup-caveat">삭제하면 이 작업은 종료됩니다. 다시 편집하려면 방금 저장한 편집 복원 파일과 원본 VOD 또는 원본 파일이 필요합니다. 다른 탭이 같은 작업을 사용 중이거나 안전하게 지울 범위를 확인하지 못하면 삭제하지 않습니다.</p>
+        <footer>
+          <button id="keep-export-session-cache" class="button secondary" type="button">유지하고 계속 편집</button>
+          <button id="delete-export-session-cache" class="button danger" type="button">작업 완료·임시 자료 삭제</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="session-completed-dialog" class="export-options-dialog" aria-labelledby="session-completed-title" aria-describedby="session-completed-summary">
+      <div class="export-options-card" tabindex="-1">
+        <header>
+          <div>
+            <h2 id="session-completed-title">현재 편집 작업을 정리했습니다</h2>
+          </div>
+        </header>
+        <p id="session-completed-summary">내보낸 영상과 편집 복원 파일은 그대로 보존되고, 이 작업이 사용하던 기기 내 임시 자료만 삭제했습니다.</p>
+        <div class="export-cleanup-result">
+          <strong>이 탭에서는 더 이상 자동저장하거나 편집하지 않습니다.</strong>
+          <span>다시 작업하려면 원본 페이지에서 새 편집을 시작한 뒤 ‘내보낸 편집 복원 파일 열기’를 사용하세요.</span>
+        </div>
+        <footer>
+          <button id="close-completed-editor" class="button primary" type="button">시작 화면으로 돌아가기</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog id="editing-session-exit-dialog" class="export-options-dialog editing-session-exit-dialog" aria-labelledby="editing-session-exit-title" aria-describedby="editing-session-exit-description">
+      <div class="export-options-card" tabindex="-1">
+        <header>
+          <div>
+            <h2 id="editing-session-exit-title">작업을 끝낼까요?</h2>
+          </div>
+        </header>
+        <p id="editing-session-exit-description">이번 편집에서 바꾼 내용을 이 기기에 남길지 선택해 주세요.</p>
+        <div class="editing-session-exit-summary">
+          <section>
+            <strong>이 기기에 저장하고 나가기</strong>
+            <span>현재 상태를 다음에 이어서 열 수 있는 편집으로 확정합니다.</span>
+          </section>
+          <section class="discard">
+            <strong>저장하지 않고 나가기</strong>
+            <span>이번에 편집기를 연 뒤 생긴 변경을 버리고, 열기 전 상태로 되돌립니다. 직접 만든 저장본은 남깁니다.</span>
+          </section>
+        </div>
+        <p class="editing-session-exit-tab-note">탭을 그냥 닫으면 이번 변경은 저장되지 않습니다. 다음 시작 화면에서 직접 만든 저장본은 남기고, 나머지는 열기 전 상태로 자동 정리합니다.</p>
+        <p id="editing-session-exit-status" class="editing-session-exit-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <footer class="editing-session-exit-actions">
+          <button id="cancel-editing-session-exit" class="button secondary" type="button">취소</button>
+          <button id="discard-and-exit-editing-session" class="button danger" type="button">저장하지 않고 나가기</button>
+          <button id="save-and-exit-editing-session" class="button primary" type="button">이 기기에 저장하고 나가기</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog id="job-dialog" class="job-dialog" hidden aria-labelledby="job-title" aria-describedby="job-message">
+      <div class="job-card" tabindex="-1">
+        <div class="job-spinner" aria-hidden="true"></div>
+        <h2 id="job-title">영상을 준비하고 있어요</h2>
+        <p id="job-message">선택한 구간의 편집 영상을 이 기기에 준비합니다.</p>
+        <div class="progress-track large"><span id="job-progress"></span></div>
+        <div class="job-meta">
+          <span id="job-percent">0%</span>
+          <button id="cancel-job" type="button">취소</button>
+        </div>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" hidden role="status" aria-live="polite" aria-atomic="true"></div>
+
+    <template id="clip-template">
+      <article class="clip-item">
+        <label class="clip-group-check">
+          <input class="clip-group-checkbox" type="checkbox">
+        </label>
+        <button class="clip-select" type="button">
+          <span class="clip-index"></span>
+          <span class="clip-copy">
+            <strong class="clip-title"></strong>
+            <span class="clip-time"></span>
+          </span>
+          <span class="clip-duration"></span>
+        </button>
+        <div class="clip-hot-load-actions" role="group" aria-label="편집 영상 범위 추가" hidden>
+          <button type="button" data-hot-load="before">앞 30초</button>
+          <button type="button" data-hot-load="after">뒤 30초</button>
+        </div>
+        <div class="clip-actions" role="group" aria-label="본편 컷 재생 순서">
+          <button type="button" data-action="first" aria-label="맨 처음 재생">⇈</button>
+          <button type="button" data-action="up" aria-label="한 컷 먼저 재생">↑</button>
+          <button type="button" data-action="down" aria-label="한 컷 나중에 재생">↓</button>
+          <button type="button" data-action="last" aria-label="맨 마지막 재생">⇊</button>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="editor/editor.js?v=2.7.0"></script>
+  </body>
+</html>

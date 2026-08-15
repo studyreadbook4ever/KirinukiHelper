@@ -10,8 +10,13 @@ import {
   AUDSEG_ENGINE_VERSION,
   AUDSEG_PIPELINE_FINGERPRINT
 } from "./audseg.js";
+import {
+  studioStorageArea
+} from "./studio-runtime.js";
 
-export const CAPTION_AGENT_SETTINGS_KEY = "chzzk-kirinuki-caption-agent-settings-v3";
+export const CAPTION_AGENT_SETTINGS_KEY = "chzzk-kirinuki-caption-agent-settings-v4";
+const PREVIOUS_CAPTION_AGENT_SETTINGS_KEY =
+  "chzzk-kirinuki-caption-agent-settings-v3";
 export const LEGACY_CAPTION_AGENT_SETTINGS_KEY =
   "chzzk-kirinuki-caption-agent-settings-v2";
 const OLDEST_CAPTION_AGENT_SETTINGS_KEY =
@@ -21,8 +26,7 @@ export const CAPTION_AGENT_RESPONSE_SCHEMA = "chzzk-kirinuki-caption-response/v1
 export const CAPTION_AGENT_SESSION_SCHEMA =
   "chzzk-kirinuki-caption-agent/session-v1";
 export const CAPTION_AGENT_CAPABILITY_SCHEMA =
-  "chzzk-kirinuki-caption-agent/capability-v1";
-export const MAX_REMOTE_CUE_DURATION_MS = 4_000;
+  "chzzk-kirinuki-caption-agent/capability-v2";
 export const MAX_REMOTE_CUES = 4_000;
 export const MAX_REMOTE_WARNINGS = 4_000;
 export const MAX_CAPTION_AGENT_CLIPS_PER_RUN = 16;
@@ -110,7 +114,7 @@ export interface NormalizedCaptionCue {
 }
 
 type JsonRecord = Record<string, unknown>;
-type StorageArea = Pick<chrome.storage.StorageArea, "get" | "set" | "remove">;
+type StorageArea = ReturnType<typeof studioStorageArea>;
 type FetchImplementation = typeof fetch;
 
 interface CaptionAgentConnectionOptions {
@@ -149,7 +153,7 @@ class CaptionAgentHttpError extends Error {
 export const DEFAULT_CAPTION_AGENT_SETTINGS: Readonly<CaptionAgentSettings> =
 Object.freeze({
   endpoint: "http://127.0.0.1:4319/v1/captions",
-  model: "whisper-tiny"
+  model: "audseg-local"
 });
 
 export const LOCAL_WHISPER_CAPTION_MODEL = "whisper-tiny";
@@ -161,6 +165,12 @@ const ALLOWED_CAPTION_MODELS = new Set<CaptionModel>([
 const LEGACY_CAPTION_PIPELINE_FINGERPRINT = "legacy-caption-pipeline-v0";
 const REQUIRED_CAPTION_PIPELINE_FINGERPRINT =
   "current-caption-pipeline-required-v1";
+export const REQUIRED_WHISPER_VAD_ENABLED = false;
+export const REQUIRED_WHISPER_TIMESTAMP_CLOCK = "original-audio";
+export const REQUIRED_WHISPER_TIMING_REVISION =
+  "vad-off-original-clock-v1";
+export const REQUIRED_WHISPER_CUE_DURATION_POLICY =
+  "source-timing-within-clip";
 
 function isCaptionModel(model: unknown): model is CaptionModel {
   return typeof model === "string"
@@ -285,26 +295,35 @@ export function normalizeCaptionAgentSettings(
 }
 
 export async function loadCaptionAgentSettings(
-  storageArea: StorageArea = chrome.storage.local
+  storageArea: StorageArea = studioStorageArea()
 ): Promise<CaptionAgentSettings> {
   const stored = await storageArea.get([
     CAPTION_AGENT_SETTINGS_KEY,
+    PREVIOUS_CAPTION_AGENT_SETTINGS_KEY,
     LEGACY_CAPTION_AGENT_SETTINGS_KEY,
     OLDEST_CAPTION_AGENT_SETTINGS_KEY
   ]);
   const current = stored[CAPTION_AGENT_SETTINGS_KEY];
-  const normalized = current
-    ? normalizeCaptionAgentSettings(current)
-    : normalizeCaptionAgentSettings({
-      ...(
-        stored[LEGACY_CAPTION_AGENT_SETTINGS_KEY]
-        || stored[OLDEST_CAPTION_AGENT_SETTINGS_KEY]
-        || {}
-      ),
-      model: DEFAULT_CAPTION_AGENT_SETTINGS.model
-    });
+  const previous = stored[PREVIOUS_CAPTION_AGENT_SETTINGS_KEY]
+    || stored[LEGACY_CAPTION_AGENT_SETTINGS_KEY]
+    || stored[OLDEST_CAPTION_AGENT_SETTINGS_KEY]
+    || {};
+  const persisted = normalizeCaptionAgentSettings(
+    current || (
+      typeof previous === "object" && previous !== null ? previous : {}
+    )
+  );
+  const normalized = {
+    ...persisted,
+    // A Whisper connection is deliberately scoped to the current editor page:
+    // its verified runtime and memory-only session token do not survive reload.
+    // Reopening on a disconnected Whisper panel would both misrepresent that
+    // state and defeat the progressive AudSeg-first opt-in UX.
+    model: DEFAULT_CAPTION_AGENT_SETTINGS.model
+  };
   await storageArea.set({ [CAPTION_AGENT_SETTINGS_KEY]: normalized });
   await storageArea.remove([
+    PREVIOUS_CAPTION_AGENT_SETTINGS_KEY,
     LEGACY_CAPTION_AGENT_SETTINGS_KEY,
     OLDEST_CAPTION_AGENT_SETTINGS_KEY
   ]);
@@ -313,7 +332,7 @@ export async function loadCaptionAgentSettings(
 
 export async function saveCaptionAgentSettings(
   settings: Partial<CaptionAgentSettings>,
-  storageArea: StorageArea = chrome.storage.local
+  storageArea: StorageArea = studioStorageArea()
 ): Promise<CaptionAgentSettings> {
   const requestedModel = isCaptionModel(settings?.model)
     ? settings.model
@@ -330,6 +349,7 @@ export async function saveCaptionAgentSettings(
     });
   await storageArea.set({ [CAPTION_AGENT_SETTINGS_KEY]: normalized });
   await storageArea.remove([
+    PREVIOUS_CAPTION_AGENT_SETTINGS_KEY,
     LEGACY_CAPTION_AGENT_SETTINGS_KEY,
     OLDEST_CAPTION_AGENT_SETTINGS_KEY
   ]);
@@ -427,22 +447,95 @@ export function captionAgentRuntimeIdentity(
   );
   if (transcriptionMode !== "local-whispercpp") {
     throw new Error(
-      "Whisper Tiny 로컬 초벌은 이 기기의 local-whispercpp runtime만 사용할 수 있습니다."
+      "Whisper 로컬 초벌은 이 기기의 local-whispercpp runtime만 사용할 수 있습니다."
+    );
+  }
+  const transcription = isPlainObject(capability.transcription)
+    ? capability.transcription
+    : {};
+  if (transcription.vad !== REQUIRED_WHISPER_VAD_ENABLED) {
+    throw new Error(
+      "로컬 Whisper가 원본 오디오 시간축을 보장하는 VAD-off 방식이 아닙니다."
+    );
+  }
+  const timestampClock = boundedCapabilityString(
+    transcription.timestampClock,
+    "타임스탬프 시간축",
+    80
+  );
+  const timingRevision = boundedCapabilityString(
+    transcription.timingRevision,
+    "타임스탬프 실행 버전",
+    80
+  );
+  if (
+    timestampClock !== REQUIRED_WHISPER_TIMESTAMP_CLOCK
+    || timingRevision !== REQUIRED_WHISPER_TIMING_REVISION
+  ) {
+    throw new Error(
+      "로컬 Whisper의 세그먼트·단어 시간축 계약이 현재 편집기와 다릅니다."
+    );
+  }
+  if (
+    capability.requestSchema !== CAPTION_AGENT_REQUEST_SCHEMA
+    || capability.responseSchema !== CAPTION_AGENT_RESPONSE_SCHEMA
+  ) {
+    throw new Error("로컬 Whisper의 자막 요청·응답 계약이 현재 편집기와 다릅니다.");
+  }
+  const qualityHarness = isPlainObject(capability.qualityHarness)
+    ? capability.qualityHarness
+    : {};
+  if (
+    qualityHarness.profile !== CAPTION_QUALITY_PROFILE_ID
+    || qualityHarness.harnessFingerprint !== CAPTION_HARNESS_FINGERPRINT
+  ) {
+    throw new Error("로컬 Whisper의 자막 품질 하네스가 현재 편집기와 다릅니다.");
+  }
+  const cueDurationPolicy = boundedCapabilityString(
+    capability.cueDurationPolicy,
+    "자막 표시 시간 정책",
+    80
+  );
+  if (cueDurationPolicy !== REQUIRED_WHISPER_CUE_DURATION_POLICY) {
+    throw new Error(
+      "로컬 Whisper가 발화 원본 시간축 안에서 자막 길이를 보존하는 방식이 아닙니다."
     );
   }
   const identitySource = JSON.stringify({
-    schema: "caption-pipeline-identity/v1",
+    schema: "caption-pipeline-identity/v3",
     model,
     provider,
     transcriptionMode,
-    sttModel
+    sttModel,
+    vad: REQUIRED_WHISPER_VAD_ENABLED,
+    timestampClock,
+    timingRevision,
+    requestSchema: CAPTION_AGENT_REQUEST_SCHEMA,
+    responseSchema: CAPTION_AGENT_RESPONSE_SCHEMA,
+    qualityProfile: CAPTION_QUALITY_PROFILE_ID,
+    harnessFingerprint: CAPTION_HARNESS_FINGERPRINT,
+    cueDurationPolicy
   });
   return {
     provider,
     sttModel,
     transcriptionMode,
-    fingerprint: `caption-pipeline-v1-${shortStableFingerprint(identitySource)}`
+    fingerprint: `caption-pipeline-v3-${shortStableFingerprint(identitySource)}`
   };
+}
+
+export function captionAgentCapabilityReady(capability: unknown): boolean {
+  if (!isPlainObject(capability)) {
+    return false;
+  }
+  const configured = isPlainObject(capability.configured)
+    ? capability.configured
+    : {};
+  const transcription = isPlainObject(capability.transcription)
+    ? capability.transcription
+    : {};
+  return configured.localWhisperReady === true
+    && transcription.ready === true;
 }
 
 export function captionAgentRunEstimate(clips: CaptionClip[] | unknown = [], {
@@ -801,7 +894,7 @@ export function createCaptionAgentRequest({
       audience: "korean-vtuber-kirinuki",
       includeAllRecognizableSpeech: true,
       uncertainSpeech: "keep-and-mark-for-review",
-      maxCueDurationMs: MAX_REMOTE_CUE_DURATION_MS,
+      cueDurationPolicy: REQUIRED_WHISPER_CUE_DURATION_POLICY,
       terminalPeriod: "omit",
       questionAndExclamationMarks: "keep"
     },
@@ -884,9 +977,6 @@ export function normalizeCaptionAgentCues(
       rawEndMs - rawStartMs < 100
     ) {
       throw new Error(`${index + 1}번째 원격 자막의 시간 범위가 올바르지 않습니다.`);
-    }
-    if (rawEndMs - rawStartMs > MAX_REMOTE_CUE_DURATION_MS) {
-      throw new Error(`${index + 1}번째 원격 자막이 4초 제한을 넘었습니다.`);
     }
     const startOffsetMs = Math.round(rawStartMs);
     const endOffsetMs = Math.round(rawEndMs);
@@ -1266,7 +1356,6 @@ function validateCompletedCaptionAgentResponse(
       cue.startMs < 0 ||
       cue.endMs <= cue.startMs ||
       cue.endMs > clipDurationMs ||
-      cue.endMs - cue.startMs > MAX_REMOTE_CUE_DURATION_MS ||
       typeof cue.text !== "string" ||
       !cue.text.trim() ||
       cue.text.length > 300 ||

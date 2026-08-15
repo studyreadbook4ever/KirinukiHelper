@@ -16,8 +16,8 @@ import {
   captionStylePreset,
   normalizeCaptionStylePresetId
 } from "../src/lib/caption-style.js";
-import { EXTENSION_PACKAGE_FILES } from "../scripts/extension-package-files.js";
 import { PAPERLOGY_FONT } from "../scripts/paperlogy-font.js";
+import { WEB_PACKAGE_FILES } from "../scripts/web-package-files.js";
 
 const sha256 = (bytes: BinaryLike) => (
   createHash("sha256").update(bytes).digest("hex")
@@ -39,17 +39,17 @@ test("Paperlogy asset manifest pins the official 1.001 source and local bytes", 
 
 test("Paperlogy distribution copy, license, CSS face, and package list stay wired", async () => {
   const [font, license, css] = await Promise.all([
-    readFile(new URL(`../extension/${PAPERLOGY_FONT.extensionFontPath}`, import.meta.url)),
-    readFile(new URL(`../extension/${PAPERLOGY_FONT.extensionLicensePath}`, import.meta.url)),
-    readFile(new URL("../extension/editor/editor.css", import.meta.url), "utf8")
+    readFile(new URL(`../web/${PAPERLOGY_FONT.webFontPath}`, import.meta.url)),
+    readFile(new URL(`../web/${PAPERLOGY_FONT.webLicensePath}`, import.meta.url)),
+    readFile(new URL("../web/editor/editor.css", import.meta.url), "utf8")
   ]);
 
   assert.equal(sha256(font), PAPERLOGY_FONT.fontSha256);
   assert.equal(sha256(license), PAPERLOGY_FONT.licenseSha256);
   assert.match(css, /font-family:\s*"Paperlogy"/);
   assert.match(css, /url\("fonts\/Paperlogy-8ExtraBold\.woff2"\)/);
-  assert.ok(EXTENSION_PACKAGE_FILES.includes(PAPERLOGY_FONT.extensionFontPath));
-  assert.ok(EXTENSION_PACKAGE_FILES.includes(PAPERLOGY_FONT.extensionLicensePath));
+  assert.ok(WEB_PACKAGE_FILES.includes(PAPERLOGY_FONT.webFontPath));
+  assert.ok(WEB_PACKAGE_FILES.includes(PAPERLOGY_FONT.webLicensePath));
 });
 
 test("caption font registry contains licensed Paperlogy and the Pretendard legacy font", () => {

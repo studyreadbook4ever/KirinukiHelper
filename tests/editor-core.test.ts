@@ -38,6 +38,7 @@ import {
   mapTimelineToSource,
   matchImageAssetToSubtitleCue,
   matchSubtitleCueToImageAsset,
+  mergeSameSourceSessionMetadata,
   mergeCaptureIntoEditorProject,
   mergeAiWarnings,
   normalizeEditorProject,
@@ -69,6 +70,10 @@ import {
   type EditorSubtitleCue
 } from "../src/lib/editor-core.js";
 import { BLACK_BOX_CAPTION_STYLE_PRESET_ID } from "../src/lib/caption-style.js";
+import {
+  normalizeShortFormBranch,
+  seedShortFormBranch
+} from "../src/lib/short-form.js";
 
 function required<T>(value: T | null | undefined): T {
   assert.ok(value);
@@ -173,6 +178,30 @@ test("생방송과 다시보기는 채널·방송 시작 시각이 같으면 같
   assert.equal(sameSourceSession(captureState.source, vodSource), true);
 });
 
+test("YouTube live와 VOD는 같은 video ID일 때만 같은 회차다", () => {
+  const live = {
+    platform: "YOUTUBE",
+    contentType: "live",
+    contentId: "abcdefghijk",
+    canonicalUrl: "https://www.youtube.com/watch?v=abcdefghijk"
+  };
+  const vod = {
+    ...live,
+    contentType: "vod"
+  };
+  assert.equal(sameSourceSession(live, vod), true);
+  assert.equal(
+    mergeSameSourceSessionMetadata(vod, live).contentId,
+    "abcdefghijk",
+    "YouTube live의 video ID는 CHZZK 채널 live처럼 비우면 안 됩니다."
+  );
+  assert.equal(sameSourceSession(live, {
+    ...vod,
+    contentId: "lmnopqrstuv",
+    canonicalUrl: "https://www.youtube.com/watch?v=lmnopqrstuv"
+  }), false);
+});
+
 test("동일 치지직 VOD의 metadata 보강은 새 원본으로 오인하지 않는다", () => {
   const withoutMetadata = {
     platform: "CHZZK",
@@ -207,6 +236,43 @@ test("동일 치지직 VOD의 metadata 보강은 새 원본으로 오인하지 �
     source: enriched,
     segments: [{ id: "saved-range" }]
   }, otherVod), true);
+});
+
+test("동일 치지직 VOD의 일시적으로 빈 metadata는 기존 회차 identity를 약화하지 않는다", () => {
+  const strongSource = {
+    platform: "CHZZK",
+    contentType: "vod",
+    contentId: "13583412",
+    channelId: "088973112d8acc831ec20274f7ffbb99",
+    broadcastStartedAt: "2026-07-28 21:00:00",
+    canonicalUrl: "https://chzzk.naver.com/video/13583412",
+    url: "https://chzzk.naver.com/video/13583412"
+  };
+  const transientSource = {
+    ...strongSource,
+    channelId: "",
+    broadcastStartedAt: "",
+    canonicalUrl: "",
+    url: "https://chzzk.naver.com/video/13583412"
+  };
+
+  const merged = mergeSameSourceSessionMetadata(
+    strongSource,
+    transientSource
+  );
+
+  assert.equal(merged.channelId, strongSource.channelId);
+  assert.equal(
+    merged.broadcastStartedAt,
+    strongSource.broadcastStartedAt
+  );
+  assert.equal(merged.canonicalUrl, strongSource.canonicalUrl);
+  assert.equal(merged.contentId, strongSource.contentId);
+  assert.equal(
+    sourceSessionIdentity(merged),
+    sourceSessionIdentity(strongSource),
+    "같은 VOD의 일시적인 metadata 누락이 broadcast identity를 vod identity로 낮추면 안 됩니다."
+  );
 });
 
 test("치지직 live의 stale contentId는 다른 타입 원본과 service binding을 만들지 않는다", () => {
@@ -953,6 +1019,167 @@ test("라이브 선택 시각과 로컬 VOD 사이의 정렬 오프셋을 모든
   );
 });
 
+test("자동 CHZZK 준비 전 정렬을 0으로 돌리면 trim도 원본 VOD 시각으로 환원된다", () => {
+  let project = createEditorProjectFromCapture(captureState);
+  project.shortForm = seedShortFormBranch(project, [{
+    selectionId: "first",
+    fit: "cover",
+    positionX: 0.5,
+    positionY: 0.5,
+    zoom: 1
+  }]);
+  const initialShortDurationMs = project.shortForm.durationMs;
+  const initialShortVideo = structuredClone(itemAt(project.shortForm.videoAssets, 0));
+  const initialShortAudio = structuredClone(itemAt(project.shortForm.sourceAudioAssets, 0));
+  project = applyMediaAlignmentOffset(project, 5_000);
+  const aligned = itemAt(project.clips, 0);
+  const alignedShortVideo = itemAt(project.shortForm.videoAssets, 0);
+  const alignedShortAudio = itemAt(project.shortForm.sourceAudioAssets, 0);
+  assert.equal(aligned.sourceStartMs, aligned.selectionStartMs + 5_000);
+  assert.equal(alignedShortVideo.sourceStartMs, initialShortVideo.sourceStartMs + 5_000);
+  assert.equal(
+    alignedShortVideo.sourceSelectionStartMs,
+    initialShortVideo.sourceSelectionStartMs + 5_000
+  );
+  assert.equal(alignedShortAudio.sourceStartMs, initialShortAudio.sourceStartMs + 5_000);
+  assert.equal(
+    alignedShortAudio.sourceSelectionStartMs,
+    initialShortAudio.sourceSelectionStartMs + 5_000
+  );
+  assert.equal(project.shortForm.durationMs, initialShortDurationMs);
+  assert.equal(alignedShortVideo.timelineStartMs, initialShortVideo.timelineStartMs);
+  assert.equal(alignedShortVideo.timelineEndMs, initialShortVideo.timelineEndMs);
+  project = applyMediaAlignmentOffset(project, 0);
+  const restored = itemAt(project.clips, 0);
+  const restoredShortVideo = itemAt(project.shortForm.videoAssets, 0);
+  const restoredShortAudio = itemAt(project.shortForm.sourceAudioAssets, 0);
+  assert.equal(project.broadcastSession.alignmentOffsetMs, 0);
+  assert.equal(project.broadcastSession.alignmentConfirmed, true);
+  assert.equal(restored.sourceStartMs, restored.selectionStartMs);
+  assert.equal(restored.sourceEndMs, restored.selectionEndMs);
+  assert.deepEqual(restoredShortVideo, initialShortVideo);
+  assert.deepEqual(restoredShortAudio, initialShortAudio);
+  assert.equal(project.shortForm.durationMs, initialShortDurationMs);
+});
+
+test("정렬 오프셋은 쇼츠 영상·원본 음성의 source 축만 옮기고 전역 캔버스 축은 유지한다", () => {
+  let project = createEditorProjectFromCapture(captureState);
+  project.shortForm = seedShortFormBranch(project, [{
+    selectionId: "first",
+    fit: "cover",
+    positionX: 0.5,
+    positionY: 0.5,
+    zoom: 1
+  }]);
+  const seeded = project.shortForm;
+  const seededVideo = itemAt(seeded.videoAssets, 0);
+  const seededAudio = itemAt(seeded.sourceAudioAssets, 0);
+  project.shortForm = normalizeShortFormBranch({
+    ...seeded,
+    videoLaneCount: 2,
+    videoAssets: [
+      ...seeded.videoAssets,
+      {
+        ...seededVideo,
+        id: "short-video-alignment",
+        sourceClipId: "clip-second",
+        sourceSelectionStartMs: 30_000,
+        sourceSelectionEndMs: 35_000,
+        sourceStartMs: 30_500,
+        sourceEndMs: 31_500,
+        timelineStartMs: 125,
+        timelineEndMs: 1_125,
+        lane: 1,
+        zIndex: seededVideo.zIndex + 1
+      }
+    ],
+    sourceAudioAssets: [
+      {
+        ...seededAudio,
+        id: "short-source-audio-alignment",
+        sourceClipId: "clip-second",
+        sourceSelectionStartMs: 32_000,
+        sourceSelectionEndMs: 38_000,
+        sourceStartMs: 32_500,
+        sourceEndMs: 34_000,
+        timelineStartMs: 250,
+        timelineEndMs: 1_750
+      }
+    ]
+  });
+  const initialDurationMs = project.shortForm.durationMs;
+
+  project = applyMediaAlignmentOffset(project, 2_000);
+  const alignedVideo = required(project.shortForm.videoAssets.find((asset) => (
+    asset.id === "short-video-alignment"
+  )));
+  const alignedAudio = required(project.shortForm.sourceAudioAssets.find((asset) => (
+    asset.id === "short-source-audio-alignment"
+  )));
+  assert.equal(alignedVideo.sourceStartMs, 32_500);
+  assert.equal(alignedVideo.sourceEndMs, 33_500);
+  assert.equal(alignedVideo.sourceSelectionStartMs, 32_000);
+  assert.equal(alignedVideo.sourceSelectionEndMs, 37_000);
+  assert.equal(alignedVideo.timelineStartMs, 125);
+  assert.equal(alignedVideo.timelineEndMs, 1_125);
+  assert.equal(alignedAudio.sourceStartMs, 34_500);
+  assert.equal(alignedAudio.sourceEndMs, 36_000);
+  assert.equal(alignedAudio.sourceSelectionStartMs, 34_000);
+  assert.equal(alignedAudio.sourceSelectionEndMs, 40_000);
+  assert.equal(alignedAudio.timelineStartMs, 250);
+  assert.equal(alignedAudio.timelineEndMs, 1_750);
+  assert.equal(project.shortForm.durationMs, initialDurationMs);
+
+  project = applyMediaAlignmentOffset(project, 0);
+  const restoredVideo = required(project.shortForm.videoAssets.find((asset) => (
+    asset.id === "short-video-alignment"
+  )));
+  const restoredAudio = required(project.shortForm.sourceAudioAssets.find((asset) => (
+    asset.id === "short-source-audio-alignment"
+  )));
+  assert.equal(restoredVideo.sourceStartMs, 30_500);
+  assert.equal(restoredVideo.sourceEndMs, 31_500);
+  assert.equal(restoredVideo.sourceSelectionStartMs, 30_000);
+  assert.equal(restoredVideo.sourceSelectionEndMs, 35_000);
+  assert.equal(restoredAudio.sourceStartMs, 32_500);
+  assert.equal(restoredAudio.sourceEndMs, 34_000);
+  assert.equal(restoredAudio.sourceSelectionStartMs, 32_000);
+  assert.equal(restoredAudio.sourceSelectionEndMs, 38_000);
+  assert.equal(project.shortForm.durationMs, initialDurationMs);
+});
+
+test("정렬값이 쇼츠 source 선택 범위를 음수로 만들면 프로젝트 전체를 원자적으로 거부한다", () => {
+  let project = createEditorProjectFromCapture(captureState);
+  project.shortForm = seedShortFormBranch(project, [{
+    selectionId: "first",
+    fit: "cover",
+    positionX: 0.5,
+    positionY: 0.5,
+    zoom: 1
+  }]);
+  const video = itemAt(project.shortForm.videoAssets, 0);
+  project.shortForm = normalizeShortFormBranch({
+    ...project.shortForm,
+    videoAssets: [{
+      ...video,
+      sourceSelectionStartMs: 500,
+      sourceSelectionEndMs: 2_500,
+      sourceStartMs: 750,
+      sourceEndMs: 1_750,
+      timelineStartMs: 0,
+      timelineEndMs: 1_000
+    }],
+    sourceAudioAssets: []
+  });
+  const before = structuredClone(project);
+
+  assert.throws(
+    () => applyMediaAlignmentOffset(project, -1_000),
+    /쇼츠 영상 에셋이 원본 시작보다 앞으로/
+  );
+  assert.deepEqual(project, before);
+});
+
 test("자막 텍스트·표시 구간·위치는 사용자 수정 상태로 보존된다", () => {
   let project = createEditorProjectFromCapture(captureState);
   const cue = createSubtitleCue(project, {
@@ -981,6 +1208,92 @@ test("자막 텍스트·표시 구간·위치는 사용자 수정 상태로 보�
     endMs: 2_900
   });
   assert.equal(cueAtTimeline(project, 1_000)?.id, "cue-1");
+});
+
+test("사람이 만든 자막은 4초를 넘어도 이동·저장 과정에서 잘리지 않는다", () => {
+  let project = createEditorProjectFromCapture(captureState);
+  const clip = itemAt(project.clips, 0);
+  const cue = createSubtitleCue(project, {
+    id: "long-human-cue",
+    clipId: clip.id,
+    startOffsetMs: 100,
+    endOffsetMs: 5_500,
+    text: "연출에 맞춰 길게 유지하는 자막",
+    origin: "human"
+  });
+  project = { ...project, subtitles: [cue] };
+  project = updateSubtitleCue(project, cue.id, {
+    startOffsetMs: 0,
+    endOffsetMs: clip.sourceEndMs - clip.sourceStartMs
+  });
+
+  const moved = itemAt(project.subtitles, 0);
+  assert.equal(moved.startOffsetMs, 0);
+  assert.equal(moved.endOffsetMs, 5_625);
+  assert.ok(moved.endOffsetMs - moved.startOffsetMs > 4_000);
+
+  const restored = required(normalizeEditorProject(
+    JSON.parse(JSON.stringify(project))
+  ));
+  assert.equal(itemAt(restored.subtitles, 0).endOffsetMs, 5_625);
+});
+
+test("AI 초벌 자막도 사람이 4초보다 길게 늘리면 그대로 저장·복원된다", () => {
+  let project = createEditorProjectFromCapture(captureState);
+  const clip = itemAt(project.clips, 0);
+  const whisperCue = createSubtitleCue(project, {
+    id: "long-whisper-cue",
+    clipId: clip.id,
+    startOffsetMs: 100,
+    endOffsetMs: 3_000,
+    text: "Whisper 초벌을 사람이 길게 조정",
+    lane: 0,
+    origin: "ai",
+    remoteMeta: { reviewRequired: true, speakerId: "speaker-0" }
+  });
+  const audsegCue = createSubtitleCue(project, {
+    id: "long-audseg-cue",
+    clipId: clip.id,
+    startOffsetMs: 100,
+    endOffsetMs: 3_000,
+    text: "",
+    lane: 1,
+    origin: "ai",
+    remoteMeta: {
+      reviewRequired: true,
+      qualityCodes: ["AUDSEG_BLANK_TIMING"]
+    }
+  });
+  project = { ...project, subtitles: [whisperCue, audsegCue] };
+  project = updateSubtitleCue(project, whisperCue.id, {
+    startOffsetMs: 0,
+    endOffsetMs: clip.sourceEndMs - clip.sourceStartMs
+  });
+  project = updateSubtitleCue(project, audsegCue.id, {
+    startOffsetMs: 0,
+    endOffsetMs: clip.sourceEndMs - clip.sourceStartMs
+  });
+
+  for (const cue of project.subtitles) {
+    assert.equal(cue.humanEdited, true);
+    assert.equal(cue.endOffsetMs, 5_625);
+    assert.ok(cue.endOffsetMs - cue.startOffsetMs > 4_000);
+  }
+
+  const restored = required(normalizeEditorProject(
+    JSON.parse(JSON.stringify(project))
+  ));
+  assert.deepEqual(
+    restored.subtitles.map((cue) => ({
+      id: cue.id,
+      endOffsetMs: cue.endOffsetMs,
+      humanEdited: cue.humanEdited
+    })),
+    [
+      { id: whisperCue.id, endOffsetMs: 5_625, humanEdited: true },
+      { id: audsegCue.id, endOffsetMs: 5_625, humanEdited: true }
+    ]
+  );
 });
 
 test("같은 UI 레인의 활성 자막 이웃을 컷 경계 너머까지 시간순으로 찾는다", () => {
@@ -1772,23 +2085,18 @@ test("단어 타임스탬프를 읽기 쉬운 자막 cue 초안으로 묶는다"
   assert.equal(itemAt(drafts, 1).text, "좋아요");
 });
 
-test("단일 transcript chunk가 길어도 모든 AI cue를 4초 이하로 나눈다", () => {
+test("단일 transcript chunk의 원본 표시 시간이 4초를 넘어도 보존한다", () => {
   const drafts = transcriptChunksToCueDrafts([
     {
       text: "하나 둘 셋 넷 다섯 여섯",
       timestamp: [0, 9]
     }
   ], 9_000);
-  assert.equal(drafts.length, 3);
-  assert.equal(drafts.map((draft) => draft.text).join(" "), "하나 둘 셋 넷 다섯 여섯");
-  assert.ok(drafts.every((draft) => (
-    draft.endOffsetMs - draft.startOffsetMs <= 4_000
-  )));
-  for (let index = 1; index < drafts.length; index += 1) {
-    assert.ok(
-      itemAt(drafts, index - 1).endOffsetMs <= itemAt(drafts, index).startOffsetMs
-    );
-  }
+  assert.deepEqual(drafts, [{
+    startOffsetMs: 0,
+    endOffsetMs: 9_000,
+    text: "하나 둘 셋 넷 다섯 여섯"
+  }]);
 
   const shortTextDrafts = transcriptChunksToCueDrafts([
     {
@@ -1796,10 +2104,11 @@ test("단일 transcript chunk가 길어도 모든 AI cue를 4초 이하로 나�
       timestamp: [0, 9]
     }
   ], 9_000);
-  assert.equal(shortTextDrafts.map((draft) => draft.text).join(""), "아야");
-  assert.ok(shortTextDrafts.every((draft) => (
-    draft.endOffsetMs - draft.startOffsetMs <= 4_000
-  )));
+  assert.deepEqual(shortTextDrafts, [{
+    startOffsetMs: 0,
+    endOffsetMs: 9_000,
+    text: "아야"
+  }]);
 });
 
 test("원격 AI cue의 위치 요청은 무시하고 화자·검수·색상만 정규화 왕복에서 보존한다", () => {

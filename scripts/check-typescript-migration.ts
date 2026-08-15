@@ -5,13 +5,21 @@ import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 
+import { GENERATED_JAVASCRIPT_BANNER } from "./generated-javascript.js";
 import {
-  buildExtensionJavaScript,
-  EXTENSION_JAVASCRIPT_PATHS,
-  EXTENSION_JAVASCRIPT_TARGETS,
-  GENERATED_JAVASCRIPT_BANNER
-} from "./extension-javascript-build.js";
-import { EXTENSION_PACKAGE_FILES } from "./extension-package-files.js";
+  SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
+  SOOP_STREAMING_COMPANION_SOURCE_PATH,
+  STREAMING_COMPANION_JAVASCRIPT_PATH,
+  STREAMING_COMPANION_JAVASCRIPT_PATHS,
+  STREAMING_COMPANION_SOURCE_PATH,
+  buildStreamingCompanion
+} from "./build-streaming-companion.js";
+import {
+  WEB_JAVASCRIPT_PATHS,
+  WEB_JAVASCRIPT_TARGETS,
+  buildWebJavaScript
+} from "./web-javascript-build.js";
+import { WEB_PACKAGE_FILES } from "./web-package-files.js";
 
 const defaultRoot = fileURLToPath(new URL("..", import.meta.url));
 const ignoredDependencyDirectoryNames = new Set([
@@ -27,7 +35,6 @@ const ignoredRootDirectories = new Set([".git", "coverage", "dist"]);
 const javaScriptFamilyPattern = /\.(?:cjs|js|jsx|mjs)$/iu;
 const typeScriptFamilyPattern = /\.(?:cts|mts|ts|tsx)$/iu;
 const declarationFilePattern = /\.d\.(?:cts|mts|ts)$/iu;
-
 export interface TypeScriptMigrationReport {
   readonly ok: true;
   readonly authoredTypeScriptFiles: number;
@@ -37,7 +44,7 @@ export interface TypeScriptMigrationReport {
   readonly generatedJavaScriptFiles: number;
   readonly generatedJavaScriptMatchesTypeScript: true;
   readonly generatedFirstPartyInputsAreTypeScript: true;
-  readonly extensionShipsTypeScript: false;
+  readonly browserDistributionShipsTypeScript: false;
 }
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -62,7 +69,12 @@ export function findAuthoredJavaScriptFiles(
   repositoryFiles: readonly string[]
 ): string[] {
   const approvedGeneratedJavaScript = new Set(
-    EXTENSION_JAVASCRIPT_PATHS.map((relativePath) => `extension/${relativePath}`)
+    [
+      ...WEB_JAVASCRIPT_PATHS.map((relativePath) => `web/${relativePath}`),
+      ...STREAMING_COMPANION_JAVASCRIPT_PATHS.map((relativePath) => (
+        `streaming-companion/${relativePath}`
+      ))
+    ]
   );
   return repositoryFiles.filter((relativePath) => (
     javaScriptFamilyPattern.test(relativePath)
@@ -135,17 +147,16 @@ export function assertNoInlineJavaScript(
     const sourceMatch = attributes.match(/\bsrc\s*=\s*(["'])(.*?)\1/iu);
     assert(sourceMatch, `HTML inline script가 있습니다: ${relativePath}`);
     assert(body.trim() === "", `외부 script 태그 안에 inline 코드가 있습니다: ${relativePath}`);
-    assert(
-      relativePath.startsWith("extension/"),
-      `Extension 밖의 HTML이 JavaScript를 실행합니다: ${relativePath}`
-    );
+    const runtimeRoot = relativePath.startsWith("web/") ? "web" : "";
+    assert(runtimeRoot, `승인되지 않은 HTML이 JavaScript를 실행합니다: ${relativePath}`);
+    const approvedPaths = WEB_JAVASCRIPT_PATHS;
     const source = (sourceMatch[2] || "").split(/[?#]/u, 1)[0] || "";
-    const htmlPath = relativePath.slice("extension/".length);
+    const htmlPath = relativePath.slice(runtimeRoot.length + 1);
     const resolvedSource = path.posix.normalize(
-      path.posix.join(path.posix.dirname(htmlPath), source)
+      path.posix.join(path.posix.dirname(htmlPath), source.replace(/^\//u, ""))
     );
     assert(
-      EXTENSION_JAVASCRIPT_PATHS.includes(resolvedSource),
+      approvedPaths.includes(resolvedSource),
       `HTML이 승인되지 않은 JavaScript를 실행합니다: ${relativePath} -> ${source}`
     );
   }
@@ -231,8 +242,11 @@ export function assertRootTypeSafetyScripts(manifest: unknown): void {
   );
   const scriptRecord = scripts as Record<string, unknown>;
   const requiredScripts = {
-    typecheck: "tsc --noEmit && tsc --noEmit -p tsconfig.source.json",
+    build: "node --import tsx scripts/build-web.ts",
+    validate: "node --import tsx scripts/validate-local-studio.ts",
+    typecheck: "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.web.source.json",
     "migration:check": "node --import tsx scripts/check-typescript-migration.ts",
+    test: "node --import tsx scripts/run-tests.ts",
     check: "npm run typecheck && npm run migration:check && npm run build && npm run validate && npm run license:check && npm test && npm run audit"
   } as const;
   for (const [name, expected] of Object.entries(requiredScripts)) {
@@ -241,6 +255,13 @@ export function assertRootTypeSafetyScripts(manifest: unknown): void {
       `root package ${name} script는 ${JSON.stringify(expected)}여야 합니다.`
     );
   }
+  const removedScripts = Object.keys(scriptRecord).filter((name) => (
+    name.startsWith("legacy:extension:")
+  ));
+  assert(
+    removedScripts.length === 0,
+    `삭제된 전체 Extension script가 다시 생겼습니다: ${removedScripts.join(", ")}`
+  );
 }
 
 function collectStringsAndKeys(value: unknown): string[] {
@@ -498,20 +519,20 @@ export function assertGeneratedJavaScriptBytes(
   assert(
     actualBuffer.subarray(0, GENERATED_JAVASCRIPT_BANNER.length).toString("utf8")
       === GENERATED_JAVASCRIPT_BANNER,
-    `TypeScript 생성물 표시가 없습니다: extension/${relativePath}`
+    `TypeScript 생성물 표시가 없습니다: ${relativePath}`
   );
   assert(
     !actualBuffer.includes(Buffer.from("sourceMappingURL=")),
-    `배포 JavaScript에 source map 참조가 있습니다: extension/${relativePath}`
+    `배포 JavaScript에 source map 참조가 있습니다: ${relativePath}`
   );
   assert(
     Buffer.compare(actualBuffer, Buffer.from(expectedContents)) === 0,
-    `TypeScript 원본과 생성 JavaScript가 일치하지 않습니다: extension/${relativePath}\n` +
+    `TypeScript 원본과 생성 JavaScript가 일치하지 않습니다: ${relativePath}\n` +
       "npm run build로 생성물을 갱신하세요."
   );
   assert(
     !actualBuffer.includes(Buffer.from(rootDirectory)),
-    `생성 JavaScript에 checkout 절대경로가 포함됐습니다: extension/${relativePath}`
+    `생성 JavaScript에 checkout 절대경로가 포함됐습니다: ${relativePath}`
   );
 }
 
@@ -519,46 +540,89 @@ async function assertGeneratedJavaScript(
   rootDirectory: string,
   repositoryFiles: readonly string[]
 ): Promise<void> {
-  const expectedExtensionJavaScript = new Set(
-    EXTENSION_JAVASCRIPT_PATHS.map((relativePath) => `extension/${relativePath}`)
+  const expectedWebJavaScript = new Set(
+    WEB_JAVASCRIPT_PATHS.map((relativePath) => `web/${relativePath}`)
   );
-  const actualExtensionJavaScript = repositoryFiles.filter((relativePath) => (
-    relativePath.startsWith("extension/") && javaScriptFamilyPattern.test(relativePath)
+  const actualWebJavaScript = repositoryFiles.filter((relativePath) => (
+    relativePath.startsWith("web/") && javaScriptFamilyPattern.test(relativePath)
   ));
   assert(
-    sameStrings(actualExtensionJavaScript, expectedExtensionJavaScript),
-    "Extension JavaScript 생성물 목록이 typed manifest와 다릅니다.\n" +
-      `expected=${JSON.stringify(sortedValues(expectedExtensionJavaScript))}\n` +
-      `actual=${JSON.stringify(actualExtensionJavaScript)}`
+    sameStrings(actualWebJavaScript, expectedWebJavaScript),
+    "localhost web JavaScript 생성물 목록이 typed manifest와 다릅니다.\n" +
+      `expected=${JSON.stringify(sortedValues(expectedWebJavaScript))}\n` +
+      `actual=${JSON.stringify(actualWebJavaScript)}`
   );
 
-  const buildResult = await buildExtensionJavaScript({
-    rootDirectory,
-    write: false,
-    logLevel: "silent"
-  });
-  assertGeneratedBuildInputs(buildResult.inputs);
-  const inputSet = new Set(buildResult.inputs);
-  const missingEntryPoints = EXTENSION_JAVASCRIPT_TARGETS
-    .map(({ sourcePath }) => sourcePath)
-    .filter((sourcePath) => !inputSet.has(sourcePath));
+  const actualCompanionJavaScript = repositoryFiles.filter((relativePath) => (
+    relativePath.startsWith("streaming-companion/")
+    && javaScriptFamilyPattern.test(relativePath)
+  ));
   assert(
-    missingEntryPoints.length === 0,
-    `typed build manifest 진입점이 실제 빌드 입력에서 빠졌습니다: ${missingEntryPoints.join(", ")}`
+    sameStrings(actualCompanionJavaScript, (
+      STREAMING_COMPANION_JAVASCRIPT_PATHS.map((relativePath) => (
+        `streaming-companion/${relativePath}`
+      ))
+    )),
+    "최소 스트리밍 companion JavaScript 생성물 목록이 typed manifest와 다릅니다."
   );
 
-  for (const relativePath of EXTENSION_JAVASCRIPT_PATHS) {
-    const expectedContents = buildResult.outputs.get(relativePath);
-    assert(expectedContents, `생성 예정 JavaScript가 없습니다: extension/${relativePath}`);
-    const actualContents = await readFile(
-      path.join(rootDirectory, "extension", relativePath)
+  const builds = [
+    {
+      rootName: "web",
+      paths: WEB_JAVASCRIPT_PATHS,
+      targets: WEB_JAVASCRIPT_TARGETS,
+      result: await buildWebJavaScript({
+        rootDirectory,
+        write: false,
+        logLevel: "silent"
+      })
+    },
+    {
+      rootName: "streaming-companion",
+      paths: STREAMING_COMPANION_JAVASCRIPT_PATHS,
+      targets: [
+        {
+          sourcePath: STREAMING_COMPANION_SOURCE_PATH,
+          outputPath: STREAMING_COMPANION_JAVASCRIPT_PATH
+        },
+        {
+          sourcePath: SOOP_STREAMING_COMPANION_SOURCE_PATH,
+          outputPath: SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH
+        }
+      ],
+      result: await buildStreamingCompanion({
+        rootDirectory,
+        write: false,
+        logLevel: "silent"
+      })
+    }
+  ];
+  for (const built of builds) {
+    assertGeneratedBuildInputs(built.result.inputs);
+    const inputSet = new Set(built.result.inputs);
+    const missingEntryPoints = built.targets
+      .map(({ sourcePath }) => sourcePath)
+      .filter((sourcePath) => !inputSet.has(sourcePath));
+    assert(
+      missingEntryPoints.length === 0,
+      `typed build manifest 진입점이 실제 빌드 입력에서 빠졌습니다: ${missingEntryPoints.join(", ")}`
     );
-    assertGeneratedJavaScriptBytes(
-      relativePath,
-      actualContents,
-      expectedContents,
-      rootDirectory
-    );
+    for (const relativePath of built.paths) {
+      const expectedContents = built.result.outputs.get(relativePath);
+      assert(
+        expectedContents,
+        `생성 예정 JavaScript가 없습니다: ${built.rootName}/${relativePath}`
+      );
+      const actualContents = await readFile(
+        path.join(rootDirectory, built.rootName, relativePath)
+      );
+      assertGeneratedJavaScriptBytes(
+        `${built.rootName}/${relativePath}`,
+        actualContents,
+        expectedContents,
+        rootDirectory
+      );
+    }
   }
 }
 
@@ -566,6 +630,13 @@ export async function runTypeScriptMigrationCheck(
   rootDirectory = defaultRoot
 ): Promise<TypeScriptMigrationReport> {
   const repositoryFiles = await listRepositoryFiles(rootDirectory);
+  const removedExtensionArtifacts = repositoryFiles.filter((relativePath) => (
+    relativePath.startsWith("extension/")
+  ));
+  assert(
+    removedExtensionArtifacts.length === 0,
+    `삭제된 전체 Extension 산출물이 다시 생겼습니다: ${removedExtensionArtifacts.join(", ")}`
+  );
   for (const relativePath of repositoryFiles.filter((filePath) => (
     !typeScriptFamilyPattern.test(filePath)
   ))) {
@@ -588,77 +659,74 @@ export async function runTypeScriptMigrationCheck(
     declarationFiles.length === 0,
     `작성 declaration만으로 JavaScript를 우회할 수 없습니다: ${declarationFiles.join(", ")}`
   );
-  const authoredTypeScriptFiles = repositoryFiles.filter((relativePath) => (
+  const allAuthoredTypeScriptFiles = repositoryFiles.filter((relativePath) => (
     typeScriptFamilyPattern.test(relativePath)
     && !declarationFilePattern.test(relativePath)
-    && !relativePath.startsWith("extension/")
   ));
+  const authoredTypeScriptFiles = allAuthoredTypeScriptFiles;
   await assertTypeScriptSyntaxPolicy(rootDirectory, authoredTypeScriptFiles);
 
-  const extensionTooling = repositoryFiles.filter((relativePath) => (
-    relativePath.startsWith("extension/")
-    && (
-      typeScriptFamilyPattern.test(relativePath)
-      || declarationFilePattern.test(relativePath)
-      || /\.(?:map|tsbuildinfo)$/iu.test(relativePath)
-    )
-  ));
-  assert(
-    extensionTooling.length === 0,
-    `Extension 디렉터리에 TypeScript 도구·소스가 있습니다: ${extensionTooling.join(", ")}`
-  );
-
   const tsconfigFiles = repositoryFiles.filter((relativePath) => (
-    /(?:^|\/)tsconfig(?:\.[\w-]+)?\.json$/u.test(relativePath)
+    /(?:^|\/)tsconfig(?:\.[\w-]+)*\.json$/u.test(relativePath)
   ));
+  const expectedTypeScriptConfigs = [
+    "tsconfig.json",
+    "tsconfig.web.json",
+    "tsconfig.web.source.json"
+  ];
   assert(
-    sameStrings(tsconfigFiles, ["tsconfig.json", "tsconfig.source.json"]),
+    sameStrings(tsconfigFiles, expectedTypeScriptConfigs),
     `승인되지 않았거나 빠진 tsconfig이 있습니다: ${tsconfigFiles.join(", ")}`
   );
-  const rootConfig = readParsedTypeScriptConfig(rootDirectory, "tsconfig.json");
-  assertRequiredCompilerOptions(rootConfig.raw);
-  const compiledFiles = configFileSet(rootDirectory, rootConfig.parsed.fileNames);
+  const rootConfig = JSON.parse(
+    await readFile(path.join(rootDirectory, "tsconfig.json"), "utf8")
+  ) as Record<string, unknown>;
+  assertRequiredCompilerOptions(rootConfig);
   assert(
-    sameStrings(compiledFiles, authoredTypeScriptFiles),
-    "작성 TypeScript와 tsc 검사 대상이 다릅니다.\n" +
-      `authored=${JSON.stringify(authoredTypeScriptFiles)}\n` +
+    Array.isArray(rootConfig.include)
+      && rootConfig.include.length === 0,
+    "공통 tsconfig.json은 독립적으로 TypeScript 파일을 선택하면 안 됩니다."
+  );
+  const webConfig = readParsedTypeScriptConfig(rootDirectory, "tsconfig.web.json");
+  const compiledFiles = configFileSet(rootDirectory, webConfig.parsed.fileNames);
+  const webAuthoredTypeScriptFiles = allAuthoredTypeScriptFiles;
+  assert(
+    sameStrings(compiledFiles, webAuthoredTypeScriptFiles),
+    "localhost web 작성 TypeScript와 tsc 검사 대상이 다릅니다.\n" +
+      `authored=${JSON.stringify(webAuthoredTypeScriptFiles)}\n` +
       `compiled=${JSON.stringify(sortedValues(compiledFiles))}`
   );
-  const sourceConfig = readParsedTypeScriptConfig(rootDirectory, "tsconfig.source.json");
-  const sourceCompilerOptions = sourceConfig.raw.compilerOptions;
-  assert(
-    sourceCompilerOptions
-      && typeof sourceCompilerOptions === "object"
-      && !Array.isArray(sourceCompilerOptions)
-      && (sourceCompilerOptions as Record<string, unknown>).noUncheckedIndexedAccess === true,
-    "production src에는 noUncheckedIndexedAccess가 켜져 있어야 합니다."
+  const sourceConfig = readParsedTypeScriptConfig(
+    rootDirectory,
+    "tsconfig.web.source.json"
   );
-  const productionSources = authoredTypeScriptFiles.filter((relativePath) => (
+  const productionSources = webAuthoredTypeScriptFiles.filter((relativePath) => (
     relativePath.startsWith("src/")
   ));
   const sourceCompiledFiles = configFileSet(rootDirectory, sourceConfig.parsed.fileNames);
   assert(
     sameStrings(sourceCompiledFiles, productionSources),
-    "production TypeScript와 noUncheckedIndexedAccess 검사 대상이 다릅니다."
+    "localhost web production TypeScript 검사 대상이 다릅니다."
   );
 
-  const forbiddenPackageFiles = EXTENSION_PACKAGE_FILES.filter((relativePath) => (
+  const forbiddenWebPackageFiles = WEB_PACKAGE_FILES.filter((relativePath) => (
     typeScriptFamilyPattern.test(relativePath)
     || declarationFilePattern.test(relativePath)
     || /\.(?:map|tsbuildinfo)$/iu.test(relativePath)
     || relativePath === "tsconfig.json"
     || relativePath.startsWith("node_modules/")
+    || relativePath.startsWith("extension/")
   ));
   assert(
-    forbiddenPackageFiles.length === 0,
-    `Extension ZIP에 TypeScript 도구·소스가 들어갑니다: ${forbiddenPackageFiles.join(", ")}`
+    forbiddenWebPackageFiles.length === 0,
+    `web ZIP에 도구·소스·Extension 파일이 들어갑니다: ${forbiddenWebPackageFiles.join(", ")}`
   );
-  const packagedJavaScript = EXTENSION_PACKAGE_FILES.filter((relativePath) => (
+  const packagedWebJavaScript = WEB_PACKAGE_FILES.filter((relativePath) => (
     javaScriptFamilyPattern.test(relativePath)
   ));
   assert(
-    sameStrings(packagedJavaScript, EXTENSION_JAVASCRIPT_PATHS),
-    "Extension ZIP JavaScript와 typed build manifest가 다릅니다."
+    sameStrings(packagedWebJavaScript, WEB_JAVASCRIPT_PATHS),
+    "web ZIP JavaScript와 typed build manifest가 다릅니다."
   );
 
   for (const relativePath of repositoryFiles.filter((filePath) => (
@@ -691,10 +759,17 @@ export async function runTypeScriptMigrationCheck(
 
   const attributes = await readFile(path.join(rootDirectory, ".gitattributes"), "utf8");
   assert(
-    /^extension\/\*\*\/\*\.js\s+linguist-generated=true$/mu.test(attributes),
-    "GitHub 언어 통계에서 생성 JavaScript를 명시해야 합니다."
+    /^web\/\*\*\/\*\.js\s+linguist-generated=true$/mu.test(attributes),
+    "GitHub 언어 통계에서 localhost web 생성 JavaScript를 명시해야 합니다."
   );
-  await assertGeneratedJavaScript(rootDirectory, repositoryFiles);
+  assert(
+    /^streaming-companion\/\*\*\/\*\.js\s+linguist-generated=true$/mu.test(attributes),
+    "GitHub 언어 통계에서 최소 companion 생성 JavaScript를 명시해야 합니다."
+  );
+  await assertGeneratedJavaScript(
+    rootDirectory,
+    repositoryFiles
+  );
 
   return {
     ok: true,
@@ -702,14 +777,19 @@ export async function runTypeScriptMigrationCheck(
     authoredJavaScriptFiles: 0,
     explicitAnyTypes: 0,
     typeSuppressionDirectives: 0,
-    generatedJavaScriptFiles: EXTENSION_JAVASCRIPT_PATHS.length,
+    generatedJavaScriptFiles: WEB_JAVASCRIPT_PATHS.length
+      + STREAMING_COMPANION_JAVASCRIPT_PATHS.length,
     generatedJavaScriptMatchesTypeScript: true,
     generatedFirstPartyInputsAreTypeScript: true,
-    extensionShipsTypeScript: false
+    browserDistributionShipsTypeScript: false
   };
 }
 
 const invokedPath = process.argv[1];
 if (invokedPath && path.resolve(invokedPath) === fileURLToPath(import.meta.url)) {
-  console.log(JSON.stringify(await runTypeScriptMigrationCheck(), null, 2));
+  const args = process.argv.slice(2);
+  if (args.length > 0) {
+    throw new TypeError("사용법: check-typescript-migration.ts");
+  }
+  console.log(JSON.stringify(await runTypeScriptMigrationCheck(defaultRoot), null, 2));
 }

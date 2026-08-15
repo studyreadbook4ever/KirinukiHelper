@@ -1,11 +1,13 @@
-// SPDX-License-Identifier: MIT
-/*
- * Browser integration of AudSeg 0.1.0.
+/*! @license
+ * AudSeg 0.1.0 browser integration — SPDX-License-Identifier: MIT
  *
- * Ported from the sibling MIT-licensed AudSeg Python package in this
- * repository. Sample indexes remain the canonical timebase. The editor uses a
- * 4-second cue ceiling so blank timing drafts follow its existing subtitle
- * readability policy.
+ * Ported from the separately MIT-licensed sibling Python package at `AudSeg/`.
+ * Corresponding source and the full notice are recorded in
+ * `legal/THIRD_PARTY_NOTICES.md` and packaged as
+ * `web/licenses/AUDSEG-MIT.txt`. This legal comment must survive the
+ * browser bundle. Sample indexes remain the canonical timebase. AudSeg uses
+ * a 4-second ceiling only when it creates initial blank timing drafts; editor
+ * cues themselves have no global maximum duration.
  */
 
 export const AUDSEG_ENGINE_ID = "audseg";
@@ -794,15 +796,28 @@ export function segmentAudSegPcm(
   };
 }
 
+export function resolveAudSegWorkerUrl(
+  moduleUrl: string | URL = import.meta.url
+): URL {
+  const resolvedModuleUrl = new URL(moduleUrl);
+  const workerUrl = new URL("./audseg-worker.js", resolvedModuleUrl);
+  workerUrl.search = resolvedModuleUrl.search;
+  return workerUrl;
+}
+
 export function segmentAudSegPcmInWorker(
   samples: Float32Array,
   {
     sampleRateHz = AUDSEG_SAMPLE_RATE_HZ,
     signal,
-    workerFactory = () => new Worker(
-      new URL("./audseg-worker.js", import.meta.url),
-      { type: "module", name: "kirinuki-audseg" }
-    )
+    workerFactory = () => {
+      // Popovic serves script assets as immutable. Carry the editor bundle's
+      // release query to its worker so both switch releases atomically.
+      return new Worker(
+        resolveAudSegWorkerUrl(),
+        { type: "module", name: "kirinuki-audseg" }
+      );
+    }
   }: {
     sampleRateHz?: number;
     signal?: AbortSignal;

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   SOURCE_PLATFORM_CHZZK,
+  SOURCE_PLATFORM_SOOP,
   SOURCE_PLATFORM_YOUTUBE,
   canStartSourceRefresh,
   canonicalSourceUrl,
@@ -59,6 +60,47 @@ test("치지직과 지원 YouTube 최상위 영상 URL만 허용한다", () => {
       false,
       `${url}은 실제 타임스탬프 영상 페이지가 아닙니다.`
     );
+  }
+});
+
+test("SOOP 현재·레거시 VOD 주소를 같은 현재 원본으로 정규화한다", () => {
+  const urls = [
+    "https://vod.sooplive.com/player/192805325",
+    "https://vod.sooplive.com/PLAYER/STATION/192805325?change_second=12",
+    "https://vod.sooplive.co.kr/player/192805325",
+    "https://vod.afreecatv.com/PLAYER/STATION/192805325"
+  ];
+  for (const url of urls) {
+    assert.equal(sourcePlatformFromUrl(url), SOURCE_PLATFORM_SOOP);
+    assert.equal(isSupportedSourceUrl(url), true);
+    const identifiers = inferSourceIdentifiers(url, {
+      linkedUrls: ["https://www.sooplive.com/station/creator01/vod"]
+    });
+    assert.deepEqual(identifiers, {
+      platform: SOURCE_PLATFORM_SOOP,
+      channelId: "creator01",
+      contentId: "192805325",
+      contentType: "vod"
+    });
+    assert.equal(
+      canonicalSourceUrl(url, identifiers),
+      "https://vod.sooplive.com/player/192805325"
+    );
+  }
+});
+
+test("SOOP 채널·라이브·스푸핑·비 HTTPS 주소는 VOD 원본으로 받지 않는다", () => {
+  for (const url of [
+    "https://www.sooplive.com/station/creator01/vod",
+    "https://play.sooplive.com/creator01/123456789",
+    "https://vod.sooplive.com/player/not-a-number",
+    "https://vod.sooplive.com/player/",
+    "http://vod.sooplive.com/player/192805325",
+    "https://vod.sooplive.com.evil.test/player/192805325",
+    "https://user:secret@vod.sooplive.com/player/192805325",
+    "https://vod.sooplive.com:8443/player/192805325"
+  ]) {
+    assert.equal(isSupportedSourceUrl(url), false, url);
   }
 });
 
@@ -297,6 +339,80 @@ test("SOURCE 패널은 활성 영상 탭을 우선하고 닫힌 편집 세션의
     })?.id,
     collidingClip.id,
     "같은 contentId 문자열이어도 VOD와 clip의 identity를 섞으면 안 됩니다."
+  );
+});
+
+test("정책 입력을 시작한 원본 탭은 다른 영상이 활성화돼도 정확히 고정한다", () => {
+  const policySourceA = {
+    id: 31,
+    active: false,
+    url: "https://chzzk.naver.com/video/13583412"
+  };
+  const activeSourceB = {
+    id: 32,
+    active: true,
+    url: "https://chzzk.naver.com/video/14405629"
+  };
+  const duplicateSourceA = {
+    ...policySourceA,
+    id: 33
+  };
+  const expectedSourceA = {
+    platform: SOURCE_PLATFORM_CHZZK,
+    contentId: "13583412",
+    contentType: "vod",
+    canonicalUrl: policySourceA.url
+  };
+
+  assert.equal(
+    selectSupportedSourceTab([policySourceA, activeSourceB], {
+      expectedSource: expectedSourceA
+    })?.id,
+    activeSourceB.id,
+    "일반 SOURCE 탐색은 기존처럼 현재 활성 영상 탭을 우선해야 합니다."
+  );
+  assert.equal(
+    selectSupportedSourceTab([policySourceA, activeSourceB], {
+      expectedSource: expectedSourceA,
+      preferExpectedSource: true,
+      preferredTabId: policySourceA.id
+    })?.id,
+    policySourceA.id,
+    "정책 시작 시에는 B가 활성화돼도 저장 원본 A를 선택해야 합니다."
+  );
+  assert.equal(
+    selectSupportedSourceTab([
+      policySourceA,
+      duplicateSourceA,
+      activeSourceB
+    ], {
+      expectedSource: expectedSourceA,
+      preferExpectedSource: true,
+      preferredTabId: duplicateSourceA.id
+    })?.id,
+    duplicateSourceA.id,
+    "같은 원본 A 탭이 여러 개면 정책을 시작한 정확한 탭 ID를 선택해야 합니다."
+  );
+
+  const transitionedVodA = {
+    id: 34,
+    active: false,
+    url: "https://chzzk.naver.com/video/13583412"
+  };
+  assert.equal(
+    selectSupportedSourceTab([transitionedVodA, activeSourceB], {
+      expectedSource: {
+        platform: SOURCE_PLATFORM_CHZZK,
+        channelId: "088973112d8acc831ec20274f7ffbb99",
+        contentType: "live",
+        canonicalUrl:
+          "https://chzzk.naver.com/live/088973112d8acc831ec20274f7ffbb99"
+      },
+      preferExpectedSource: true,
+      preferredTabId: transitionedVodA.id
+    })?.id,
+    transitionedVodA.id,
+    "같은 회차의 LIVE 탭이 VOD URL로 전환돼도 이미 확인한 탭 ID를 먼저 사용해야 합니다."
   );
 });
 

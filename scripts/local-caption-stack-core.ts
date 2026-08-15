@@ -1,6 +1,18 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
+import {
+  KIRINUKI_WHISPER_CONNECTION_FILENAME,
+  WHISPER_MODEL_CATALOG
+} from "../src/lib/whisper-connection.js";
+import type { WhisperModelId } from "../src/lib/whisper-connection.js";
+import {
+  KIRINUKI_LOCAL_STUDIO_ORIGIN,
+  isKirinukiStudioOrigin,
+  resolveKirinukiStudioOrigin
+} from "../src/lib/local-runtime-origin.js";
+import type { KirinukiStudioOrigin } from "../src/lib/local-runtime-origin.js";
+
 export const LOCAL_CAPTION_STACK_SCHEMA =
   "chzzk-kirinuki-local-caption-stack/v1";
 export const LOCAL_CAPTION_STACK_SERVICE =
@@ -8,7 +20,7 @@ export const LOCAL_CAPTION_STACK_SERVICE =
 export const LOOPBACK_HOST = "127.0.0.1";
 export const DEFAULT_STT_PORT = 4318;
 export const DEFAULT_GATEWAY_PORT = 4319;
-export const MINIMUM_NODE_VERSION = "20.9.0";
+export const MINIMUM_NODE_VERSION = "22.0.0";
 
 export const PINNED_WHISPER_CPP = Object.freeze({
   version: "v1.8.6",
@@ -32,7 +44,7 @@ export const PINNED_MODELS = Object.freeze({
     url:
       `https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_MODEL_REVISION}/ggml-tiny-q5_1.bin`,
     sha256: "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7",
-    size: 32_152_673
+    size: WHISPER_MODEL_CATALOG["tiny-q5_1"].downloadSizeBytes
   }),
   light: Object.freeze({
     id: "base-q5_1",
@@ -40,7 +52,7 @@ export const PINNED_MODELS = Object.freeze({
     url:
       `https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_MODEL_REVISION}/ggml-base-q5_1.bin`,
     sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
-    size: 59_707_625
+    size: WHISPER_MODEL_CATALOG["base-q5_1"].downloadSizeBytes
   }),
   auto: Object.freeze({
     id: "small-q5_1",
@@ -48,7 +60,7 @@ export const PINNED_MODELS = Object.freeze({
     url:
       `https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_MODEL_REVISION}/ggml-small-q5_1.bin`,
     sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
-    size: 190_085_487
+    size: WHISPER_MODEL_CATALOG["small-q5_1"].downloadSizeBytes
   }),
   quality: Object.freeze({
     id: "medium-q5_0",
@@ -56,7 +68,7 @@ export const PINNED_MODELS = Object.freeze({
     url:
       `https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_MODEL_REVISION}/ggml-medium-q5_0.bin`,
     sha256: "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f",
-    size: 539_212_467
+    size: WHISPER_MODEL_CATALOG["medium-q5_0"].downloadSizeBytes
   })
 });
 
@@ -95,8 +107,7 @@ export interface LocalCaptionStackOptions {
 }
 
 export interface LocalCaptionStackPaths {
-  repoRoot: string;
-  extensionRoot: string;
+  packageRoot: string;
   dataRoot: string;
   configRoot: string;
   stateRoot: string;
@@ -107,6 +118,7 @@ export interface LocalCaptionStackPaths {
   modelsRoot: string;
   runtimeNoticesPath: string;
   configPath: string;
+  connectionPath: string;
   unitPath: string;
   pidPath: string;
 }
@@ -157,7 +169,7 @@ export interface InstallConfig {
     binaryPath: string;
   };
   model: {
-    id: string;
+    id: WhisperModelId;
     path: string;
     sha256: string;
     size: number;
@@ -223,7 +235,7 @@ function requiredAbsolutePath(value: unknown, label: string): string {
       `${label} 경로는 앞뒤 공백이나 줄바꿈이 없는 절대 경로여야 합니다.`
     );
   }
-  return path.normalize(raw);
+  return path.resolve(raw);
 }
 
 export function parseLocalCaptionStackArgs(
@@ -315,14 +327,20 @@ export function parseLocalCaptionStackArgs(
 export function resolveStackPaths({
   env = {},
   homeDir,
-  repoRoot
+  packageRoot
 }: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
-  repoRoot?: string;
+  packageRoot?: string;
 } = {}): Readonly<LocalCaptionStackPaths> {
   const resolvedHome = requiredAbsolutePath(homeDir, "홈");
-  const resolvedRepo = requiredAbsolutePath(repoRoot, "레포지토리");
+  const fallbackPackageRoot = requiredAbsolutePath(packageRoot, "패키지");
+  const resolvedPackage = env.KIRINUKI_PACKAGE_ROOT === undefined
+    ? fallbackPackageRoot
+    : requiredAbsolutePath(
+      env.KIRINUKI_PACKAGE_ROOT,
+      "KIRINUKI_PACKAGE_ROOT"
+    );
   const dataBase = env.XDG_DATA_HOME
     ? requiredAbsolutePath(env.XDG_DATA_HOME, "XDG_DATA_HOME")
     : path.join(resolvedHome, ".local", "share");
@@ -335,19 +353,12 @@ export function resolveStackPaths({
   const runtimeBase = env.XDG_RUNTIME_DIR
     ? requiredAbsolutePath(env.XDG_RUNTIME_DIR, "XDG_RUNTIME_DIR")
     : path.join(stateBase, "run");
-  const extensionRoot = env.KIRINUKI_EXTENSION_ROOT === undefined
-    ? path.join(resolvedRepo, "extension")
-    : requiredAbsolutePath(
-      env.KIRINUKI_EXTENSION_ROOT,
-      "KIRINUKI_EXTENSION_ROOT"
-    );
   const dataRoot = path.join(dataBase, "kirinuki-caption-stack");
   const configRoot = path.join(configBase, "kirinuki-caption-stack");
   const stateRoot = path.join(stateBase, "kirinuki-caption-stack");
   const runtimeRoot = path.join(runtimeBase, "kirinuki-caption-stack");
   return Object.freeze({
-    repoRoot: resolvedRepo,
-    extensionRoot,
+    packageRoot: resolvedPackage,
     dataRoot,
     configRoot,
     stateRoot,
@@ -358,6 +369,10 @@ export function resolveStackPaths({
     modelsRoot: path.join(dataRoot, "models"),
     runtimeNoticesPath: path.join(dataRoot, "THIRD_PARTY_NOTICES.md"),
     configPath: path.join(configRoot, "config.json"),
+    connectionPath: path.join(
+      configRoot,
+      KIRINUKI_WHISPER_CONNECTION_FILENAME
+    ),
     unitPath: path.join(
       configBase,
       "systemd",
@@ -440,32 +455,17 @@ export function resolveSemanticProfile(
   });
 }
 
-export function chromiumExtensionIdForPath(
-  extensionPath: string
-): string {
-  const normalized = requiredAbsolutePath(extensionPath, "확장 프로그램");
-  const digest = createHash("sha256").update(normalized).digest().subarray(0, 16);
-  return [...digest]
-    .map((byte) => (
-      String.fromCharCode(97 + (byte >> 4))
-      + String.fromCharCode(97 + (byte & 0x0f))
-    ))
-    .join("");
-}
-
-export function extensionOriginForPath(extensionPath: string): string {
-  return `chrome-extension://${chromiumExtensionIdForPath(extensionPath)}`;
-}
-
 export function createInstallConfig(
   paths: LocalCaptionStackPaths,
   semanticProfile: SemanticProfile,
   {
   sttPort = DEFAULT_STT_PORT,
-  gatewayPort = DEFAULT_GATEWAY_PORT
+  gatewayPort = DEFAULT_GATEWAY_PORT,
+  origin = KIRINUKI_LOCAL_STUDIO_ORIGIN
 }: {
   sttPort?: number;
   gatewayPort?: number;
+  origin?: KirinukiStudioOrigin;
 } = {}
 ): Readonly<InstallConfig> {
   const binaryName = process.platform === "win32"
@@ -487,7 +487,7 @@ export function createInstallConfig(
     host: LOOPBACK_HOST,
     sttPort,
     gatewayPort,
-    origin: extensionOriginForPath(paths.extensionRoot),
+    origin: resolveKirinukiStudioOrigin(origin),
     whisper: Object.freeze({
       version: PINNED_WHISPER_CPP.version,
       commit: PINNED_WHISPER_CPP.commit,
@@ -578,7 +578,7 @@ function systemdQuote(value: unknown): string {
 }
 
 function systemdWorkingDirectory(value: string): string {
-  const absolutePath = requiredAbsolutePath(value, "레포지토리");
+  const absolutePath = requiredAbsolutePath(value, "패키지");
   if (/[\0\r\n]/u.test(absolutePath)) {
     throw new TypeError("systemd 작업 경로에 제어 문자를 사용할 수 없습니다.");
   }
@@ -591,18 +591,24 @@ export function renderSystemdUserUnit({
   nodePath,
   runtimeArgs = [],
   cliPath,
-  repoRoot,
-  origin
+  packageRoot,
+  origin,
+  writableDataRoot,
+  writableVodStateRoot
 }: {
   nodePath: string;
   runtimeArgs?: readonly string[];
   cliPath: string;
-  repoRoot: string;
+  packageRoot: string;
   origin: string;
+  writableDataRoot?: string;
+  writableVodStateRoot?: string;
 }): string {
   const exactOrigin = String(origin || "");
-  if (!/^chrome-extension:\/\/[a-p]{32}$/u.test(exactOrigin)) {
-    throw new TypeError("systemd unit에 정확한 확장 프로그램 Origin이 필요합니다.");
+  if (!isKirinukiStudioOrigin(exactOrigin)) {
+    throw new TypeError(
+      "systemd unit에는 정확한 Kirinuki Studio Origin이 필요합니다."
+    );
   }
   const execStart = [
     systemdQuote(requiredAbsolutePath(nodePath, "Node")),
@@ -617,6 +623,10 @@ export function renderSystemdUserUnit({
     "start",
     "--foreground"
   ].join(" ");
+  const writableRoots = [writableDataRoot, writableVodStateRoot]
+    .filter((value): value is string => value !== undefined)
+    .map((value) => requiredAbsolutePath(value, "쓰기 가능 로컬 데이터"))
+    .filter((value, index, values) => values.indexOf(value) === index);
   return [
     "[Unit]",
     "Description=Kirinuki local Whisper caption stack",
@@ -625,7 +635,8 @@ export function renderSystemdUserUnit({
     "",
     "[Service]",
     "Type=simple",
-    `WorkingDirectory=${systemdWorkingDirectory(repoRoot)}`,
+    `WorkingDirectory=${systemdWorkingDirectory(packageRoot)}`,
+    `Environment=${systemdQuote(`KIRINUKI_PACKAGE_ROOT=${requiredAbsolutePath(packageRoot, "패키지")}`)}`,
     `ExecStart=${execStart}`,
     "Restart=on-failure",
     "RestartSec=3",
@@ -639,6 +650,9 @@ export function renderSystemdUserUnit({
     "PrivateTmp=true",
     "ProtectSystem=strict",
     "ProtectHome=read-only",
+    ...writableRoots.map((root) => (
+      `ReadWritePaths=${systemdWorkingDirectory(root)}`
+    )),
     "ProtectClock=true",
     "ProtectKernelLogs=true",
     "ProtectKernelModules=true",
