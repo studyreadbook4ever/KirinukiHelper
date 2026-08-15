@@ -747,7 +747,13 @@ function sendGatewayClosing(
 async function waitForResponseSettlement(
   response: ServerResponse
 ): Promise<void> {
-  if (response.writableFinished || response.destroyed) {
+  const requestSocket = response.req.socket;
+  if (
+    response.writableFinished
+    || response.destroyed
+    || response.closed
+    || requestSocket.destroyed
+  ) {
     return;
   }
   await new Promise<void>((resolve) => {
@@ -756,6 +762,7 @@ async function waitForResponseSettlement(
       response.removeListener("finish", finish);
       response.removeListener("close", finish);
       response.removeListener("error", finish);
+      requestSocket.removeListener("close", finish);
     };
     const finish = () => {
       if (settled) {
@@ -768,7 +775,17 @@ async function waitForResponseSettlement(
     response.once("finish", finish);
     response.once("close", finish);
     response.once("error", finish);
-    if (response.writableFinished || response.destroyed) {
+    // Node 22 can detach a queued pipelined ServerResponse from its socket
+    // without emitting `close` on that response when shutdown destroys the
+    // connection. The request socket closing is the terminal fallback: no
+    // response bytes can remain writable after that point.
+    requestSocket.once("close", finish);
+    if (
+      response.writableFinished
+      || response.destroyed
+      || response.closed
+      || requestSocket.destroyed
+    ) {
       finish();
     }
   });

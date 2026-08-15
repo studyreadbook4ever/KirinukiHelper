@@ -2893,13 +2893,38 @@ async function main(): Promise<void> {
     (value) => value.frameUrl === chzzkUrl && !value.refreshDisabled,
     "Q/W 단축키 검사 전에 CHZZK 원본 창이 준비되지 않았습니다."
   );
+  await execute(`
+    const manager = document.querySelector("#recent-section");
+    const summary = document.querySelector("#local-projects-summary");
+    const empty = document.querySelector("#local-projects-empty");
+    if (!manager || !summary || !empty) {
+      throw new Error("local project manager 없음");
+    }
+    manager.setAttribute("aria-busy", "true");
+    summary.textContent = "Q_REFRESH_SENTINEL";
+    empty.hidden = true;
+  `);
   const recentRefreshHandled = await dispatchStudioShortcut("Q");
   assert(recentRefreshHandled, "Q 단축키가 document capture console에서 처리되지 않았습니다.");
   await waitFor(
-    () => execute<string>(
-      "return document.querySelector('#stream-cut-console-status')?.textContent || ''"
+    () => execute<{
+      ariaBusy: string | null;
+      emptyHidden: boolean;
+      summary: string;
+    }>(`
+      const manager = document.querySelector("#recent-section");
+      const empty = document.querySelector("#local-projects-empty");
+      return {
+        ariaBusy: manager?.getAttribute("aria-busy") ?? null,
+        emptyHidden: Boolean(empty?.hidden),
+        summary: document.querySelector("#local-projects-summary")?.textContent || ""
+      };
+    `),
+    (value) => (
+      value.ariaBusy === "false"
+      && value.emptyHidden === false
+      && value.summary === "저장된 편집 없음 · 아래 입력은 항상 새 프로젝트로 시작합니다."
     ),
-    (value) => value.includes("이 브라우저에 저장된 편집이 없습니다"),
     "Q 단축키가 이 기기의 최근 편집을 다시 읽지 않았습니다."
   );
   const refreshShortcut = await execute<{
