@@ -24,6 +24,7 @@ import type {
 } from "../lib/soop-vod-source-clock.js";
 import {
   StaleSerialOperationGenerationError,
+  createCoalescedAutomaticOperation,
   createGenerationBoundSerialOperationQueue,
   createLatestSerialOperationQueue
 } from "../lib/serial-operation-gate.js";
@@ -1549,23 +1550,55 @@ async function reconcileAbandonedProjectsBeforeEditorEntry(): Promise<void> {
   }
 }
 
-function queueLocalProjectLifecycleCleanup({
+async function performLocalProjectLifecycleCleanup({
   announce = false
 }: {
   announce?: boolean;
 } = {}): Promise<void> {
-  return localProjectLifecycleCleanupQueue.enqueue(async () => {
-    // The queue is the only lifecycle caller of the rollback inventory. A
-    // failed pass remains authoritative until a later explicit retry runs.
-    await reconcileAbandonedProjectsBeforeEditorEntry();
-    if (announce) {
-      setStreamCutStatus(
-        localProjectEntries.length > 0
-          ? `저장된 편집 ${localProjectEntries.length}개를 다시 읽었습니다.`
-          : "이 브라우저에 저장된 편집이 없습니다."
+  await reconcileAbandonedProjectsBeforeEditorEntry();
+  if (announce) {
+    setStreamCutStatus(
+      localProjectEntries.length > 0
+        ? `저장된 편집 ${localProjectEntries.length}개를 다시 읽었습니다.`
+        : "이 브라우저에 저장된 편집이 없습니다."
+    );
+  }
+}
+
+const automaticLocalProjectLifecycleCleanup =
+  createCoalescedAutomaticOperation({
+    enqueue: (operation) => localProjectLifecycleCleanupQueue.enqueue(operation),
+    operation: () => performLocalProjectLifecycleCleanup(),
+    isEnabled: () => (
+      localProjectManagerInitialized
+      && !document.hidden
+      && !openingEditor
+      && pendingLocalProjectDeletion === null
+    ),
+    onError: (error) => {
+      console.error(
+        "자동 이전 편집 브라우저 저장 상태 정리에 실패했습니다.",
+        error
       );
     }
   });
+
+function queueMandatoryLocalProjectLifecycleCleanup({
+  announce = false
+}: {
+  announce?: boolean;
+} = {}): Promise<void> {
+  // A mandatory Q/retry/editor-entry inventory is newer than every automatic
+  // focus hint. Queued automatic work becomes a no-op; an already-running
+  // rollback is allowed to finish before this exact final pass.
+  automaticLocalProjectLifecycleCleanup.supersede();
+  return localProjectLifecycleCleanupQueue.enqueue(
+    () => performLocalProjectLifecycleCleanup({ announce })
+  );
+}
+
+function requestAutomaticLocalProjectLifecycleCleanup(): void {
+  automaticLocalProjectLifecycleCleanup.request();
 }
 
 function observeLocalProjectLifecycleCleanup(
@@ -1577,13 +1610,10 @@ function observeLocalProjectLifecycleCleanup(
 }
 
 async function requireSafeLocalProjectStateForEditorEntry(): Promise<void> {
-  // Request one final inventory after every cleanup already requested by
-  // startup/focus/pageshow. `openingEditor` prevents lifecycle events from
-  // adding more work while the navigation transaction begins.
-  const requested = queueLocalProjectLifecycleCleanup();
-  observeLocalProjectLifecycleCleanup(requested);
+  // Await this exact mandatory pass. `openingEditor` prevents later automatic
+  // lifecycle events and Q refreshes from appending work behind the barrier.
   try {
-    await localProjectLifecycleCleanupQueue.waitForLatest();
+    await queueMandatoryLocalProjectLifecycleCleanup();
   } catch {
     throw new Error(
       "이전 편집 정리를 확인하지 못해 새 편집을 열지 않았습니다. 브라우저 저장 편집에서 ‘다시 읽기’를 눌러 정리를 완료한 뒤 다시 시도해 주세요."
@@ -1611,7 +1641,7 @@ function scheduleLocalProjectLifecycleRefresh(): void {
     if (openingEditor || pendingLocalProjectDeletion) {
       return;
     }
-    observeLocalProjectLifecycleCleanup(queueLocalProjectLifecycleCleanup());
+    requestAutomaticLocalProjectLifecycleCleanup();
   }, 80);
 }
 
@@ -1867,7 +1897,7 @@ function reloadActivePlayerFrame(): void {
 
 async function refreshRecentProject(): Promise<void> {
   try {
-    await queueLocalProjectLifecycleCleanup({ announce: true });
+    await queueMandatoryLocalProjectLifecycleCleanup({ announce: true });
   } catch {
     // The manager already exposes its retry state. Keep this capture-console
     // refresh usable without turning a failed inventory into an unhandled task.
@@ -1982,7 +2012,7 @@ async function confirmLocalProjectDeletion(): Promise<void> {
     }
     closeLocalProjectDeleteDialog();
     localProjectManagerBusy = false;
-    await queueLocalProjectLifecycleCleanup();
+    await queueMandatoryLocalProjectLifecycleCleanup();
     setStreamCutStatus(`${deletedName}의 브라우저 저장 데이터를 삭제했습니다.`);
   } catch (error) {
     setStreamCutStatus(errorMessage(error));
@@ -2051,7 +2081,9 @@ function runStudioCaptureAction(action: StudioCaptureAction): void {
   }
   switch (action) {
     case "refresh-recovery-sessions":
-      void refreshRecentProject();
+      if (!openingEditor) {
+        void refreshRecentProject();
+      }
       return;
     case "refresh-source":
       void refreshActivePlayerContext().catch(reportStudioCaptureActionError);
@@ -2193,14 +2225,14 @@ elements.localProjectsList.addEventListener("click", (event) => {
 elements.refreshLocalProjects.addEventListener("click", () => {
   if (!openingEditor) {
     observeLocalProjectLifecycleCleanup(
-      queueLocalProjectLifecycleCleanup({ announce: true })
+      queueMandatoryLocalProjectLifecycleCleanup({ announce: true })
     );
   }
 });
 elements.retryLocalProjects.addEventListener("click", () => {
   if (!openingEditor) {
     observeLocalProjectLifecycleCleanup(
-      queueLocalProjectLifecycleCleanup({ announce: true })
+      queueMandatoryLocalProjectLifecycleCleanup({ announce: true })
     );
   }
 });
@@ -2316,7 +2348,7 @@ window.addEventListener("pageshow", (event) => {
     openingEditor = false;
     renderMobileEditorAccess();
     clearCurrentTabWebEditorSession();
-    observeLocalProjectLifecycleCleanup(queueLocalProjectLifecycleCleanup());
+    requestAutomaticLocalProjectLifecycleCleanup();
     return;
   }
   scheduleLocalProjectLifecycleRefresh();
