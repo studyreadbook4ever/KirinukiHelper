@@ -547,7 +547,7 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
     version: ">=22",
     license: "build-dependent",
     upstream: "https://github.com/nodejs/node",
-    purpose: "빌드 스크립트와 로컬 companion을 실행합니다.",
+    purpose: "빌드 스크립트와 Kirinuki 내부 엔진을 실행합니다.",
     redistributed: false,
     detection: ["node --version", "node -p process.versions"],
     licenseDependsOnBuild: true
@@ -582,11 +582,11 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
   {
     id: "tsx-runtime",
     kind: "local-companion-runtime",
-    name: "tsx and esbuild local companion runtime",
+    name: "tsx and esbuild Kirinuki internal runtime",
     version: "package-lock.json exact pins",
     license: "MIT",
     upstream: "https://github.com/privatenumber/tsx",
-    purpose: "TypeScript로 작성된 로컬 companion·setup·gateway CLI를 실행합니다.",
+    purpose: "TypeScript로 작성된 Kirinuki 내부 엔진·설치·연결 CLI를 실행합니다.",
     redistributed: false,
     packages: [
       "tsx@4.23.1 (MIT)",

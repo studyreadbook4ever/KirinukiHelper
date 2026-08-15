@@ -37,6 +37,62 @@ test("편집기 HTML은 검증 중 경고를 숨기고 실제 작업공간도 �
   );
 });
 
+test("공개 origin의 편집기는 앱 설치 안내만 보이고 로컬 기능을 시작하지 않는다", async () => {
+  const [html, source] = await Promise.all([
+    readFile(new URL("../web/editor.html", import.meta.url), "utf8"),
+    readFile(new URL("../src/editor/main.ts", import.meta.url), "utf8")
+  ]);
+  const appGateStart = /<main id="editor-app-gate"[^>]*>/u.exec(html)?.[0] ?? "";
+  const initialize = sectionFrom(
+    source,
+    "async function initialize()",
+    "function normalizeLocalCaptionFirstPass("
+  );
+
+  assert.match(appGateStart, /\bhidden\b/u);
+  assert.match(html, /Kirinuki 앱에서만 편집할 수 있습니다/u);
+  assert.match(html, /공개 페이지에서는 편집기와 VOD 처리 기능을 시작하지 않습니다/u);
+  assert.match(
+    html,
+    /href="kirinuki:\/\/open"[^>]*>Kirinuki 앱에서 열기/u
+  );
+  assert.match(
+    html,
+    /href="https:\/\/github\.com\/studyreadbook4ever\/KirinukiHelper#설치"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/u
+  );
+  assert.match(
+    initialize,
+    /^async function initialize\(\) \{\s*if \(!isKirinukiLocalStudioOrigin\(location\.origin\)\) \{\s*showEditorAppGate\(\);\s*return;\s*\}/u
+  );
+  assert.ok(
+    initialize.indexOf("showEditorAppGate()")
+      < initialize.indexOf("verifyEditorUsagePolicyGate()"),
+    "앱 origin 차단이 정책·프로젝트 초기화보다 먼저 실행되어야 합니다."
+  );
+  const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/u
+    .exec(html)?.[1] ?? "";
+  assert.ok(csp);
+  assert.doesNotMatch(csp, /127\.0\.0\.1|localhost|4319/u);
+});
+
+test("편집기는 내장 미디어 엔진 주소를 사용자 설정으로 노출하지 않는다", async () => {
+  const [html, source] = await Promise.all([
+    readFile(new URL("../web/editor.html", import.meta.url), "utf8"),
+    readFile(new URL("../src/editor/main.ts", import.meta.url), "utf8")
+  ]);
+
+  assert.doesNotMatch(html, /caption-agent-endpoint|PC 도우미|companion|gateway|localhost|127\.0\.0\.1|4319|caption-stack:setup|caption-stack:start/iu);
+  assert.match(html, /id="test-caption-agent"[\s\S]*내장 Whisper 다시 확인/u);
+  assert.match(
+    source,
+    /function readCaptionAgentConfig\(\)[\s\S]*endpoint: DEFAULT_CAPTION_AGENT_SETTINGS\.endpoint/u
+  );
+  assert.doesNotMatch(
+    source,
+    /PC 도우미|Kirinuki setup|Whisper PC 도우미 주소|Kirinuki 런타임/u
+  );
+});
+
 test("편집기 스크립트는 정책 검증 성공 전 프로젝트·미디어 작업을 초기화하지 않는다", async () => {
   const [source, studioRuntime] = await Promise.all([
     readFile(new URL("../src/editor/main.ts", import.meta.url), "utf8"),
@@ -78,7 +134,7 @@ test("편집기 스크립트는 정책 검증 성공 전 프로젝트·미디어
   assert.doesNotMatch(studioRuntime, /chrome\.|KIRINUKI_VERIFY_USAGE_POLICY_GATE/u);
   assert.match(
     verify,
-    /!isRecord\(response\) \|\| response\.ok !== true[\s\S]*Kirinuki 런타임[\s\S]*시작 화면/u
+    /!isRecord\(response\) \|\| response\.ok !== true[\s\S]*Kirinuki 앱[\s\S]*완전히 종료/u
   );
   assert.doesNotMatch(verify, /chrome:\/\/extensions|새로고침/u);
   assert.match(verify, /normalizeActiveUsagePolicySession\(/u);

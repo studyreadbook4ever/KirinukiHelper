@@ -5,13 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <meta name="referrer" content="strict-origin-when-cross-origin">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: http://127.0.0.1:4319; worker-src 'self' blob:; connect-src 'self' http://127.0.0.1:4319">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self'">
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki 영상 편집기</title>
-    <link rel="stylesheet" href="editor/editor.css?v=2.7.0">
+    <link rel="stylesheet" href="editor/editor.css?v=3.0.0">
   </head>
   <body>
+    <main id="editor-app-gate" class="editor-policy-gate" aria-labelledby="editor-app-gate-title" hidden>
+      <div class="editor-policy-gate-card">
+        <h1 id="editor-app-gate-title">Kirinuki 앱에서만 편집할 수 있습니다</h1>
+        <p>이 공개 페이지에서는 편집기와 VOD 처리 기능을 시작하지 않습니다. PC에서 Kirinuki 앱을 설치하고 실행해 주세요.</p>
+        <a class="button primary" href="kirinuki://open">Kirinuki 앱에서 열기</a>
+        <a class="button secondary" href="https://github.com/studyreadbook4ever/KirinukiHelper#설치" target="_blank" rel="noopener noreferrer">설치 방법 보기</a>
+      </div>
+    </main>
+
     <main id="editor-mobile-gate" class="editor-mobile-gate" aria-labelledby="editor-mobile-gate-title" hidden>
       <div class="editor-mobile-gate-card">
         <h1 id="editor-mobile-gate-title">편집기는 모바일에서 사용할 수 없습니다</h1>
@@ -92,12 +101,12 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5Z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/></svg>
                   <span>지금 저장</span>
                 </button>
-                <button id="open-local-drafts" class="local-draft-button browse" type="button" title="최근 저장본 목록" aria-label="최근 저장본 목록 열기" aria-haspopup="dialog" aria-controls="local-draft-dialog">
+                <button id="open-local-drafts" class="local-draft-button browse" type="button" title="저장·복구본 목록" aria-label="저장·복구본 목록 열기" aria-haspopup="dialog" aria-controls="local-draft-dialog">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M7 3v4m10-4v4M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="M8 11h3v3H8Z"/></svg>
-                  <span>저장본 목록</span>
+                  <span>저장·복구본</span>
                 </button>
               </div>
-              <span id="local-draft-status" class="local-draft-status" role="status" aria-live="polite" aria-atomic="true">5분마다 자동 저장</span>
+              <span id="local-draft-status" class="local-draft-status" role="status" aria-live="polite" aria-atomic="true">편집 중 임시 복구 · 탭 종료 시 폐기</span>
             </div>
             <button id="finish-editing-session" class="button secondary finish-editing-session" type="button" aria-haspopup="dialog" aria-controls="editing-session-exit-dialog" title="현재 작업을 저장하거나 폐기하고 시작 화면으로 돌아가기" hidden disabled>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5"/><path d="m14 8 4 4-4 4"/><path d="M8 12h10"/></svg>
@@ -561,8 +570,8 @@
               <div class="whisper-connect-heading">
                 <strong>이 PC의 Whisper로 글과 타이밍 만들기</strong>
                 <p>
-                  버튼을 누르면 Kirinuki PC 도우미를 백그라운드에서 바로 확인하고
-                  실행 중인 모델에 자동으로 연결합니다.
+                  버튼을 누르면 Kirinuki 앱이 내장 자막 엔진을 확인하고
+                  실행 중인 Whisper 모델에 자동으로 연결합니다.
                 </p>
               </div>
               <button
@@ -582,9 +591,10 @@
                 <summary>자동 연결이 되지 않아요</summary>
                 <div>
                   <p>
-                    처음이면 Kirinuki 폴더에서 <code>npm run caption-stack:setup</code>,
-                    설치한 적이 있으면 <code>npm run caption-stack:start</code>를 실행하세요.
-                    다시 Kirinuki를 열면 이 브라우저의 프로젝트를 그대로 이어서 자동 연결합니다.
+                    AudSeg 방식으로 설치한 앱은 재실행만으로 Whisper가 추가되지 않습니다.
+                    현재 작업을 ‘지금 저장’한 뒤 앱 폴더에서 <code>./setup.sh --mode whisper</code>를
+                    한 번 완료하고 Kirinuki를 다시 열어 주세요. 이미 Whisper로 설치했다면
+                    앱을 다시 연 뒤 같은 버튼으로 연결 상태를 확인하세요.
                   </p>
                 </div>
               </details>
@@ -600,7 +610,7 @@
               <div class="whisper-model-card" aria-labelledby="whisper-model-label">
                 <span id="whisper-model-label">연결된 모델</span>
                 <strong id="whisper-model-summary">연결 후 자동으로 확인합니다</strong>
-                <small>모델 이름은 PC 도우미가 보고한 실제 실행 상태를 검증한 뒤에만 표시됩니다.</small>
+                <small>모델 이름은 Kirinuki가 내장 자막 엔진의 실제 실행 상태를 검증한 뒤에만 표시됩니다.</small>
               </div>
 
               <details id="whisper-model-catalog" class="caption-agent-policy whisper-model-catalog">
@@ -617,19 +627,14 @@
               </details>
 
               <details id="caption-advanced-settings" class="caption-agent-policy caption-provider-settings">
-                <summary>연결 문제 해결 <em>고급</em></summary>
+                <summary>내장 Whisper 문제 해결</summary>
                 <div class="caption-provider-fields">
                   <p class="caption-agent-advanced-intro">
-                    자동 연결이 실패할 때만 아래 주소를 확인하세요.
-                    Whisper 연결 도우미는 이 기기 안에서만 실행됩니다.
+                    AudSeg 설치에서 자동 연결이 실패하면 현재 작업을 ‘지금 저장’한 뒤
+                    <code>./setup.sh --mode whisper</code>로 Whisper를 준비하고 앱을 다시 열어 주세요.
+                    음성은 이 기기 안의 내장 Whisper에서만 처리됩니다.
                   </p>
-                  <div class="caption-agent-row">
-                    <label class="select-field">
-                      <span>PC 도우미 연결 주소</span>
-                      <input id="caption-agent-endpoint" type="url" inputmode="url" spellcheck="false" value="http://127.0.0.1:4319/v1/captions" placeholder="http://127.0.0.1:4319/v1/captions">
-                    </label>
-                    <button id="test-caption-agent" class="small-action caption-agent-test" type="button">연결 확인</button>
-                  </div>
+                  <button id="test-caption-agent" class="small-action caption-agent-test" type="button">내장 Whisper 다시 확인</button>
                   <input id="caption-agent-token" type="hidden" value="">
                   <strong class="caption-agent-rules-title">자동 자막 원칙</strong>
                   <ul>
@@ -1303,32 +1308,33 @@
     <dialog id="local-draft-dialog" class="local-draft-dialog" aria-labelledby="local-draft-title" aria-describedby="local-draft-description">
       <div class="local-draft-dialog-header">
         <div>
-          <h2 id="local-draft-title">최근 저장본 5개</h2>
+          <h2 id="local-draft-title">저장·복구본 최대 5개</h2>
         </div>
-        <button id="close-local-draft-dialog" class="icon-action local-draft-close" type="button" aria-label="저장본 목록 닫기" title="닫기">
+        <button id="close-local-draft-dialog" class="icon-action local-draft-close" type="button" aria-label="저장·복구본 목록 닫기" title="닫기">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
         </button>
       </div>
 
       <div class="local-draft-dialog-body">
         <div id="local-draft-description" class="local-draft-description">
-          <p>편집 상태는 최근 5개까지만 이 브라우저·이 기기에 보관됩니다.</p>
+          <p>직접 저장한 버전과 편집 중 복구본을 합쳐 최근 5개까지 이 기기에 둡니다.</p>
+          <p><strong>탭 종료 뒤에는 ‘지금 저장’으로 만든 버전만 남습니다.</strong> 편집 중·불러오기 전 복구본은 자동으로 정리됩니다.</p>
           <p class="local-draft-device-note">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6Z"/><path d="M10 17h4"/></svg>
             이 사이트의 기기 내 데이터를 지우면 저장본도 함께 삭제됩니다.
           </p>
         </div>
 
-        <div id="local-draft-list" class="local-draft-list" role="radiogroup" aria-label="불러올 저장본"></div>
-        <p id="local-draft-empty" class="local-draft-empty">아직 저장된 버전이 없습니다.</p>
+        <div id="local-draft-list" class="local-draft-list" role="radiogroup" aria-label="불러올 저장·복구본"></div>
+        <p id="local-draft-empty" class="local-draft-empty">아직 직접 저장한 버전이나 편집 중 복구본이 없습니다.</p>
       </div>
 
       <div class="local-draft-dialog-footer">
         <p>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7v5c0 4.7 3.2 7.7 8 9 4.8-1.3 8-4.3 8-9V7Z"/><path d="m9 12 2 2 4-4"/></svg>
-          불러오기 직전의 현재 상태도 자동으로 저장합니다.
+          선택한 버전을 불러오기 전에 현재 상태의 편집 중 복구본을 만듭니다. 이 복구본도 탭 종료 시 폐기됩니다.
         </p>
-        <p>저장본 불러오기는 시작 화면의 최근 편집에서 ‘저장본’을 선택하고 이번 사용의 사용자 진술을 다시 입력한 경우에만 활성화됩니다.</p>
+        <p>시작 화면에서 직접 저장본을 다시 열 때는 이번 사용의 사용자 진술을 다시 입력해야 합니다.</p>
         <div class="local-draft-footer-actions">
           <button id="open-session-archive-file" class="button secondary" type="button">내보낸 편집 복원 파일 열기</button>
           <button id="restore-local-draft" class="button primary" type="button" disabled>선택한 버전 불러오기</button>
@@ -1482,6 +1488,6 @@
       </article>
     </template>
 
-    <script type="module" src="editor/editor.js?v=2.7.0"></script>
+    <script type="module" src="editor/editor.js?v=3.0.0"></script>
   </body>
 </html>

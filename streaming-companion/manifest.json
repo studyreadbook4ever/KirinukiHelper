@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Kirinuki Streaming Companion",
-  "version": "2.0.0",
-  "description": "Kirinuki Studio의 임베드 스트리밍 플레이어를 클라이언트에서 제어합니다.",
+  "name": "Kirinuki Player Bridge",
+  "version": "3.0.0",
+  "description": "Kirinuki 앱에 포함된 원본 플레이어 연결 구성요소입니다.",
   "minimum_chrome_version": "120",
   "content_scripts": [
     {

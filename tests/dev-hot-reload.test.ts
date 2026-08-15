@@ -491,7 +491,7 @@ test("web 릴리스 명령은 전체 검증부터 web ZIP까지 한 lease로 감
     packageJson.scripts.package,
     "node --import tsx scripts/release-package.ts"
   );
-  assert.equal(packageJson.name, "kirinuki-local-web-studio");
+  assert.equal(packageJson.name, "kirinuki-app");
   assert.equal(
     packageJson.scripts.build,
     "node --import tsx scripts/build-web.ts"

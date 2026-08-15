@@ -96,8 +96,8 @@ AudSeg만 쓸 때는 caption stack 설치·실행이 필요 없다.
 - 4319는 공개 VOD 준비·검증·로컬 media Range와 caption session의 gateway다.
   4318은 Whisper를 명시적으로 연결했을 때 gateway가 호출하는 private loopback
   엔진이며 localhost 웹 페이지가 직접 의존하지 않는다.
-- 허용된 HTTPS 치지직·YouTube·SOOP·`naver.me` URL만 브라우저 인자로 받고 제어
-  문자를 거부한다.
+- 공용 source embed parser가 실제로 처리할 수 있는 HTTPS 치지직·YouTube·SOOP
+  공개 완료 VOD URL만 브라우저 인자로 받고, 길이 초과와 제어 문자를 거부한다.
 - 실행 중인 Chromium을 강제 종료하지 않는다. `stop`은 관리하는 localhost
   4320 서버, 4319 gateway와 선택적 Whisper stack만 정상 종료한다.
 - foreground Whisper의 PID claim은 exact CLI 경로, Linux process start tick,
@@ -438,11 +438,11 @@ localhost editor
   공개 모드만 exact `kirinuki.eff0rtchung.kr` Host와 HTTPS forwarded proto를
   받으며 관리 health/migration endpoint는 Tunnel에 노출하지 않는다. allowlisted
   regular file, symlink/traversal 차단, CSP·nosniff·no-referrer를 유지한다.
-- Popovic 같은 rewrite 없는 정적 배포에서는 tracked `web/`의 Studio Origin token을
-  exact `https://kirinuki.eff0rtchung.kr` 문서에서만 자체 해석한다. Git 앱 등록은
-  `repo_subdir=web`, `hostnames=kirinuki.eff0rtchung.kr`를 사용한다.
-  `web/.popovic-hosts`는 mounted-source 전용이며 Git deploy가 복사하지 않는다.
-  CSS·JS·AudSeg worker의 package-version query는 한 release에서 일치해야 한다.
+- 공개 배포는 tracked `public-shell/` 또는 검증된 `kirinuki-web-v*.zip`만 사용한다.
+  Git 앱 등록은 `repo_subdir=public-shell`,
+  `hostnames=kirinuki.eff0rtchung.kr`를 사용한다. `web/`은 앱 내부 편집 화면이므로
+  정적 호스트나 Tunnel origin으로 지정하면 안 된다. `public-shell/_headers`와
+  실제 HTTPS 응답 헤더가 일치하지 않으면 배포를 완료한 것으로 간주하지 않는다.
 - 공개 전 Popovic의 RED 요청 집계를 코드에서 완전히 비활성화하고 기존 metric
   bucket을 지운다. Popovic 또는 Cloudflare에서 clickjacking·nosniff·최소 권한·
   COOP/CORP/HSTS 응답 헤더를 적용한다. meta CSP만으로 완료됐다고 간주하지 않는다.
@@ -524,9 +524,9 @@ Elastic/Prosperity, field-of-use·revenue 제한 또는 불명확한 `LicenseRef
 - `scripts/chzzk-vod-job-manager.ts`: 호환 schema 아래 플랫폼 공용 VOD 작업·로컬 media lease
 - `web/index.html`, `web/studio.css`, `web/studio.js`: localhost 시작 화면
 - `web/editor.html`, `web/editor/**`: 정상 web 편집기 HTML·CSS·typed 생성물
+- `public-shell/**`: 공개 앱 실행·설치 shell, hostname과 강제 응답 헤더 설정
 - `streaming-companion/**`: action·service worker·UI가 없는 정상 실행 연결부
 - `web/THIRD_PARTY_NOTICES.md`, `web/licenses/**`: 정상 web 배포 고지·원문
-- `web/.popovic-hosts`: Popovic mounted-source용 exact 공개 hostname 선언
 - `tests/audseg.test.ts`: DSP 결정성·경계·AudSeg 생성 빈 cue의 4초 상한
 - `tests/caption-agent-client.test.ts`: loopback client·session·재개
 - `tests/local-caption-stack.test.ts`: 설치·runtime·보안
@@ -645,7 +645,7 @@ uv run --project AudSeg --extra dev ruff format --check AudSeg
 - [ ] protocol marker 누락·불일치·중복 companion은 stale로 표시하고 재사용하거나 자동 종료하지 않음
 - [ ] 과거 관리 프로세스 전환은 exact 프로필·PID·시작 시각·실행 파일·명령행을 연속 재검증한 경우에만 한 번 정상 종료하며, 불명확한 프로세스에는 신호를 보내지 않음
 - [ ] Origin migration은 명시적으로 켠 loopback 서버에서 exact 이전 Origin·분리된 single-use nonce만 허용하고 기본·공개 모드에서는 닫힘
-- [ ] Popovic Git 앱 repository의 `hostnames=kirinuki.eff0rtchung.kr`, `web/.popovic-hosts`, versioned immutable asset query가 일치하며 `web/licenses/UNLICENSE.txt`와 루트 `UNLICENSE`가 모두 보존됨
+- [ ] 공개 호스트의 `repo_subdir=public-shell`, `hostnames=kirinuki.eff0rtchung.kr`, `public-shell/.popovic-hosts`, `_headers`가 일치하고 `web/`이 공개되지 않으며 공개 shell의 `licenses/UNLICENSE.txt`와 루트 `UNLICENSE`가 모두 보존됨
 - [ ] 4320 정적 서버가 loopback·exact Host·allowlist·traversal/symlink 차단을 검증함
 - [ ] CHZZK·YouTube·SOOP VOD가 도메인으로 자동 분기되고 최초 범위는 선택 ±10초이며, 사람의 명시적 추가 로딩만 clip별 범위를 단조롭게 넓힘
 - [ ] 추가 로딩이 검증된 기존 조각을 재사용해 필요한 차집합만 받고, 실패·취소·원본 변경 시 이전 로컬 영상과 편집 상태를 보존함

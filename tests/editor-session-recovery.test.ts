@@ -93,7 +93,7 @@ test("삭제 완료 복구와 archive import는 exact identity와 공통 busy gu
   );
   assert.match(
     reconcile,
-    /sessionCleanupMarkerMatchesMaterializedBinding\([\s\S]*LOCAL_VOD_COMPANION_ENDPOINT/u
+    /sessionCleanupMarkerMatchesMaterializedBinding\([\s\S]*KIRINUKI_MEDIA_ENGINE_ENDPOINT/u
   );
   assert.match(source, /isSafeSessionCleanupMediaUrl\([\s\S]*record\.mediaUrl/u);
   assert.match(reconcile, /아무 파일도 지우지 않았습니다/u);
@@ -282,7 +282,11 @@ test("편집 세션은 진입 baseline 뒤 작업 사본을 저장하고 명시�
   assert.match(html, /탭을 그냥 닫으면 이번 변경은 저장되지 않습니다/u);
   assert.match(
     source,
-    /PC 도우미를 켠 뒤 이 탭에서 같은 버튼을 다시 눌러 주세요\. 현재 작업을 보존하려면 상단 ‘작업 끝내기’에서 저장 후 나가기를 선택하세요/u
+    /feature === "Whisper"[\s\S]*현재 작업을 ‘지금 저장’한 뒤 설치 안내의 ‘Whisper로 설치’를 완료하고 Kirinuki를 다시 열어 같은 버튼을 눌러 주세요\.[\s\S]*현재 작업을 저장한 뒤 Kirinuki 앱을 완전히 종료하고 다시 열어 같은 버튼을 눌러 주세요\./u
+  );
+  assert.match(
+    source,
+    /return `\$\{feature\}용 내부 미디어 엔진을 시작하지 못했습니다\. \$\{recovery\}`/u
   );
   assert.doesNotMatch(
     source,

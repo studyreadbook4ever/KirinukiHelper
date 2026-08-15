@@ -135,10 +135,15 @@ test("컷 단계는 원본 iframe만 유지하고 로컬 미디어 준비 경로
   );
   assert.doesNotMatch(
     mainSource,
-    /ChzzkVodMaterialization|LOCAL_VOD_COMPANION_ENDPOINT|startChzzkVodMaterialization|waitForChzzkVodMaterialization|localPreviewBootstrapClip|\/v1\/vod\/materializations/u,
+    /ChzzkVodMaterialization|LOCAL_VOD_COMPANION_ENDPOINT|KIRINUKI_MEDIA_ENGINE_ENDPOINT|startChzzkVodMaterialization|waitForChzzkVodMaterialization|localPreviewBootstrapClip|\/v1\/vod\/materializations/u,
     "컷 단계가 VOD materialization을 시작해서는 안 됩니다."
   );
   assert.match(mainSource, /StreamingBridgeClient/u);
+  assert.match(
+    mainSource,
+    /requestTimeoutMs: 900,[\s\S]*maxDeliveryAttempts: 3/u,
+    "실제 cross-origin player의 짧은 stall을 idempotent 세 번째 전달로 흡수해야 합니다."
+  );
 
   const controls = sourceSection(
     mainSource,

@@ -719,14 +719,14 @@ export async function runTypeScriptMigrationCheck(
   ));
   assert(
     forbiddenWebPackageFiles.length === 0,
-    `web ZIP에 도구·소스·Extension 파일이 들어갑니다: ${forbiddenWebPackageFiles.join(", ")}`
+    `앱 web assets에 도구·소스·Extension 파일이 들어갑니다: ${forbiddenWebPackageFiles.join(", ")}`
   );
   const packagedWebJavaScript = WEB_PACKAGE_FILES.filter((relativePath) => (
     javaScriptFamilyPattern.test(relativePath)
   ));
   assert(
     sameStrings(packagedWebJavaScript, WEB_JAVASCRIPT_PATHS),
-    "web ZIP JavaScript와 typed build manifest가 다릅니다."
+    "앱 web assets JavaScript와 typed build manifest가 다릅니다."
   );
 
   for (const relativePath of repositoryFiles.filter((filePath) => (

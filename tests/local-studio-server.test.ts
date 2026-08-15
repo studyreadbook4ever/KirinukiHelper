@@ -32,7 +32,8 @@ import {
   studioRequestPath,
   studioHealthPayload,
   studioSecurityHeaders,
-  validStudioPidRecord
+  validStudioPidRecord,
+  withoutStaticContentSecurityPolicyMeta
 } from "../scripts/local-studio-server-core.js";
 import type {
   StudioHealthPayload,
@@ -129,7 +130,7 @@ async function createStaticFixture(): Promise<string> {
   await Promise.all([
     writeFile(
       path.join(root, "web", "index.html"),
-      "<!doctype html><meta name=\"kirinuki-studio-origin\" content=\"__KIRINUKI_STUDIO_ORIGIN__\"><title>Kirinuki localhost</title>\n",
+      "<!doctype html>\n<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self'; connect-src 'self'\">\n<meta name=\"kirinuki-studio-origin\" content=\"__KIRINUKI_STUDIO_ORIGIN__\"><title>Kirinuki localhost</title>\n",
       "utf8"
     ),
     writeFile(
@@ -154,7 +155,7 @@ async function createStaticFixture(): Promise<string> {
     ),
     writeFile(
       path.join(root, "web", "editor.html"),
-      "<!doctype html><meta name=\"kirinuki-studio-origin\" content=\"__KIRINUKI_STUDIO_ORIGIN__\"><title>Editor</title>\n",
+      "<!doctype html>\n<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self'; connect-src 'self'\">\n<meta name=\"kirinuki-studio-origin\" content=\"__KIRINUKI_STUDIO_ORIGIN__\"><title>Editor</title>\n",
       "utf8"
     ),
     writeFile(
@@ -268,14 +269,9 @@ test("CLI는 start/status/stop과 command별 옵션만 받는다", () => {
       studioOrigin: KIRINUKI_LOCAL_STUDIO_ORIGIN
     }
   });
-  assert.equal(
-    parseLocalStudioServerArgs(["start", "--public-origin"])
-      .options.studioOrigin,
-    KIRINUKI_PUBLIC_STUDIO_ORIGIN
-  );
   assert.throws(
-    () => parseLocalStudioServerArgs(["status", "--public-origin"]),
-    /start에서만/u
+    () => parseLocalStudioServerArgs(["start", "--public-origin"]),
+    /알 수 없는 옵션/u
   );
   assert.throws(
     () => parseLocalStudioServerArgs(["stop", "--foreground"]),
@@ -625,6 +621,22 @@ test("HTML 보안 헤더는 CSP, no-store, COOP, nosniff와 origin-only referrer
   );
 });
 
+test("앱 서버는 public-safe meta CSP 하나만 제거하고 HTTP CSP를 단독 적용한다", () => {
+  const source = '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; connect-src \'self\'">\n<main>앱</main>\n';
+  assert.equal(
+    withoutStaticContentSecurityPolicyMeta(source),
+    "<main>앱</main>\n"
+  );
+  assert.throws(
+    () => withoutStaticContentSecurityPolicyMeta("<main>없음</main>"),
+    /정확히 하나/u
+  );
+  assert.throws(
+    () => withoutStaticContentSecurityPolicyMeta(source + source),
+    /정확히 하나/u
+  );
+});
+
 test("HTTP server는 health와 allowlist 파일만 정확한 MIME/보안 헤더로 제공한다", async () => {
   const root = await createStaticFixture();
   const server = createLocalStudioHttpServer({
@@ -646,6 +658,10 @@ test("HTTP server는 health와 allowlist 파일만 정확한 MIME/보안 헤더�
     );
     assert.match(String(index.headers["content-security-policy"]), /object-src 'none'/u);
     assert.match(index.body.toString("utf8"), /Kirinuki localhost/u);
+    assert.doesNotMatch(
+      index.body.toString("utf8"),
+      /http-equiv="Content-Security-Policy"/u
+    );
     assert.match(
       index.body.toString("utf8"),
       /content="http:\/\/127\.0\.0\.1:4320"/u
@@ -762,62 +778,18 @@ test("HTTP server는 health와 allowlist 파일만 정확한 MIME/보안 헤더�
   }
 });
 
-test("공개 opt-in server는 exact Tunnel 요청에 공개 Origin meta를 주입한다", async () => {
-  const root = await createStaticFixture();
-  const server = createLocalStudioHttpServer({
-    repoRoot: root,
+test("앱 UI 서버는 공개 Origin 모드 생성을 거부한다", () => {
+  assert.throws(() => createLocalStudioHttpServer({
+    repoRoot: "/opt/kirinuki",
     instanceNonce: TEST_NONCE,
-    studioOrigin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
-    enableLegacyMigration: true,
-    migrationNonce: TEST_MIGRATION_NONCE
-  });
-  try {
-    const port = await listenEphemeral(server);
-    const tunneled = await requestServer(port, "/editor.html", {
-      host: "kirinuki.eff0rtchung.kr",
-      headers: { "X-Forwarded-Proto": "https" }
-    });
-    assert.equal(tunneled.status, 200);
-    assert.match(
-      tunneled.body.toString("utf8"),
-      /content="https:\/\/kirinuki\.eff0rtchung\.kr"/u
-    );
-    assert.equal((await requestServer(port, "/")).status, 404);
-    assert.equal((await requestServer(port, "/studio.css")).status, 404);
-    assert.equal((await requestServer(port, "/", { method: "POST" })).status, 404);
-    assert.equal((await requestServer(port, "/v1/studio/health")).status, 200);
-    assert.equal((await requestServer(
-      port,
-      LOCAL_STUDIO_MIGRATION_CAPABILITY_ROUTE,
-      { headers: { Origin: legacyExtensionOriginForRepo(root) } }
-    )).status, 200);
-    assert.equal((await requestServer(port, "/v1/studio/health", {
-      host: "kirinuki.eff0rtchung.kr",
-      headers: { "X-Forwarded-Proto": "https" }
-    })).status, 404);
-    assert.equal((await requestServer(port, "/", {
-      host: "kirinuki.eff0rtchung.kr"
-    })).status, 421);
-    assert.equal((await requestServer(port, "/", {
-      host: "kirinuki.eff0rtchung.kr.attacker.example",
-      headers: { "X-Forwarded-Proto": "https" }
-    })).status, 421);
-  } finally {
-    if (server.listening) {
-      await closeServer(server);
-    }
-    await rm(root, { recursive: true, force: true });
-  }
+    studioOrigin: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  }), /Kirinuki 앱 Origin/u);
 });
 
-test("Studio CLI URL은 local 기본과 public opt-in을 혼합하지 않는다", () => {
+test("Studio CLI URL은 설치된 앱 Origin 하나만 연다", () => {
   assert.equal(
     studioBrowserUrl(KIRINUKI_LOCAL_STUDIO_ORIGIN),
     KIRINUKI_LOCAL_STUDIO_ORIGIN
-  );
-  assert.equal(
-    studioBrowserUrl(KIRINUKI_PUBLIC_STUDIO_ORIGIN),
-    KIRINUKI_PUBLIC_STUDIO_ORIGIN
   );
 });
 

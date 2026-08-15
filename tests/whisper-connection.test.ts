@@ -10,6 +10,7 @@ import {
   KIRINUKI_STUDIO_ORIGIN_PLACEHOLDER,
   assertKirinukiStudioDocumentOrigin,
   isKirinukiPublicStudioOrigin,
+  resolveKirinukiAppOrigin,
   resolveKirinukiStudioOrigin
 } from "../src/lib/local-runtime-origin.js";
 import {
@@ -94,6 +95,18 @@ test("Studio Origin 설정은 loopback 기본과 단 하나의 공개 opt-in만 
   );
 });
 
+test("내부 미디어 엔진은 공개 문서 Origin을 절대 허용하지 않는다", () => {
+  assert.equal(resolveKirinukiAppOrigin(), KIRINUKI_LOCAL_STUDIO_ORIGIN);
+  assert.equal(
+    resolveKirinukiAppOrigin(KIRINUKI_LOCAL_STUDIO_ORIGIN),
+    KIRINUKI_LOCAL_STUDIO_ORIGIN
+  );
+  assert.throws(
+    () => resolveKirinukiAppOrigin(KIRINUKI_PUBLIC_STUDIO_ORIGIN),
+    /앱.*Origin/u
+  );
+});
+
 function descriptor() {
   return createWhisperConnectionDescriptor({
     gatewayPort: 4319,
@@ -152,21 +165,15 @@ test("연결 JSON은 path와 비밀값 없이 exact loopback·Origin·실제 모
   assert.equal(Object.isFrozen(parsed), true);
 });
 
-test("공개 Studio 연결도 endpoint는 loopback에 고정하고 Origin만 exact 공개값을 쓴다", () => {
-  const created = createWhisperConnectionDescriptor({
+test("공개 페이지는 Whisper 연결 파일을 만들 수 없다", () => {
+  assert.throws(() => createWhisperConnectionDescriptor({
     gatewayPort: 4319,
     origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
     requestedProfile: "draft",
     effectiveProfile: "draft",
     backend: "cpu",
     modelId: "tiny-q5_1"
-  });
-  assert.equal(created.endpoint, "http://127.0.0.1:4319/v1/captions");
-  assert.equal(created.origin, KIRINUKI_PUBLIC_STUDIO_ORIGIN);
-  assert.throws(
-    () => parseWhisperConnectionDescriptor(created, origin),
-    /현재 실행 중인 Kirinuki/u
-  );
+  }), /설치된 Kirinuki 앱/u);
 });
 
 test("연결 parser는 외부 주소·다른 Origin·추가 필드·모델 불일치를 fail-closed한다", () => {
@@ -189,7 +196,7 @@ test("연결 parser는 외부 주소·다른 Origin·추가 필드·모델 불�
       valid,
       "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     ),
-    /고정된 loopback 또는 공개 배포 Origin/u
+    /설치된 Kirinuki 앱/u
   );
   assert.throws(
     () => parseWhisperConnectionDescriptor({

@@ -1512,7 +1512,7 @@ test("fresh VOD 자동 준비는 실제 호출을 한 번만 하고 상세 실�
     chzzkVodSourceUrl: () => "https://www.youtube.com/watch?v=abcdefghijk",
     prepareChzzkVodMedia: async () => {
       prepareCalls += 1;
-      toasts.push("로컬 companion 연결 실패 · 편집 영상 준비 버튼으로 재시도");
+      toasts.push("내부 미디어 엔진 연결 실패 · 편집 영상 준비 버튼으로 재시도");
       return false;
     },
     showToast: (message: string) => toasts.push(message),
@@ -1535,7 +1535,7 @@ test("fresh VOD 자동 준비는 실제 호출을 한 번만 하고 상세 실�
   assert.equal(prepareCalls, 1, "같은 editor runtime에서 최초 요청을 중복 시작하면 안 됩니다.");
   assert.equal(storedHandleReads, 0, "mediaAsset이 없는 VOD 세션은 고아 파일 핸들을 읽어 붙이면 안 됩니다.");
   assert.deepEqual(toasts, [
-    "로컬 companion 연결 실패 · 편집 영상 준비 버튼으로 재시도"
+    "내부 미디어 엔진 연결 실패 · 편집 영상 준비 버튼으로 재시도"
   ]);
 
   const resumeRestore = factory(...Object.values({
@@ -1568,17 +1568,17 @@ test("VOD 준비는 사용자가 바꿀 수 있는 자막 endpoint와 분리된 
   const endpoint = variableDeclaration(prepare, "endpoint");
 
   assert.ok(endpoint.initializer && ts.isIdentifier(endpoint.initializer));
-  assert.equal(endpoint.initializer.text, "LOCAL_VOD_COMPANION_ENDPOINT");
+  assert.equal(endpoint.initializer.text, "KIRINUKI_MEDIA_ENGINE_ENDPOINT");
   assert.doesNotMatch(
     body,
     /const endpoint = captionAgentSettings\.endpoint/u
   );
-  assert.match(body, /token: vodCompanionToken/u);
-  assert.match(body, /vodCompanionToken = token/u);
+  assert.match(body, /token: vodMediaEngineToken/u);
+  assert.match(body, /vodMediaEngineToken = token/u);
   assert.doesNotMatch(
     body,
     /elements\.caption_agent_token/u,
-    "VOD 요청이 자막 companion token을 읽거나 덮어쓰면 안 됩니다."
+    "VOD 요청이 자막 엔진 token을 읽거나 덮어쓰면 안 됩니다."
   );
 });
 

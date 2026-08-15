@@ -370,7 +370,7 @@ test("세 플랫폼의 컷 제어는 YouTube API 또는 client-only streaming br
   assert.match(source, /generation !== youtubePlayerGeneration/u);
   assert.doesNotMatch(
     source,
-    /LOCAL_VOD_COMPANION_ENDPOINT|startChzzkVodMaterialization|waitForChzzkVodMaterialization|localPreviewVideo/u
+    /LOCAL_VOD_COMPANION_ENDPOINT|KIRINUKI_MEDIA_ENGINE_ENDPOINT|startChzzkVodMaterialization|waitForChzzkVodMaterialization|localPreviewVideo/u
   );
   assert.doesNotMatch(source, /fetch\([^\n]*(?:youtube|chzzk|soop)/iu);
   assert.doesNotMatch(source, /setInterval\([^\n]*(?:fake|localClock)/iu);

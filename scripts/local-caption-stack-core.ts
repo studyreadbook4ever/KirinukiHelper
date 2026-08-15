@@ -8,10 +8,10 @@ import {
 import type { WhisperModelId } from "../src/lib/whisper-connection.js";
 import {
   KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  isKirinukiStudioOrigin,
-  resolveKirinukiStudioOrigin
+  isKirinukiLocalStudioOrigin,
+  resolveKirinukiAppOrigin
 } from "../src/lib/local-runtime-origin.js";
-import type { KirinukiStudioOrigin } from "../src/lib/local-runtime-origin.js";
+import type { KirinukiAppOrigin } from "../src/lib/local-runtime-origin.js";
 
 export const LOCAL_CAPTION_STACK_SCHEMA =
   "chzzk-kirinuki-local-caption-stack/v1";
@@ -278,7 +278,7 @@ export function parseLocalCaptionStackArgs(
     const [flag = "", inlineValue] = raw.split("=", 2);
     if (/api[-_]?key|token|secret/iu.test(flag)) {
       throw new TypeError(
-        "API 키는 지원하지 않고 연결 토큰은 로컬 companion이 자동 발급되므로 명령행 인자로 받을 수 없습니다."
+        "API 키는 지원하지 않고 연결 정보는 Kirinuki 내부 자막 엔진이 자동 발급하므로 명령행 인자로 받을 수 없습니다."
       );
     }
     if (flag === "--profile") {
@@ -465,7 +465,7 @@ export function createInstallConfig(
 }: {
   sttPort?: number;
   gatewayPort?: number;
-  origin?: KirinukiStudioOrigin;
+  origin?: KirinukiAppOrigin;
 } = {}
 ): Readonly<InstallConfig> {
   const binaryName = process.platform === "win32"
@@ -487,7 +487,7 @@ export function createInstallConfig(
     host: LOOPBACK_HOST,
     sttPort,
     gatewayPort,
-    origin: resolveKirinukiStudioOrigin(origin),
+    origin: resolveKirinukiAppOrigin(origin),
     whisper: Object.freeze({
       version: PINNED_WHISPER_CPP.version,
       commit: PINNED_WHISPER_CPP.commit,
@@ -605,7 +605,7 @@ export function renderSystemdUserUnit({
   writableVodStateRoot?: string;
 }): string {
   const exactOrigin = String(origin || "");
-  if (!isKirinukiStudioOrigin(exactOrigin)) {
+  if (!isKirinukiLocalStudioOrigin(exactOrigin)) {
     throw new TypeError(
       "systemd unit에는 정확한 Kirinuki Studio Origin이 필요합니다."
     );

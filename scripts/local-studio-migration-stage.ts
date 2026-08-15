@@ -75,7 +75,7 @@ function requiredNonce(value: unknown): string {
 
 function requiredExtensionOrigin(value: unknown): string {
   if (typeof value !== "string" || !EXTENSION_ORIGIN_PATTERN.test(value)) {
-    throw new TypeError("legacy Extension origin이 올바르지 않습니다.");
+    throw new TypeError("이전 Kirinuki 편집 저장소 식별자가 올바르지 않습니다.");
   }
   return value;
 }
@@ -132,7 +132,7 @@ export class LocalStudioMigrationStage {
   ): Promise<Readonly<LocalStudioMigrationStageResult>> {
     if (sourceOrigin !== this.expectedExtensionOrigin) {
       fail(
-        "legacy Extension origin이 현재 로컬 빌드와 다릅니다.",
+        "이전 Kirinuki 편집 저장소가 현재 앱 빌드와 다릅니다.",
         "LOCAL_STUDIO_MIGRATION_ORIGIN_MISMATCH",
         403
       );
@@ -418,7 +418,7 @@ export async function handleLocalStudioMigrationRequest({
         || exactHeader(request, "content-type") !== "application/json"
       ) {
         fail(
-          "Extension migration 요청 헤더가 올바르지 않습니다.",
+          "이전 Kirinuki 데이터 이동 요청 헤더가 올바르지 않습니다.",
           "LOCAL_STUDIO_MIGRATION_REQUEST_REJECTED",
           403
         );

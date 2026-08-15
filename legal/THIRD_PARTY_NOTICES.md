@@ -1,18 +1,21 @@
-# Third-party notices — source, web distribution and local runtime
+# Third-party notices — source, app browser assets and Kirinuki runtime
 
-이 문서는 KirinukiHelper 저장소, localhost web 정적 배포물, 선택적으로 설치되는
-로컬 runtime까지 포함하는 전체 고지입니다. 정상 web ZIP 자체의 더 좁은 범위는
-`web/THIRD_PARTY_NOTICES.md`를 기준으로 합니다. 최소 `streaming-companion/`은
-first-party bridge 코드만 포함하며 제3자 runtime을 번들하지 않습니다.
+이 문서는 Kirinuki 앱 소스 저장소, 앱에 포함되는 browser assets, 앱 setup
+과정에서 선택적으로 설치되는 내부 runtime까지 포함하는 전체 고지입니다. 제3자
+코드가 없는 공개 launch shell ZIP의 더 좁은 범위는
+`public-shell/THIRD_PARTY_NOTICES.md`를 기준으로 합니다. 앱 browser assets의
+배포 고지는 `web/THIRD_PARTY_NOTICES.md`에 따로 둡니다.
+기술 경로 `streaming-companion/`에는 앱이 관리하는 first-party Player Bridge
+코드만 있으며 제3자 runtime을 번들하지 않습니다.
 
-KirinukiHelper가 직접 작성한 코드는 루트 `UNLICENSE`에 따라 퍼블릭 도메인에
-헌정됩니다. Popovic 정적 배포에는 같은 원문을
-`web/licenses/UNLICENSE.txt`로 싣습니다. 아래 구성요소는 그 헌정 대상이 아니며
+Kirinuki 프로젝트가 직접 작성한 코드는 루트 `UNLICENSE`에 따라 퍼블릭 도메인에
+헌정됩니다. 공개 launch shell에는 같은 원문을
+`public-shell/licenses/UNLICENSE.txt`로 싣습니다. 아래 구성요소는 그 헌정 대상이 아니며
 각각의 라이선스와 저작권 고지를 유지합니다. 인벤토리와 자동 검사는 법률 자문이나 법적 무위험 보증이
-아닙니다. 실제 웹·컨테이너·companion 배포 산출물은 출시 때 다시 감사해야
+아닙니다. 실제 web·Kirinuki 앱·container 배포 산출물은 출시 때 다시 감사해야
 합니다.
 
-## web 정적 배포물에 포함되는 구성요소
+## Linux 소스 앱의 browser assets에 포함되는 구성요소
 
 <!-- attribution-id: mediabunny -->
 ### Mediabunny 1.51.0
@@ -86,10 +89,11 @@ npm source package에서 받을 수 있습니다.
 
 두 WOFF2 모두 표시한 upstream revision의 파일을 수정 없이 포함합니다.
 
-## 사용자별 XDG 디렉터리에 내려받는 로컬 runtime
+## 앱 setup이 사용자별 XDG 디렉터리에 내려받는 runtime
 
-아래 파일은 web 정적 ZIP에 포함되지 않습니다. setup 명령은 HTTPS URL,
-바이트 수와 SHA-256을 모두 고정하고, 검증에 실패하면 설치하지 않습니다.
+아래 파일은 공개 shell ZIP과 Linux source-app archive에 포함되지 않습니다.
+Kirinuki 앱의 setup 단계는 HTTPS URL, 바이트 수와 SHA-256을 모두 고정하고,
+검증에 실패하면 설치하지 않습니다.
 설치 위치와 운영 방식은 `legal/RUNTIME_DEPENDENCIES.md`를 확인하세요.
 
 <!-- attribution-id: whisper-cpp -->
@@ -227,7 +231,7 @@ SOFTWARE.
 ### FFmpeg
 
 `ffmpeg -version`과 `ffmpeg -buildconf`로 감지합니다. 이 저장소와 현재
-web 정적 ZIP은 FFmpeg를 재배포하지 않습니다. FFmpeg의 정확한 LGPL/GPL 및
+공개 shell ZIP은 FFmpeg를 재배포하지 않습니다. FFmpeg의 정확한 LGPL/GPL 및
 외부 라이브러리 의무는 사용한 build configuration에 따라 달라집니다.
 Upstream: https://ffmpeg.org/
 
@@ -241,8 +245,8 @@ Upstream: https://ffmpeg.org/ffprobe.html
 <!-- attribution-id: nodejs -->
 ### Node.js
 
-`node --version`과 `node -p process.versions`로 감지합니다. 로컬 companion과
-빌드 도구의 host runtime일 뿐 web 정적 ZIP에는 포함되지 않습니다. Node.js
+`node --version`과 `node -p process.versions`로 감지합니다. Kirinuki 앱 내부
+엔진과 빌드 도구의 host runtime일 뿐 공개 shell ZIP에는 포함되지 않습니다. Node.js
 배포본에는 여러 제3자 라이선스가 있으므로 향후 컨테이너에 넣을 때 해당
 배포본의 `LICENSE`를 함께 감사합니다. Upstream: https://github.com/nodejs/node
 
@@ -250,21 +254,23 @@ Upstream: https://ffmpeg.org/ffprobe.html
 ### Python
 
 `python3 --version`으로 감지하며 managed yt-dlp zipimport를 실행합니다.
-현재 web 정적 ZIP에는 포함되지 않습니다. Upstream: https://www.python.org/
+현재 공개 shell ZIP에는 포함되지 않습니다. Upstream: https://www.python.org/
 
 <!-- attribution-id: chromium -->
 ### Chromium / Google Chrome / ChromeDriver
 
-localhost web 실행과 E2E 검증에 사용하는 외부 브라우저 도구입니다. 이 저장소가
+Kirinuki 앱 화면 실행과 E2E 검증에 사용하는 외부 브라우저 도구입니다. 이 저장소가
 재배포하지 않으며 브라우저 배포본의 정확한 구성과 라이선스는 제공자·build에
 따라 달라집니다. Upstream: https://www.chromium.org/chromium-projects/
 
-## 로컬 companion npm runtime
+## Kirinuki 앱 내부 npm runtime
 
 <!-- attribution-id: tsx-runtime -->
-현재 로컬 setup·caption/VOD gateway는 저장소의 TypeScript CLI를 직접
-실행하므로 다음 패키지는 단순 build tool이 아니라 **companion runtime**
-입니다. web 정적 ZIP에는 포함되지 않습니다.
+현재 Kirinuki setup·자막 엔진·VOD 미디어 엔진은 저장소의 TypeScript CLI를
+직접 실행하므로 다음 패키지는 단순 build tool이 아니라 **앱 내부 runtime**
+입니다. `package-lock.json`을 이용해 repository-local `node_modules`에
+설치되며 공개 shell ZIP과 Linux source-app archive에는 패키지 내용이 포함되지
+않습니다.
 Upstream: https://github.com/privatenumber/tsx
 
 - tsx 4.23.1 — MIT
@@ -276,7 +282,7 @@ Upstream: https://github.com/privatenumber/tsx
 <!-- attribution-id: typescript-toolchain -->
 정확한 artifact URL·integrity는 `package-lock.json`에 고정하며
 `npm run license:check`가 승인 목록 밖의 패키지를 거부합니다. 이 패키지는
-web 정적 ZIP에 들어가지 않습니다.
+공개 shell ZIP에 들어가지 않습니다.
 TypeScript upstream: https://github.com/microsoft/TypeScript
 
 - TypeScript 5.9.3 — Apache-2.0
@@ -286,7 +292,7 @@ TypeScript upstream: https://github.com/microsoft/TypeScript
 
 <!-- attribution-id: github-actions-ci -->
 아래 구성요소는 `.github/workflows/typescript-quality.yml`에서만 실행되며
-web·로컬 companion 산출물에 재배포하지 않습니다. workflow는 mutable
+공개 web·Kirinuki 앱 산출물에 재배포하지 않습니다. workflow는 mutable
 major tag 대신 full commit SHA를 사용합니다. Upstream:
 https://docs.github.com/actions
 
@@ -316,7 +322,7 @@ https://docs.github.com/actions
 
 ## Corresponding source
 
-web·최소 streaming companion 소스, TypeScript build scripts, runtime installers,
+공개 web·앱 내부 Player Bridge 소스, TypeScript build scripts, runtime installers,
 exact lockfile와
 이 인벤토리의 canonical typed registry는 다음 위치에 있습니다.
 

@@ -8,7 +8,7 @@ KIRINUKI_SCRIPT_DIR="$(
 )"
 
 if [[ "$(uname -s 2>/dev/null || true)" != "Linux" ]]; then
-  printf '%s\n' "Kirinuki Linux 도우미는 현재 Linux만 지원합니다." >&2
+  printf '%s\n' "Kirinuki 앱은 현재 Linux만 지원합니다." >&2
   exit 1
 fi
 
@@ -17,7 +17,7 @@ if ! KIRINUKI_RESOLVED_NODE="$(command -v -- "$KIRINUKI_NODE_COMMAND" 2>/dev/nul
   printf '%s\n' \
     "Node.js 22 이상을 찾지 못했습니다." \
     "배포판 패키지 관리자나 https://nodejs.org/ 에서 Node.js와 npm을 설치한 뒤 다시 실행하세요." \
-    "이 도우미는 관리자 권한을 자동으로 얻거나 시스템 패키지를 임의로 설치하지 않습니다." >&2
+    "Kirinuki 앱은 관리자 권한을 자동으로 얻거나 시스템 패키지를 임의로 설치하지 않습니다." >&2
   exit 1
 fi
 

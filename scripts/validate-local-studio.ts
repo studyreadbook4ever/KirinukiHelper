@@ -98,7 +98,7 @@ const [companionContentScript, soopCompanionContentScript] =
   companionManifest.content_scripts || [];
 assert(
   companionManifest.manifest_version === 3
-    && companionManifest.version === "2.0.0"
+    && companionManifest.version === packageManifest.version
     && companionManifest.background === undefined
     && companionManifest.action === undefined
     && companionManifest.side_panel === undefined
@@ -179,7 +179,7 @@ assert(
 );
 
 assert(
-  packageManifest.name === "kirinuki-local-web-studio",
+  packageManifest.name === "kirinuki-app",
   "root package 이름이 localhost web studio를 가리키지 않습니다."
 );
 const packageScripts = packageManifest.scripts || {};
@@ -397,7 +397,7 @@ assert(
     && !WEB_PACKAGE_FILES.includes("manifest.json")
     && !WEB_PACKAGE_FILES.includes("sidepanel.html")
     && !WEB_PACKAGE_FILES.includes("service-worker.js"),
-  "기본 web 배포 allowlist에 Chrome Extension 진입점이 섞였습니다."
+  "앱 web assets allowlist에 Chrome Extension 진입점이 섞였습니다."
 );
 
 const securityHeaders = studioSecurityHeaders({ html: true });
@@ -422,6 +422,6 @@ assert(
 );
 
 console.log(
-  `localhost web 검증 통과: ${WEB_JAVASCRIPT_PATHS.length}개 typed bundle, `
-  + "source/구간/policy/resume UI, chrome-free runtime, exact loopback CSP"
+  `Kirinuki 앱 검증 통과: ${WEB_JAVASCRIPT_PATHS.length}개 typed bundle, `
+  + "source/구간/policy/resume UI, browser runtime, exact app-only CSP"
 );

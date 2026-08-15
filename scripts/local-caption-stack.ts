@@ -31,8 +31,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   KIRINUKI_GATEWAY_ORIGIN_BINDING,
-  isKirinukiStudioOrigin,
-  resolveKirinukiStudioOrigin
+  isKirinukiLocalStudioOrigin,
+  resolveKirinukiAppOrigin
 } from "../src/lib/local-runtime-origin.js";
 import {
   createWhisperConnectionDescriptor,
@@ -238,9 +238,9 @@ systemd-user가 없다면:
   종료는 같은 터미널에서 Ctrl+C
   실행 중 설정 변경은 caption-stack:stop → setup → start 순서로 적용
 
-공개 Studio opt-in:
-  KIRINUKI_ALLOWED_ORIGIN=https://kirinuki.eff0rtchung.kr npm run caption-stack -- setup
-  생략하면 기존 http://127.0.0.1:4320 전용이며 다른 Origin은 거절합니다.
+앱 연결 경계:
+  http://127.0.0.1:4320의 Kirinuki 앱 내부 Origin 하나만 허용합니다.
+  공개 사이트와 Cloudflare Tunnel에는 자막 엔진을 연결하지 않습니다.
 `.trim();
 }
 
@@ -428,7 +428,7 @@ async function readInstalledConfig(
     || gatewayPort < 1
     || gatewayPort > 65_535
     || sttPort === gatewayPort
-    || !isKirinukiStudioOrigin(config.origin)
+    || !isKirinukiLocalStudioOrigin(config.origin)
     || config.whisper?.version !== PINNED_WHISPER_CPP.version
     || config.whisper?.commit !== PINNED_WHISPER_CPP.commit
     || !pinnedModel
@@ -482,7 +482,7 @@ export function captionInstallMatchesRequestedStudioOrigin(
 ): boolean {
   return Boolean(
     config
-    && config.origin === resolveKirinukiStudioOrigin(
+    && config.origin === resolveKirinukiAppOrigin(
       environment.KIRINUKI_ALLOWED_ORIGIN
     )
   );
@@ -781,7 +781,7 @@ async function doctorCommand(options: LocalCaptionStackOptions) {
       configured: Boolean(config),
       configPath: paths.configPath,
       configuredOrigin: config?.origin || null,
-      expectedOrigin: resolveKirinukiStudioOrigin(
+      expectedOrigin: resolveKirinukiAppOrigin(
         process.env.KIRINUKI_ALLOWED_ORIGIN
       ),
       originMatchesLocalStudio: installOriginMatchesLocalStudio(paths, config),
@@ -877,7 +877,7 @@ async function setupCommand(
     options.backend
   );
   const config = createInstallConfig(paths, semantic, {
-    origin: resolveKirinukiStudioOrigin(
+    origin: resolveKirinukiAppOrigin(
       process.env.KIRINUKI_ALLOWED_ORIGIN
     )
   });
@@ -1680,7 +1680,7 @@ async function statusCommand(
     configured: Boolean(config),
     packageRoot: paths.packageRoot,
     configuredOrigin: config?.origin || null,
-    expectedOrigin: resolveKirinukiStudioOrigin(
+    expectedOrigin: resolveKirinukiAppOrigin(
       process.env.KIRINUKI_ALLOWED_ORIGIN
     ),
     originMatchesLocalStudio,

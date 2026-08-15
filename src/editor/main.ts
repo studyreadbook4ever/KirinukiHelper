@@ -81,7 +81,7 @@ import {
 import {
   KIRINUKI_STUDIO_ORIGIN_META_NAME,
   assertKirinukiStudioDocumentOrigin,
-  isKirinukiPublicStudioOrigin
+  isKirinukiLocalStudioOrigin
 } from "../lib/local-runtime-origin.js";
 
 import type {
@@ -195,7 +195,6 @@ import {
   isLoopbackCaptionAgentEndpoint,
   loadCaptionAgentSettings,
   normalizeCaptionAgentCues,
-  normalizeCaptionAgentEndpoint,
   probeCaptionAgent,
   requestCaptionAgentWithSessionRetry,
   sameCaptionMediaIdentity,
@@ -208,7 +207,7 @@ import type {
   CaptionModel
 } from "./caption-agent.js";
 import {
-  LOCAL_VOD_COMPANION_ENDPOINT,
+  KIRINUKI_MEDIA_ENGINE_ENDPOINT,
   cancelChzzkVodMaterialization,
   purgeChzzkVodConsumerSessionCache,
   startChzzkVodMaterialization,
@@ -642,26 +641,29 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function localCompanionErrorMessage(
+function internalMediaEngineErrorMessage(
   error: unknown,
   feature: "VOD" | "Whisper"
 ): string {
   const message = errorMessage(error);
+  const recovery = feature === "Whisper"
+    ? "현재 작업을 ‘지금 저장’한 뒤 설치 안내의 ‘Whisper로 설치’를 완료하고 Kirinuki를 다시 열어 같은 버튼을 눌러 주세요."
+    : "현재 작업을 저장한 뒤 Kirinuki 앱을 완전히 종료하고 다시 열어 같은 버튼을 눌러 주세요.";
   if (
     /failed to fetch|networkerror|load failed|시간.*초과|timed?\s*out|econnrefused/iu.test(message)
   ) {
-    if (
-      isKirinukiPublicStudioOrigin(CONFIGURED_KIRINUKI_STUDIO_ORIGIN)
-    ) {
-      return `${feature} PC 도우미에 연결하지 못했습니다. 브라우저의 로컬 네트워크 접근을 허용한 뒤 같은 버튼을 다시 눌러 주세요. PC 도우미가 켜져 있는지도 확인해 주세요. 현재 작업을 보존하려면 상단 ‘작업 끝내기’에서 저장 후 나가기를 선택하세요.`;
-    }
-    return `${feature} PC 도우미가 꺼져 있습니다. PC 도우미를 켠 뒤 이 탭에서 같은 버튼을 다시 눌러 주세요. 현재 작업을 보존하려면 상단 ‘작업 끝내기’에서 저장 후 나가기를 선택하세요.`;
+    return `${feature}용 내부 미디어 엔진을 시작하지 못했습니다. ${recovery}`;
   }
   if (/\b403\b|origin|출처/iu.test(message)) {
-    return `${feature} PC 도우미가 현재 사이트와 연결되도록 설정되지 않았습니다. Kirinuki setup을 다시 실행해 주세요.`;
+    return `${feature}용 내부 미디어 엔진이 현재 편집 세션을 확인하지 못했습니다. ${recovery}`;
   }
   if (/\b429\b|너무 많은|rate/iu.test(message)) {
-    return `${feature} PC 도우미가 잠시 바쁩니다. 잠시 뒤 같은 버튼을 다시 눌러 주세요.`;
+    return `${feature}용 내부 미디어 엔진이 다른 작업을 마무리하고 있습니다. 잠시 뒤 같은 버튼을 다시 눌러 주세요.`;
+  }
+  if (
+    /companion|gateway|게이트웨이|도우미|localhost|127\.0\.0\.1|endpoint|port|포트|setup/iu.test(message)
+  ) {
+    return `${feature}용 내부 미디어 엔진을 준비하지 못했습니다. ${recovery}`;
   }
   return message;
 }
@@ -684,6 +686,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const EDITOR_ELEMENT_IDS = [
+  "editor-app-gate",
   "editor-mobile-gate",
   "editor-policy-gate",
   "editor-policy-gate-status",
@@ -847,7 +850,6 @@ const EDITOR_ELEMENT_IDS = [
   "reset-short-workspace-framing",
   "copy-short-workspace-framing",
   "add-cue-top",
-  "caption-agent-endpoint",
   "caption-agent-token",
   "caption-style-preset",
   "toggle-caption-background",
@@ -1260,6 +1262,7 @@ function showVerifiedEditorShell(session: ActiveUsagePolicySession): void {
     `이번 사용 확인 · ${usagePolicyBasisLabel(session.basis)}`;
   elements.usage_policy_status.title =
     "사용자 진술을 기록한 상태이며 Kirinuki의 법률·권리 검증이나 게시 승인을 뜻하지 않습니다.";
+  elements.editor_app_gate.hidden = true;
   elements.editor_mobile_gate.hidden = true;
   elements.editor_policy_gate.hidden = true;
   elements.editor_shell.inert = false;
@@ -1276,6 +1279,7 @@ function showVerifiedEditorShell(session: ActiveUsagePolicySession): void {
 function showEditorPolicyGateError(message: string): void {
   elements.editor_shell.inert = true;
   elements.editor_shell.hidden = true;
+  elements.editor_app_gate.hidden = true;
   elements.editor_mobile_gate.hidden = true;
   elements.editor_policy_gate.hidden = false;
   elements.editor_policy_gate_status.textContent = message;
@@ -1285,8 +1289,18 @@ function showEditorMobileGate(): void {
   document.documentElement.dataset.editorAccess = "mobile-blocked";
   elements.editor_shell.inert = true;
   elements.editor_shell.hidden = true;
+  elements.editor_app_gate.hidden = true;
   elements.editor_policy_gate.hidden = true;
   elements.editor_mobile_gate.hidden = false;
+}
+
+function showEditorAppGate(): void {
+  document.documentElement.dataset.editorAccess = "app-required";
+  elements.editor_shell.inert = true;
+  elements.editor_shell.hidden = true;
+  elements.editor_mobile_gate.hidden = true;
+  elements.editor_policy_gate.hidden = true;
+  elements.editor_app_gate.hidden = false;
 }
 
 async function verifyEditorUsagePolicyGate(): Promise<string> {
@@ -1311,7 +1325,7 @@ async function verifyEditorUsagePolicyGate(): Promise<string> {
     throw new Error(
       isRecord(response) && typeof response.error === "string"
         ? response.error
-        : "Kirinuki 런타임이 이번 사용 확인에 응답하지 않습니다. 저장 구간은 유지됩니다. 시작 화면에서 프로젝트를 다시 열어 주세요."
+        : "Kirinuki 앱이 이번 사용 확인에 응답하지 않습니다. 저장 구간은 유지됩니다. 앱을 완전히 종료한 뒤 다시 열어 주세요."
     );
   }
   const session = normalizeActiveUsagePolicySession(
@@ -1519,7 +1533,7 @@ let usagePolicyRevalidationPending = false;
 let mediaFile: EditorMediaSource = null!;
 let mediaHandle: FileSystemFileHandle | null = null;
 let mediaUrl: string | null = null;
-let vodCompanionToken = "";
+let vodMediaEngineToken = "";
 let sourceBindingConnected = false;
 let pixelsPerSecond = 70;
 let timelineSnapEnabled = true;
@@ -1614,7 +1628,6 @@ interface WhisperConnectionSnapshot {
   runtime: CaptionAgentRuntime | null;
   settings: CaptionAgentSettings;
   modelId: string;
-  endpoint: string;
   token: string;
   state: WhisperConnectionState;
   message: string;
@@ -2336,25 +2349,25 @@ function renderLocalPersistenceStatus(): void {
         : "ready";
   elements.local_draft_status.dataset.state = state;
   const current = state === "error"
-    ? "자동 저장 실패"
+    ? "편집 중 임시 복구 실패"
     : state === "saving"
-      ? "저장 중…"
+      ? "편집 중 임시 복구 중…"
       : state === "saved"
-        ? `자동 저장됨 ${localSaveTimeFormatter.format(lastCurrentProjectSavedAtMs)}`
-        : "자동 저장 준비됨";
+        ? `편집 중 임시 복구됨 ${localSaveTimeFormatter.format(lastCurrentProjectSavedAtMs)}`
+        : "편집 중 임시 복구 준비됨";
   const lastAutoText = lastAutomaticDraftAtMs > 0
-    ? ` · 최근 자동 저장 ${localDraftDateFormatter.format(lastAutomaticDraftAtMs)}`
+    ? ` · 최근 5분 복구 ${localDraftDateFormatter.format(lastAutomaticDraftAtMs)}`
     : "";
   elements.local_draft_status.textContent = (
-    `${current} · 저장본 ${Math.min(5, knownLocalDraftCount)}/5 · 5분마다 자동 저장${lastAutoText}`
+    `${current} · 현재 복구본 ${Math.min(5, knownLocalDraftCount)}/5 · 5분 간격 · 탭 종료 시 임시본 폐기${lastAutoText}`
   );
 }
 
 function localDraftReasonLabel(reason: "manual" | "auto" | "pre-restore") {
   return {
     manual: "직접 저장",
-    auto: "자동 저장",
-    "pre-restore": "불러오기 전"
+    auto: "편집 중 복구",
+    "pre-restore": "불러오기 전 복구"
   }[reason] || "저장";
 }
 
@@ -2408,7 +2421,7 @@ function updateLocalDraftStatus(drafts: LocalDraftRecord[] = []) {
   renderLocalPersistenceStatus();
   elements.open_local_drafts.title = editorShortcutTitle(
     "open-local-drafts",
-    `최근 저장본 ${count}개 불러오기`
+    `저장·복구본 ${count}개 불러오기`
   );
 }
 
@@ -2631,8 +2644,8 @@ function runAutomaticLocalDraft() {
     () => saveCurrentLocalDraft("auto")
   )
     .catch((error) => {
-      console.warn("5분 자동 저장에 실패했습니다.", error);
-      showToast(`자동 저장 실패: ${errorMessage(error)}`, "error", 0);
+      console.warn("5분 간격의 편집 중 임시 복구에 실패했습니다.", error);
+      showToast(`편집 중 임시 복구 실패: ${errorMessage(error)}`, "error", 0);
       return null;
     })
     .finally(() => {
@@ -2873,13 +2886,13 @@ async function notifyRuntimeOfEditingSessionCompletion(
       || response.projectId !== activePolicy.projectId
     ) {
       throw new Error(String(
-        response?.error || "Kirinuki 런타임이 세션 완료를 확인하지 않았습니다."
+        response?.error || "Kirinuki 앱이 세션 완료를 확인하지 않았습니다."
       ));
     }
   } catch (error: unknown) {
     // The browser checkpoint is already resolved at this point. Never reopen
     // or rewrite it merely because the ephemeral runtime notice failed.
-    console.warn("편집 종료 뒤 런타임 연결 정리를 확인하지 못했습니다.", error);
+    console.warn("편집 종료 뒤 앱 내부 연결 정리를 확인하지 못했습니다.", error);
   }
 }
 
@@ -3086,7 +3099,7 @@ function verifyExpectedDevReloadProject(candidateProject: EditorProject) {
     removeDevReloadSessionValue(DEV_RELOAD_EXPECTED_PROJECT_KEY);
     throw new Error(
       "코드 변경 직전에 저장한 프로젝트와 다시 불러온 프로젝트가 다릅니다. "
-      + "자동 저장본을 덮어쓰지 않았으니 저장 목록을 확인해 주세요."
+      + "편집 중 복구본을 덮어쓰지 않았으니 저장 목록을 확인해 주세요."
     );
   }
   removeDevReloadSessionValue(DEV_RELOAD_EXPECTED_PROJECT_KEY);
@@ -15519,13 +15532,13 @@ async function prepareChzzkVodMedia({
   );
   try {
     await cancelAndWaitForShortPreviewCacheOperation();
-    const endpoint = LOCAL_VOD_COMPANION_ENDPOINT;
+    const endpoint = KIRINUKI_MEDIA_ENGINE_ENDPOINT;
     const token = await ensureCaptionAgentSession({
       endpoint,
-      token: vodCompanionToken,
+      token: vodMediaEngineToken,
       signal: controller.signal
     });
-    vodCompanionToken = token;
+    vodMediaEngineToken = token;
     let status = await startChzzkVodMaterialization({
       endpoint,
       token,
@@ -15590,7 +15603,7 @@ async function prepareChzzkVodMedia({
       status.materialization
     );
     if (!materialization || !status.media) {
-      throw new Error("PC 도우미가 안전한 VOD 시간 정보를 확인하지 못했습니다.");
+      throw new Error("Kirinuki 내부 미디어 엔진이 안전한 VOD 시간 정보를 확인하지 못했습니다.");
     }
     if (
       hotLoadSequence !== undefined
@@ -15631,7 +15644,7 @@ async function prepareChzzkVodMedia({
     // Network/materialization work may finish after a same-tab history
     // transition. Apply it only when the exact project+source+entry lease that
     // started the request is still current; a newer A→B session must keep the
-    // verified A artifact in its own companion cache without attaching it.
+    // verified A artifact in its own internal cache without attaching it.
     requireSameUsagePolicyLease(activePolicy);
     const liveSourceSessionId = sourceSessionIdentity(project.source);
     if (
@@ -15670,7 +15683,7 @@ async function prepareChzzkVodMedia({
       showToast(
         cancelled
           ? "VOD 편집 영상 준비를 취소했습니다."
-          : `VOD 편집 영상을 준비하지 못했습니다: ${localCompanionErrorMessage(error, "VOD")} 내 파일 직접 연결도 사용할 수 있습니다.`,
+          : `VOD 편집 영상을 준비하지 못했습니다: ${internalMediaEngineErrorMessage(error, "VOD")} 내 파일 직접 연결도 사용할 수 있습니다.`,
         cancelled ? "info" : "error",
         cancelled ? 3_600 : 0
       );
@@ -15955,16 +15968,11 @@ function requestVodHotLoadForClip(
 
 function readCaptionAgentConfig(): CaptionUiConfig {
   const model = elements.caption_model.value as CaptionModel;
-  if (model === AUDSEG_DRAFT_MODEL) {
-    return {
-      endpoint: captionAgentSettings.endpoint,
-      model,
-      token: ""
-    };
-  }
   return {
-    endpoint: normalizeCaptionAgentEndpoint(elements.caption_agent_endpoint.value),
-    token: elements.caption_agent_token.value,
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    token: model === AUDSEG_DRAFT_MODEL
+      ? ""
+      : elements.caption_agent_token.value,
     model
   };
 }
@@ -16073,7 +16081,7 @@ function renderCaptionModeControls() {
   }
   if (!whisperConnectionMessage) {
     setWhisperConnectionStatus(
-      "아직 연결하지 않았습니다 · 파일 선택 없이 이 PC 도우미를 바로 확인합니다",
+      "아직 연결하지 않았습니다 · 버튼을 누르면 Kirinuki가 내장 Whisper를 확인합니다",
       "disconnected"
     );
   } else {
@@ -16084,11 +16092,13 @@ function renderCaptionModeControls() {
 
 function persistAudSegProviderSelection() {
   void saveCaptionAgentSettings({
-    endpoint: captionAgentSettings.endpoint,
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
     model: AUDSEG_DRAFT_MODEL
   }).then((settings) => {
-    captionAgentSettings = settings;
-    elements.caption_agent_endpoint.value = settings.endpoint;
+    captionAgentSettings = {
+      ...settings,
+      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint
+    };
   }).catch((error: unknown) => {
     showToast(`자막 방식 설정 저장 실패: ${errorMessage(error)}`, "error", 0);
   });
@@ -16150,7 +16160,7 @@ async function ensureLocalCaptionSession(
   }
   if (expectedModelId && runtime.sttModel !== expectedModelId) {
     throw new Error(
-      `요청한 모델(${expectedModelId})과 실행 중인 모델(${runtime.sttModel})이 다릅니다. PC 도우미를 다시 시작한 뒤 자동 연결을 다시 눌러 주세요.`
+      `요청한 모델(${expectedModelId})과 실행 중인 모델(${runtime.sttModel})이 다릅니다. Kirinuki 앱을 완전히 종료한 뒤 다시 열고 자동 연결을 눌러 주세요.`
     );
   }
   if (!captionAgentSelectionStillCurrent(config)) {
@@ -16172,7 +16182,6 @@ function captureWhisperConnectionSnapshot(): WhisperConnectionSnapshot {
     runtime: captionAgentRuntime,
     settings: { ...captionAgentSettings },
     modelId: connectedWhisperModelId,
-    endpoint: elements.caption_agent_endpoint.value,
     token: elements.caption_agent_token.value,
     state: whisperConnectionState,
     message: whisperConnectionMessage
@@ -16185,7 +16194,6 @@ function restoreWhisperConnectionSnapshot(
   captionAgentRuntime = snapshot.runtime;
   captionAgentSettings = { ...snapshot.settings };
   connectedWhisperModelId = snapshot.modelId;
-  elements.caption_agent_endpoint.value = snapshot.endpoint;
   elements.caption_agent_token.value = snapshot.token;
   setWhisperConnectionStatus(snapshot.message, snapshot.state);
 }
@@ -16211,7 +16219,7 @@ async function prepareCaptionAgentConfig(): Promise<PreparedCaptionUiConfig> {
   }
   if (!isLoopbackCaptionAgentEndpoint(config.endpoint)) {
     throw new Error(
-      "Whisper PC 도우미 주소는 127.0.0.1 또는 localhost여야 합니다."
+      "Kirinuki 앱의 내장 Whisper 연결 정보가 올바르지 않습니다. 앱을 완전히 종료한 뒤 다시 열어 주세요."
     );
   }
   const sessionConfig = await ensureLocalCaptionSession(
@@ -16234,13 +16242,12 @@ async function prepareCaptionAgentConfig(): Promise<PreparedCaptionUiConfig> {
     throw new Error("로컬 Whisper STT가 준비되지 않았습니다.");
   }
   captionAgentSettings = await saveCaptionAgentSettings({
-    endpoint: sessionConfig.endpoint,
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
     model: sessionConfig.model
   });
-  elements.caption_agent_endpoint.value = captionAgentSettings.endpoint;
   return {
     ...sessionConfig,
-    endpoint: captionAgentSettings.endpoint,
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
     model: captionAgentSettings.model,
     capability,
     runtime
@@ -16325,7 +16332,7 @@ async function testCaptionAgentConnection() {
       availableModels.length > 0
       && !availableModels.includes(config.model)
     ) {
-      throw new Error(`PC 도우미가 ${config.model} 모델을 지원하지 않습니다.`);
+      throw new Error(`Kirinuki 내장 자막 엔진이 ${config.model} 모델을 지원하지 않습니다.`);
     }
     const provider = result.provider ? ` · ${result.provider}` : "";
     const actualStt = config.runtime?.sttModel || result.models?.stt || "확인 불가";
@@ -16358,14 +16365,14 @@ async function testCaptionAgentConnection() {
     showToast(
       canceled
         ? "Whisper 연결 확인을 취소했습니다."
-        : `Whisper 자동 연결 실패: ${localCompanionErrorMessage(error, "Whisper")}`,
+        : `Whisper 자동 연결 실패: ${internalMediaEngineErrorMessage(error, "Whisper")}`,
       canceled ? "info" : "error",
       0
     );
     restoreWhisperConnectionSnapshot(connectionSnapshot);
     if (connectionSnapshot.state !== "ready") {
       setWhisperConnectionStatus(
-        `자동 연결 실패 · ${localCompanionErrorMessage(error, "Whisper")}`,
+        `자동 연결 실패 · ${internalMediaEngineErrorMessage(error, "Whisper")}`,
         "error"
       );
     }
@@ -16459,14 +16466,14 @@ async function generateCaptions() {
     if (!audsegMode) {
       elements.caption_advanced_settings.open = true;
       setWhisperConnectionStatus(
-        `자동 연결 실패 · ${localCompanionErrorMessage(error, "Whisper")}`,
+        `자동 연결 실패 · ${internalMediaEngineErrorMessage(error, "Whisper")}`,
         "error"
       );
     }
     showToast(
       audsegMode
         ? `자막 초벌 설정을 확인해 주세요: ${errorMessage(error)}`
-        : `Whisper를 준비하지 못했습니다: ${localCompanionErrorMessage(error, "Whisper")} AudSeg는 바로 사용할 수 있습니다.`,
+        : `Whisper를 준비하지 못했습니다: ${internalMediaEngineErrorMessage(error, "Whisper")} AudSeg는 바로 사용할 수 있습니다.`,
       "error",
       0
     );
@@ -16785,7 +16792,7 @@ async function generateCaptions() {
     const message = errorMessage(error);
     if (
       !canceled
-      && /(?:STT|전사|companion|에이전트)/iu.test(message)
+      && /(?:STT|전사|companion|에이전트|자막 엔진|Whisper)/iu.test(message)
     ) {
       elements.caption_advanced_settings.open = true;
     }
@@ -17313,7 +17320,7 @@ function sessionCleanupMarkerFromProject(
     || typeof record.mediaUrl !== "string"
     || !isSafeSessionCleanupMediaUrl(
       record.mediaUrl,
-      LOCAL_VOD_COMPANION_ENDPOINT
+      KIRINUKI_MEDIA_ENGINE_ENDPOINT
     )
     || typeof record.platform !== "string"
     || !record.platform
@@ -17386,7 +17393,7 @@ async function reconcileInterruptedSessionCleanup(
   }
   const cleanProject = projectWithoutSessionCleanupMarker(candidateProject);
   if (marker.stage === "purge-intent") {
-    // The power may have failed on either side of the companion request. Keep
+    // The power may have failed on either side of the internal engine request. Keep
     // the media binding and let the normal exact-materialization restore path
     // verify/rebuild it; never guess that an external deletion completed.
     await retrySessionCleanupStoreOperation(() => (
@@ -17399,7 +17406,7 @@ async function reconcileInterruptedSessionCleanup(
   if (!sessionCleanupMarkerMatchesMaterializedBinding(
     marker,
     candidateProject.mediaAsset,
-    LOCAL_VOD_COMPANION_ENDPOINT
+    KIRINUKI_MEDIA_ENGINE_ENDPOINT
   )) {
     // A stale/corrupt marker must never detach a newer materialization or a
     // manually connected file. Clear only the transient marker URL and keep
@@ -17445,7 +17452,7 @@ async function cleanupCompletedExportSessionCaches(
   const sourceVersionId = String(
     materialization?.source.sourceVersionId || ""
   );
-  const cleanupVodToken = vodCompanionToken;
+  const cleanupVodToken = vodMediaEngineToken;
   let releasedVodBytes = 0;
   let releasedVodFiles = 0;
   let materializedSessionWasPurged = false;
@@ -17459,7 +17466,7 @@ async function cleanupCompletedExportSessionCaches(
       throw new Error("현재 연결된 편집용 VOD의 정확한 준비 기록을 확인하지 못해 영상을 삭제하지 않았습니다.");
     }
     if (!cleanupVodToken) {
-      throw new Error("현재 PC 도우미의 접근 정보가 없어 이번 편집용 VOD를 삭제하지 않았습니다.");
+      throw new Error("현재 Kirinuki 내부 미디어 엔진의 접근 정보가 없어 이번 편집용 VOD를 삭제하지 않았습니다.");
     }
   }
 
@@ -17519,12 +17526,12 @@ async function cleanupCompletedExportSessionCaches(
     elements.preview_video.removeAttribute("src");
     elements.preview_video.load();
     // Let Chromium dispatch aborts for outstanding range requests before the
-    // companion checks that no decoder is still reading this exact artifact.
+    // The internal engine checks that no decoder is still reading this artifact.
     await Promise.resolve();
     let purge;
     try {
       purge = await purgeChzzkVodConsumerSessionCache({
-        endpoint: LOCAL_VOD_COMPANION_ENDPOINT,
+        endpoint: KIRINUKI_MEDIA_ENGINE_ENDPOINT,
         token: cleanupVodToken,
         consumerId: exportedRootProject.id,
         mediaUrl: sourceMedia.url,
@@ -17668,7 +17675,7 @@ async function cleanupCompletedExportSessionCaches(
   let runtimeCleanupWarning = "";
   const activePolicy = usagePolicySession;
   if (!activePolicy || activePolicy.projectId !== exportedRootProject.id) {
-    runtimeCleanupWarning = "Kirinuki 런타임의 원본 연결 세션을 확인하지 못했습니다.";
+    runtimeCleanupWarning = "Kirinuki 앱의 원본 연결 세션을 확인하지 못했습니다.";
   } else {
     try {
       const response = await completeStudioEditorSession({
@@ -17686,7 +17693,7 @@ async function cleanupCompletedExportSessionCaches(
         || response.projectId !== exportedRootProject.id
       ) {
         throw new Error(
-          String(response?.error || "Kirinuki 런타임이 세션 완료를 확인하지 않았습니다.")
+          String(response?.error || "Kirinuki 앱이 세션 완료를 확인하지 않았습니다.")
         );
       }
     } catch (error: unknown) {
@@ -20461,37 +20468,6 @@ function bindActions() {
   elements.connect_local_whisper.addEventListener("click", () => {
     void testCaptionAgentConnection();
   });
-  elements.caption_agent_endpoint.addEventListener("change", () => {
-    try {
-      elements.caption_agent_endpoint.value = normalizeCaptionAgentEndpoint(
-        elements.caption_agent_endpoint.value
-      );
-    } catch (error: unknown) {
-      showToast(errorMessage(error), "error", 0);
-      elements.caption_agent_endpoint.value = captionAgentSettings.endpoint;
-      return;
-    }
-    if (elements.caption_model.value === "whisper-tiny") {
-      captionAgentRuntime = null;
-      connectedWhisperModelId = "";
-      elements.caption_agent_token.value = "";
-      setWhisperConnectionStatus(
-        "주소가 바뀌었습니다 · ‘연결 확인’을 눌러 실제 Whisper를 다시 확인해 주세요",
-        "disconnected"
-      );
-      renderCaptionModeControls();
-      return;
-    }
-    void saveCaptionAgentSettings({
-      endpoint: elements.caption_agent_endpoint.value,
-      model: elements.caption_model.value as CaptionModel
-    }).then((settings) => {
-      captionAgentSettings = settings;
-      elements.caption_agent_endpoint.value = settings.endpoint;
-    }).catch((error: unknown) => {
-      showToast(`자막 에이전트 설정 저장 실패: ${errorMessage(error)}`, "error", 0);
-    });
-  });
   elements.cancel_job.addEventListener("click", cancelActiveJob);
   elements.job_dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
@@ -21072,7 +21048,7 @@ async function restoreMedia() {
     const restored = await prepareChzzkVodMedia({ restore: true });
     if (!restored) {
       showToast(
-        "이 기기의 VOD 편집 영상을 자동으로 다시 연결하지 못했습니다. PC 도우미가 켜져 있는지 확인한 뒤 ‘편집 영상 다시 준비’를 눌러 주세요.",
+        "이 기기의 VOD 편집 영상을 자동으로 다시 연결하지 못했습니다. 현재 작업을 저장한 뒤 Kirinuki 앱을 완전히 종료하고 다시 열어 ‘편집 영상 다시 준비’를 눌러 주세요.",
         "error",
         0
       );
@@ -21148,6 +21124,10 @@ async function initializeSourceBinding() {
 }
 
 async function initialize() {
+  if (!isKirinukiLocalStudioOrigin(location.origin)) {
+    showEditorAppGate();
+    return;
+  }
   if (currentClientCannotUseEditor()) {
     showEditorMobileGate();
     return;
@@ -21156,12 +21136,14 @@ async function initialize() {
   bindActions();
   elements.finish_editing_session.hidden = false;
   try {
-    captionAgentSettings = await loadCaptionAgentSettings();
+    captionAgentSettings = {
+      ...await loadCaptionAgentSettings(),
+      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint
+    };
   } catch (error) {
     console.warn("자막 에이전트 설정을 불러오지 못했습니다.", error);
     captionAgentSettings = { ...DEFAULT_CAPTION_AGENT_SETTINGS };
   }
-  elements.caption_agent_endpoint.value = captionAgentSettings.endpoint;
   elements.caption_model.value = captionAgentSettings.model;
   renderCaptionModeControls();
   const {
@@ -21287,7 +21269,7 @@ async function initialize() {
       });
       if (response?.ok !== true || response.projectId !== project.id) {
         throw new Error(
-          String(response?.error || "Kirinuki 런타임이 복구된 세션 완료를 확인하지 않았습니다.")
+          String(response?.error || "Kirinuki 앱이 복구된 세션 완료를 확인하지 않았습니다.")
         );
       }
     } catch (error: unknown) {
@@ -21311,7 +21293,7 @@ async function initialize() {
         : "")
       + "을 삭제했습니다."
       + (runtimeCleanupWarning
-        ? ` Kirinuki 런타임 연결 정리는 다음 브라우저 종료 때 다시 정리됩니다: ${runtimeCleanupWarning}`
+        ? ` Kirinuki 앱의 내부 연결 정리는 다음 앱 종료 때 다시 정리됩니다: ${runtimeCleanupWarning}`
         : "")
     );
     startupCleanupRecoveryNotice = "";

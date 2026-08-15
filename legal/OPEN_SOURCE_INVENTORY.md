@@ -28,10 +28,10 @@ Prosperity·불명확한 LicenseRef 차단, pseudo-license의 비재배포 kind 
 
 | ID | 구성요소 | 버전/고정점 | 라이선스 | 현재 배포 경계 |
 | --- | --- | --- | --- | --- |
-| `mediabunny` | Mediabunny | 1.51.0 | MPL-2.0 | web editor JS에 bundle |
-| `audseg` | AudSeg browser port | 0.1.0 | MIT | source와 web editor JS에 포함 |
-| `pretendard` | Pretendard ExtraBold | 1.3.9 | OFL-1.1 | web WOFF2 포함 |
-| `paperlogy` | Paperlogy 8 ExtraBold | 1.001 / `8ef35f…` | OFL-1.1 | web WOFF2 포함 |
+| `mediabunny` | Mediabunny | 1.51.0 | MPL-2.0 | Linux 소스 앱의 editor JS에 bundle |
+| `audseg` | AudSeg browser port | 0.1.0 | MIT | Linux 소스 앱의 source와 editor JS에 포함 |
+| `pretendard` | Pretendard ExtraBold | 1.3.9 | OFL-1.1 | Linux 소스 앱의 WOFF2 포함 |
+| `paperlogy` | Paperlogy 8 ExtraBold | 1.001 / `8ef35f…` | OFL-1.1 | Linux 소스 앱의 WOFF2 포함 |
 | `whisper-cpp` | whisper.cpp | v1.8.6 / `23ee035…` | MIT 및 embedded 고지 | 선택 시 XDG에 source download·local build |
 | `openai-whisper-models` | quantized Whisper models | `535986…` | MIT | 선택한 모델만 XDG에 download |
 | `silero-vad` | Silero VAD 6.2 conversion | `9ffd54…` | MIT | XDG에 download |
@@ -39,16 +39,17 @@ Prosperity·불명확한 LicenseRef 차단, pseudo-license의 비재배포 kind 
 | `ffmpeg`, `ffprobe` | FFmpeg tools | host build | build-dependent | 시스템 도구, 현재 재배포 안 함 |
 | `nodejs`, `python` | host runtimes | detected | build-dependent distribution | 시스템 도구, 현재 재배포 안 함 |
 | `chromium` | Chromium/Chrome/ChromeDriver | detected | build-dependent distribution | 시스템 도구, 현재 재배포 안 함 |
-| `tsx-runtime` | tsx/esbuild/platform binary | lockfile pins | MIT | 로컬 companion 실행 필수, web 정적 ZIP 제외 |
+| `tsx-runtime` | tsx/esbuild/platform binary | lockfile pins | MIT | Kirinuki 앱 내부 엔진 실행 필수, web 정적 ZIP 제외 |
 | `typescript-toolchain` | TypeScript/types | lockfile pins | Apache-2.0/MIT | 개발·build 전용, web 정적 ZIP 제외 |
 | `github-actions-ci` | checkout/setup-node/setup-chrome Actions | full commit SHA | MIT | GitHub-hosted CI 전용, 제품 산출물 제외 |
 | `chzzk-service`, `youtube-service`, `soop-service` | 외부 서비스 이름 | external | 서비스 약관·상표 | 코드 의존성과 분리된 참조 |
 
-## web 정적 배포물에 실제로 포함되는 것
+## Linux 소스 앱의 browser assets에 실제로 포함되는 것
 
-first-party canonical 원문은 루트 `UNLICENSE`이고, Popovic 정적 배포에는 같은
-원문을 `web/licenses/UNLICENSE.txt`로 포함합니다. extensionless
-`web/UNLICENSE`가 정적 배포에서 제공된다고 가정하지 않습니다.
+first-party canonical 원문은 루트 `UNLICENSE`입니다. Linux 소스 앱은
+`web/licenses/UNLICENSE.txt`와 아래 browser asset 라이선스도 포함합니다.
+공개 shell-only ZIP은 별도의 `public-shell/licenses/UNLICENSE.txt`만 포함하고
+editor JavaScript·글꼴·아래 제3자 구성요소를 배포하지 않습니다.
 
 <!-- attribution-id: mediabunny -->
 ### Mediabunny
@@ -79,8 +80,9 @@ WOFF2와 OFL-1.1 원문을 함께 배포합니다.
 upstream: https://github.com/Freesentation/paperlogy/tree/8ef35f53b318c7ca914c52b1b382b9a8bad07a61
 
 정확한 크기와 SHA-256은 canonical registry 및
-`web/THIRD_PARTY_NOTICES.md`에 있습니다. 최소 `streaming-companion/`은
-first-party bridge 코드만 생성하며 위 제3자 구성요소를 다시 번들하지 않습니다.
+`web/THIRD_PARTY_NOTICES.md`에 있습니다. 기술 경로
+`streaming-companion/`에는 앱이 관리하는 first-party Player Bridge 코드만
+생성되며 위 제3자 구성요소를 다시 번들하지 않습니다.
 
 ## 설치 시 내려받는 것
 
@@ -120,15 +122,17 @@ first-party bridge 코드만 생성하며 위 제3자 구성요소를 다시 번
 bundle에 넣는 순간 이 분류는 바뀌며 실제 binary build의 전체 라이선스를 새로
 수집해야 합니다.
 
-## 로컬 companion 실행용 npm 패키지
+## Kirinuki 앱 내부 runtime용 npm 패키지
 
 <!-- attribution-id: tsx-runtime -->
 `tsx` 4.23.1, `esbuild` 0.28.1과 현재 OS용 platform binary는
-TypeScript로 작성된 setup·caption/VOD gateway를 실행하는 현재 로컬
-companion의 **runtime 필수 구성요소**입니다. `package-lock.json`의 exact
-URL·integrity로 설치하며 web 정적 ZIP에는 들어가지 않습니다.
-향후 companion installer/container를 배포하면 이 npm runtime의 MIT
-고지와 실제 platform package를 산출물 단위로 수집합니다.
+TypeScript로 작성된 Kirinuki setup·자막 엔진·VOD 미디어 엔진을 실행하는
+**앱 내부 runtime 필수 구성요소**입니다. `package-lock.json`의 exact
+URL·integrity로 repository-local `node_modules`에 설치하며 web 정적 ZIP에는
+들어가지 않습니다. 현재 Linux source-app archive도 `node_modules`를 포함하지
+않으므로 이 패키지들을 번들한다고 간주하지 않습니다. 향후 설치 프로그램이나
+container에 실제 패키지 내용을 포함하면 이 npm runtime의 MIT 고지와 실제
+platform package를 산출물 단위로 수집합니다.
 upstream: https://github.com/privatenumber/tsx
 
 ## 개발·build 전용 패키지
@@ -141,7 +145,7 @@ web 정적 ZIP에 포함되지 않습니다.
 ## 저장소 전용 Python·CI 도구의 미고정 경계
 
 `AudSeg/pyproject.toml`의 `hatchling>=1.27`, `pytest`/`pytest-cov`, `ruff`
-범위는 AudSeg build·개발용이며 루트 web/companion 설치가 내려받지
+범위는 AudSeg build·개발용이며 Kirinuki 앱의 일반 setup이 내려받지
 않습니다. 현재 exact lockfile이 없으므로 이 범위 자체를 재현 가능한 배포
 인벤토리로 간주하지 않습니다. AudSeg Python package나 그 build image를
 배포하기 전에는 실제 resolve 결과를 고정하고 각 artifact의 출처·라이선스·해시를
@@ -185,7 +189,8 @@ image까지 포함한 실제 CI provenance를 다시 기록합니다.
 2. 내려받아 재배포하는 artifact는 immutable URL, byte size와 SHA-256이 모두
    없으면 허용하지 않습니다.
 3. 시스템 도구는 detection 명령과 build별 라이선스 여부를 기록합니다.
-4. web notice에는 정상 web 정적 파일만, root notice에는 로컬 companion과 설치
-   runtime까지 적습니다. 서로 다른 배포 경계를 억지로 동일하게 만들지 않습니다.
+4. `public-shell` notice에는 공개 shell 파일만, `web` notice에는 앱 browser
+   assets만, root notice에는 Kirinuki 앱 내부 runtime과 설치 시 내려받는
+   구성요소까지 적습니다. 서로 다른 배포 경계를 동일하게 만들지 않습니다.
 5. `npm run license:check`, `npm run build`, `npm run validate`, 실제 release
    archive 검사를 통과시킵니다.

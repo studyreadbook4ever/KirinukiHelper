@@ -33,9 +33,9 @@ function silence(seconds: number) {
 test("AudSeg Worker는 Popovic immutable release query를 editor bundle과 공유한다", () => {
   assert.equal(
     resolveAudSegWorkerUrl(
-      "https://kirinuki.eff0rtchung.kr/editor/editor.js?v=2.7.0"
+      "https://kirinuki.eff0rtchung.kr/editor/editor.js?v=3.0.0"
     ).href,
-    "https://kirinuki.eff0rtchung.kr/editor/audseg-worker.js?v=2.7.0"
+    "https://kirinuki.eff0rtchung.kr/editor/audseg-worker.js?v=3.0.0"
   );
 });
 

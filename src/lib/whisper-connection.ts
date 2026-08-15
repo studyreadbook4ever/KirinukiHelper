@@ -1,7 +1,7 @@
 import {
-  isKirinukiStudioOrigin
+  isKirinukiLocalStudioOrigin
 } from "./local-runtime-origin.js";
-import type { KirinukiStudioOrigin } from "./local-runtime-origin.js";
+import type { KirinukiAppOrigin } from "./local-runtime-origin.js";
 
 export const KIRINUKI_WHISPER_CONNECTION_SCHEMA =
   "kirinuki-whisper-connection/v1";
@@ -125,10 +125,10 @@ function includes<const Values extends readonly string[]>(
 function assertStudioOrigin(
   value: unknown,
   label: string
-): KirinukiStudioOrigin {
-  if (!isKirinukiStudioOrigin(value)) {
+): KirinukiAppOrigin {
+  if (!isKirinukiLocalStudioOrigin(value)) {
     throw new TypeError(
-      `${label}은 Kirinuki의 고정된 loopback 또는 공개 배포 Origin이어야 합니다.`
+      `${label}은 설치된 Kirinuki 앱의 고정 Origin이어야 합니다.`
     );
   }
   return value;

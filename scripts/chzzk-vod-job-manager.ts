@@ -2164,7 +2164,7 @@ export function createChzzkVodJobManager({
   const create = (rawRequest: unknown): ChzzkVodJob => {
     if (closing) {
       throw new ChzzkVodJobManagerError(
-        "로컬 companion이 종료 중이라 새 VOD 작업을 받을 수 없습니다.",
+        "Kirinuki 내부 미디어 엔진이 종료 중이라 새 VOD 작업을 받을 수 없습니다.",
         "BUSY"
       );
     }
@@ -2798,16 +2798,16 @@ export function createChzzkVodJobManager({
     closing = true;
     for (const job of jobs.values()) {
       if (!job.controller.signal.aborted && !terminalJob(job)) {
-        job.controller.abort(new DOMException("로컬 companion을 종료합니다.", "AbortError"));
+        job.controller.abort(new DOMException("Kirinuki 내부 미디어 엔진을 종료합니다.", "AbortError"));
         job.state = "cancelled";
         job.progress = 0;
-        job.message = "로컬 companion 종료로 VOD 구간 준비를 취소했습니다.";
+        job.message = "Kirinuki 내부 미디어 엔진 종료로 VOD 구간 준비를 취소했습니다.";
         job.updatedAt = now();
       }
     }
     if (!verificationController.signal.aborted) {
       verificationController.abort(new DOMException(
-        "로컬 companion을 종료합니다.",
+        "Kirinuki 내부 미디어 엔진을 종료합니다.",
         "AbortError"
       ));
     }

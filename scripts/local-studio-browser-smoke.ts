@@ -3224,7 +3224,7 @@ async function main(): Promise<void> {
     timesUnclipped: boolean;
     horizontalOverflow: boolean;
   }>(`
-    const main = document.querySelector("main");
+    const main = document.querySelector("#local-app-surface");
     const workspace = document.querySelector(".source-capture-workspace");
     const stream = document.querySelector(".stream-preview");
     const rail = document.querySelector(".selection-rail");

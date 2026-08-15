@@ -125,6 +125,15 @@ test("새 localhost 편집 세션은 최근 저장 프로젝트 포인터를 선
   assert.match(begin, /localStorage\.removeItem\(storageKey\)/u);
 });
 
+test("사용자에게 보이는 작업 전환 오류는 localhost와 세션 세대를 노출하지 않는다", async () => {
+  const source = await readFile(
+    new URL("../src/editor/studio-runtime-web.ts", import.meta.url),
+    "utf8"
+  );
+  assert.doesNotMatch(source, /error:\s*"[^"]*(?:localhost|세션 세대)/u);
+  assert.match(source, /다른 편집 작업으로 전환되어/u);
+});
+
 test("편집·단건 정리는 collection shared 뒤 project lock을 잡고 전체 삭제만 exclusive로 막는다", async () => {
   const originalNavigator = Object.getOwnPropertyDescriptor(
     globalThis,

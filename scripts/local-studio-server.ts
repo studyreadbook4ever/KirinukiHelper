@@ -39,11 +39,10 @@ import type {
 } from "./local-studio-server-core.js";
 import { typescriptCommandArgs } from "./typescript-runtime.js";
 import {
-  KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  KIRINUKI_LOCAL_STUDIO_ORIGIN
 } from "../src/lib/local-runtime-origin.js";
 import type {
-  KirinukiStudioOrigin
+  KirinukiAppOrigin
 } from "../src/lib/local-runtime-origin.js";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -57,11 +56,11 @@ export interface LocalStudioServerCliOptions {
   enableLegacyMigration: boolean;
   foreground: boolean;
   json: boolean;
-  studioOrigin: KirinukiStudioOrigin;
+  studioOrigin: KirinukiAppOrigin;
 }
 
 export function studioBrowserUrl(
-  studioOrigin: KirinukiStudioOrigin
+  studioOrigin: KirinukiAppOrigin
 ): string {
   return studioOrigin;
 }
@@ -92,10 +91,10 @@ function hasErrorCode(
 
 export function helpText(): string {
   return `
-Kirinuki localhost studio server
+Kirinuki 앱 UI 엔진
 
 사용법:
-  node --import tsx scripts/local-studio-server.ts start [--foreground] [--json] [--enable-legacy-migration] [--public-origin]
+  node --import tsx scripts/local-studio-server.ts start [--foreground] [--json] [--enable-legacy-migration]
   node --import tsx scripts/local-studio-server.ts status [--json]
   node --import tsx scripts/local-studio-server.ts stop [--json]
 
@@ -105,8 +104,7 @@ Kirinuki localhost studio server
   일치할 때만 실행 중인 서버로 인정하거나 종료합니다.
   legacy Extension 저장소 이동 endpoint는 기본으로 꺼져 있으며,
   필요한 한 번의 start에 --enable-legacy-migration을 명시해야만 열립니다.
-  --public-origin을 명시한 start만 ${KIRINUKI_PUBLIC_STUDIO_ORIGIN}의
-  exact Cloudflare Tunnel Host/HTTPS 전달 헤더를 받습니다.
+  공개 도메인은 앱 실행·설치 안내만 제공하며 이 내부 서버에 연결하지 않습니다.
 `.trim();
 }
 
@@ -139,10 +137,6 @@ export function parseLocalStudioServerArgs(
       options.json = true;
       continue;
     }
-    if (value === "--public-origin") {
-      options.studioOrigin = KIRINUKI_PUBLIC_STUDIO_ORIGIN;
-      continue;
-    }
     throw new TypeError(`알 수 없는 옵션입니다: ${value}`);
   }
   const normalizedCommand = command === "--help" ? "help" : command;
@@ -154,12 +148,6 @@ export function parseLocalStudioServerArgs(
   }
   if (normalizedCommand !== "start" && options.enableLegacyMigration) {
     throw new TypeError("--enable-legacy-migration은 start에서만 사용할 수 있습니다.");
-  }
-  if (
-    normalizedCommand !== "start"
-    && options.studioOrigin !== KIRINUKI_LOCAL_STUDIO_ORIGIN
-  ) {
-    throw new TypeError("--public-origin은 start에서만 사용할 수 있습니다.");
   }
   return { command: normalizedCommand, options };
 }
@@ -242,7 +230,7 @@ export async function verifiedStudioServerPid(
 
 async function currentPidRecord(): Promise<StudioServerPidRecord> {
   if (process.platform !== "linux") {
-    throw new Error("관리형 localhost server는 Linux에서만 지원합니다.");
+    throw new Error("Kirinuki 앱 UI 엔진은 Linux에서만 지원합니다.");
   }
   const [procStartTime, bootId] = await Promise.all([
     readProcStartTime(process.pid),
@@ -355,7 +343,7 @@ export async function probeStudioHealth(
     timeoutMs = 1_500
   }: {
     instanceNonce?: string;
-    studioOrigin?: KirinukiStudioOrigin;
+    studioOrigin?: KirinukiAppOrigin;
     timeoutMs?: number;
   } = {}
 ): Promise<StudioHealthPayload | null> {
@@ -491,7 +479,7 @@ async function foregroundStart(
 
 async function waitForStudio(
   instanceNonce: string,
-  studioOrigin: KirinukiStudioOrigin,
+  studioOrigin: KirinukiAppOrigin,
   timeoutMs: number = STARTUP_TIMEOUT_MS
 ): Promise<void> {
   const startedAt = Date.now();
@@ -540,7 +528,7 @@ export async function startLocalStudioServer(
         !== options.studioOrigin
       ) {
         throw new Error(
-          "실행 중인 localhost studio의 공개 Origin 모드가 요청과 다릅니다. stop 후 다시 start 하세요."
+          "이전 버전의 앱 UI 엔진이 실행 중입니다. Kirinuki 앱을 다시 시작해 주세요."
         );
       }
       const result = {
@@ -582,9 +570,6 @@ export async function startLocalStudioServer(
         "--foreground",
         ...(options.enableLegacyMigration
           ? ["--enable-legacy-migration"]
-          : []),
-        ...(options.studioOrigin === KIRINUKI_PUBLIC_STUDIO_ORIGIN
-          ? ["--public-origin"]
           : [])
       ),
       {
@@ -649,7 +634,7 @@ export async function statusLocalStudioServer(
     host: STUDIO_LOOPBACK_HOST,
     port: DEFAULT_STUDIO_PORT,
     studioOrigin,
-    url: studioOrigin
+    url: studioOrigin === KIRINUKI_LOCAL_STUDIO_ORIGIN
       ? studioBrowserUrl(studioOrigin)
       : `http://${STUDIO_LOOPBACK_HOST}:${DEFAULT_STUDIO_PORT}`,
     loopbackUrl: `http://${STUDIO_LOOPBACK_HOST}:${DEFAULT_STUDIO_PORT}`,

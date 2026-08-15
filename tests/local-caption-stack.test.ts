@@ -27,8 +27,7 @@ import {
   systemdStopCommands
 } from "../scripts/local-caption-stack-core.js";
 import {
-  KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  KIRINUKI_LOCAL_STUDIO_ORIGIN
 } from "../src/lib/local-runtime-origin.js";
 import {
   captionInstallMatchesRequestedStudioOrigin,
@@ -384,23 +383,18 @@ test("로컬 Studio Origin은 설치 경로와 무관한 고정 browser origin�
   );
   assert.equal(first.origin, KIRINUKI_LOCAL_STUDIO_ORIGIN);
   assert.equal(moved.origin, KIRINUKI_LOCAL_STUDIO_ORIGIN);
-  const publicInstall = createInstallConfig(
-    fixturePaths(),
-    resolveSemanticProfile("draft", hardware(), "cpu"),
-    { origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN }
-  );
-  assert.equal(publicInstall.origin, KIRINUKI_PUBLIC_STUDIO_ORIGIN);
   assert.equal(captionInstallMatchesRequestedStudioOrigin(first, {}), true);
-  assert.equal(captionInstallMatchesRequestedStudioOrigin(publicInstall, {
-    KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
-  }), true);
-  assert.equal(captionInstallMatchesRequestedStudioOrigin(publicInstall, {}), false);
   assert.throws(
     () => captionInstallMatchesRequestedStudioOrigin(first, {
-      KIRINUKI_ALLOWED_ORIGIN: "https://example.com"
+      KIRINUKI_ALLOWED_ORIGIN: "https://kirinuki.eff0rtchung.kr"
     }),
-    /Kirinuki Studio Origin.*고정된/u
+    /Kirinuki 앱 Origin/u
   );
+  assert.throws(() => createInstallConfig(
+    fixturePaths(),
+    resolveSemanticProfile("draft", hardware(), "cpu"),
+    { origin: "https://kirinuki.eff0rtchung.kr" as never }
+  ), /Kirinuki 앱 Origin/u);
 });
 
 test("systemd-user unit은 자동 페어링·로컬 STT·exact Origin만 환경에 넣는다", () => {
@@ -423,15 +417,12 @@ test("systemd-user unit은 자동 페어링·로컬 STT·exact Origin만 환경�
     unit,
     /^ReadWritePaths=\/home\/test\/\.local\/share\/kirinuki-caption-stack$/mu
   );
-  const publicUnit = renderSystemdUserUnit({
+  assert.throws(() => renderSystemdUserUnit({
     nodePath: "/usr/bin/node",
     cliPath: "/opt/kirinuki/scripts/local-caption-stack.ts",
     packageRoot: "/opt/kirinuki",
-    origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN
-  });
-  assert.ok(publicUnit.includes(
-    `KIRINUKI_ALLOWED_ORIGIN=${KIRINUKI_PUBLIC_STUDIO_ORIGIN}`
-  ));
+    origin: "https://kirinuki.eff0rtchung.kr"
+  }), /Kirinuki Studio Origin/u);
   assert.match(
     unit,
     /^ReadWritePaths=\/home\/test\/\.local\/state\/kirinuki-vod-runtime$/mu

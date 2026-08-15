@@ -29,7 +29,7 @@ export const CHZZK_VOD_CONSUMER_CACHE_PURGE_REQUEST_SCHEMA =
 export const CHZZK_VOD_CONSUMER_CACHE_PURGE_RESULT_SCHEMA =
   "chzzk-kirinuki-vod-consumer-cache-purge-result/v1";
 export const CHZZK_VOD_HANDLE_MS = 10_000;
-export const LOCAL_VOD_COMPANION_ENDPOINT =
+export const KIRINUKI_MEDIA_ENGINE_ENDPOINT =
   "http://127.0.0.1:4319/v1/captions";
 export const CHZZK_VOD_POLL_INTERVAL_MS = 500;
 export const CHZZK_VOD_MAX_STATUS_BYTES = 2 * 1024 * 1024;
@@ -90,7 +90,7 @@ export interface ChzzkVodMaterializationStatus {
 }
 
 /**
- * Terminal/API failures retain the companion's stable public code so callers
+ * Terminal/API failures retain the media engine's stable public code so callers
  * can choose a semantic recovery action without parsing Korean display text.
  */
 export class ChzzkVodMaterializationClientError extends Error {
@@ -233,7 +233,7 @@ function boundedString(
     || normalized.length > maximum
     || /[\u0000-\u001f\u007f]/u.test(normalized)
   ) {
-    throw new Error(`로컬 VOD companion의 ${label} 값이 올바르지 않습니다.`);
+    throw new Error(`Kirinuki 내부 미디어 엔진의 ${label} 값이 올바르지 않습니다.`);
   }
   return normalized;
 }
@@ -249,7 +249,7 @@ function normalizedPublicErrorCode(
 function normalizeToken(value: unknown): string {
   const token = String(value || "").trim();
   if (!token || token.length > 4_096 || /[\s\u0000-\u001f\u007f]/u.test(token)) {
-    throw new Error("로컬 companion 세션 토큰이 필요합니다.");
+    throw new Error("Kirinuki 내부 미디어 세션 토큰이 필요합니다.");
   }
   return token;
 }
@@ -469,14 +469,14 @@ function consumerCachePurgeRequestIdentity(
 
 function normalizeLocalMedia(
   value: unknown,
-  companionEndpoint: unknown,
+  mediaEngineEndpoint: unknown,
   jobId: string
 ): ChzzkVodLocalMedia {
   if (!isRecord(value)) {
     throw new Error("로컬 VOD 미디어 정보가 없습니다.");
   }
   const expectedOrigin = new URL(
-    chzzkVodMaterializationEndpoint(companionEndpoint)
+    chzzkVodMaterializationEndpoint(mediaEngineEndpoint)
   );
   let url: URL;
   try {
@@ -522,10 +522,10 @@ function normalizeLocalMedia(
 
 export function normalizeChzzkVodMaterializationStatus(
   value: unknown,
-  companionEndpoint: unknown
+  mediaEngineEndpoint: unknown
 ): ChzzkVodMaterializationStatus {
   if (!isRecord(value) || value.schema !== CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA) {
-    throw new Error("로컬 VOD companion 응답 버전이 맞지 않습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진 응답 버전이 맞지 않습니다.");
   }
   const jobId = normalizeJobId(value.jobId);
   const state = String(value.state || "") as ChzzkVodJobState;
@@ -557,7 +557,7 @@ export function normalizeChzzkVodMaterializationStatus(
     };
   }
   if (value.media !== undefined) {
-    normalized.media = normalizeLocalMedia(value.media, companionEndpoint, jobId);
+    normalized.media = normalizeLocalMedia(value.media, mediaEngineEndpoint, jobId);
   }
   if (state === "completed" && (!normalized.media || !normalized.materialization)) {
     throw new Error("완료된 로컬 VOD 작업의 결과가 빠졌습니다.");
@@ -570,7 +570,7 @@ export function normalizeChzzkVodMaterializationStatus(
 
 async function parseStatusResponse(
   response: Response,
-  companionEndpoint: unknown
+  mediaEngineEndpoint: unknown
 ): Promise<ChzzkVodMaterializationStatus> {
   const contentType = String(response.headers.get("content-type") || "")
     .split(";", 1)[0]
@@ -581,17 +581,17 @@ async function parseStatusResponse(
     contentType !== "application/json"
     || (Number.isFinite(contentLength) && contentLength > CHZZK_VOD_MAX_STATUS_BYTES)
   ) {
-    throw new Error("로컬 VOD companion이 올바른 JSON 응답을 보내지 않았습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진이 올바른 JSON 응답을 보내지 않았습니다.");
   }
   const text = await response.text();
   if (new TextEncoder().encode(text).byteLength > CHZZK_VOD_MAX_STATUS_BYTES) {
-    throw new Error("로컬 VOD companion 응답이 허용 크기를 넘었습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진 응답이 허용 크기를 넘었습니다.");
   }
   let payload: unknown;
   try {
     payload = JSON.parse(text);
   } catch {
-    throw new Error("로컬 VOD companion 응답 JSON을 읽지 못했습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진 응답 JSON을 읽지 못했습니다.");
   }
   if (!response.ok) {
     const error = isRecord(payload) && isRecord(payload.error)
@@ -600,7 +600,7 @@ async function parseStatusResponse(
     throw new ChzzkVodMaterializationClientError(
       typeof error.message === "string" && error.message.trim()
         ? error.message.trim().slice(0, 1_000)
-        : `로컬 VOD companion 요청이 실패했습니다. (HTTP ${response.status})`,
+        : `Kirinuki 내부 미디어 엔진 요청이 실패했습니다. (HTTP ${response.status})`,
       normalizedPublicErrorCode(
         error.code,
         "MATERIALIZATION_REQUEST_FAILED"
@@ -608,7 +608,7 @@ async function parseStatusResponse(
       response.status
     );
   }
-  return normalizeChzzkVodMaterializationStatus(payload, companionEndpoint);
+  return normalizeChzzkVodMaterializationStatus(payload, mediaEngineEndpoint);
 }
 
 export function normalizeChzzkVodCachePurgeResult(
@@ -761,17 +761,17 @@ async function parseCachePurgeResponse(
     || (Number.isFinite(contentLength)
       && contentLength > CHZZK_VOD_MAX_STATUS_BYTES)
   ) {
-    throw new Error("로컬 VOD companion이 올바른 JSON 응답을 보내지 않았습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진이 올바른 JSON 응답을 보내지 않았습니다.");
   }
   const text = await response.text();
   if (new TextEncoder().encode(text).byteLength > CHZZK_VOD_MAX_STATUS_BYTES) {
-    throw new Error("로컬 VOD companion 응답이 허용 크기를 넘었습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진 응답이 허용 크기를 넘었습니다.");
   }
   let payload: unknown;
   try {
     payload = JSON.parse(text);
   } catch {
-    throw new Error("로컬 VOD companion 응답 JSON을 읽지 못했습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진 응답 JSON을 읽지 못했습니다.");
   }
   if (!response.ok) {
     const error = isRecord(payload) && isRecord(payload.error)
@@ -799,17 +799,17 @@ async function parseConsumerCachePurgeResponse(
     || (Number.isFinite(contentLength)
       && contentLength > CHZZK_VOD_MAX_STATUS_BYTES)
   ) {
-    throw new Error("로컬 VOD companion이 올바른 JSON 응답을 보내지 않았습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진이 올바른 JSON 응답을 보내지 않았습니다.");
   }
   const text = await response.text();
   if (new TextEncoder().encode(text).byteLength > CHZZK_VOD_MAX_STATUS_BYTES) {
-    throw new Error("로컬 VOD companion 응답이 허용 크기를 넘었습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진 응답이 허용 크기를 넘었습니다.");
   }
   let payload: unknown;
   try {
     payload = JSON.parse(text);
   } catch {
-    throw new Error("로컬 VOD companion 응답 JSON을 읽지 못했습니다.");
+    throw new Error("Kirinuki 내부 미디어 엔진 응답 JSON을 읽지 못했습니다.");
   }
   if (!response.ok) {
     const error = isRecord(payload) && isRecord(payload.error)
@@ -999,7 +999,7 @@ export async function purgeChzzkVodMaterializedCache({
 
 /**
  * Deletes every managed VOD cache generation owned by one exact edit-session
- * consumer. The companion authenticates both the bearer session and the
+ * consumer.  The internal engine authenticates both the bearer session and the
  * current completed media capability before removing the isolated scope.
  */
 export async function purgeChzzkVodConsumerSessionCache({
