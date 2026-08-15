@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import type { ChildProcess, SpawnOptions, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import {
   link,
   mkdtemp,
   mkdir,
+  open,
   readdir,
   readFile,
   rename,
@@ -84,8 +86,8 @@ const CHZZK_ID = "14514980";
 const CHZZK_URL = `https://chzzk.naver.com/video/${CHZZK_ID}`;
 const SOOP_ID = "123456789";
 const SOOP_URL = `https://vod.sooplive.com/player/${SOOP_ID}`;
-const PYTHON_BINARY = "/usr/bin/python3";
-const YT_DLP_ARTIFACT = "/opt/kirinuki/yt-dlp";
+const PYTHON_BINARY = path.resolve("/usr/bin/python3");
+const YT_DLP_ARTIFACT = path.resolve("/opt/kirinuki/yt-dlp");
 const TEST_CONSUMER_ID = "kirinuki-test-editor-project";
 
 function soopSourceClockIdentity(
@@ -315,6 +317,24 @@ async function materializeExternalVod(
 
 function sha256Buffer(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function isPublishedInspectionInput(
+  filePath: string,
+  options?: Pick<ExternalProcessRunOptions, "inheritedInputFileDescriptor">
+): boolean {
+  return options?.inheritedInputFileDescriptor !== undefined
+    || filePath.startsWith(`/proc/${process.pid}/fd/`);
+}
+
+async function readFixtureMediaText(
+  filePath: string,
+  options?: Pick<ExternalProcessRunOptions, "inheritedInputFileDescriptor">
+): Promise<string> {
+  const inheritedFileDescriptor = options?.inheritedInputFileDescriptor;
+  return inheritedFileDescriptor === undefined
+    ? await readFile(filePath, "utf8")
+    : readFileSync(inheritedFileDescriptor, "utf8");
 }
 
 function youtubeFixtureDependencies(
@@ -770,9 +790,9 @@ test("사용자 환경에서 경로·로케일 외 쿠키와 자격 증명 가�
   }, "/private/job"), {
     PATH: "/usr/bin",
     NO_COLOR: "1",
-    TEMP: "/private/job",
-    TMP: "/private/job",
-    TMPDIR: "/private/job"
+    TEMP: path.resolve("/private/job"),
+    TMP: path.resolve("/private/job"),
+    TMPDIR: path.resolve("/private/job")
   });
 });
 
@@ -1365,7 +1385,7 @@ test("정규화 root의 최종 concat은 packet-copy faststart MP4를 만든다"
   const outputFormatIndex = args.lastIndexOf("-f");
   assert.notEqual(outputFormatIndex, -1);
   assert.equal(args[outputFormatIndex + 1], "mp4");
-  assert.equal(args.at(-1), "/tmp/job/materialized.tmp.mp4");
+  assert.equal(args.at(-1), path.resolve("/tmp/job/materialized.tmp.mp4"));
 });
 
 test("strict packet-copy 검증이 없으면 최종 concat은 안전하게 재인코딩한다", () => {
@@ -1580,7 +1600,7 @@ test("ffprobe는 packet-copy 결정을 위해 codec extradata SHA-256을 요청�
   const args = buildExternalFfprobeArgs("/tmp/job/root.mp4");
   assert(args.includes("-show_data"));
   assert.equal(optionValue(args, "-show_data_hash"), "sha256");
-  assert.equal(args.at(-1), "/tmp/job/root.mp4");
+  assert.equal(args.at(-1), path.resolve("/tmp/job/root.mp4"));
 });
 
 test("CHZZK 0초·비영점 조각은 컨테이너 합집합과 각 A/V 스트림 범위를 따로 검증한다", async (t) => {
@@ -1689,8 +1709,8 @@ test("CHZZK 0초·비영점 조각은 컨테이너 합집합과 각 A/V 스트�
     runProcess,
     pythonBinary: PYTHON_BINARY,
     ytDlpBinary: YT_DLP_ARTIFACT,
-    inspectMedia: async (filePath) => {
-      const content = await readFile(filePath, "utf8");
+    inspectMedia: async (filePath, options) => {
+      const content = await readFixtureMediaText(filePath, options);
       return content === "chzzk-strict-section"
         ? sectionInspection
         : editorSafeInspection(15_000);
@@ -1781,10 +1801,13 @@ test("기본 프로세스 경계는 argv 배열과 shell:false를 사용한다",
   assert.equal(captured?.command, "yt-dlp");
   assert.deepEqual(captured?.args, ["--version"]);
   assert.equal(captured?.options.shell, false);
-  assert.equal(captured?.options.detached, true);
-  assert.equal(captured?.options.env?.TEMP, "/tmp");
-  assert.equal(captured?.options.env?.TMP, "/tmp");
-  assert.equal(captured?.options.env?.TMPDIR, "/tmp");
+  assert.equal(
+    captured?.options.detached,
+    process.platform === "win32" ? undefined : true
+  );
+  assert.equal(captured?.options.env?.TEMP, path.resolve("/tmp"));
+  assert.equal(captured?.options.env?.TMP, path.resolve("/tmp"));
+  assert.equal(captured?.options.env?.TMPDIR, path.resolve("/tmp"));
   assert.equal(captured?.options.env?.temp, undefined);
 });
 
@@ -1833,6 +1856,36 @@ test("ffprobe용 열린 파일은 모든 OS에서 child fd 3에 매핑하고 Win
       && error.code === "INVALID_PROCESS_BINARY"
     )
   );
+});
+
+test("macOS child fd 3은 실제 /dev/fd/3 입력으로 열린 파일 bytes를 읽는다", {
+  skip: process.platform !== "darwin"
+}, async (t) => {
+  const workingDirectory = await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-darwin-inherited-fd-"
+  ));
+  t.after(async () => {
+    await rm(workingDirectory, { recursive: true, force: true });
+  });
+  const fixturePath = path.join(workingDirectory, "published.mp4");
+  await writeFile(fixturePath, "darwin-fd-bound-fixture");
+  const handle = await open(fixturePath, "r");
+  try {
+    const result = await runExternalProcess(process.execPath, [
+      "--input-type=module",
+      "--eval",
+      'import { readFileSync } from "node:fs"; process.stdout.write(readFileSync("/dev/fd/3", "utf8"));'
+    ], {
+      cwd: workingDirectory,
+      env: {},
+      shell: false,
+      inheritedInputFileDescriptor: handle.fd
+    });
+    assert.equal(result.stdout, "darwin-fd-bound-fixture");
+  } finally {
+    await handle.close();
+  }
 });
 
 test("Windows 취소는 leader kill이 아니라 exact process tree terminator 완료를 기다린다", async () => {
@@ -2622,16 +2675,18 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
     return { exitCode: 0, stdout: "", stderr: "" };
   };
   const inspectMedia = async (
-    filePath: string
+    filePath: string,
+    options?: ExternalProcessRunOptions
   ): Promise<ExternalMediaInspection> => {
-    const content = await readFile(filePath, "utf8");
+    const content = await readFixtureMediaText(filePath, options);
     const section = /^strict-section:(\d+)$/u.exec(content);
     return editorSafeInspection(section ? Number(section[1]) : 21_000);
   };
   const inspectPacketCopyMedia = async (
-    filePath: string
+    filePath: string,
+    options: ExternalProcessRunOptions
   ): Promise<ExternalMediaInspection> => ({
-    ...(await inspectMedia(filePath)),
+    ...(await inspectMedia(filePath, options)),
     packetCopySignature: "fixture-strict-codec-parameters"
   });
   const request = {
@@ -2841,7 +2896,7 @@ test("최종 ffprobe 뒤 source가 교체돼도 게시본을 다시 검사하고
       clips: [{ id: "clip", startMs: 20_000, endMs: 21_000 }],
       stateDir
     }, youtubeFixtureDependencies({
-      inspectMedia: async (filePath) => {
+      inspectMedia: async (filePath, options) => {
         const basename = path.basename(filePath);
         if (basename === "materialized.tmp.mp4" && !sourceSwapped) {
           const original = await readFile(filePath);
@@ -2850,7 +2905,7 @@ test("최종 ffprobe 뒤 source가 교체돼도 게시본을 다시 검사하고
           sourceSwapped = true;
           return editorSafeInspection(21_000);
         }
-        if (filePath.startsWith(`/proc/${process.pid}/fd/`)) {
+        if (isPublishedInspectionInput(filePath, options)) {
           publishedProbeCalls += 1;
           return editorSafeInspection(22_000);
         }
@@ -2885,8 +2940,8 @@ test("게시 경로를 바꿨다가 복원해도 semantic probe는 열린 fd만 
       clips: [{ id: "clip", startMs: 20_000, endMs: 21_000 }],
       stateDir
     }, youtubeFixtureDependencies({
-      inspectMedia: async (filePath) => {
-        if (!filePath.startsWith(`/proc/${process.pid}/fd/`)) {
+      inspectMedia: async (filePath, options) => {
+        if (!isPublishedInspectionInput(filePath, options)) {
           return editorSafeInspection(21_000);
         }
         descriptorProbeCalls += 1;
@@ -2903,7 +2958,7 @@ test("게시 경로를 바꿨다가 복원해도 semantic probe는 열린 fd만 
         try {
           await writeFile(artifactPath, "alternate-path-bytes");
           await writeFile(backupPath, original);
-          inspectedContent = await readFile(filePath, "utf8");
+          inspectedContent = await readFixtureMediaText(filePath, options);
         } finally {
           await rm(artifactPath, { force: true });
           await rename(backupPath, artifactPath);
@@ -3416,8 +3471,8 @@ test("필수 오디오가 없는 strict section은 최종 mux 전에 거부한�
       runProcess,
       pythonBinary: PYTHON_BINARY,
       ytDlpBinary: YT_DLP_ARTIFACT,
-      inspectMedia: async (filePath) => {
-        const content = await readFile(filePath, "utf8");
+      inspectMedia: async (filePath, options) => {
+        const content = await readFixtureMediaText(filePath, options);
         return editorSafeInspection(
           content === "strict-section:2" ? 6_000 : 15_000,
           content === "strict-section:2" ? null : "aac"
@@ -3530,8 +3585,8 @@ test("동시 publish 뒤 한 attempt의 검증 실패가 다른 attempt의 commi
     releaseFirstDescriptor = resolve;
   });
   const dependencies = youtubeFixtureDependencies({
-    inspectMedia: async (filePath) => {
-      if (!filePath.startsWith(`/proc/${process.pid}/fd/`)) {
+    inspectMedia: async (filePath, options) => {
+      if (!isPublishedInspectionInput(filePath, options)) {
         return editorSafeInspection(21_000);
       }
       descriptorCalls += 1;
@@ -3608,10 +3663,10 @@ test("immutable artifact 게시 뒤 receipt 원자 저장 실패는 그 attempt�
   });
   let blockedReceiptWrite = false;
   const dependencies = youtubeFixtureDependencies({
-    inspectMedia: async (filePath) => {
+    inspectMedia: async (filePath, options) => {
       if (
         !blockedReceiptWrite
-        && filePath.startsWith(`/proc/${process.pid}/fd/`)
+        && isPublishedInspectionInput(filePath, options)
       ) {
         const platformDirectory = path.join(
           stateDir,
@@ -3698,8 +3753,11 @@ test("YouTube hot-load는 기존 clip 부분집합 root를 상속하고 새 line
     await writeFile(outputPath, `final:${durationMs}`);
     return { exitCode: 0, stdout: "", stderr: "" };
   };
-  const inspectMedia = async (filePath: string): Promise<ExternalMediaInspection> => {
-    const content = await readFile(filePath, "utf8");
+  const inspectMedia = async (
+    filePath: string,
+    options?: ExternalProcessRunOptions
+  ): Promise<ExternalMediaInspection> => {
+    const content = await readFixtureMediaText(filePath, options);
     if (content.startsWith("final:")) {
       return editorSafeInspection(Number(content.slice("final:".length)));
     }
@@ -3961,8 +4019,10 @@ test("HLS hot-load는 같은 playlist라도 겹치는 경계 fragment bytes가 �
     fetchImpl,
     pythonBinary: PYTHON_BINARY,
     ytDlpBinary: YT_DLP_ARTIFACT,
-    inspectMedia: async (filePath) => {
-      const duration = /:(\d+)$/u.exec(await readFile(filePath, "utf8"))?.[1];
+    inspectMedia: async (filePath, options) => {
+      const duration = /:(\d+)$/u.exec(
+        await readFixtureMediaText(filePath, options)
+      )?.[1];
       assert.ok(duration);
       return editorSafeInspection(Number(duration));
     },
@@ -4130,8 +4190,10 @@ test("HLS hot-load는 선택 sequence가 맞닿기만 해도 선행 바이트 �
     resolveClockProofSet: resolveSegmentedClockProofSet,
     pythonBinary: PYTHON_BINARY,
     ytDlpBinary: YT_DLP_ARTIFACT,
-    inspectMedia: async (filePath) => {
-      const duration = /:(\d+)$/u.exec(await readFile(filePath, "utf8"))?.[1];
+    inspectMedia: async (filePath, options) => {
+      const duration = /:(\d+)$/u.exec(
+        await readFixtureMediaText(filePath, options)
+      )?.[1];
       assert.ok(duration);
       return editorSafeInspection(Number(duration));
     },

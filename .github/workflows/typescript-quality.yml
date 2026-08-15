@@ -55,6 +55,9 @@ jobs:
       - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
 
+      - name: Prepare the pinned FFmpeg used by the browser smoke
+        run: npm run tools:desktop -- linux-x64
+
       - name: Install Chrome for Testing and matching ChromeDriver
         id: setup-chrome
         uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2
@@ -67,6 +70,7 @@ jobs:
         env:
           CHROMIUM_BINARY: ${{ steps.setup-chrome.outputs.chrome-path }}
           CHROMEDRIVER_BINARY: ${{ steps.setup-chrome.outputs.chromedriver-path }}
+          FFMPEG_BINARY: ${{ github.workspace }}/.artifacts/desktop-tools/linux-x64/ffmpeg
 
       - name: Prove release packaging kept tracked sources clean
         run: |

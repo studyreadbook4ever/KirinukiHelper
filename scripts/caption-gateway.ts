@@ -3,7 +3,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import type { BigIntStats } from "node:fs";
-import { open } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { createServer } from "node:http";
 import type {
   IncomingMessage,
@@ -62,7 +62,8 @@ import {
   CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
   VOD_ARTIFACT_CHUNK_BYTES,
   ChzzkVodJobManagerError,
-  createChzzkVodJobManager
+  createChzzkVodJobManager,
+  sameChzzkVodArtifactObjectIdentity
 } from "./chzzk-vod-job-manager.js";
 import type {
   ChzzkVodArtifactIdentity,
@@ -845,6 +846,22 @@ function sameMediaIdentity(
   );
 }
 
+function mediaIdentityFromStats(
+  metadata: BigIntStats,
+  symlink: boolean
+): ChzzkVodArtifactIdentity {
+  return {
+    size: Number(metadata.size),
+    mtimeMs: Number(metadata.mtimeNs) / 1_000_000,
+    dev: metadata.dev.toString(),
+    ino: metadata.ino.toString(),
+    mtimeNs: metadata.mtimeNs.toString(),
+    ctimeNs: metadata.ctimeNs.toString(),
+    regular: metadata.isFile(),
+    symlink
+  };
+}
+
 function mediaTransferAborted(): DOMException {
   return new DOMException("로컬 미디어 전송이 중단되었습니다.", "AbortError");
 }
@@ -922,8 +939,12 @@ export async function sendLocalMedia(
   );
   try {
     const metadata = await handle.stat({ bigint: true });
+    const pathMetadata = await lstat(artifactPath, { bigint: true });
+    const handleIdentity = mediaIdentityFromStats(metadata, false);
     if (
-      !sameMediaIdentity(metadata, expectedIdentity)
+      !sameChzzkVodArtifactObjectIdentity(handleIdentity, expectedIdentity)
+      || !sameMediaIdentity(pathMetadata, expectedIdentity)
+      || pathMetadata.isSymbolicLink()
       || expectedIntegrity.sizeBytes !== expectedIdentity.size
       || expectedVerification.hashSha256 !== expectedIntegrity.hashSha256
       || expectedVerification.chunkSizeBytes !== VOD_ARTIFACT_CHUNK_BYTES

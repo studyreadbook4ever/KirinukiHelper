@@ -144,7 +144,7 @@ test("FFmpeg arguments seek both exact inputs and use deterministic public heade
   assert.ok(args.includes("1:a:0?"));
   assert.ok(args.includes("setpts=PTS-STARTPTS"));
   assert.ok(args.includes("asetpts=PTS-STARTPTS"));
-  assert.equal(args.at(-1), "/private/work/output.mp4");
+  assert.equal(args.at(-1), path.resolve("/private/work/output.mp4"));
 });
 
 test("direct acquisition rejects a shape-valid forged clock-proof ID before FFmpeg", async () => {

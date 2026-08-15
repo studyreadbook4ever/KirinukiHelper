@@ -77,7 +77,7 @@ test("localhost companion package root override는 절대경로만 사용한다"
   });
   assert.equal(
     overridden.packageRoot,
-    "/srv/kirinuki runtime"
+    path.resolve("/srv/kirinuki runtime")
   );
   for (const value of ["", "relative/package", " /opt/package", "/opt/x\nx"]) {
     assert.throws(
@@ -397,7 +397,9 @@ test("로컬 Studio Origin은 설치 경로와 무관한 고정 browser origin�
   ), /Kirinuki 앱 Origin/u);
 });
 
-test("systemd-user unit은 자동 페어링·로컬 STT·exact Origin만 환경에 넣는다", () => {
+test("systemd-user unit은 자동 페어링·로컬 STT·exact Origin만 환경에 넣는다", {
+  skip: process.platform !== "linux"
+}, () => {
   const origin = KIRINUKI_LOCAL_STUDIO_ORIGIN;
   const unit = renderSystemdUserUnit({
     nodePath: "/usr/bin/node",

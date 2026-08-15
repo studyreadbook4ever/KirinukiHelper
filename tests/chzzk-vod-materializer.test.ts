@@ -581,7 +581,7 @@ test("XML entity/doctype와 비 muxed 표현을 fail-closed로 거부한다", ()
 test("XDG state 경로와 명시 override를 결정론적으로 고른다", () => {
   assert.equal(
     resolveChzzkVodStateDirectory(undefined, { XDG_STATE_HOME: "/state" }, "/home/test"),
-    "/state/kirinuki-vod-runtime/vod-fragments"
+    path.resolve("/state/kirinuki-vod-runtime/vod-fragments")
   );
   assert.equal(
     resolveChzzkVodStateDirectory(undefined, {
@@ -589,7 +589,7 @@ test("XDG state 경로와 명시 override를 결정론적으로 고른다", () =
       KIRINUKI_CHZZK_VOD_STATE_DIR: "/legacy/ignored",
       XDG_STATE_HOME: "/ignored"
     }, "/home/test"),
-    "/srv/kirinuki-vod"
+    path.resolve("/srv/kirinuki-vod")
   );
   assert.equal(
     resolveChzzkVodStateDirectory("relative/state", {}, "/home/test"),

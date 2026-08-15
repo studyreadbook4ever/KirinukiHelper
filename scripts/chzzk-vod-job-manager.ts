@@ -1071,13 +1071,36 @@ function sameArtifactIdentity(
   right: Readonly<ChzzkVodArtifactIdentity>
 ): boolean {
   return (
+    sameArtifactObjectIdentity(left, right)
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+  );
+}
+
+/**
+ * Compares the stable object fields shared by path-based lstat and fd-based
+ * fstat. Windows can report timestamp metadata differently through those two
+ * APIs, so cross-API checks bind the opened handle to the same file object and
+ * keep timestamp checks within one API family. The fd is still hashed and
+ * checked before/after, while the final path is lstat again.
+ */
+export function sameChzzkVodArtifactObjectIdentity(
+  left: Readonly<ChzzkVodArtifactIdentity>,
+  right: Readonly<ChzzkVodArtifactIdentity>
+): boolean {
+  return sameArtifactObjectIdentity(left, right);
+}
+
+function sameArtifactObjectIdentity(
+  left: Readonly<ChzzkVodArtifactIdentity>,
+  right: Readonly<ChzzkVodArtifactIdentity>
+): boolean {
+  return (
     left.regular === right.regular
     && left.symlink === right.symlink
     && left.size === right.size
     && left.dev === right.dev
     && left.ino === right.ino
-    && left.mtimeNs === right.mtimeNs
-    && left.ctimeNs === right.ctimeNs
   );
 }
 
@@ -1117,7 +1140,7 @@ async function hashExactArtifact(
       await handle.stat({ bigint: true })
     );
     if (
-      !sameArtifactIdentity(before, expectedIdentity)
+      !sameArtifactObjectIdentity(before, expectedIdentity)
       || !before.regular
       || before.symlink
     ) {
@@ -1168,7 +1191,7 @@ async function hashExactArtifact(
     });
     if (
       !sameArtifactIdentity(after, before)
-      || !sameArtifactIdentity(pathAfter, before)
+      || !sameArtifactIdentity(pathAfter, expectedIdentity)
     ) {
       throw new ChzzkVodJobManagerError(
         "검증 중 로컬 편집 미디어 파일이 바뀌었습니다.",
@@ -1256,7 +1279,7 @@ async function purgeExactManagedArtifact(
       || handleIdentity.symlink
       || handleStatus.nlink !== 1n
       || pathStatus.nlink !== 1n
-      || !sameArtifactIdentity(handleIdentity, expectedIdentity)
+      || !sameArtifactObjectIdentity(handleIdentity, expectedIdentity)
       || !sameArtifactIdentity(pathIdentity, expectedIdentity)
     ) {
       throw new ChzzkVodJobManagerError(
@@ -1702,7 +1725,7 @@ async function purgeExactManagedConsumerScope({
     );
   }
   const quarantinePath = path.join(
-    quarantineRoot,
+    canonicalQuarantineRoot,
     `consumer-${vodConsumerScopeHash(consumerId)}-${quarantineNonce}`
   );
   if (!pathWithinRoot(quarantinePath, canonicalQuarantineRoot)) {

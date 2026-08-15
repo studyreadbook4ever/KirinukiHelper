@@ -106,15 +106,29 @@ test("yt-dlp는 공식 2026.07.04 zipimport와 bundled EJS를 불변 pin한다",
 
 test("Linux XDG 경로는 자막 stack과 독립된 VOD runtime namespace를 쓴다", () => {
   const paths = fixturePaths();
-  assert.equal(paths.dataRoot, "/tmp/kirinuki-vod-test/data/kirinuki-vod-runtime");
-  assert.equal(paths.configPath, "/tmp/kirinuki-vod-test/config/kirinuki-vod-runtime/config.json");
-  assert.equal(paths.stateRoot, "/tmp/kirinuki-vod-test/state/kirinuki-vod-runtime");
-  assert.equal(paths.runtimeRoot, "/tmp/kirinuki-vod-test/run/kirinuki-vod-runtime");
+  assert.equal(
+    paths.dataRoot,
+    path.resolve("/tmp/kirinuki-vod-test/data/kirinuki-vod-runtime")
+  );
+  assert.equal(
+    paths.configPath,
+    path.resolve("/tmp/kirinuki-vod-test/config/kirinuki-vod-runtime/config.json")
+  );
+  assert.equal(
+    paths.stateRoot,
+    path.resolve("/tmp/kirinuki-vod-test/state/kirinuki-vod-runtime")
+  );
+  assert.equal(
+    paths.runtimeRoot,
+    path.resolve("/tmp/kirinuki-vod-test/run/kirinuki-vod-runtime")
+  );
   assert.equal(
     paths.ytDlpPath,
-    "/tmp/kirinuki-vod-test/data/kirinuki-vod-runtime/bin/yt-dlp-2026.07.04"
+    path.resolve(
+      "/tmp/kirinuki-vod-test/data/kirinuki-vod-runtime/bin/yt-dlp-2026.07.04"
+    )
   );
-  assert.equal(paths.packageRoot, "/opt/kirinuki");
+  assert.equal(paths.packageRoot, path.resolve("/opt/kirinuki"));
   for (const [key, value] of ([
     ["XDG_DATA_HOME", "relative/data"],
     ["XDG_CONFIG_HOME", " /tmp/config"],
@@ -131,7 +145,7 @@ test("Linux XDG 경로는 자막 stack과 독립된 VOD runtime namespace를 쓴
     env: { KIRINUKI_PACKAGE_ROOT: "/srv/kirinuki package" },
     homeDir: "/tmp/home",
     packageRoot: "/opt/kirinuki"
-  }).packageRoot, "/srv/kirinuki package");
+  }).packageRoot, path.resolve("/srv/kirinuki package"));
   assert.throws(() => resolveVodRuntimePaths({
     env: { KIRINUKI_PACKAGE_ROOT: "relative/package" },
     homeDir: "/tmp/home",
@@ -183,7 +197,9 @@ test("Node 22.13과 Python 3.11 최소 버전을 semantic하게 검증한다", (
   assert.equal(parsePythonVersion("python unknown"), null);
 });
 
-test("artifact 검증은 regular non-symlink·크기·SHA·실행 비트를 모두 요구한다", async () => {
+test("artifact 검증은 regular non-symlink·크기·SHA·실행 비트를 모두 요구한다", {
+  skip: process.platform !== "linux"
+}, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-vod-artifact-"));
   try {
     const bytes = Buffer.from("verified fixture\n", "utf8");
@@ -345,7 +361,7 @@ test("gateway child 환경은 비밀을 제거하고 관리형 절대 도구와 
       LANG: "ko_KR.UTF-8",
       TMPDIR: "/tmp"
     },
-    nodeBinary: "/opt/node/bin/node",
+    nodeBinary: config.node.path,
     kind: "caption-vod",
     instanceNonce: TEST_INSTANCE_NONCE
   });
@@ -363,7 +379,7 @@ test("gateway child 환경은 비밀을 제거하고 관리형 절대 도구와 
     environment.KIRINUKI_YT_DLP_PYTHON_BINARY,
     config.python.path
   );
-  assert.equal(environment.KIRINUKI_YT_DLP_NODE_BINARY, "/opt/node/bin/node");
+  assert.equal(environment.KIRINUKI_YT_DLP_NODE_BINARY, config.node.path);
   assert.equal(environment.KIRINUKI_FFMPEG_BINARY, config.ffmpeg.path);
   assert.equal(environment.KIRINUKI_FFPROBE_BINARY, config.ffprobe.path);
   assert.equal(environment.KIRINUKI_VOD_STATE_DIR, config.vodStateDir);
@@ -373,8 +389,14 @@ test("gateway child 환경은 비밀을 제거하고 관리형 절대 도구와 
   assert.equal(environment.KIRINUKI_VOD_YT_DLP_VERSION, "2026.07.04");
   assert.equal(environment.KIRINUKI_VOD_EJS_VERSION, "0.8.0");
   assert.equal(environment.KIRINUKI_VOD_INSTANCE_NONCE, TEST_INSTANCE_NONCE);
-  assert.match(String(environment.PATH), /^\/opt\/node\/bin:/u);
-  assert.match(String(environment.PATH), /(?:^|:)\/opt\/python\/bin(?:$|:)/u);
+  assert.equal(
+    String(environment.PATH).split(path.delimiter)[0],
+    path.dirname(config.node.path)
+  );
+  assert.ok(
+    String(environment.PATH).split(path.delimiter)
+      .includes(path.dirname(config.python.path))
+  );
   assert.doesNotMatch(String(environment.PATH), /secret/u);
 
   const manager = vodManagerEnvironment({
@@ -386,7 +408,7 @@ test("gateway child 환경은 비밀을 제거하고 관리형 절대 도구와 
   assert.equal(manager.XDG_DATA_HOME, "/tmp/kirinuki-vod-test/data");
   assert.equal(manager.ACCESS_TOKEN, undefined);
   assert.equal(manager.NODE_OPTIONS, undefined);
-  assert.equal(manager.KIRINUKI_PACKAGE_ROOT, "/opt/kirinuki");
+  assert.equal(manager.KIRINUKI_PACKAGE_ROOT, fixturePaths().packageRoot);
   assert.equal(manager.KIRINUKI_EXTENSION_ROOT, undefined);
   assert.equal(manager.KIRINUKI_VOD_INSTANCE_NONCE, TEST_INSTANCE_NONCE);
   assert.equal(createVodInstanceNonce().length, 43);
@@ -529,23 +551,28 @@ test("PID identity는 exact CLI·foreground·proc start tick·boot ID를 함께 
   const fields = ["S", ...Array.from({ length: 18 }, () => "0"), "987654", "0"];
   assert.equal(parseProcStartTime(`42 (node worker) ${fields.join(" ")}`), "987654");
   assert.equal(parseProcStartTime("invalid"), null);
-  const expectedCli = "/opt/kirinuki/scripts/local-vod-runtime.ts";
+  const expectedCli = path.resolve(
+    "/opt/kirinuki/scripts/local-vod-runtime.ts"
+  );
+  const expectedCwd = path.resolve("/opt/kirinuki");
   assert.equal(commandLineRunsExactVodCli({
     commandLine:
       `/usr/bin/node\0--import\0tsx\0${expectedCli}\0start\0--foreground\0`,
-    processCwd: "/opt/kirinuki",
+    processCwd: expectedCwd,
     expectedCliPath: expectedCli
   }), true);
   assert.equal(commandLineRunsExactVodCli({
     commandLine:
       `/usr/bin/node\0--import\0tsx\0${expectedCli}\0start\0`,
-    processCwd: "/opt/kirinuki",
+    processCwd: expectedCwd,
     expectedCliPath: expectedCli
   }), false);
   assert.equal(commandLineRunsExactVodCli({
     commandLine:
-      "/usr/bin/node\0--import\0tsx\0/opt/foreign/local-vod-runtime.ts\0start\0--foreground\0",
-    processCwd: "/opt/foreign",
+      `/usr/bin/node\0--import\0tsx\0${path.resolve(
+        "/opt/foreign/local-vod-runtime.ts"
+      )}\0start\0--foreground\0`,
+    processCwd: path.resolve("/opt/foreign"),
     expectedCliPath: expectedCli
   }), false);
 
@@ -561,7 +588,10 @@ test("PID identity는 exact CLI·foreground·proc start tick·boot ID를 함께 
   } as const;
   assert.equal(validVodPidRecord(record, expectedCli), true);
   assert.equal(validVodPidRecord({ ...record, procStartTime: "bad" }, expectedCli), false);
-  assert.equal(validVodPidRecord({ ...record, cliPath: "/opt/foreign.ts" }, expectedCli), false);
+  assert.equal(validVodPidRecord({
+    ...record,
+    cliPath: path.resolve("/opt/foreign.ts")
+  }, expectedCli), false);
   assert.equal(validVodPidRecord({ ...record, instanceNonce: "generic" }, expectedCli), false);
   const identity = {
     schema: LOCAL_VOD_RUNTIME_SCHEMA,

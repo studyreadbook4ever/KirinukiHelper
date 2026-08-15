@@ -23,7 +23,8 @@ import {
   DEFAULT_COMPLETED_VOD_JOB_TTL_MS,
   VOD_ARTIFACT_CHUNK_BYTES,
   createChzzkVodJobManager,
-  normalizeChzzkVodMaterializationRequest
+  normalizeChzzkVodMaterializationRequest,
+  sameChzzkVodArtifactObjectIdentity
 } from "../scripts/chzzk-vod-job-manager.js";
 import {
   vodConsumerScopeHash,
@@ -265,6 +266,27 @@ function inspected(
     symlink: false
   };
 }
+
+test("path lstat과 fd stat은 timestamp 표현이 달라도 같은 파일 객체를 식별한다", () => {
+  const pathIdentity = inspected("same-object", { version: 1 });
+  const handleIdentity = {
+    ...pathIdentity,
+    mtimeNs: (BigInt(pathIdentity.mtimeNs) + 100n).toString(),
+    ctimeNs: (BigInt(pathIdentity.ctimeNs) + 200n).toString()
+  };
+  assert.equal(
+    sameChzzkVodArtifactObjectIdentity(pathIdentity, handleIdentity),
+    true
+  );
+  assert.equal(sameChzzkVodArtifactObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    ino: "different-file"
+  }), false);
+  assert.equal(sameChzzkVodArtifactObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    symlink: true
+  }), false);
+});
 
 test("요청은 공개 CHZZK VOD, 고정 10초, 명시적 권리 확인만 받는다", () => {
   assert.deepEqual(normalizeChzzkVodMaterializationRequest(request()), {

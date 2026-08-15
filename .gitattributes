@@ -1,3 +1,4 @@
+* text=auto eol=lf
 *.sh text eol=lf
 web/**/*.js linguist-generated=true
 streaming-companion/**/*.js linguist-generated=true

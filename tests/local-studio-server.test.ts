@@ -217,14 +217,18 @@ test("localhost studio는 고정 loopback 주소와 독립 XDG PID/log 경로를
     homeDir: "/tmp/kirinuki-studio-test/home",
     repoRoot: "/opt/kirinuki"
   });
-  assert.equal(paths.repoRoot, "/opt/kirinuki");
+  assert.equal(paths.repoRoot, path.resolve("/opt/kirinuki"));
   assert.equal(
     paths.pidPath,
-    "/tmp/kirinuki-studio-test/run/kirinuki-studio/localhost-server.pid"
+    path.resolve(
+      "/tmp/kirinuki-studio-test/run/kirinuki-studio/localhost-server.pid"
+    )
   );
   assert.equal(
     paths.logPath,
-    "/tmp/kirinuki-studio-test/state/kirinuki-studio/localhost-server.log"
+    path.resolve(
+      "/tmp/kirinuki-studio-test/state/kirinuki-studio/localhost-server.log"
+    )
   );
   assert.throws(() => resolveStudioServerPaths({
     env: { XDG_STATE_HOME: "relative" },
@@ -334,7 +338,7 @@ test("health와 PID는 예측 불가능한 nonce 및 정확한 process identity�
     studioOrigin: KIRINUKI_PUBLIC_STUDIO_ORIGIN
   }), false);
 
-  const cli = "/opt/kirinuki/scripts/local-studio-server.ts";
+  const cli = path.resolve("/opt/kirinuki/scripts/local-studio-server.ts");
   const record: StudioServerPidRecord = {
     schema: LOCAL_STUDIO_PID_SCHEMA,
     pid: 3210,
@@ -354,13 +358,15 @@ test("health와 PID는 예측 불가능한 nonce 및 정확한 process identity�
   assert.equal(commandLineRunsExactStudioCli({
     commandLine:
       `/usr/bin/node\0--import\0tsx\0${cli}\0start\0--foreground\0`,
-    processCwd: "/opt/kirinuki",
+    processCwd: path.resolve("/opt/kirinuki"),
     expectedCliPath: cli
   }), true);
   assert.equal(commandLineRunsExactStudioCli({
     commandLine:
-      "/usr/bin/node\0--import\0tsx\0/opt/foreign/server.ts\0start\0--foreground\0",
-    processCwd: "/opt/foreign",
+      `/usr/bin/node\0--import\0tsx\0${path.resolve(
+        "/opt/foreign/server.ts"
+      )}\0start\0--foreground\0`,
+    processCwd: path.resolve("/opt/foreign"),
     expectedCliPath: cli
   }), false);
 

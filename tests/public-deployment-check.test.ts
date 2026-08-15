@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   writeFile
 } from "node:fs/promises";
@@ -38,6 +39,12 @@ import {
 import { PUBLIC_WEB_PACKAGE_FILES } from "../scripts/web-package-files.js";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
+// These fixtures intentionally exercise the Linux web-release contract through
+// Info-ZIP (`zip -X`) and Unix archive modes. The checker itself remains covered
+// on Windows by its platform-neutral parser/unit tests and by Linux CI here.
+const publicDeploymentArtifactTest = process.platform === "win32"
+  ? test.skip
+  : test;
 
 interface ArtifactFixture {
   readonly artifactDirectory: string;
@@ -99,7 +106,10 @@ async function commitAll(root: string, message: string): Promise<string> {
 async function createVerifiedArtifactFixture(
   options: Readonly<ArtifactFixtureOptions> = {}
 ): Promise<ArtifactFixture> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-deployment-check-"));
+  const root = await realpath(await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-deployment-check-"
+  )));
   const stage = path.join(root, "stage");
   const artifactDirectory = path.join(root, "dist");
   await run("git", ["init", "--quiet"], root);
@@ -394,6 +404,9 @@ let sharedArtifact: ArtifactFixture;
 let expectedResources: readonly PublicDeploymentExpectedResource[];
 
 before(async () => {
+  if (process.platform === "win32") {
+    return;
+  }
   sharedArtifact = await createVerifiedArtifactFixture();
   expectedResources = await loadCurrentPublicDeploymentArtifact(
     fixtureCheckOptions(sharedArtifact)
@@ -401,10 +414,12 @@ before(async () => {
 });
 
 after(async () => {
-  await rm(sharedArtifact.root, { recursive: true, force: true });
+  if (sharedArtifact) {
+    await rm(sharedArtifact.root, { recursive: true, force: true });
+  }
 });
 
-test("공개 배포 checker는 checksum이 검증된 ZIP의 exact 공개 bytes만 통과시킨다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 checksum이 검증된 ZIP의 exact 공개 bytes만 통과시킨다", async (t) => {
   const observedRequests: string[] = [];
   const server = createExactArtifactServer(expectedResources, observedRequests);
   t.after(() => closeServer(server));
@@ -426,7 +441,7 @@ test("공개 배포 checker는 checksum이 검증된 ZIP의 exact 공개 bytes�
   );
 });
 
-test("공개 배포 checker는 보고·refresh·legacy cookie 응답 헤더를 모두 거절한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 보고·refresh·legacy cookie 응답 헤더를 모두 거절한다", async (t) => {
   for (const [name, value] of [
     ["Refresh", "0; url=https://attacker.example/"],
     ["Reporting-Endpoints", 'default="https://attacker.example/report"'],
@@ -456,7 +471,7 @@ test("공개 배포 checker는 보고·refresh·legacy cookie 응답 헤더를 �
   }
 });
 
-test("공개 배포 checker는 meta refresh·link·img·script·내부 경로 주입을 exact index 비교로 거절한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 meta refresh·link·img·script·내부 경로 주입을 exact index 비교로 거절한다", async (t) => {
   const observedRequests: string[] = [];
   const indexResource = expectedResources.find(({ archivePath }) => (
     archivePath === "index.html"
@@ -493,7 +508,7 @@ test("공개 배포 checker는 meta refresh·link·img·script·내부 경로 �
   assert.deepEqual(observedRequests, ["/"]);
 });
 
-test("공개 배포 checker는 artifact와 다른 CSS bytes를 거절한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 artifact와 다른 CSS bytes를 거절한다", async (t) => {
   const observedRequests: string[] = [];
   const stylesheet = expectedResources.find(({ archivePath }) => (
     archivePath === "public.css"
@@ -523,7 +538,7 @@ test("공개 배포 checker는 artifact와 다른 CSS bytes를 거절한다", as
   assert.deepEqual(observedRequests, ["/", stylesheet.requestPath]);
 });
 
-test("공개 배포 checker는 Content-Length 없는 oversized chunked body를 1 MiB에서 취소한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 Content-Length 없는 oversized chunked body를 1 MiB에서 취소한다", async (t) => {
   const observedRequests: string[] = [];
   const indexResource = expectedResources.find(({ archivePath }) => (
     archivePath === "index.html"
@@ -585,7 +600,7 @@ test("공개 배포 checker는 Content-Length 없는 oversized chunked body를 1
   assert.deepEqual(observedRequests, ["/"]);
 });
 
-test("공개 배포 checker는 ZIP checksum sidecar 불일치를 fail-closed한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 ZIP checksum sidecar 불일치를 fail-closed한다", async (t) => {
   const fixture = await createVerifiedArtifactFixture();
   t.after(() => rm(fixture.root, { recursive: true, force: true }));
   await writeFile(
@@ -598,7 +613,7 @@ test("공개 배포 checker는 ZIP checksum sidecar 불일치를 fail-closed한�
   );
 });
 
-test("공개 배포 checker는 재서명된 manifest의 잘못된 web size도 거절한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 재서명된 manifest의 잘못된 web size도 거절한다", async (t) => {
   const fixture = await createVerifiedArtifactFixture();
   t.after(() => rm(fixture.root, { recursive: true, force: true }));
   const manifest = JSON.parse(
@@ -625,7 +640,7 @@ test("공개 배포 checker는 재서명된 manifest의 잘못된 web size도 �
   );
 });
 
-test("공개 배포 checker는 release manifest 또는 그 sidecar가 없으면 network 전에 fail-closed한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 release manifest 또는 그 sidecar가 없으면 network 전에 fail-closed한다", async (t) => {
   for (const missing of ["manifest", "sidecar"] as const) {
     await t.test(missing, async (subtest) => {
       const fixture = await createVerifiedArtifactFixture();
@@ -652,7 +667,7 @@ test("공개 배포 checker는 release manifest 또는 그 sidecar가 없으면 
   }
 });
 
-test("공개 배포 checker는 현재 trusted HEAD가 아닌 기존 commit의 self-consistent release와 live를 거절한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 현재 trusted HEAD가 아닌 기존 commit의 self-consistent release와 live를 거절한다", async (t) => {
   const fixture = await createVerifiedArtifactFixture({
     untrustedReleaseIndexMutation: (source) => source.replace(
       "</body>",
@@ -673,7 +688,7 @@ test("공개 배포 checker는 현재 trusted HEAD가 아닌 기존 commit의 se
   assert.deepEqual(observedRequests, []);
 });
 
-test("공개 배포 checker는 commit·manifest·ZIP·fake live가 모두 일치해도 악성 shell을 거절한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 commit·manifest·ZIP·fake live가 모두 일치해도 악성 shell을 거절한다", async (t) => {
   const fixture = await createVerifiedArtifactFixture({
     trustedIndexMutation: (source) => source.replace(
       "</head>",
@@ -701,7 +716,7 @@ test("공개 배포 checker는 commit·manifest·ZIP·fake live가 모두 일치
   assert.deepEqual(observedRequests, []);
 });
 
-test("공개 배포 checker는 ZIP·sidecar·manifest를 함께 다시 만든 source blob 불일치도 거절한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 ZIP·sidecar·manifest를 함께 다시 만든 source blob 불일치도 거절한다", async (t) => {
   const fixture = await createVerifiedArtifactFixture({
     archiveOnlyIndexMutation: (source) => source.replace(
       "Kirinuki",

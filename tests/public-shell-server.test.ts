@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile
@@ -51,7 +52,10 @@ interface HttpResult {
 const repositoryPublicShell = new URL("../public-shell/", import.meta.url);
 
 async function createPublicShellFixture(): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-public-shell-"));
+  const root = await realpath(await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-public-shell-"
+  )));
   await mkdir(path.join(root, "licenses"));
   for (const relativePath of [
     ".popovic-hosts",
@@ -270,7 +274,7 @@ test("공개 Host는 raw Host 하나의 exact domain만 허용한다", () => {
 
 test("_headers는 HSTS를 포함한 exact 보안 계약만 파싱한다", async () => {
   const actual = await loadPublicShellSecurityHeaders(
-    fileURLToPath(repositoryPublicShell)
+    await realpath(fileURLToPath(repositoryPublicShell))
   );
   assert.deepEqual(actual, PUBLIC_SHELL_SECURITY_HEADERS);
   assert.equal(
