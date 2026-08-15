@@ -12,6 +12,7 @@ import {
   link,
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   readlink,
@@ -2799,51 +2800,20 @@ function currentProcessUid(): number | null {
   return typeof process.getuid === "function" ? process.getuid() : null;
 }
 
-async function ensurePrivateAppLifecycleSocketDirectory(
-  socketName: string
+async function ensurePrivateOwnedDirectory(
+  directory: string,
+  label: string
 ): Promise<void> {
-  if (
-    !path.isAbsolute(socketName)
-    || socketName.includes("\0")
-    || Buffer.byteLength(socketName, "utf8") > 100
-  ) {
-    throw new Error(
-      "Kirinuki lifecycle IPC 경로가 Unix socket의 안전한 길이를 넘었습니다. XDG_STATE_HOME을 더 짧은 사용자 전용 경로로 지정하세요."
-    );
-  }
-  const directory = path.dirname(socketName);
-  const stateRoot = path.dirname(directory);
-  await mkdir(stateRoot, { recursive: true, mode: 0o700 });
-  let stateMetadata = await lstat(stateRoot);
-  const uid = currentProcessUid();
-  if (
-    !stateMetadata.isDirectory()
-    || stateMetadata.isSymbolicLink()
-    || (uid !== null && stateMetadata.uid !== uid)
-  ) {
-    throw new Error(
-      "Kirinuki 상태 폴더를 안전한 사용자 폴더로 확인하지 못했습니다."
-    );
-  }
-  await chmod(stateRoot, 0o700);
-  stateMetadata = await lstat(stateRoot);
-  if (
-    !stateMetadata.isDirectory()
-    || stateMetadata.isSymbolicLink()
-    || (stateMetadata.mode & 0o777) !== 0o700
-    || (uid !== null && stateMetadata.uid !== uid)
-  ) {
-    throw new Error("Kirinuki 상태 폴더 권한을 0700으로 제한하지 못했습니다.");
-  }
   await mkdir(directory, { recursive: true, mode: 0o700 });
   let metadata = await lstat(directory);
+  const uid = currentProcessUid();
   if (
     !metadata.isDirectory()
     || metadata.isSymbolicLink()
     || (uid !== null && metadata.uid !== uid)
   ) {
     throw new Error(
-      "Kirinuki lifecycle IPC 폴더를 안전한 사용자 폴더로 확인하지 못했습니다."
+      `Kirinuki ${label}를 안전한 사용자 폴더로 확인하지 못했습니다.`
     );
   }
   await chmod(directory, 0o700);
@@ -2854,7 +2824,122 @@ async function ensurePrivateAppLifecycleSocketDirectory(
     || (metadata.mode & 0o777) !== 0o700
     || (uid !== null && metadata.uid !== uid)
   ) {
-    throw new Error("Kirinuki lifecycle IPC 폴더 권한을 0700으로 제한하지 못했습니다.");
+    throw new Error(`Kirinuki ${label} 권한을 0700으로 제한하지 못했습니다.`);
+  }
+}
+
+async function ensurePrivateAppLifecycleSocketDirectory(
+  socketName: string,
+  stateRoot: string
+): Promise<void> {
+  if (
+    !path.isAbsolute(socketName)
+    || socketName.includes("\0")
+  ) {
+    throw new Error(
+      "Kirinuki lifecycle IPC 경로가 안전한 절대 경로가 아닙니다."
+    );
+  }
+  const resolvedStateRoot = path.resolve(stateRoot);
+  const directory = path.dirname(socketName);
+  await ensurePrivateOwnedDirectory(resolvedStateRoot, "상태 폴더");
+  await ensurePrivateOwnedDirectory(directory, "lifecycle IPC 폴더");
+}
+
+interface PreparedAppLifecycleSocketEndpoint {
+  readonly physicalSocketName: string;
+  readonly transportSocketName: string;
+  close(): Promise<void>;
+}
+
+async function prepareAppLifecycleSocketEndpoint(
+  profileRoot: string,
+  stateRoot: string
+): Promise<PreparedAppLifecycleSocketEndpoint> {
+  const physicalSocketName = appLifecycleSocketName(profileRoot, stateRoot);
+  await ensurePrivateAppLifecycleSocketDirectory(
+    physicalSocketName,
+    stateRoot
+  );
+  if (Buffer.byteLength(physicalSocketName, "utf8") <= 100) {
+    return {
+      physicalSocketName,
+      transportSocketName: physicalSocketName,
+      close: async () => {}
+    };
+  }
+  if (process.platform !== "linux") {
+    throw new Error(
+      "긴 Kirinuki lifecycle IPC 경로는 Linux /proc directory FD alias가 필요합니다."
+    );
+  }
+  const directory = path.dirname(physicalSocketName);
+  const directoryHandle = await open(
+    directory,
+    fsConstants.O_RDONLY
+      | fsConstants.O_DIRECTORY
+      | fsConstants.O_NOFOLLOW
+  );
+  let accepted = false;
+  try {
+    const [handleMetadata, namedMetadata] = await Promise.all([
+      directoryHandle.stat(),
+      lstat(directory)
+    ]);
+    const uid = currentProcessUid();
+    if (
+      !handleMetadata.isDirectory()
+      || !namedMetadata.isDirectory()
+      || namedMetadata.isSymbolicLink()
+      || handleMetadata.dev !== namedMetadata.dev
+      || handleMetadata.ino !== namedMetadata.ino
+      || handleMetadata.uid !== namedMetadata.uid
+      || (handleMetadata.mode & 0o777) !== 0o700
+      || (namedMetadata.mode & 0o777) !== 0o700
+      || (uid !== null && handleMetadata.uid !== uid)
+    ) {
+      throw new Error(
+        "Kirinuki lifecycle IPC 폴더를 열린 private directory로 고정하지 못했습니다."
+      );
+    }
+    const descriptorDirectory = `/proc/self/fd/${directoryHandle.fd}`;
+    const descriptorMetadata = await stat(descriptorDirectory);
+    if (
+      !descriptorMetadata.isDirectory()
+      || descriptorMetadata.dev !== handleMetadata.dev
+      || descriptorMetadata.ino !== handleMetadata.ino
+      || descriptorMetadata.uid !== handleMetadata.uid
+    ) {
+      throw new Error(
+        "Kirinuki lifecycle IPC directory FD alias를 확인하지 못했습니다."
+      );
+    }
+    const transportSocketName = path.join(
+      descriptorDirectory,
+      path.basename(physicalSocketName)
+    );
+    if (
+      !path.isAbsolute(transportSocketName)
+      || transportSocketName.includes("\0")
+      || Buffer.byteLength(transportSocketName, "utf8") > 100
+    ) {
+      throw new Error(
+        "Kirinuki lifecycle IPC directory FD alias가 Unix socket 길이 제한을 넘었습니다."
+      );
+    }
+    const close = createIdempotentAsyncAction(async () => {
+      await directoryHandle.close();
+    });
+    accepted = true;
+    return {
+      physicalSocketName,
+      transportSocketName,
+      close
+    };
+  } finally {
+    if (!accepted) {
+      await directoryHandle.close().catch(() => {});
+    }
   }
 }
 
@@ -3084,6 +3169,8 @@ function appLifecycleWireResponse(
 
 async function requestAppLifecycleOpen(
   socketName: string,
+  physicalSocketName: string,
+  stateRoot: string,
   sourceUrl: string | null,
   requestId: string
 ): Promise<AppLifecycleOpenResult> {
@@ -3109,7 +3196,10 @@ async function requestAppLifecycleOpen(
   if (payload.length > APP_LIFECYCLE_MAX_REQUEST_BYTES) {
     throw new TypeError("Kirinuki lifecycle 요청이 허용 크기를 넘었습니다.");
   }
-  await ensurePrivateAppLifecycleSocketDirectory(socketName);
+  await ensurePrivateAppLifecycleSocketDirectory(
+    physicalSocketName,
+    stateRoot
+  );
   const endpointBeforeConnect = await trustedAppLifecycleSocketMetadata(
     socketName
   );
@@ -3187,9 +3277,17 @@ export async function claimAppLifecycle(
   profileRoot: string,
   stateRoot: string
 ): Promise<AppLifecycleClaim> {
-  const socketName = appLifecycleSocketName(profileRoot, stateRoot);
-  await ensurePrivateAppLifecycleSocketDirectory(socketName);
-  await removeStaleAppLifecycleSocket(socketName);
+  const endpoint = await prepareAppLifecycleSocketEndpoint(
+    profileRoot,
+    stateRoot
+  );
+  const socketName = endpoint.transportSocketName;
+  try {
+    await removeStaleAppLifecycleSocket(socketName);
+  } catch (error) {
+    await endpoint.close();
+    throw error;
+  }
   let state: "starting" | "ready" | "closing" | "released" = "starting";
   let openHandler: AppLifecycleOpenHandler | null = null;
   let operationTail: Promise<void> = Promise.resolve();
@@ -3321,55 +3419,74 @@ export async function claimAppLifecycle(
     });
   });
   let boundEndpointMetadata: Awaited<ReturnType<typeof lstat>> | null = null;
-  const owned = await new Promise<boolean>((resolve, reject) => {
-    let settled = false;
-    const onError = (error: NodeJS.ErrnoException) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (error.code === "EADDRINUSE") {
-        resolve(false);
-        return;
-      }
-      reject(error);
-    };
-    server.on("error", onError);
-    server.listen(socketName, () => {
-      void (async () => {
+  let owned: boolean;
+  try {
+    owned = await new Promise<boolean>((resolve, reject) => {
+      let settled = false;
+      const onError = (error: NodeJS.ErrnoException) => {
         if (settled) {
           return;
         }
-        try {
-          await chmod(socketName, 0o600);
-          const metadata = await trustedAppLifecycleSocketMetadata(socketName);
-          if (!metadata || (Number(metadata.mode) & 0o777) !== 0o600) {
-            throw new Error(
-              "Kirinuki lifecycle IPC socket 권한을 0600으로 제한하지 못했습니다."
-            );
-          }
-          boundEndpointMetadata = metadata;
-          settled = true;
-          resolve(true);
-        } catch (error) {
-          settled = true;
-          server.close(() => reject(error));
+        settled = true;
+        if (error.code === "EADDRINUSE") {
+          resolve(false);
+          return;
         }
-      })();
+        reject(error);
+      };
+      server.on("error", onError);
+      server.listen(socketName, () => {
+        void (async () => {
+          if (settled) {
+            return;
+          }
+          try {
+            await chmod(socketName, 0o600);
+            const metadata = await trustedAppLifecycleSocketMetadata(socketName);
+            if (!metadata || (Number(metadata.mode) & 0o777) !== 0o600) {
+              throw new Error(
+                "Kirinuki lifecycle IPC socket 권한을 0600으로 제한하지 못했습니다."
+              );
+            }
+            boundEndpointMetadata = metadata;
+            settled = true;
+            resolve(true);
+          } catch (error) {
+            settled = true;
+            server.close(() => reject(error));
+          }
+        })();
+      });
     });
-  });
+  } catch (error) {
+    await endpoint.close();
+    throw error;
+  }
   if (!owned) {
+    let released = false;
+    const release = createIdempotentAsyncAction(async () => {
+      released = true;
+      await endpoint.close();
+    });
     return {
       owned: false,
       activateOpenRequests: () => {
         throw new Error("secondary Kirinuki 실행은 open 요청을 받을 수 없습니다.");
       },
-      requestOpen: (sourceUrl, requestId) => (
-        requestAppLifecycleOpen(socketName, sourceUrl, requestId)
+      requestOpen: async (sourceUrl, requestId) => (
+        released
+          ? { status: "unavailable" }
+          : requestAppLifecycleOpen(
+          socketName,
+          endpoint.physicalSocketName,
+          stateRoot,
+          sourceUrl,
+          requestId
+        )
       ),
       beginClosing: async () => {},
       resumeOpenRequests: async () => {},
-      release: async () => {}
+      release
     };
   }
   const beginClosing = async () => {
@@ -3380,32 +3497,36 @@ export async function claimAppLifecycle(
     await operationTail;
   };
   const release = createIdempotentAsyncAction(async () => {
-    await beginClosing();
-    state = "released";
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (!error || (error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING") {
-          resolve();
-          return;
-        }
-        reject(error);
+    try {
+      await beginClosing();
+      state = "released";
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (!error || (error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING") {
+            resolve();
+            return;
+          }
+          reject(error);
+        });
       });
-    });
-    const currentEndpoint = await trustedAppLifecycleSocketMetadata(
-      socketName
-    );
-    if (
-      currentEndpoint
-      && boundEndpointMetadata
-      && currentEndpoint.dev === boundEndpointMetadata.dev
-      && currentEndpoint.ino === boundEndpointMetadata.ino
-      && currentEndpoint.uid === boundEndpointMetadata.uid
-    ) {
-      await unlink(socketName).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") {
-          throw error;
-        }
-      });
+      const currentEndpoint = await trustedAppLifecycleSocketMetadata(
+        socketName
+      );
+      if (
+        currentEndpoint
+        && boundEndpointMetadata
+        && currentEndpoint.dev === boundEndpointMetadata.dev
+        && currentEndpoint.ino === boundEndpointMetadata.ino
+        && currentEndpoint.uid === boundEndpointMetadata.uid
+      ) {
+        await unlink(socketName).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") {
+            throw error;
+          }
+        });
+      }
+    } finally {
+      await endpoint.close();
     }
   });
   return {
@@ -5211,7 +5332,12 @@ async function launchBrowser(
       lifecycleClaim = candidate;
       break;
     }
-    const delivered = await candidate.requestOpen(options.url, requestId);
+    let delivered: AppLifecycleOpenResult;
+    try {
+      delivered = await candidate.requestOpen(options.url, requestId);
+    } finally {
+      await candidate.release();
+    }
     if (delivered.status === "opened") {
       return;
     }

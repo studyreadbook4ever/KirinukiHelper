@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { constants as fsConstants } from "node:fs";
 import {
   chmod,
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   readlink,
@@ -17,7 +19,7 @@ import path from "node:path";
 import test from "node:test";
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   APP_LIFECYCLE_MAX_REQUEST_BYTES,
@@ -116,24 +118,39 @@ async function rawLifecycleRequest(
   socketName: string,
   payload: Buffer
 ): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const socket = createConnection(socketName);
-    const chunks: Buffer[] = [];
-    const timeout = setTimeout(() => {
-      socket.destroy();
-      reject(new Error("lifecycle raw request timeout"));
-    }, 3_000);
-    socket.once("connect", () => socket.write(payload));
-    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
-    socket.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
+  const directoryHandle = Buffer.byteLength(socketName, "utf8") > 100
+    ? await open(
+      path.dirname(socketName),
+      fsConstants.O_RDONLY
+        | fsConstants.O_DIRECTORY
+        | fsConstants.O_NOFOLLOW
+    )
+    : null;
+  const transportSocketName = directoryHandle
+    ? `/proc/self/fd/${directoryHandle.fd}/${path.basename(socketName)}`
+    : socketName;
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      const socket = createConnection(transportSocketName);
+      const chunks: Buffer[] = [];
+      const timeout = setTimeout(() => {
+        socket.destroy();
+        reject(new Error("lifecycle raw request timeout"));
+      }, 3_000);
+      socket.once("connect", () => socket.write(payload));
+      socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+      socket.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      socket.once("close", () => {
+        clearTimeout(timeout);
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      });
     });
-    socket.once("close", () => {
-      clearTimeout(timeout);
-      resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-  });
+  } finally {
+    await directoryHandle?.close();
+  }
 }
 
 test("버전 하한은 Node 22와 Chromium 120 경계를 정확히 구분한다", () => {
@@ -297,6 +314,10 @@ test("동시 open은 같은 프로필의 primary 생명주기를 하나만 획�
   const socketMetadata = await lstat(socketName);
   assert.equal(socketName.includes("\0"), false);
   assert.equal(path.dirname(path.dirname(socketName)), path.resolve(tempRoot));
+  const stateRootMetadata = await lstat(tempRoot);
+  assert.equal(stateRootMetadata.isDirectory(), true);
+  assert.equal(stateRootMetadata.isSymbolicLink(), false);
+  assert.equal(stateRootMetadata.mode & 0o777, 0o700);
   assert.equal(socketDirectoryMetadata.isDirectory(), true);
   assert.equal(socketDirectoryMetadata.isSymbolicLink(), false);
   assert.equal(socketDirectoryMetadata.mode & 0o777, 0o700);
@@ -316,6 +337,69 @@ test("동시 open은 같은 프로필의 primary 생명주기를 하나만 획�
   const afterRelease = await claimAppLifecycle(profile, tempRoot);
   assert.equal(afterRelease.owned, true);
   await afterRelease.release();
+});
+
+test("긴 상태 경로도 private directory FD alias로 lifecycle을 유지한다", async (t) => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "kl-long-root-"));
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const stateRootA = path.join(
+    tempRoot,
+    `state-a-${"s".repeat(72)}`
+  );
+  const stateRootB = path.join(
+    tempRoot,
+    `state-b-${"s".repeat(72)}`
+  );
+  const profileA = path.join(tempRoot, `profile-a-${"p".repeat(72)}`);
+  const profileB = path.join(tempRoot, `profile-b-${"p".repeat(72)}`);
+  const socketA = appLifecycleSocketName(profileA, stateRootA);
+  const sameSocketA = appLifecycleSocketName(profileA, stateRootA);
+  const otherStateSocket = appLifecycleSocketName(profileA, stateRootB);
+  const otherProfileSocket = appLifecycleSocketName(profileB, stateRootA);
+  assert.equal(socketA, sameSocketA);
+  assert.notEqual(socketA, otherStateSocket);
+  assert.notEqual(socketA, otherProfileSocket);
+  assert.equal(Buffer.byteLength(socketA, "utf8") > 100, true);
+  assert.equal(path.dirname(path.dirname(socketA)), path.resolve(stateRootA));
+
+  const owner = await claimAppLifecycle(profileA, stateRootA);
+  const secondary = await claimAppLifecycle(profileA, stateRootA);
+  assert.equal(owner.owned, true);
+  assert.equal(secondary.owned, false);
+  const sources: Array<string | null> = [];
+  owner.activateOpenRequests(async (sourceUrl) => {
+    sources.push(sourceUrl);
+  });
+  const sourceUrl = "https://chzzk.naver.com/video/14514980";
+  assert.deepEqual(await secondary.requestOpen(
+    sourceUrl,
+    createAppLifecycleRequestId()
+  ), { status: "opened" });
+  assert.deepEqual(sources, [sourceUrl]);
+  for (const directory of [
+    stateRootA,
+    path.dirname(socketA)
+  ]) {
+    const metadata = await lstat(directory);
+    assert.equal(metadata.isDirectory(), true);
+    assert.equal(metadata.isSymbolicLink(), false);
+    assert.equal(metadata.mode & 0o777, 0o700);
+    if (typeof process.getuid === "function") {
+      assert.equal(metadata.uid, process.getuid());
+    }
+  }
+  const socketMetadata = await lstat(socketA);
+  assert.equal(socketMetadata.isSocket(), true);
+  assert.equal(socketMetadata.mode & 0o777, 0o600);
+  await secondary.release();
+  assert.deepEqual(await secondary.requestOpen(
+    sourceUrl,
+    createAppLifecycleRequestId()
+  ), { status: "unavailable" });
+  await owner.release();
+  const takeover = await claimAppLifecycle(profileA, stateRootA);
+  assert.equal(takeover.owned, true);
+  await takeover.release();
 });
 
 test("lifecycle IPC는 symlink 상태 폴더와 비-socket endpoint를 삭제하지 않고 거부한다", async (t) => {
@@ -350,15 +434,20 @@ test("lifecycle IPC는 동일 사용자의 끊어진 socket inode만 회수한�
     path.join(os.tmpdir(), "kirinuki-lifecycle-stale-")
   );
   t.after(() => rm(tempRoot, { recursive: true, force: true }));
-  const stateRoot = path.join(tempRoot, "state");
-  const profile = path.join(tempRoot, "profile");
+  const stateRoot = path.join(tempRoot, `state-${"s".repeat(72)}`);
+  const profile = path.join(tempRoot, `profile-${"p".repeat(72)}`);
   const socketName = appLifecycleSocketName(profile, stateRoot);
+  assert.equal(Buffer.byteLength(socketName, "utf8") > 100, true);
   await mkdir(path.dirname(socketName), { recursive: true, mode: 0o700 });
   const staleCreator = spawn(process.execPath, [
+    "--import",
+    "tsx",
+    "--input-type=module",
     "-e",
     [
-      "const { createServer } = require('node:net');",
-      `const server = createServer(); server.listen(${JSON.stringify(socketName)}, () => process.exit(0));`
+      `import { claimAppLifecycle } from ${JSON.stringify(pathToFileURL(helperPath).href)};`,
+      `const owner = await claimAppLifecycle(${JSON.stringify(profile)}, ${JSON.stringify(stateRoot)});`,
+      "process.exit(owner.owned ? 0 : 1);"
     ].join(" ")
   ], { stdio: "ignore" });
   const staleExit = await new Promise<number | null>((resolve, reject) => {
@@ -456,6 +545,7 @@ test("owner open IPC는 closing을 먼저 공개하고 수락 요청 drain 뒤�
     sourceUrl,
     createAppLifecycleRequestId()
   )).status, "closing");
+  await secondary.release();
   await owner.release();
   await owner.release();
   const takeover = await claimAppLifecycle(profile, tempRoot);
@@ -510,6 +600,7 @@ test("lifecycle IPC는 초과·비정형 payload와 requestId를 fail-closed한�
     /원본 URL|크기/u
   );
   assert.equal(calls, 0);
+  await secondary.release();
   await owner.release();
 });
 
