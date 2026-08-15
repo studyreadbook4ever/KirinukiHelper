@@ -8,9 +8,12 @@
 `npm run package:desktop`은 실행한 운영체제와 아키텍처에 맞는 **unsigned,
 unpacked 개발 검증용 앱 디렉터리**를 만듭니다. CI도 이 디렉터리를 빌드하고
 실제로 실행해 내부 Studio·gateway health, Player Bridge 로드, 고정 미디어 도구
-버전, 검증용 H.264/AAC MP4의 production 검사 경계, 정상 종료 뒤 자식 프로세스·
-포트·임시 데이터 회수까지 검사합니다. CI 결과를 release artifact로 업로드하거나
-게시하지 않습니다.
+버전과 검증용 H.264/AAC MP4의 production 검사 경계를 확인합니다. Linux·macOS는
+정상 종료 뒤 exact process group·자식 프로세스·포트·임시 데이터를 모두
+검사합니다. Windows는 앱이 보고한 다중 프로세스 실행, exact root 종료, 포트
+회수와 전용 session 디렉터리 삭제를 검사합니다. descendant 전체 소유권은 아래
+Job Object 차단 조건이 닫히기 전까지 증명됐다고 간주하지 않습니다. CI 결과를
+release artifact로 업로드하거나 게시하지 않습니다.
 
 현재 패키지는 installer, AppImage, DMG, PKG, MSI 또는 서명된 ZIP이 아닙니다.
 아래 라이선스·provenance·서명 조건이 모두 닫힐 때까지 공개 다운로드, 자동

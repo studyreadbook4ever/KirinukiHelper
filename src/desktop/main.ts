@@ -147,7 +147,10 @@ function configureNativeSmokeControl(
       await new Promise<void>((resolve, reject) => {
         send.call(
           process,
-          desktopNativeSmokeReadyMessage(nativeSmoke),
+          desktopNativeSmokeReadyMessage(
+            nativeSmoke,
+            app.getAppMetrics().length
+          ),
           (error) => error ? reject(error) : resolve()
         );
       });

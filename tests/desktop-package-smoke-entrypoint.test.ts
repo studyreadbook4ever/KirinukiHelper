@@ -4,18 +4,8 @@ import test from "node:test";
 import {
   isDesktopPackageSmokeEntrypoint,
   matchesExactDesktopToolVersion,
-  reclaimCapturedWindowsProcessIdentities,
   terminateOwnedPosixProcessGroup
 } from "../scripts/desktop-package-smoke.js";
-import type { ProcessIdentity } from "../scripts/desktop-package-smoke.js";
-
-function identity(
-  pid: number,
-  parentPid: number,
-  started: string
-): Readonly<ProcessIdentity> {
-  return Object.freeze({ pid, parentPid, started });
-}
 
 test("desktop package smoke entrypoint follows native path case semantics", () => {
   const canonical = "/tmp/KirinukiSmoke/desktop-package-smoke.ts";
@@ -72,67 +62,6 @@ test("desktop package smoke는 target별 exact FFmpeg version token만 허용한
       stdout
     );
   }
-});
-
-test("Windows smoke cleanup은 끝난 root를 건너뛰고 exact descendant를 회수한다", async () => {
-  const root = identity(100, 1, "root-created");
-  const descendant = identity(101, 100, "child-created");
-  const current = new Map<number, Readonly<ProcessIdentity>>([
-    [descendant.pid, descendant]
-  ]);
-  const terminated: number[] = [];
-  await reclaimCapturedWindowsProcessIdentities([root, descendant], {
-    snapshotImpl: async () => new Map(current),
-    terminateProcessTreeImpl: async (pid, confirmTargetIdentity) => {
-      assert.equal(await confirmTargetIdentity(), true);
-      terminated.push(pid);
-      current.delete(pid);
-    }
-  });
-  assert.deepEqual(terminated, [descendant.pid]);
-});
-
-test("Windows smoke cleanup은 재사용된 PID owner를 종료하지 않는다", async () => {
-  const captured = identity(200, 1, "captured-created");
-  const reused = identity(200, 99, "reused-created");
-  const current = new Map<number, Readonly<ProcessIdentity>>([
-    [reused.pid, reused]
-  ]);
-  let terminationCalls = 0;
-  await reclaimCapturedWindowsProcessIdentities([captured], {
-    snapshotImpl: async () => new Map(current),
-    terminateProcessTreeImpl: async () => {
-      terminationCalls += 1;
-    }
-  });
-  assert.equal(terminationCalls, 0);
-  assert.deepEqual(current.get(reused.pid), reused);
-});
-
-test("Windows smoke cleanup은 helper 실패와 exact survivor를 함께 드러낸다", async () => {
-  const root = identity(300, 1, "root-created");
-  const descendant = identity(301, 300, "child-created");
-  const current = new Map<number, Readonly<ProcessIdentity>>([
-    [root.pid, root],
-    [descendant.pid, descendant]
-  ]);
-  await assert.rejects(
-    reclaimCapturedWindowsProcessIdentities([root, descendant], {
-      snapshotImpl: async () => new Map(current),
-      terminateProcessTreeImpl: async (pid, confirmTargetIdentity) => {
-        assert.equal(await confirmTargetIdentity(), true);
-        throw new Error(`taskkill failed for ${pid}`);
-      }
-    }),
-    (error: unknown) => {
-      assert(error instanceof AggregateError);
-      assert.equal(error.errors.length, 3);
-      assert.match(error.errors[0]?.message || "", /300/u);
-      assert.match(error.errors[1]?.message || "", /301/u);
-      assert.match(error.errors[2]?.message || "", /300, 301/u);
-      return true;
-    }
-  );
 });
 
 test("POSIX smoke cleanup은 SIGKILL 뒤 process group 생존을 실패로 드러낸다", async () => {

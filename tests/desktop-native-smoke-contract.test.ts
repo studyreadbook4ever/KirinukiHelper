@@ -104,11 +104,20 @@ test("native smoke IPC requires exact schema, fields, and capability token", asy
         [DESKTOP_NATIVE_SMOKE_TOKEN_ENV]: smokeToken
       }
     });
-    assert.deepEqual(desktopNativeSmokeReadyMessage(contract!), {
+    assert.deepEqual(desktopNativeSmokeReadyMessage(contract!, 7), {
+      processCount: 7,
       schema: DESKTOP_NATIVE_SMOKE_IPC_SCHEMA,
       type: "ready",
       token: smokeToken
     });
+    assert.throws(
+      () => desktopNativeSmokeReadyMessage(contract!, 1),
+      /process 수/u
+    );
+    assert.throws(
+      () => desktopNativeSmokeReadyMessage(contract!, 65),
+      /process 수/u
+    );
     assert.equal(isDesktopNativeSmokeQuitMessage({
       schema: DESKTOP_NATIVE_SMOKE_IPC_SCHEMA,
       type: "quit",

@@ -49,8 +49,7 @@ import {
 import {
   externalPublishedArtifactInspectionBinding,
   inspectExternalMp4,
-  runExternalProcess,
-  terminateWindowsExternalProcessTree
+  runExternalProcess
 } from "./external-vod-materializer.js";
 import {
   DEFAULT_STUDIO_PORT,
@@ -65,199 +64,10 @@ const IPC_SEND_TIMEOUT_MS = 5_000;
 const PROCESS_RECLAIM_TIMEOUT_MS = 15_000;
 const PROCESS_GROUP_RECLAIM_TIMEOUT_MS = 5_000;
 const PROCESS_GROUP_TERM_GRACE_MS = 2_000;
-const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
 const HTTP_REQUEST_TIMEOUT_MS = 2_000;
 const MAX_HTTP_RESPONSE_BYTES = 64 * 1024;
 const MAX_APP_OUTPUT_BYTES = 512 * 1024;
 const TOOL_TIMEOUT_MS = 30_000;
-const WINDOWS_PROCESS_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
-const WINDOWS_PROCESS_SNAPSHOT_SOURCE = String.raw`
-using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Globalization;
-using System.IO;
-using System.Runtime.InteropServices;
-using System.Text;
-
-public static class KirinukiProcessSnapshot
-{
-    private const uint TH32CS_SNAPPROCESS = 0x00000002;
-    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
-    private const int ERROR_NO_MORE_FILES = 18;
-    private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct PROCESSENTRY32
-    {
-        public uint dwSize;
-        public uint cntUsage;
-        public uint th32ProcessID;
-        public UIntPtr th32DefaultHeapID;
-        public uint th32ModuleID;
-        public uint cntThreads;
-        public uint th32ParentProcessID;
-        public int pcPriClassBase;
-        public uint dwFlags;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-        public string szExeFile;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct FILETIME
-    {
-        public uint Low;
-        public uint High;
-
-        public ulong Ticks
-        {
-            get { return ((ulong)High << 32) | Low; }
-        }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PROCESS_BASIC_INFORMATION
-    {
-        public IntPtr Reserved1;
-        public IntPtr PebBaseAddress;
-        public IntPtr Reserved2_0;
-        public IntPtr Reserved2_1;
-        public IntPtr UniqueProcessId;
-        public IntPtr InheritedFromUniqueProcessId;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32 entry);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32 entry);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetProcessTimes(
-        IntPtr process,
-        out FILETIME creation,
-        out FILETIME exit,
-        out FILETIME kernel,
-        out FILETIME user
-    );
-
-    [DllImport("ntdll.dll")]
-    private static extern int NtQueryInformationProcess(
-        IntPtr process,
-        int informationClass,
-        ref PROCESS_BASIC_INFORMATION information,
-        int informationLength,
-        out int returnLength
-    );
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(IntPtr handle);
-
-    public static void WriteAll(string outputPath)
-    {
-        List<string> records = new List<string>();
-        IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (snapshot == INVALID_HANDLE_VALUE)
-        {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
-        }
-
-        try
-        {
-            PROCESSENTRY32 entry = new PROCESSENTRY32();
-            entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
-            if (!Process32FirstW(snapshot, ref entry))
-            {
-                int error = Marshal.GetLastWin32Error();
-                if (error == ERROR_NO_MORE_FILES)
-                {
-                    return;
-                }
-                throw new Win32Exception(error);
-            }
-
-            while (true)
-            {
-                IntPtr process = OpenProcess(
-                    PROCESS_QUERY_LIMITED_INFORMATION,
-                    false,
-                    entry.th32ProcessID
-                );
-                if (process != IntPtr.Zero)
-                {
-                    try
-                    {
-                        FILETIME creation;
-                        FILETIME exit;
-                        FILETIME kernel;
-                        FILETIME user;
-                        PROCESS_BASIC_INFORMATION basic = new PROCESS_BASIC_INFORMATION();
-                        int returned;
-                        int status = NtQueryInformationProcess(
-                            process,
-                            0,
-                            ref basic,
-                            Marshal.SizeOf(typeof(PROCESS_BASIC_INFORMATION)),
-                            out returned
-                        );
-                        long currentPid = basic.UniqueProcessId.ToInt64();
-                        long currentParentPid = basic.InheritedFromUniqueProcessId.ToInt64();
-                        if (
-                            status == 0
-                            && currentPid == entry.th32ProcessID
-                            && currentParentPid == entry.th32ParentProcessID
-                            && GetProcessTimes(process, out creation, out exit, out kernel, out user)
-                        )
-                        {
-                            records.Add(String.Format(
-                                CultureInfo.InvariantCulture,
-                                "{0},{1},{2}",
-                                currentPid,
-                                currentParentPid,
-                                creation.Ticks
-                            ));
-                        }
-                    }
-                    finally
-                    {
-                        CloseHandle(process);
-                    }
-                }
-
-                if (!Process32NextW(snapshot, ref entry))
-                {
-                    int error = Marshal.GetLastWin32Error();
-                    if (error != ERROR_NO_MORE_FILES)
-                    {
-                        throw new Win32Exception(error);
-                    }
-                    break;
-                }
-            }
-        }
-        finally
-        {
-            CloseHandle(snapshot);
-        }
-        File.WriteAllLines(
-            outputPath,
-            records.ToArray(),
-            new UTF8Encoding(false)
-        );
-    }
-}
-`;
 const PORTS = Object.freeze([
   DEFAULT_CAPTION_GATEWAY_PORT,
   DEFAULT_STUDIO_PORT
@@ -450,123 +260,6 @@ async function runTool(
     `번들 도구가 실패했습니다: ${path.basename(command)} (${result.exitCode})`
   );
   return Object.freeze({ stdout: result.stdout, stderr: result.stderr });
-}
-
-async function runWindowsProcessSnapshotTool(
-  command: string,
-  args: readonly string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-  outputPath: string
-): Promise<string> {
-  // Windows PowerShell Add-Type can leave a compiler descendant holding its
-  // inherited stdio handles after PowerShell exits. Keep this probe off Node
-  // pipes and read its flushed result from the private smoke directory so the
-  // exact parent-process exit remains a bounded completion boundary.
-  const reservation = await open(
-    outputPath,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
-    0o600
-  );
-  await reservation.close();
-  try {
-    const child = spawn(command, [...args], {
-      cwd,
-      env: {
-        ...env,
-        TEMP: cwd,
-        TMP: cwd,
-        TMPDIR: cwd
-      },
-      shell: false,
-      stdio: ["ignore", "ignore", "ignore"],
-      windowsHide: true
-    });
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let terminationError: Error | undefined;
-      let killDeadline: ReturnType<typeof setTimeout> | undefined;
-      const timeout = setTimeout(() => {
-        if (settled) {
-          return;
-        }
-        terminationError = Object.assign(
-          new Error("Windows process snapshot이 시간 제한을 넘었습니다."),
-          { code: "ETIMEDOUT" }
-        );
-        let killed = false;
-        try {
-          killed = child.kill("SIGKILL");
-        } catch {
-          // The retained process handle can already be closing.
-        }
-        if (!killed) {
-          Object.defineProperty(terminationError, "cause", {
-            configurable: true,
-            value: new Error(
-              "Windows process snapshot의 exact child 종료 요청이 실패했습니다."
-            )
-          });
-        }
-        killDeadline = setTimeout(() => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          child.unref();
-          reject(terminationError);
-        }, WINDOWS_TASKKILL_TIMEOUT_MS);
-        killDeadline.unref?.();
-      }, TOOL_TIMEOUT_MS);
-      const finish = (error?: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-        if (killDeadline !== undefined) {
-          clearTimeout(killDeadline);
-        }
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      };
-      child.once("error", (error) => finish(error));
-      child.once("exit", (code, signal) => {
-        if (terminationError) {
-          finish(terminationError);
-          return;
-        }
-        if (code !== 0 || signal !== null) {
-          finish(new Error(
-            `Windows process snapshot이 실패했습니다: code=${code}, signal=${signal ?? "none"}`
-          ));
-          return;
-        }
-        finish();
-      });
-    });
-    const handle = await open(
-      outputPath,
-      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0)
-    );
-    try {
-      const metadata = await handle.stat();
-      invariant(
-        metadata.isFile()
-          && metadata.size > 0
-          && metadata.size <= WINDOWS_PROCESS_SNAPSHOT_MAX_BYTES,
-        "Windows process snapshot 파일이 안전한 크기의 regular file이 아닙니다."
-      );
-      return (await handle.readFile()).toString("utf8");
-    } finally {
-      await handle.close();
-    }
-  } finally {
-    await rm(outputPath, { force: true });
-  }
 }
 
 export function matchesExactDesktopToolVersion(
@@ -897,27 +590,36 @@ function appCompletion(child: ChildProcess): Promise<AppExit> {
   });
 }
 
-function isReadyMessage(value: unknown, token: string): boolean {
+function readyProcessCount(value: unknown, token: string): number | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
+    return null;
   }
   const message = value as Record<string, unknown>;
-  return Object.keys(message).sort().join(",") === "schema,token,type"
-    && message.schema === DESKTOP_NATIVE_SMOKE_IPC_SCHEMA
-    && message.type === "ready"
-    && message.token === token;
+  if (
+    Object.keys(message).sort().join(",") !== "processCount,schema,token,type"
+    || message.schema !== DESKTOP_NATIVE_SMOKE_IPC_SCHEMA
+    || message.type !== "ready"
+    || message.token !== token
+    || !Number.isSafeInteger(message.processCount)
+    || Number(message.processCount) < 2
+    || Number(message.processCount) > 64
+  ) {
+    return null;
+  }
+  return Number(message.processCount);
 }
 
 function waitForReady(
   child: ChildProcess,
   completion: Promise<AppExit>,
   token: string
-): Promise<void> {
-  return withTimeout(new Promise<void>((resolve, reject) => {
+): Promise<number> {
+  return withTimeout(new Promise<number>((resolve, reject) => {
     const onMessage = (message: unknown) => {
       cleanup();
-      if (isReadyMessage(message, token)) {
-        resolve();
+      const processCount = readyProcessCount(message, token);
+      if (processCount !== null) {
+        resolve(processCount);
       } else {
         reject(new Error("packaged app READY IPC가 정확하지 않습니다."));
       }
@@ -948,50 +650,16 @@ async function processSnapshot(
   cwd: string,
   env: NodeJS.ProcessEnv
 ): Promise<ReadonlyMap<number, Readonly<ProcessIdentity>>> {
-  let command: string;
-  let args: readonly string[];
-  let stdout: string;
-  if (process.platform === "win32") {
-    const systemRoot = String(process.env.SystemRoot || process.env.SYSTEMROOT || "");
-    invariant(path.win32.isAbsolute(systemRoot), "Windows SystemRoot를 확인하지 못했습니다.");
-    command = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    const outputPath = path.join(
-      cwd,
-      `.process-snapshot-${randomBytes(16).toString("hex")}.txt`
-    );
-    const source = Buffer.from(
-      WINDOWS_PROCESS_SNAPSHOT_SOURCE,
-      "utf8"
-    ).toString("base64");
-    const encodedOutputPath = Buffer.from(outputPath, "utf8").toString("base64");
-    const script = [
-      "$ErrorActionPreference='Stop'",
-      `$source=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${source}'))`,
-      `$output=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedOutputPath}'))`,
-      "Add-Type -TypeDefinition $source -Language CSharp",
-      "[KirinukiProcessSnapshot]::WriteAll($output)"
-    ].join(";");
-    args = [
-      "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64")
-    ];
-    stdout = await runWindowsProcessSnapshotTool(
-      command,
-      args,
-      cwd,
-      env,
-      outputPath
-    );
-  } else {
-    command = "/bin/ps";
-    args = ["-axo", "pid=,ppid=,lstart="];
-    stdout = (await runTool(command, args, cwd, env)).stdout;
-  }
+  invariant(process.platform !== "win32", "POSIX process snapshot은 Windows에서 사용할 수 없습니다.");
+  const result = await runTool(
+    "/bin/ps",
+    ["-axo", "pid=,ppid=,lstart="],
+    cwd,
+    env
+  );
   const records = new Map<number, Readonly<ProcessIdentity>>();
-  for (const line of stdout.split(/\r?\n/u)) {
-    const match = process.platform === "win32"
-      ? /^(\d+),(\d+),(.+)$/u.exec(line.trim())
-      : /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
+  for (const line of result.stdout.split(/\r?\n/u)) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
     if (!match) {
       continue;
     }
@@ -1110,109 +778,6 @@ async function assertPosixProcessGroupReclaimed(
   }
 }
 
-export async function reclaimCapturedWindowsProcessIdentities(
-  captured: readonly Readonly<ProcessIdentity>[],
-  {
-    snapshotImpl,
-    terminateProcessTreeImpl
-  }: {
-    readonly snapshotImpl: () => Promise<
-      ReadonlyMap<number, Readonly<ProcessIdentity>>
-    >;
-    readonly terminateProcessTreeImpl: (
-      processId: number,
-      confirmTargetIdentity: () => Promise<boolean>
-    ) => Promise<void>;
-  }
-): Promise<void> {
-  const identities = new Map<number, Readonly<ProcessIdentity>>();
-  for (const entry of captured) {
-    invariant(
-      Number.isSafeInteger(entry.pid)
-        && entry.pid > 0
-        && Number.isSafeInteger(entry.parentPid)
-        && entry.parentPid >= 0
-        && entry.started.length > 0,
-      "captured Windows process identity가 올바르지 않습니다."
-    );
-    invariant(
-      !identities.has(entry.pid),
-      `captured Windows process PID가 중복됐습니다: ${entry.pid}`
-    );
-    identities.set(entry.pid, entry);
-  }
-  const errors: Error[] = [];
-  const isExactCurrentIdentity = async (
-    expected: Readonly<ProcessIdentity>
-  ): Promise<boolean> => {
-    const current = (await snapshotImpl()).get(expected.pid);
-    return current?.started === expected.started;
-  };
-  for (const expected of identities.values()) {
-    let stillOwned = false;
-    try {
-      stillOwned = await isExactCurrentIdentity(expected);
-    } catch (error) {
-      errors.push(error instanceof Error
-        ? error
-        : new Error("Windows process identity snapshot을 읽지 못했습니다."));
-      continue;
-    }
-    if (!stillOwned) {
-      continue;
-    }
-    try {
-      await terminateProcessTreeImpl(
-        expected.pid,
-        async () => await isExactCurrentIdentity(expected)
-      );
-    } catch (error) {
-      errors.push(error instanceof Error
-        ? error
-        : new Error(`Windows captured process ${expected.pid} 종료에 실패했습니다.`));
-    }
-  }
-  try {
-    const finalSnapshot = await snapshotImpl();
-    const survivors = [...identities.values()].filter((expected) => (
-      finalSnapshot.get(expected.pid)?.started === expected.started
-    ));
-    if (survivors.length > 0) {
-      errors.push(new Error(
-        `Windows captured process가 정리 뒤 남았습니다: ${survivors
-          .map(({ pid }) => pid)
-          .join(", ")}`
-      ));
-    }
-  } catch (error) {
-    errors.push(error instanceof Error
-      ? error
-      : new Error("Windows cleanup 최종 process snapshot을 읽지 못했습니다."));
-  }
-  if (errors.length > 0) {
-    throw new AggregateError(
-      errors,
-      "Windows packaged app process cleanup을 완전히 증명하지 못했습니다."
-    );
-  }
-}
-
-async function terminateCapturedWindowsProcesses(
-  captured: readonly Readonly<ProcessIdentity>[],
-  cwd: string,
-  env: NodeJS.ProcessEnv
-): Promise<void> {
-  await reclaimCapturedWindowsProcessIdentities(captured, {
-    snapshotImpl: async () => await processSnapshot(cwd, env),
-    terminateProcessTreeImpl: async (processId, confirmTargetIdentity) => {
-      await terminateWindowsExternalProcessTree(processId, {
-        timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
-        confirmTargetIdentityImpl: confirmTargetIdentity
-      });
-    }
-  });
-}
-
 function isMissingProcessError(error: unknown): boolean {
   return Boolean(
     error
@@ -1285,7 +850,6 @@ export async function terminateOwnedPosixProcessGroup({
 async function terminateOwnedAppTree(
   child: ChildProcess,
   capturedRoot: Readonly<ProcessIdentity> | undefined,
-  capturedProcesses: readonly Readonly<ProcessIdentity>[],
   cwd: string,
   env: NodeJS.ProcessEnv
 ): Promise<void> {
@@ -1294,15 +858,48 @@ async function terminateOwnedAppTree(
     return;
   }
   if (process.platform === "win32") {
-    if (capturedProcesses.length > 0) {
-      await terminateCapturedWindowsProcesses(capturedProcesses, cwd, env);
+    if (child.exitCode !== null || child.signalCode !== null) {
       return;
     }
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-      throw new Error(
-        "Windows packaged app의 시작 identity를 캡처하지 못해 descendant cleanup을 증명할 수 없습니다."
-      );
+    const exited = new Promise<void>((resolve, reject) => {
+      const finish = () => {
+        child.removeListener("exit", finish);
+        child.removeListener("error", failExit);
+        resolve();
+      };
+      const failExit = (error: Error) => {
+        child.removeListener("exit", finish);
+        reject(error);
+      };
+      child.once("exit", finish);
+      child.once("error", failExit);
+      if (child.exitCode !== null || child.signalCode !== null) {
+        finish();
+      }
+    });
+    let killed = false;
+    try {
+      killed = child.kill("SIGKILL");
+    } catch {
+      // The exact retained child handle can already be closing.
+    }
+    if (
+      !killed
+      && child.exitCode === null
+      && child.signalCode === null
+    ) {
+      throw new Error("Windows packaged app의 exact child 종료 요청이 실패했습니다.");
+    }
+    try {
+      await withTimeout(exited, 5_000, "Windows packaged app exact child 종료");
+    } catch (error) {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      if (child.connected) {
+        child.disconnect();
+      }
+      child.unref();
+      throw error;
     }
     return;
   }
@@ -1347,6 +944,7 @@ async function runNativePackageSmoke(): Promise<void> {
   let appChild: ChildProcess | undefined;
   let appRootIdentity: Readonly<ProcessIdentity> | undefined;
   let capturedProcesses: readonly Readonly<ProcessIdentity>[] = [];
+  let observedProcessCount = 0;
   let output: AppOutput | undefined;
   let smokeFailure: Error | undefined;
   const snapshotEnvironment = minimalToolEnvironment(paths.packageRoot);
@@ -1380,11 +978,13 @@ async function runNativePackageSmoke(): Promise<void> {
       appChild?.once("error", reject);
     }), 10_000, "packaged app spawn");
     invariant(appChild.pid !== undefined && appChild.pid > 0, "packaged app PID가 없습니다.");
-    const launchSnapshot = await processSnapshot(smokeRoot, snapshotEnvironment);
-    appRootIdentity = launchSnapshot.get(appChild.pid);
-    invariant(appRootIdentity !== undefined, "packaged app launch identity를 찾지 못했습니다.");
-    capturedProcesses = Object.freeze([appRootIdentity]);
-    await Promise.all([
+    if (process.platform !== "win32") {
+      const launchSnapshot = await processSnapshot(smokeRoot, snapshotEnvironment);
+      appRootIdentity = launchSnapshot.get(appChild.pid);
+      invariant(appRootIdentity !== undefined, "packaged app launch identity를 찾지 못했습니다.");
+      capturedProcesses = Object.freeze([appRootIdentity]);
+    }
+    const [reportedProcessCount] = await Promise.all([
       ready,
       waitForHealth(
         "studio health",
@@ -1400,24 +1000,28 @@ async function runNativePackageSmoke(): Promise<void> {
         validateGatewayHealth
       )
     ]);
+    observedProcessCount = reportedProcessCount;
     invariant(!output.overflow, "packaged app stdout/stderr 상한을 초과했습니다.");
-    const snapshot = await processSnapshot(smokeRoot, snapshotEnvironment);
-    capturedProcesses = descendants(snapshot, appChild.pid);
-    invariant(capturedProcesses.some((entry) => entry.pid === appChild?.pid), "packaged app process identity를 찾지 못했습니다.");
-    const capturedRoot = snapshot.get(appChild.pid);
-    invariant(capturedRoot !== undefined, "packaged app root process identity를 찾지 못했습니다.");
-    if (appRootIdentity && capturedRoot.started !== appRootIdentity.started) {
-      throw new Error("packaged app root process identity가 실행 중 바뀌었습니다.");
+    if (process.platform !== "win32") {
+      const snapshot = await processSnapshot(smokeRoot, snapshotEnvironment);
+      capturedProcesses = descendants(snapshot, appChild.pid);
+      invariant(capturedProcesses.some((entry) => entry.pid === appChild?.pid), "packaged app process identity를 찾지 못했습니다.");
+      const capturedRoot = snapshot.get(appChild.pid);
+      invariant(capturedRoot !== undefined, "packaged app root process identity를 찾지 못했습니다.");
+      if (appRootIdentity && capturedRoot.started !== appRootIdentity.started) {
+        throw new Error("packaged app root process identity가 실행 중 바뀌었습니다.");
+      }
+      appRootIdentity = capturedRoot;
+      invariant(capturedProcesses.length > 1, "packaged app child process가 시작되지 않았습니다.");
     }
-    appRootIdentity = capturedRoot;
-    invariant(capturedProcesses.length > 1, "packaged app child process가 시작되지 않았습니다.");
     await sendQuit(appChild, token);
     const exit = await withTimeout(completion, APP_QUIT_TIMEOUT_MS, "packaged app graceful quit");
     invariant(exit.code === 0 && exit.signal === null, `packaged app 종료 상태가 다릅니다: code=${exit.code}, signal=${exit.signal ?? "none"}`);
-    await assertProcessesReclaimed(capturedProcesses, smokeRoot, snapshotEnvironment);
     if (process.platform !== "win32") {
+      await assertProcessesReclaimed(capturedProcesses, smokeRoot, snapshotEnvironment);
+      invariant(appRootIdentity !== undefined, "packaged app root identity가 없습니다.");
       await assertPosixProcessGroupReclaimed(
-        capturedRoot,
+        appRootIdentity,
         smokeRoot,
         snapshotEnvironment
       );
@@ -1438,7 +1042,10 @@ async function runNativePackageSmoke(): Promise<void> {
         : process.platform === "darwin"
           ? "/dev/fd/3"
           : "pipe:3",
-      reclaimedProcesses: capturedProcesses.length,
+      observedProcesses: observedProcessCount,
+      reclaimedProcesses: process.platform === "win32"
+        ? "exact-root+ports+private-state"
+        : capturedProcesses.length,
       reclaimedPorts: PORTS
     }, null, 2));
   } catch (error) {
@@ -1455,7 +1062,6 @@ async function runNativePackageSmoke(): Promise<void> {
         await terminateOwnedAppTree(
           appChild,
           appRootIdentity,
-          capturedProcesses,
           smokeRoot,
           snapshotEnvironment
         );

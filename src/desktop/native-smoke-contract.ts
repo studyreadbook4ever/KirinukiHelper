@@ -23,6 +23,7 @@ export interface DesktopNativeSmokeContract {
 }
 
 export interface DesktopNativeSmokeReadyMessage {
+  readonly processCount: number;
   readonly schema: typeof DESKTOP_NATIVE_SMOKE_IPC_SCHEMA;
   readonly type: "ready";
   readonly token: string;
@@ -122,9 +123,14 @@ export function resolveDesktopNativeSmokeContract({
 }
 
 export function desktopNativeSmokeReadyMessage(
-  contract: Readonly<DesktopNativeSmokeContract>
+  contract: Readonly<DesktopNativeSmokeContract>,
+  processCount: number
 ): Readonly<DesktopNativeSmokeReadyMessage> {
+  if (!Number.isSafeInteger(processCount) || processCount < 2 || processCount > 64) {
+    throw new TypeError("데스크톱 native smoke process 수가 올바르지 않습니다.");
+  }
   return Object.freeze({
+    processCount,
     schema: DESKTOP_NATIVE_SMOKE_IPC_SCHEMA,
     type: "ready",
     token: contract.token

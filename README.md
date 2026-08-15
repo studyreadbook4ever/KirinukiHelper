@@ -52,7 +52,10 @@ Electron `43.4.0`, FFmpeg/ffprobe `n8.1.2`(Shaka 정적 빌드 tag
 x64입니다. 현재 정적 FFmpeg의 실행 하한에 맞춰 macOS 프리뷰는 15.0 이상을
 package metadata로 강제합니다. CI는 Linux x64·Windows x64·macOS arm64에서 unsigned 패키지를 만든 뒤
 실제로 실행해 내부 Studio·gateway health, 번들 미디어 도구, 검증용 MP4 처리,
-정상 종료 뒤 자식 프로세스·포트·임시 데이터 회수까지 검사합니다.
+정상 종료를 검사합니다. Linux·macOS는 exact process group과 자식 프로세스,
+포트·임시 데이터를 모두 확인합니다. Windows는 앱이 보고한 다중 프로세스 실행,
+exact root 종료, 포트 회수와 전용 session 디렉터리 삭제를 확인하며, descendant
+전체 소유권은 아래 공개 배포용 Job Object 차단 조건으로 남깁니다.
 
 이 프리뷰 산출물은 installer가 아닌 unpacked 앱 디렉터리이며 아직 공개 다운로드가
 아닙니다. Electron/Chromium/Node 전체 고지와 SBOM, FFmpeg build configuration과
