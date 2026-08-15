@@ -116,7 +116,7 @@
   실행·두 번째 실행·업데이트 뒤 첫 실행이 모두 멱등적이다.
 - [ ] 앱이 저장소 관리 npm 구성요소, web/editor build, 고정 runtime artifact와
   선택한 자막 구성을 스스로 확인하고 필요한 항목만 준비한다.
-- [ ] 시스템 Node.js 22.13.0+, npm, Chromium 120+, Python 3.11+, FFmpeg, ffprobe가
+- [ ] 시스템 Node.js 22.17.0+, npm, Chromium 120+, Python 3.11+, FFmpeg, ffprobe가
   없으면 정확한 항목을 안내하고 fail closed한다. `sudo`, `curl | sh`, 임의
   package-manager 설치를 자동 실행하지 않는다.
 - [ ] 앱 내부 프로세스는 이 기기에서만 접근 가능하고 임의 LAN interface나 공개

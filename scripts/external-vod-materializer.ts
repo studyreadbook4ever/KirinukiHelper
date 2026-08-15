@@ -48,7 +48,8 @@ import type {
   SoopVodSourceClockIdentity
 } from "../src/lib/soop-vod-source-clock.js";
 import {
-  acquireExternalVodDirectSection
+  acquireExternalVodDirectSection,
+  writePrivateNodeRootCaFile
 } from "./external-vod-direct-acquirer.js";
 import type {
   ExternalVodDirectSectionEvidence
@@ -95,8 +96,7 @@ import {
 } from "./external-vod-transfer.js";
 import {
   terminatePosixProcessGroup,
-  terminateWindowsProcessTreeWithTaskkill,
-  windowsTaskkillOuterGuardTimeoutMs
+  terminateWindowsProcessTreeWithTaskkill
 } from "./process-tree-termination.js";
 import {
   MAX_VOD_CONSUMER_ID_LENGTH,
@@ -131,6 +131,8 @@ export const MAX_EXTERNAL_VOD_SOURCE_MS = 7 * 24 * 60 * 60 * 1_000;
 export const MAX_EXTERNAL_VOD_MATERIALIZED_MS = 6 * 60 * 60 * 1_000;
 /** Sections plus the concurrently-present final mux may consume at most 64 GiB. */
 export const MAX_EXTERNAL_VOD_WORK_BYTES = 64 * 1024 * 1024 * 1024;
+const ATOMIC_DESTINATION_STABILIZATION_ATTEMPTS = 64;
+const ATOMIC_DESTINATION_STABILIZATION_MAX_DELAY_MS = 8;
 /** Keep this much filesystem capacity unused beyond the conservative estimate. */
 export const MIN_EXTERNAL_VOD_DISK_HEADROOM_BYTES = 512 * 1024 * 1024;
 const ESTIMATED_EXTERNAL_VOD_WORK_BYTES_PER_SECOND = 2 * 1024 * 1024;
@@ -489,6 +491,7 @@ export interface ExternalVodMaterializerDependencies {
       pythonBinary?: string;
       nodeBinary: string;
       ffprobeBinary: string;
+      tlsCaFile: string;
       fetchImpl?: typeof globalThis.fetch;
       signal?: AbortSignal;
     }
@@ -1823,11 +1826,6 @@ export async function runExternalProcess(
     clearTimeoutImpl = clearTimeout,
     killProcessGroupImpl = (pid, signal) => process.kill(-pid, signal),
     probeProcessGroupImpl = (pid) => process.kill(-pid, 0),
-    terminateWindowsProcessTreeImpl = async (pid, cleanupTimeoutMs) => {
-      await terminateWindowsExternalProcessTree(pid, {
-        timeoutMs: cleanupTimeoutMs
-      });
-    },
     killGraceMs = EXTERNAL_PROCESS_KILL_GRACE_MS,
     platform = process.platform,
     statFileSystemImpl = statFileSystem
@@ -1837,10 +1835,6 @@ export async function runExternalProcess(
     clearTimeoutImpl?: typeof clearTimeout;
     killProcessGroupImpl?: (pid: number, signal: NodeJS.Signals) => void;
     probeProcessGroupImpl?: (pid: number) => void;
-    terminateWindowsProcessTreeImpl?: (
-      pid: number,
-      cleanupTimeoutMs: number
-    ) => Promise<void>;
     killGraceMs?: number;
     platform?: NodeJS.Platform;
     statFileSystemImpl?: (directory: string) => Promise<{
@@ -1931,7 +1925,7 @@ export async function runExternalProcess(
     let terminationError: Error | undefined;
     let cleanupError: Error | undefined;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-    let processTreeTimeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let windowsCloseDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let resourceMonitor: ReturnType<typeof setInterval> | undefined;
     let resourceInspectionPromise: Promise<void> | undefined;
@@ -1952,14 +1946,14 @@ export async function runExternalProcess(
         ? Number(child.pid)
         : undefined
     );
-    const signalLeader = (signal: NodeJS.Signals) => {
+    const signalLeader = (signal: NodeJS.Signals): boolean => {
       if (closed) {
-        return;
+        return true;
       }
       try {
-        child.kill(signal);
+        return child.kill(signal);
       } catch {
-        // A close/error event owns settlement; a concurrently exited child is safe.
+        return false;
       }
     };
     const recordCleanupError = (error: unknown): void => {
@@ -1987,43 +1981,45 @@ export async function runExternalProcess(
       }
       terminationError = error;
       const pid = processId();
-      if (
-        platform === "win32"
-        && pid !== undefined
-      ) {
-        processGroupCleanupPromise = new Promise<void>((resolveCleanup) => {
-          let cleanupSettled = false;
-          const finishCleanup = (treeError?: unknown): void => {
-            if (cleanupSettled) {
-              return;
-            }
-            cleanupSettled = true;
-            clearTimer(processTreeTimeoutTimer);
-            if (treeError !== undefined) {
-              recordCleanupError(treeError);
-              signalLeader("SIGKILL");
-            }
-            resolveCleanup();
-          };
-          const cleanupTimeoutMs = Math.max(1, killGraceMs);
-          processTreeTimeoutTimer = setTimeoutImpl(() => {
-            finishCleanup(Object.assign(
-              new Error("Windows 외부 도구 process tree terminator가 응답하지 않았습니다."),
-              { code: "EPROCESSTREEOUTER" }
-            ));
-          }, windowsTaskkillOuterGuardTimeoutMs(cleanupTimeoutMs));
-          let cleanupResult: Promise<void>;
-          try {
-            cleanupResult = terminateWindowsProcessTreeImpl(pid, cleanupTimeoutMs);
-          } catch (treeError) {
-            finishCleanup(treeError);
+      if (platform === "win32") {
+        // Kill only the process HANDLE retained by this ChildProcess. A
+        // PID-based taskkill fallback can race PID reuse and terminate an
+        // unrelated process tree after the original tool exits.
+        if (!signalLeader("SIGKILL")) {
+          recordCleanupError(new Error(
+            "Windows 외부 도구의 exact child handle 종료 요청이 실패했습니다."
+          ));
+        }
+        windowsCloseDeadlineTimer = setTimeoutImpl(() => {
+          if (settled) {
             return;
           }
-          void cleanupResult.then(
-            () => finishCleanup(),
-            (treeError: unknown) => finishCleanup(treeError)
-          );
-        });
+          recordCleanupError(Object.assign(
+            new Error("Windows 외부 도구가 exact child 종료 요청 뒤 닫히지 않았습니다."),
+            { code: "EPROCESSCLOSEDEADLINE" }
+          ));
+          settled = true;
+          clearTimer(timeoutTimer);
+          clearTimer(forceKillTimer);
+          if (resourceMonitor !== undefined) {
+            clearInterval(resourceMonitor);
+          }
+          options.signal?.removeEventListener("abort", abortListener);
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          (child as typeof child & { unref?: () => void }).unref?.();
+          const finalError = terminationError
+            ?? childError
+            ?? resourceInspectionError
+            ?? cleanupError!;
+          if (cleanupError && cleanupError !== finalError && finalError.cause === undefined) {
+            Object.defineProperty(finalError, "cause", {
+              configurable: true,
+              value: cleanupError
+            });
+          }
+          reject(finalError);
+        }, Math.max(1, killGraceMs));
         return;
       }
       if (useProcessGroup && pid !== undefined) {
@@ -2115,6 +2111,7 @@ export async function runExternalProcess(
       closed = true;
       settled = true;
       clearTimer(timeoutTimer);
+      clearTimer(windowsCloseDeadlineTimer);
       if (resourceMonitor !== undefined) {
         clearInterval(resourceMonitor);
       }
@@ -2145,7 +2142,7 @@ export async function runExternalProcess(
           await processGroupCleanupPromise;
         }
         clearTimer(forceKillTimer);
-        clearTimer(processTreeTimeoutTimer);
+        clearTimer(windowsCloseDeadlineTimer);
         const error = terminationError
           ?? childError
           ?? resourceInspectionError
@@ -2813,13 +2810,24 @@ function directClockProbeHeaderBlock(
 }
 
 export function buildExternalDirectClockProbeArgs(
-  input: ExternalVodSelectedDirectInput
+  input: ExternalVodSelectedDirectInput,
+  tlsCaFile: string
 ): string[] {
   const url = assertExternalVodTransferUrl("YOUTUBE", input.url);
   const headerBlock = directClockProbeHeaderBlock(input.publicHeaders);
+  if (
+    !path.isAbsolute(tlsCaFile)
+    || tlsCaFile.trim() !== tlsCaFile
+    || /[\0\r\n]/u.test(tlsCaFile)
+  ) {
+    fail("ffprobe TLS 신뢰 루트 경로가 올바르지 않습니다.", "INVALID_SELECTED_SOURCE");
+  }
   return [
     "-v", "error",
     "-protocol_whitelist", "https,tls,tcp",
+    "-tls_verify", "1",
+    "-ca_file", tlsCaFile,
+    "-max_redirects", "0",
     "-rw_timeout", "30000000",
     ...(headerBlock ? ["-headers", headerBlock] : []),
     "-show_entries",
@@ -2841,6 +2849,7 @@ async function resolveExternalVodClockProofs(
     pythonBinary?: string;
     nodeBinary: string;
     ffprobeBinary: string;
+    tlsCaFile: string;
     fetchImpl?: typeof globalThis.fetch;
     signal?: AbortSignal;
   }
@@ -2887,7 +2896,7 @@ async function resolveExternalVodClockProofs(
         const probed = await checkedProcess(
           context.runProcess,
           context.ffprobeBinary,
-          buildExternalDirectClockProbeArgs(input),
+          buildExternalDirectClockProbeArgs(input, context.tlsCaFile),
           processOptions(
             context.cwd,
             context.processEnv,
@@ -3226,12 +3235,25 @@ function validatedOpenRegularFileStatus(
   status: BigIntStats,
   {
     maximumBytes,
-    requireSingleLink = false
+    requireSingleLink = false,
+    unlinkedSingleLinkIsTransient = false
   }: {
     maximumBytes: number;
     requireSingleLink?: boolean;
+    unlinkedSingleLinkIsTransient?: boolean;
   }
 ): number {
+  if (
+    requireSingleLink
+    && unlinkedSingleLinkIsTransient
+    && status.isFile()
+    && status.nlink === 0n
+  ) {
+    fail(
+      "원자 게시 목적지가 동시 게시자에 의해 교체되어 다시 검증합니다.",
+      "CACHE_INTEGRITY_FAILED"
+    );
+  }
   if (
     !status.isFile()
     || status.size <= 0n
@@ -3334,11 +3356,13 @@ async function inspectOpenedExternalRegularFile(
   {
     maximumBytes,
     requireSingleLink = false,
+    unlinkedSingleLinkIsTransient = false,
     supplementalHashFile,
     signal
   }: {
     maximumBytes: number;
     requireSingleLink?: boolean;
+    unlinkedSingleLinkIsTransient?: boolean;
     supplementalHashFile?: NonNullable<
       ExternalVodMaterializerDependencies["hashFile"]
     >;
@@ -3349,7 +3373,8 @@ async function inspectOpenedExternalRegularFile(
   const before = await handle.stat({ bigint: true });
   const sizeBytes = validatedOpenRegularFileStatus(before, {
     maximumBytes,
-    requireSingleLink
+    requireSingleLink,
+    unlinkedSingleLinkIsTransient
   });
   const hashSha256 = await hashExternalFileHandle(handle, sizeBytes, signal);
   if (supplementalHashFile) {
@@ -3375,6 +3400,7 @@ async function inspectExternalRegularFileNoFollow(
   options: {
     maximumBytes: number;
     requireSingleLink?: boolean;
+    unlinkedSingleLinkIsTransient?: boolean;
     supplementalHashFile?: NonNullable<
       ExternalVodMaterializerDependencies["hashFile"]
     >;
@@ -4684,7 +4710,11 @@ export async function copyVerifiedExternalVodFileAtomic({
     // between our rename and validation. Retry only transient path/fd races;
     // every accepted destination is independently hashed and single-linked.
     let lastRaceError: ExternalVodMaterializationError | undefined;
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt < ATOMIC_DESTINATION_STABILIZATION_ATTEMPTS;
+      attempt += 1
+    ) {
       abortIfRequested(signal);
       try {
         const published = await inspectExternalRegularFileNoFollow(
@@ -4692,6 +4722,7 @@ export async function copyVerifiedExternalVodFileAtomic({
           {
             maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES,
             requireSingleLink: true,
+            unlinkedSingleLinkIsTransient: true,
             ...(signal ? { signal } : {})
           }
         );
@@ -4706,13 +4737,20 @@ export async function copyVerifiedExternalVodFileAtomic({
         if (
           !(error instanceof ExternalVodMaterializationError)
           || error.code !== "CACHE_INTEGRITY_FAILED"
-          || attempt === 3
+          || attempt === ATOMIC_DESTINATION_STABILIZATION_ATTEMPTS - 1
         ) {
           throw error;
         }
         lastRaceError = error;
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 1));
+      // A finite fan-out of verified publishers can successively unlink each
+      // other's just-opened inode. Give every publisher enough bounded time
+      // to observe the final name after that finite rename burst settles.
+      const delayMs = Math.min(
+        ATOMIC_DESTINATION_STABILIZATION_MAX_DELAY_MS,
+        2 ** Math.min(attempt, 3)
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
     }
     throw lastRaceError ?? new ExternalVodMaterializationError(
       "원자 게시된 원본 조각을 안정적으로 재검증하지 못했습니다.",
@@ -5940,6 +5978,7 @@ export async function materializeExternalVod(
     cwd: string
   ): Promise<ExternalVodClockProofSetResolution> => {
     try {
+      const tlsCaFile = await writePrivateNodeRootCaFile(cwd);
       const prove = async (): Promise<ExternalVodClockProofSetResolution> => (
         await clockResolver(candidateMetadata, parts, {
           cwd,
@@ -5950,6 +5989,7 @@ export async function materializeExternalVod(
           ...(pythonBinary === undefined ? {} : { pythonBinary }),
           nodeBinary,
           ffprobeBinary,
+          tlsCaFile,
           ...(dependencies.fetchImpl ? { fetchImpl: dependencies.fetchImpl } : {}),
           ...(request.signal ? { signal: request.signal } : {})
         })

@@ -57,7 +57,7 @@ unsigned 개발 패키지에서 새로 생긴 **검토 대기 재배포 경계**
 | `@electron/asar` | `4.2.1` | MIT 및 transitive build dependencies | build-only, 패키지 내부 allowlist·hash 검증 |
 | `@electron/packager` | `20.3.0` | BSD-2-Clause 및 transitive build dependencies | build-only, canonical lock inventory 검토 미완료 |
 | `@electron/fuses` | `2.1.3` | MIT 및 transitive build dependencies | build-only, canonical lock inventory 검토 미완료 |
-| FFmpeg·ffprobe sidecar | FFmpeg `7.0.2`, distribution tag `b6.1.1` | target build에 따라 LGPL/GPL·외부 library 조건 변화 | buildconf·link·대응 소스 검토 전 공개 차단 |
+| FFmpeg·ffprobe sidecar | FFmpeg `n8.1.2`, Shaka build tag `n8.1.2-1` | GPLv3·정적 외부 library 조건 | buildconf·link·대응 소스 검토 전 공개 차단 |
 | yt-dlp standalone | `2026.07.04` | Unlicense + embedded Python/EJS/기타 component | target별 embedded notice 검토 전 공개 차단 |
 
 대상별 sidecar URL·바이트·SHA-256은 `src/desktop/tool-manifest.ts`에 있습니다.
@@ -134,7 +134,7 @@ upstream: https://github.com/Freesentation/paperlogy/tree/8ef35f53b318c7ca914c52
 <!-- attribution-id: ffprobe -->
 - ffprobe는 `ffprobe -version` 및 동일 FFmpeg build 정보로 확인합니다.
 <!-- attribution-id: nodejs -->
-- Node.js 22.13.0 이상은 `node --version`, `process.versions`로 확인합니다.
+- Node.js 22.17.0 이상은 `node --version`, `process.versions`로 확인합니다.
 <!-- attribution-id: python -->
 - Python 3.11 이상은 `python3 --version`으로 확인합니다.
 <!-- attribution-id: chromium -->

@@ -24,6 +24,8 @@ const CASES: readonly Readonly<{
   arch: DesktopArchitecture;
   resourcesRoot: string;
   ytDlpAsset: string;
+  ffmpegAsset: string;
+  ffprobeAsset: string;
   ffmpegVersion: string;
 }>[] = Object.freeze([
   {
@@ -32,7 +34,9 @@ const CASES: readonly Readonly<{
     arch: "x64",
     resourcesRoot: "/opt/Kirinuki/resources",
     ytDlpAsset: "yt-dlp_linux",
-    ffmpegVersion: "7.0.2-static"
+    ffmpegAsset: "ffmpeg-linux-x64",
+    ffprobeAsset: "ffprobe-linux-x64",
+    ffmpegVersion: "n8.1.2"
   },
   {
     target: "linux-arm64",
@@ -40,7 +44,9 @@ const CASES: readonly Readonly<{
     arch: "arm64",
     resourcesRoot: "/opt/Kirinuki-arm64/resources",
     ytDlpAsset: "yt-dlp_linux_aarch64",
-    ffmpegVersion: "7.0.2-static"
+    ffmpegAsset: "ffmpeg-linux-arm64",
+    ffprobeAsset: "ffprobe-linux-arm64",
+    ffmpegVersion: "n8.1.2"
   },
   {
     target: "darwin-x64",
@@ -48,7 +54,9 @@ const CASES: readonly Readonly<{
     arch: "x64",
     resourcesRoot: "/Applications/Kirinuki x64.app/Contents/Resources",
     ytDlpAsset: "yt-dlp_macos",
-    ffmpegVersion: "6.1.1-tessus"
+    ffmpegAsset: "ffmpeg-osx-x64",
+    ffprobeAsset: "ffprobe-osx-x64",
+    ffmpegVersion: "n8.1.2"
   },
   {
     target: "darwin-arm64",
@@ -56,7 +64,9 @@ const CASES: readonly Readonly<{
     arch: "arm64",
     resourcesRoot: "/Applications/Kirinuki.app/Contents/Resources",
     ytDlpAsset: "yt-dlp_macos",
-    ffmpegVersion: "6.0"
+    ffmpegAsset: "ffmpeg-osx-arm64",
+    ffprobeAsset: "ffprobe-osx-arm64",
+    ffmpegVersion: "n8.1.2"
   },
   {
     target: "win32-x64",
@@ -64,7 +74,9 @@ const CASES: readonly Readonly<{
     arch: "x64",
     resourcesRoot: "C:\\Program Files\\Kirinuki\\resources",
     ytDlpAsset: "yt-dlp.exe",
-    ffmpegVersion: "6.1.1-essentials_build-www.gyan.dev"
+    ffmpegAsset: "ffmpeg-win-x64.exe",
+    ffprobeAsset: "ffprobe-win-x64.exe",
+    ffmpegVersion: "n8.1.2"
   }
 ]);
 
@@ -113,29 +125,23 @@ test("desktop tool manifest pins every packaged target and matches runtime paths
     assert.deepEqual(tools.ffprobe.argsPrefix, []);
     assert.deepEqual(tools.ytDlp.argsPrefix, []);
     assert.equal(tools.ytDlp.artifactKind, "standalone");
-    assert.equal(manifest.ffmpeg.compression, "gzip");
-    assert.equal(manifest.ffprobe.compression, "gzip");
+    assert.equal(manifest.ffmpeg.compression, "none");
+    assert.equal(manifest.ffprobe.compression, "none");
     assert.equal(manifest.ytDlp.compression, "none");
     assert.equal(manifest.ffmpegLicense.compression, "none");
-    for (const compressed of [manifest.ffmpeg, manifest.ffprobe]) {
-      assert.equal(
-        Number.isSafeInteger(compressed.compressedSize)
-          && Number(compressed.compressedSize) > 0
-          && Number(compressed.compressedSize) < compressed.size,
-        true,
-        `${entry.target}:${compressed.fileName}:compressedSize`
-      );
-    }
+    assert.equal(manifest.ffmpeg.compressedSize, undefined);
+    assert.equal(manifest.ffprobe.compressedSize, undefined);
     assert.equal(manifest.ytDlp.compressedSize, undefined);
     assert.equal(manifest.ffmpegLicense.compressedSize, undefined);
     assert.equal(
       manifest.ffmpeg.url,
-      `${DESKTOP_FFMPEG_RELEASE.baseUrl}/ffmpeg-${entry.target}.gz`
+      `${DESKTOP_FFMPEG_RELEASE.baseUrl}/${entry.ffmpegAsset}`
     );
     assert.equal(
       manifest.ffprobe.url,
-      `${DESKTOP_FFMPEG_RELEASE.baseUrl}/ffprobe-${entry.target}.gz`
+      `${DESKTOP_FFMPEG_RELEASE.baseUrl}/${entry.ffprobeAsset}`
     );
+    assert.equal(manifest.ffmpegLicense.url, DESKTOP_FFMPEG_RELEASE.licenseUrl);
     assert.equal(
       manifest.ytDlp.url,
       `${DESKTOP_YT_DLP_RELEASE.baseUrl}/${entry.ytDlpAsset}`

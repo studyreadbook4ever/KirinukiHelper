@@ -245,12 +245,12 @@ assert(
   "KirinukiHelper package license가 상업 이용 positive allowlist를 통과하지 못했습니다."
 );
 assert(
-  packageJson.engines?.node === ">=22.13.0",
-  "node:sqlite lease와 managed yt-dlp EJS runtime의 Node 하한은 >=22.13.0이어야 합니다."
+  packageJson.engines?.node === ">=22.17.0",
+  "node:sqlite lease와 Windows file identity 수정이 포함된 Node 하한은 >=22.17.0이어야 합니다."
 );
 assert(
-  MINIMUM_NODE_VERSION === "22.13.0"
-    && MINIMUM_VOD_NODE_VERSION === "22.13.0",
+  MINIMUM_NODE_VERSION === "22.17.0"
+    && MINIMUM_VOD_NODE_VERSION === "22.17.0",
   "로컬 caption/VOD runtime의 Node 하한이 license inventory와 다릅니다."
 );
 await Promise.all([
@@ -928,8 +928,8 @@ assert(
   "Whisper 시작은 source·VOD·caption runtime 고지의 크기/SHA를 모두 검증해야 합니다."
 );
 assert(
-  /node-version:\s*["']22\.13\.0["']/u.test(typescriptQualityWorkflowText),
-  "GitHub TypeScript quality workflow는 프로젝트 최소 Node 22.13.0에서 실행돼야 합니다."
+  /node-version:\s*["']22\.17\.0["']/u.test(typescriptQualityWorkflowText),
+  "GitHub TypeScript quality workflow는 프로젝트 최소 Node 22.17.0에서 실행돼야 합니다."
 );
 assert(
   !/uses:\s*[^\s@]+@v\d+/u.test(typescriptQualityWorkflowText),

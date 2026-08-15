@@ -67,8 +67,6 @@ import type {
   ExternalVodMaterializationResult,
   ExternalVodMetadata
 } from "../scripts/external-vod-materializer.js";
-import { windowsTaskkillOuterGuardTimeoutMs } from
-  "../scripts/process-tree-termination.js";
 import {
   resolveExternalVodClockProofSet
 } from "../scripts/external-vod-clock-resolver.js";
@@ -1459,6 +1457,7 @@ test("selected-source probe는 SOOP 파트와 YouTube 분리 video+audio를 엄�
 
 test("YouTube direct clock probe는 ffprobe 옵션 경계와 공개 헤더를 정확히 만든다", () => {
   const semanticIdentity = "youtube:format:136:video";
+  const tlsCaFile = path.resolve("/private/clock/node-root-ca.pem");
   const args = buildExternalDirectClockProbeArgs({
     url: "https://rr1.googlevideo.com/videoplayback?sig=runtime-only",
     semanticIdentity,
@@ -1467,9 +1466,12 @@ test("YouTube direct clock probe는 ffprobe 옵션 경계와 공개 헤더를 �
       "user-agent": "Kirinuki fixture",
       accept: "*/*"
     }
-  });
+  }, tlsCaFile);
   assert(!args.includes("-nostdin"), "ffprobe는 -nostdin을 값 옵션으로 오해합니다.");
   assert.equal(optionValue(args, "-protocol_whitelist"), "https,tls,tcp");
+  assert.equal(optionValue(args, "-tls_verify"), "1");
+  assert.equal(optionValue(args, "-ca_file"), tlsCaFile);
+  assert.equal(optionValue(args, "-max_redirects"), "0");
   assert.equal(
     optionValue(args, "-headers"),
     "accept: */*\r\nuser-agent: Kirinuki fixture\r\n"
@@ -1887,10 +1889,12 @@ test("기본 프로세스 경계는 argv 배열과 shell:false를 사용한다",
   ) => {
     captured = { command, args, options };
     const child = new EventEmitter() as EventEmitter & {
+      pid: number;
       stdout: PassThrough;
       stderr: PassThrough;
       kill: () => boolean;
     };
+    child.pid = 77_777;
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     child.kill = () => true;
@@ -2003,23 +2007,27 @@ test("macOS child fd 3은 실제 /dev/fd/3 입력으로 열린 파일 bytes를 �
   }
 });
 
-test("Windows 취소는 leader kill이 아니라 exact process tree terminator 완료를 기다린다", async () => {
+test("Windows 취소는 PID fallback 없이 exact child handle만 종료한다", async () => {
   const controller = new AbortController();
-  let terminatedPid = 0;
-  let leaderKillCount = 0;
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
   let child: (EventEmitter & {
     pid: number;
     stdout: PassThrough;
     stderr: PassThrough;
-    kill: () => boolean;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
   }) | undefined;
   const spawnImpl = (() => {
     child = new EventEmitter() as typeof child & NonNullable<typeof child>;
     child.pid = 4_321;
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    child.kill = () => {
-      leaderKillCount += 1;
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      queueMicrotask(() => {
+        child?.stdout.end();
+        child?.stderr.end();
+        child?.emit("close", 1, null);
+      });
       return true;
     };
     return child as unknown as ChildProcess;
@@ -2031,22 +2039,13 @@ test("Windows 취소는 leader kill이 아니라 exact process tree terminator �
     signal: controller.signal
   }, {
     platform: "win32",
-    spawnImpl,
-    terminateWindowsProcessTreeImpl: async (pid) => {
-      terminatedPid = pid;
-      queueMicrotask(() => {
-        child?.stdout.end();
-        child?.stderr.end();
-        child?.emit("close", 1, null);
-      });
-    }
+    spawnImpl
   });
   controller.abort();
   await assert.rejects(pending, (error: unknown) => (
     error instanceof Error && "code" in error && error.code === "ABORT_ERR"
   ));
-  assert.equal(terminatedPid, 4_321);
-  assert.equal(leaderKillCount, 0);
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
 });
 
 test("Windows taskkill helper timeout은 killer를 종료하고 close까지 기다린다", async () => {
@@ -2099,7 +2098,7 @@ test("Windows taskkill helper timeout은 killer를 종료하고 close까지 기�
   assert.equal(timerCleared, true);
 });
 
-test("Windows taskkill reject는 exact leader fallback 뒤 원래 취소 오류를 보존한다", async () => {
+test("Windows exact child kill은 반복 abort에도 한 번만 실행된다", async () => {
   const controller = new AbortController();
   const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
   let childRef: (EventEmitter & {
@@ -2132,11 +2131,9 @@ test("Windows taskkill reject는 exact leader fallback 뒤 원래 취소 오류�
     signal: controller.signal
   }, {
     platform: "win32",
-    spawnImpl,
-    terminateWindowsProcessTreeImpl: async () => {
-      throw new Error("taskkill rejected");
-    }
+    spawnImpl
   });
+  controller.abort();
   controller.abort();
   await assert.rejects(pending, (error: unknown) => (
     error instanceof Error
@@ -2146,7 +2143,7 @@ test("Windows taskkill reject는 exact leader fallback 뒤 원래 취소 오류�
   assert.deepEqual(leaderSignals, ["SIGKILL"]);
 });
 
-test("Windows taskkill never-settle은 bounded fallback 뒤 close 한 번으로 원래 timeout 오류를 보존한다", async () => {
+test("Windows timeout은 exact child를 한 번 죽이고 close 한 번으로 원래 오류를 보존한다", async () => {
   const scheduled: Array<{
     callback: () => void;
     delay: number;
@@ -2200,17 +2197,10 @@ test("Windows taskkill never-settle은 bounded fallback 뒤 close 한 번으로 
     platform: "win32",
     spawnImpl,
     setTimeoutImpl,
-    clearTimeoutImpl,
-    killGraceMs: 17,
-    terminateWindowsProcessTreeImpl: async () => await new Promise<void>(() => undefined)
+    clearTimeoutImpl
   });
   assert.equal(scheduled[0]?.delay, 123);
   scheduled[0]?.callback();
-  assert.equal(
-    scheduled[1]?.delay,
-    windowsTaskkillOuterGuardTimeoutMs(17)
-  );
-  scheduled[1]?.callback();
   await assert.rejects(pending, (error: unknown) => (
     error instanceof Error
     && "code" in error
@@ -2218,8 +2208,60 @@ test("Windows taskkill never-settle은 bounded fallback 뒤 close 한 번으로 
   ));
   assert.deepEqual(leaderSignals, ["SIGKILL"]);
   assert.equal(scheduled[0]?.cleared, true);
+  assert.equal(scheduled.length, 2);
   assert.equal(scheduled[1]?.cleared, true);
   assert.equal(childRef?.listenerCount("close"), 0);
+});
+
+test("Windows exact child가 닫히지 않아도 timeout 결과는 bounded하게 끝난다", async () => {
+  const scheduled: Array<{ callback: () => void; delay: number }> = [];
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    scheduled.push({ callback, delay });
+    return {};
+  }) as unknown as typeof setTimeout;
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let unrefCount = 0;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: (signal?: NodeJS.Signals | number) => boolean;
+      unref: () => void;
+    };
+    child.pid = 9_877;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      return false;
+    };
+    child.unref = () => { unrefCount += 1; };
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("ffmpeg.exe", [], {
+    cwd: "C:\\Kirinuki",
+    env: {},
+    shell: false,
+    timeoutMs: 123
+  }, {
+    platform: "win32",
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl: (() => undefined) as unknown as typeof clearTimeout,
+    killGraceMs: 17
+  });
+  scheduled[0]?.callback();
+  assert.equal(scheduled[1]?.delay, 17);
+  scheduled[1]?.callback();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ETIMEDOUT"
+    && error.cause instanceof Error
+  ));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  assert.equal(unrefCount, 1);
 });
 
 test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM 후 KILL하고 close에서 끝난다", async () => {
@@ -2598,15 +2640,21 @@ test("빠른 close도 진행 중인 재귀 quota 검사가 끝나기 전에 성�
 });
 
 test("빠른 close 뒤 최종 statfs가 나빠지면 성공 대신 오류를 전파한다", async () => {
+  let killCount = 0;
   const spawnImpl = (() => {
     const child = new EventEmitter() as EventEmitter & {
+      pid: number;
       stdout: PassThrough;
       stderr: PassThrough;
       kill: () => boolean;
     };
+    child.pid = 88_888;
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    child.kill = () => true;
+    child.kill = () => {
+      killCount += 1;
+      return true;
+    };
     queueMicrotask(() => {
       child.stdout.end();
       child.stderr.end();
@@ -2638,6 +2686,7 @@ test("빠른 close 뒤 최종 statfs가 나빠지면 성공 대신 오류를 전
     }
   );
   assert.equal(statFileSystemCalls, 2);
+  assert.equal(killCount, 0, "close 뒤 재사용 가능 PID를 다시 종료하면 안 됩니다.");
 });
 
 test("기본 프로세스 경계는 작업 파일이 상한을 넘는 즉시 child를 종료한다", async (t) => {
@@ -3352,14 +3401,20 @@ test("YouTube direct clock의 일시적 CDN 실패만 새 선택 source로 한 �
     await rm(stateDir, { recursive: true, force: true });
   });
   let resolverCalls = 0;
+  const observedTlsCaFiles = new Set<string>();
   const completed = await materializeExternalVod({
     consumerId: TEST_CONSUMER_ID,
     sourceUrl: YOUTUBE_URL,
     clips: [{ id: "clock-retry", startMs: 20_000, endMs: 21_000 }],
     stateDir
   }, youtubeFixtureDependencies({
-    resolveClockProofSet: async (metadata, parts) => {
+    resolveClockProofSet: async (metadata, parts, context) => {
       resolverCalls += 1;
+      assert.equal(path.dirname(context.tlsCaFile), context.cwd);
+      const tlsCaBundle = await readFile(context.tlsCaFile, "utf8");
+      assert.match(tlsCaBundle, /^-----BEGIN CERTIFICATE-----/u);
+      assert.match(tlsCaBundle, /-----END CERTIFICATE-----\n$/u);
+      observedTlsCaFiles.add(context.tlsCaFile);
       if (resolverCalls === 1) {
         throw Object.assign(new Error("transient signed edge URL"), {
           code: "DIRECT_CLOCK_PROBE_FAILED"
@@ -3370,6 +3425,7 @@ test("YouTube direct clock의 일시적 CDN 실패만 새 선택 source로 한 �
   }));
   assert.equal(completed.manifest.source.platform, "YOUTUBE");
   assert.equal(resolverCalls, 3, "최초 1회 재시도와 완료 source 재검증만 허용합니다.");
+  assert.equal(observedTlsCaFiles.size, 2, "각 private clock-probe 생명주기마다 CA를 하나만 만듭니다.");
 });
 
 test("다운로드 완료 전 metadata 재검증에서 sourceVersionId 변화가 보이면 publish하지 않는다", async (t) => {

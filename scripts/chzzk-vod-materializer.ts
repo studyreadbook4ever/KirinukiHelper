@@ -52,9 +52,7 @@ import {
   vodConsumerScopeHash
 } from "./vod-consumer-scope.js";
 import {
-  terminatePosixProcessGroup,
-  terminateWindowsProcessTreeWithTaskkill,
-  windowsTaskkillOuterGuardTimeoutMs
+  terminatePosixProcessGroup
 } from "./process-tree-termination.js";
 
 export const LEGACY_CHZZK_VOD_MATERIALIZATION_SCHEMA_ID =
@@ -1621,62 +1619,6 @@ export function sleepWithMaterializerAbort(
   });
 }
 
-export function windowsChzzkProcessTreeTerminationCommand(
-  processId: number,
-  environment: NodeJS.ProcessEnv = process.env
-): Readonly<{ command: string; args: readonly string[] }> {
-  if (!Number.isSafeInteger(processId) || processId <= 0) {
-    fail("Windows CHZZK 도구 process tree 식별자가 올바르지 않습니다.", "PROCESS_START_FAILED");
-  }
-  const systemRoot = String(environment.SystemRoot || environment.SYSTEMROOT || "");
-  if (
-    !systemRoot
-    || systemRoot.trim() !== systemRoot
-    || !path.win32.isAbsolute(systemRoot)
-    || /[\u0000-\u001f\u007f]/u.test(systemRoot)
-  ) {
-    fail("Windows SystemRoot 경로를 안전하게 확인하지 못했습니다.", "PROCESS_START_FAILED");
-  }
-  return Object.freeze({
-    command: path.win32.join(systemRoot, "System32", "taskkill.exe"),
-    args: Object.freeze(["/PID", String(processId), "/T", "/F"])
-  });
-}
-
-export async function terminateWindowsChzzkProcessTree(
-  processId: number,
-  {
-    spawnImpl = spawn,
-    setTimeoutImpl = setTimeout,
-    clearTimeoutImpl = clearTimeout,
-    timeoutMs = CHZZK_PROCESS_KILL_GRACE_MS,
-    environment = process.env,
-    probeProcessImpl = (pid: number) => process.kill(pid, 0)
-  }: {
-    spawnImpl?: typeof spawn;
-    setTimeoutImpl?: typeof setTimeout;
-    clearTimeoutImpl?: typeof clearTimeout;
-    timeoutMs?: number;
-    environment?: NodeJS.ProcessEnv;
-    probeProcessImpl?: (pid: number) => void;
-  } = {}
-): Promise<void> {
-  const invocation = windowsChzzkProcessTreeTerminationCommand(processId, environment);
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    fail("Windows CHZZK process tree 종료 시간 제한이 올바르지 않습니다.", "INVALID_PROCESS_TIMEOUT");
-  }
-  await terminateWindowsProcessTreeWithTaskkill({
-    processId,
-    command: invocation.command,
-    args: invocation.args,
-    spawnImpl,
-    probeProcessImpl,
-    setTimeoutImpl,
-    clearTimeoutImpl,
-    timeoutMs
-  });
-}
-
 export async function runMaterializerProcess(
   command: string,
   args: readonly string[],
@@ -1687,11 +1629,6 @@ export async function runMaterializerProcess(
     clearTimeoutImpl = clearTimeout,
     killProcessGroupImpl = (pid, signal) => process.kill(-pid, signal),
     probeProcessGroupImpl = (pid) => process.kill(-pid, 0),
-    terminateWindowsProcessTreeImpl = async (pid, cleanupTimeoutMs) => {
-      await terminateWindowsChzzkProcessTree(pid, {
-        timeoutMs: cleanupTimeoutMs
-      });
-    },
     killGraceMs = CHZZK_PROCESS_KILL_GRACE_MS,
     platform = process.platform
   }: {
@@ -1700,10 +1637,6 @@ export async function runMaterializerProcess(
     clearTimeoutImpl?: typeof clearTimeout;
     killProcessGroupImpl?: (pid: number, signal: NodeJS.Signals) => void;
     probeProcessGroupImpl?: (pid: number) => void;
-    terminateWindowsProcessTreeImpl?: (
-      pid: number,
-      cleanupTimeoutMs: number
-    ) => Promise<void>;
     killGraceMs?: number;
     platform?: NodeJS.Platform;
   } = {}
@@ -1743,7 +1676,7 @@ export async function runMaterializerProcess(
     let terminationError: Error | undefined;
     let cleanupError: Error | undefined;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-    let processTreeTimeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let windowsCloseDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let processTreeCleanupPromise: Promise<void> | undefined;
 
@@ -1757,14 +1690,14 @@ export async function runMaterializerProcess(
         ? Number(child.pid)
         : undefined
     );
-    const signalLeader = (signal: NodeJS.Signals): void => {
+    const signalLeader = (signal: NodeJS.Signals): boolean => {
       if (closed) {
-        return;
+        return true;
       }
       try {
-        child.kill(signal);
+        return child.kill(signal);
       } catch {
-        // The close event remains the single settlement boundary.
+        return false;
       }
     };
     const recordCleanupError = (error: unknown): void => {
@@ -1792,40 +1725,39 @@ export async function runMaterializerProcess(
       }
       terminationError = error;
       const pid = processId();
-      if (platform === "win32" && pid !== undefined) {
-        processTreeCleanupPromise = new Promise<void>((resolveCleanup) => {
-          let cleanupSettled = false;
-          const finishCleanup = (treeError?: unknown): void => {
-            if (cleanupSettled) {
-              return;
-            }
-            cleanupSettled = true;
-            clearTimer(processTreeTimeoutTimer);
-            if (treeError !== undefined) {
-              recordCleanupError(treeError);
-              signalLeader("SIGKILL");
-            }
-            resolveCleanup();
-          };
-          const cleanupTimeoutMs = Math.max(1, killGraceMs);
-          processTreeTimeoutTimer = setTimeoutImpl(() => {
-            finishCleanup(Object.assign(
-              new Error("Windows CHZZK 도구 process tree terminator가 응답하지 않았습니다."),
-              { code: "EPROCESSTREEOUTER" }
-            ));
-          }, windowsTaskkillOuterGuardTimeoutMs(cleanupTimeoutMs));
-          let cleanupResult: Promise<void>;
-          try {
-            cleanupResult = terminateWindowsProcessTreeImpl(pid, cleanupTimeoutMs);
-          } catch (treeError) {
-            finishCleanup(treeError);
+      if (platform === "win32") {
+        // Node/libuv keeps the spawned Windows process HANDLE on this exact
+        // ChildProcess. Never reopen a numeric PID with taskkill: the target
+        // could exit and its PID could be reassigned before that second open.
+        if (!signalLeader("SIGKILL")) {
+          recordCleanupError(new Error(
+            "Windows CHZZK 도구의 exact child handle 종료 요청이 실패했습니다."
+          ));
+        }
+        windowsCloseDeadlineTimer = setTimeoutImpl(() => {
+          if (finalizing) {
             return;
           }
-          void cleanupResult.then(
-            () => finishCleanup(),
-            (treeError: unknown) => finishCleanup(treeError)
-          );
-        });
+          recordCleanupError(Object.assign(
+            new Error("Windows CHZZK 도구가 exact child 종료 요청 뒤 닫히지 않았습니다."),
+            { code: "EPROCESSCLOSEDEADLINE" }
+          ));
+          finalizing = true;
+          clearTimer(timeoutTimer);
+          clearTimer(forceKillTimer);
+          options.signal?.removeEventListener("abort", abortListener);
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          (child as typeof child & { unref?: () => void }).unref?.();
+          const finalError = terminationError ?? cleanupError!;
+          if (cleanupError && cleanupError !== finalError && finalError.cause === undefined) {
+            Object.defineProperty(finalError, "cause", {
+              configurable: true,
+              value: cleanupError
+            });
+          }
+          reject(finalError);
+        }, Math.max(1, killGraceMs));
         return;
       }
       if (useProcessGroup && pid !== undefined) {
@@ -1876,6 +1808,7 @@ export async function runMaterializerProcess(
       closed = true;
       finalizing = true;
       clearTimer(timeoutTimer);
+      clearTimer(windowsCloseDeadlineTimer);
       options.signal?.removeEventListener("abort", abortListener);
       void (async () => {
         const pid = processId();
@@ -1886,7 +1819,7 @@ export async function runMaterializerProcess(
           await processTreeCleanupPromise;
         }
         clearTimer(forceKillTimer);
-        clearTimer(processTreeTimeoutTimer);
+        clearTimer(windowsCloseDeadlineTimer);
         const error = terminationError ?? childError ?? cleanupError;
         if (error) {
           if (cleanupError && cleanupError !== error && error.cause === undefined) {
@@ -3603,7 +3536,6 @@ async function openJobLeaseDatabase(
       throw error;
     }
     await assertSafeJobLeaseDatabasePath(databasePath, stateDirectory);
-    await chmod(databasePath, 0o600);
     return database;
   } catch (error) {
     try {

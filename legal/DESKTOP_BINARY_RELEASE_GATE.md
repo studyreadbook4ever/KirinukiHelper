@@ -25,7 +25,7 @@ unpacked 개발 검증용 앱 디렉터리**를 만듭니다. CI도 이 디렉�
 | `@electron/asar` | `4.2.1` | 생성된 ASAR의 정확한 파일 목록·바이트 검증 |
 | `@electron/packager` | `20.3.0` | 빌드 시 unpacked 앱 디렉터리 생성 |
 | `@electron/fuses` | `2.1.3` | Electron fuse 검증·설정용 build dependency |
-| FFmpeg·ffprobe | FFmpeg `7.0.2`, `ffmpeg-static` tag `b6.1.1` | 대상별 native media sidecar |
+| FFmpeg·ffprobe | FFmpeg `n8.1.2`, Shaka build tag `n8.1.2-1` | 대상별 native media sidecar |
 | yt-dlp | `2026.07.04` official standalone | 대상별 공개 VOD metadata·media 준비 sidecar |
 
 Electron npm wrapper와 패키징 도구는 `package-lock.json`의 exact version,
@@ -46,7 +46,9 @@ FFmpeg·ffprobe와 yt-dlp의 대상별 URL, 압축·해제 바이트 수와 SHA-
 
 Windows arm64는 경로 타입에는 예약되어 있지만 실제 artifact manifest와 공개
 지원 대상이 아닙니다. CI의 현재 네이티브 대표 대상은 `linux-x64`, `win32-x64`,
-`darwin-arm64`입니다.
+`darwin-arm64`입니다. 현재 Shaka macOS sidecar가 요구하는 최소 macOS는 15.0이며,
+패키지는 `LSMinimumSystemVersion=15.0`을 강제합니다. 더 오래된 macOS 지원은
+별도의 재현 빌드와 네이티브 회귀 검증 없이는 선언하지 않습니다.
 
 ## 아직 끝나지 않은 라이선스 검토
 
@@ -69,8 +71,8 @@ registry가 아직 승인하지 않았으므로 기존 `license:check` 통과를
 
 ### FFmpeg와 ffprobe
 
-현재 개발 패키지는 `eugeneware/ffmpeg-static`의 `b6.1.1` 대상별 executable과
-해당 release의 `FFMPEG-LICENSE.txt`를 함께 준비합니다. 그러나 공개 배포 전에는
+현재 개발 패키지는 `shaka-project/static-ffmpeg-binaries`의 `n8.1.2-1`
+대상별 executable과 canonical GPLv3 원문을 함께 준비합니다. 그러나 공개 배포 전에는
 각 대상에서 실제 `ffmpeg -version`, `ffprobe -version`, `ffmpeg -buildconf`,
 linked library와 codec 구성을 증거로 남겨 LGPL/GPL 적용 범위를 확정해야 합니다.
 
@@ -79,9 +81,14 @@ GPL component가 활성화된 경우에는 그 실제 조건에 맞는 전체 �
 source offer를 준비해야 합니다. `FFMPEG-LICENSE.txt` 한 파일만 존재한다는 사실은
 이 검토를 대체하지 않습니다.
 
+현재 Shaka 빌드는 Mbed TLS `3.4.1`을 정적으로 포함합니다. 앱은 직접 HTTPS 입력에
+Node 신뢰 루트, `tls_verify=1`, redirect 0회를 강제하지만, 공개 바이너리 전에는
+지원 중인 TLS library로 재현 빌드하거나 FFmpeg의 원격 HTTPS 입력 자체를 제거해야
+합니다. 이 조건을 취약 구성요소 검토가 끝난 것으로 간주하지 않습니다.
+
 - FFmpeg legal and license considerations: https://ffmpeg.org/legal.html
 - 개발 artifact provenance:
-  https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1
+  https://github.com/shaka-project/static-ffmpeg-binaries/releases/tag/n8.1.2-1
 
 ### yt-dlp standalone
 
@@ -107,9 +114,10 @@ Windows 공개 배포에는 앱과 native sidecar의 Authenticode 서명, 신뢰
 timestamp와 최종 서명 검증이 필요합니다. 서명은 SmartScreen reputation을 즉시
 보장하지 않으므로 새 사용자 계정의 실제 설치·실행 경고도 별도로 검사합니다.
 
-또한 현재 `taskkill /T /F` 경계는 helper 종료와 leader PID 소멸을 bounded하게
-검증하지만, 이미 reparent된 descendant와 PID 재사용 identity까지 증명하지는
-못합니다. 따라서 Windows 공개 바이너리는 native
+현재 production runner는 PID를 다시 여는 `taskkill /T /F`를 사용하지 않고,
+Node/libuv가 보관한 exact child process handle만 종료합니다. 이 방식은 PID 재사용
+오종료를 막고 close 대기를 bounded하게 끝내지만, 이미 만든 descendant 전체의
+종료까지 보장하지는 못합니다. 따라서 Windows 공개 바이너리는 native
 `CreateJobObject`/`AssignProcessToJobObject`와
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`를 적용하고, 정상 종료·취소·timeout·강제
 종료 각각에서 descendant orphan이 없다는 실제 Windows 회귀 테스트를 통과할

@@ -53,6 +53,7 @@ import type { DesktopToolArtifactRole } from "./prepare-desktop-tools.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const ELECTRON_VERSION = "43.4.0";
+export const DESKTOP_DARWIN_MINIMUM_SYSTEM_VERSION = "15.0";
 
 const DESKTOP_FUSE_CONFIG = Object.freeze({
   version: FuseVersion.V1,
@@ -387,6 +388,13 @@ export async function packageDesktopApplication(): Promise<Readonly<{
       asar: true,
       appBundleId: "kr.eff0rtchung.kirinuki",
       appCategoryType: "public.app-category.video",
+      ...(platform === "darwin"
+        ? {
+          extendInfo: {
+            LSMinimumSystemVersion: DESKTOP_DARWIN_MINIMUM_SYSTEM_VERSION
+          }
+        }
+        : {}),
       protocols: [{
         name: "Kirinuki app link",
         schemes: ["kirinuki"]
@@ -453,6 +461,26 @@ export async function packageDesktopApplication(): Promise<Readonly<{
       throw new Error("Electron packager가 정확히 하나의 앱 디렉터리를 만들지 않았습니다.");
     }
     const packageRoot = path.resolve(outputDirectories[0]);
+    if (platform === "darwin") {
+      const infoPlist = await readFile(path.join(
+        packageRoot,
+        "Kirinuki.app",
+        "Contents",
+        "Info.plist"
+      ), "utf8");
+      const minimumVersionEntries = infoPlist.match(
+        /<key>LSMinimumSystemVersion<\/key>/gu
+      ) ?? [];
+      if (
+        minimumVersionEntries.length !== 1
+        || !new RegExp(
+          `<key>LSMinimumSystemVersion</key>\\s*<string>${DESKTOP_DARWIN_MINIMUM_SYSTEM_VERSION.replace(".", "\\.")}</string>`,
+          "u"
+        ).test(infoPlist)
+      ) {
+        throw new Error("macOS 최소 버전 package metadata가 올바르지 않습니다.");
+      }
+    }
     const executable = packagedExecutable(packageRoot, process.platform);
     await hardenPackagedElectron(
       executable,

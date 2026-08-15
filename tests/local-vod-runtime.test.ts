@@ -207,12 +207,12 @@ test("CLI는 setup/doctor/start/status/stop만 받고 command별 옵션을 제�
   assert.throws(() => parseVodRuntimeArgs(["unknown"]), /알 수 없는 명령/u);
 });
 
-test("Node 22.13과 Python 3.11 최소 버전을 semantic하게 검증한다", () => {
-  assert.equal(MINIMUM_VOD_NODE_VERSION, "22.13.0");
+test("Node 22.17과 Python 3.11 최소 버전을 semantic하게 검증한다", () => {
+  assert.equal(MINIMUM_VOD_NODE_VERSION, "22.17.0");
   assert.equal(MINIMUM_VOD_PYTHON_VERSION, "3.11.0");
   assert.equal(supportedVodNodeVersion("21.99.99"), false);
-  assert.equal(supportedVodNodeVersion("22.12.99"), false);
-  assert.equal(supportedVodNodeVersion("22.13.0"), true);
+  assert.equal(supportedVodNodeVersion("22.16.99"), false);
+  assert.equal(supportedVodNodeVersion("22.17.0"), true);
   assert.equal(supportedVodNodeVersion("v24.1.0"), true);
   assert.equal(supportedVodPythonVersion("Python 3.10.14"), false);
   assert.equal(supportedVodPythonVersion("Python 3.11.0"), true);
@@ -312,7 +312,7 @@ test("설정은 pin·절대 도구 경로·앱 Origin·VOD state를 강하게 �
       packageRoot: "/opt/kirinuki"
     });
     const localConfig = createVodRuntimeConfig(localPaths, {
-      node: { path: "/opt/node/bin/node", version: "22.13.0" },
+      node: { path: "/opt/node/bin/node", version: "22.17.0" },
       python: { path: "/opt/python/bin/python3", version: "3.11.9" },
       ffmpeg: { path: "/usr/bin/ffmpeg", version: "7.0.0" },
       ffprobe: { path: "/usr/bin/ffprobe", version: "7.0.0" }

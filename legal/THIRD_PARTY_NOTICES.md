@@ -238,16 +238,15 @@ Electron runtime에는 Chromium, Node.js와 다수의 제3자 구성요소가 �
 않습니다. 전체 transitive lockfile inventory와 canonical positive allowlist
 검토는 아직 완료되지 않았습니다.
 
-### FFmpeg·ffprobe 7.0.2 static sidecars
+### FFmpeg·ffprobe n8.1.2 static sidecars
 
 - Distribution project/tag:
-  https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1
+  https://github.com/shaka-project/static-ffmpeg-binaries/releases/tag/n8.1.2-1
 - FFmpeg upstream: https://ffmpeg.org/
 - Legal guidance: https://ffmpeg.org/legal.html
 
-개발 패키지는 대상별 executable과 release의 `FFMPEG-LICENSE.txt`를 포함합니다.
-하지만 LGPL/GPL 범위는 실제 build configuration과 linked library에 따라
-달라집니다. 최종 `-version`, `-buildconf`와 link evidence를 수집하고
+개발 패키지는 대상별 executable과 canonical GPLv3 원문인
+`FFMPEG-LICENSE.txt`를 포함합니다. 최종 `-version`, `-buildconf`와 link evidence를 수집하고
 `--enable-nonfree`가 없음을 확인하며 적용 조건에 맞는 라이선스 원문·대응 소스
 또는 source offer를 제공하기 전에는 공개 배포하지 않습니다.
 

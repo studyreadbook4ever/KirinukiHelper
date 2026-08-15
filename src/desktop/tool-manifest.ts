@@ -4,9 +4,11 @@ export const DESKTOP_TOOL_MANIFEST_SCHEMA =
   "kirinuki-desktop-tools/v1" as const;
 
 export const DESKTOP_FFMPEG_RELEASE = Object.freeze({
-  distributionTag: "b6.1.1",
+  distributionTag: "n8.1.2-1",
   baseUrl:
-    "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1"
+    "https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.1.2-1",
+  licenseUrl:
+    "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/linux-x64.LICENSE"
 });
 
 export const DESKTOP_YT_DLP_RELEASE = Object.freeze({
@@ -38,14 +40,12 @@ export interface DesktopToolTargetManifest {
 interface TargetValues {
   readonly ffmpegVersion: string;
   readonly ffprobeVersion: string;
+  readonly ffmpegAsset: string;
   readonly ffmpegSize: number;
-  readonly ffmpegCompressedSize: number;
   readonly ffmpegSha256: string;
+  readonly ffprobeAsset: string;
   readonly ffprobeSize: number;
-  readonly ffprobeCompressedSize: number;
   readonly ffprobeSha256: string;
-  readonly licenseSize: number;
-  readonly licenseSha256: string;
   readonly ytDlpAsset: string;
   readonly ytDlpSize: number;
   readonly ytDlpSha256: string;
@@ -53,95 +53,80 @@ interface TargetValues {
 
 const TARGET_VALUES = Object.freeze({
   "linux-x64": {
-    ffmpegVersion: "7.0.2-static",
-    ffprobeVersion: "7.0.2-static",
-    ffmpegSize: 79_826_272,
-    ffmpegCompressedSize: 29_354_986,
+    ffmpegVersion: "n8.1.2",
+    ffprobeVersion: "n8.1.2",
+    ffmpegAsset: "ffmpeg-linux-x64",
+    ffmpegSize: 48_299_480,
     ffmpegSha256:
-      "e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99",
-    ffprobeSize: 79_665_792,
-    ffprobeCompressedSize: 29_276_839,
+      "9eac5b2b5076db5ff853a6fa0dcd6b8de7d0cac8481eadda6c47cd935825f1ee",
+    ffprobeAsset: "ffprobe-linux-x64",
+    ffprobeSize: 48_090_488,
     ffprobeSha256:
-      "4f231a1960d83e403d08f7971e271707bec278a9ae18e21b8b5b03186668450d",
-    licenseSize: 35_147,
-    licenseSha256:
-      "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "065d3c56926052a76e884c4e4b51b7d95248da9391ab7effdcca6b94ceab98cf",
     ytDlpAsset: "yt-dlp_linux",
     ytDlpSize: 39_924_536,
     ytDlpSha256:
       "6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae"
   },
   "linux-arm64": {
-    ffmpegVersion: "7.0.2-static",
-    ffprobeVersion: "7.0.2-static",
-    ffmpegSize: 51_134_160,
-    ffmpegCompressedSize: 25_568_691,
+    ffmpegVersion: "n8.1.2",
+    ffprobeVersion: "n8.1.2",
+    ffmpegAsset: "ffmpeg-linux-arm64",
+    ffmpegSize: 36_523_320,
     ffmpegSha256:
-      "6bb182d0d75d23028db82e9e4f723ca69b853d055698486e6984ddb2c06fb8ce",
-    ffprobeSize: 50_994_160,
-    ffprobeCompressedSize: 25_493_573,
+      "6e7b1d7d1aa8c35e3fedd78a140aa0968717aeb7386ecfb0ee00773d9f0a4503",
+    ffprobeAsset: "ffprobe-linux-arm64",
+    ffprobeSize: 36_326_648,
     ffprobeSha256:
-      "d17ae9b4c297d48e2521ba14e417bb0537c6ff77c584cdbcd6bb0d8d0307a2e8",
-    licenseSize: 35_147,
-    licenseSha256:
-      "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "fd2aca1456f0261cabef4514b6d97a70fa342003347f51b39c473dd364328089",
     ytDlpAsset: "yt-dlp_linux_aarch64",
     ytDlpSize: 39_675_904,
     ytDlpSha256:
       "b6ce97646773070d7a7ffd6bbbdcaecb47c48483909c54c915bf08a7a9b5e0b1"
   },
   "darwin-x64": {
-    ffmpegVersion: "6.1.1-tessus",
-    ffprobeVersion: "6.1.1-tessus",
-    ffmpegSize: 78_862_176,
-    ffmpegCompressedSize: 25_296_431,
+    ffmpegVersion: "n8.1.2",
+    ffprobeVersion: "n8.1.2",
+    ffmpegAsset: "ffmpeg-osx-x64",
+    ffmpegSize: 42_745_472,
     ffmpegSha256:
-      "ebdddc936f61e14049a2d4b549a412b8a40deeff6540e58a9f2a2da9e6b18894",
-    ffprobeSize: 78_780_408,
-    ffprobeCompressedSize: 25_239_438,
+      "62c87854d851f202fc4a29bdda0fe7b6ebcddd37b863482ce1bdc81151b03fe4",
+    ffprobeAsset: "ffprobe-osx-x64",
+    ffprobeSize: 42_555_344,
     ffprobeSha256:
-      "fa3add0ce901f7241abe0dfc0155d958fc834aca3f8ce61f87cc712ae669c1e0",
-    licenseSize: 4_346,
-    licenseSha256:
-      "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af",
+      "d530823f480a3c7eb6334f18a00197d1e9f1070e86172b9aa89c4bf4022bd879",
     ytDlpAsset: "yt-dlp_macos",
     ytDlpSize: 38_256_544,
     ytDlpSha256:
       "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
   },
   "darwin-arm64": {
-    ffmpegVersion: "6.0",
-    ffprobeVersion: "6.0",
-    ffmpegSize: 45_568_216,
-    ffmpegCompressedSize: 19_246_198,
+    ffmpegVersion: "n8.1.2",
+    ffprobeVersion: "n8.1.2",
+    ffmpegAsset: "ffmpeg-osx-arm64",
+    ffmpegSize: 34_074_040,
     ffmpegSha256:
-      "a90e3db6a3fd35f6074b013f948b1aa45b31c6375489d39e572bea3f18336584",
-    ffprobeSize: 45_528_808,
-    ffprobeCompressedSize: 19_207_077,
+      "e7b9fcd97f95f333512d6e8b8ac24d9dbc08f189f36047695499bd7b57214b22",
+    ffprobeAsset: "ffprobe-osx-arm64",
+    ffprobeSize: 33_882_408,
     ffprobeSha256:
-      "bb2db6f5d8cef919da12fbf592119a987202a8c060a886f3cab091f9cab90b64",
-    licenseSize: 4_376,
-    licenseSha256:
-      "cb48bf09a11f5fb576cddb0431c8f5ed0a60157a9ec942adffc13907cbe083f2",
+      "ded4c698b8ff38d0bc1fd30fcc5e768dc46f58bc15a8dfd61f98615ba49cde5c",
     ytDlpAsset: "yt-dlp_macos",
     ytDlpSize: 38_256_544,
     ytDlpSha256:
       "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
   },
   "win32-x64": {
-    ffmpegVersion: "6.1.1-essentials_build-www.gyan.dev",
-    ffprobeVersion: "6.1.1-essentials_build-www.gyan.dev",
-    ffmpegSize: 82_797_568,
-    ffmpegCompressedSize: 29_581_307,
+    ffmpegVersion: "n8.1.2",
+    ffprobeVersion: "n8.1.2",
+    ffmpegAsset: "ffmpeg-win-x64.exe",
+    ffmpegSize: 53_763_072,
     ffmpegSha256:
-      "04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00",
-    ffprobeSize: 82_668_032,
-    ffprobeCompressedSize: 29_521_644,
+      "4044b3924c977ad31229d504c5d5b8685f9553124fbaff6e9c99048b42830341",
+    ffprobeAsset: "ffprobe-win-x64.exe",
+    ffprobeSize: 53_558_272,
     ffprobeSha256:
-      "3a7e2dc003dc2cd1472827e4c7c4f056ae1ae0ae7c5bbc580c99b49827351ba4",
-    licenseSize: 35_147,
-    licenseSha256:
-      "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "fc37ca23d31ee08bb8f7e108edf3822f6ef3efc1a8d306bbe0b779190230710b",
     ytDlpAsset: "yt-dlp.exe",
     ytDlpSize: 18_226_085,
     ytDlpSha256:
@@ -166,10 +151,6 @@ export function desktopToolTargetManifest(
       `지원하는 데스크톱 패키지 대상이 아닙니다: ${String(target)}`
     );
   }
-  const ffmpegTarget = target;
-  const ffmpegAssetBase = `ffmpeg-${ffmpegTarget}`;
-  const ffprobeAssetBase = `ffprobe-${ffmpegTarget}`;
-  const licenseAsset = `${ffmpegTarget}.LICENSE`;
   const artifact = (
     fileName: string,
     url: string,
@@ -192,25 +173,23 @@ export function desktopToolTargetManifest(
     ffprobeVersion: values.ffprobeVersion,
     ffmpeg: artifact(
       executableName(target as DesktopBundleTarget, "ffmpeg"),
-      `${DESKTOP_FFMPEG_RELEASE.baseUrl}/${ffmpegAssetBase}.gz`,
+      `${DESKTOP_FFMPEG_RELEASE.baseUrl}/${values.ffmpegAsset}`,
       values.ffmpegSize,
       values.ffmpegSha256,
-      "gzip",
-      values.ffmpegCompressedSize
+      "none"
     ),
     ffprobe: artifact(
       executableName(target as DesktopBundleTarget, "ffprobe"),
-      `${DESKTOP_FFMPEG_RELEASE.baseUrl}/${ffprobeAssetBase}.gz`,
+      `${DESKTOP_FFMPEG_RELEASE.baseUrl}/${values.ffprobeAsset}`,
       values.ffprobeSize,
       values.ffprobeSha256,
-      "gzip",
-      values.ffprobeCompressedSize
+      "none"
     ),
     ffmpegLicense: artifact(
       "FFMPEG-LICENSE.txt",
-      `${DESKTOP_FFMPEG_RELEASE.baseUrl}/${licenseAsset}`,
-      values.licenseSize,
-      values.licenseSha256,
+      DESKTOP_FFMPEG_RELEASE.licenseUrl,
+      35_147,
+      "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
       "none"
     ),
     ytDlp: artifact(

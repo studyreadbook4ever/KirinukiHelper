@@ -56,7 +56,7 @@ export {
 
 export const HELPER_SCHEMA = "chzzk-kirinuki-linux-helper/v1";
 export const APP_STATUS_SCHEMA = "kirinuki-app/v1";
-export const MINIMUM_NODE_VERSION = "22.13.0";
+export const MINIMUM_NODE_VERSION = "22.17.0";
 export const MINIMUM_BROWSER_VERSION = 120;
 export const DEFAULT_SOURCE_URL = "https://chzzk.naver.com/video/14514980";
 export const LOCAL_STUDIO_URL = "http://127.0.0.1:4320/";
@@ -6202,7 +6202,7 @@ Kirinuki 앱 (Linux)
   whisper  고정·검증된 로컬 Whisper Tiny로 한국어 글과 타이밍 생성
 
 시스템 요구사항:
-  기본: Linux, Node.js 22.13.0+, npm, Chromium 120+, Python 3.11+, FFmpeg, ffprobe
+  기본: Linux, Node.js 22.17.0+, npm, Chromium 120+, Python 3.11+, FFmpeg, ffprobe
   Whisper 선택 시 추가: CMake, tar, C++ 컴파일러(g++ 또는 clang++)
 
 지원 URL:

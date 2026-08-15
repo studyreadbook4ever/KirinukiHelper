@@ -17,7 +17,7 @@ export const LOCAL_VOD_PID_SCHEMA =
   "kirinuki-local-vod-runtime-pid/v1";
 export const VOD_LOOPBACK_HOST = "127.0.0.1";
 export const DEFAULT_VOD_GATEWAY_PORT = 4319;
-export const MINIMUM_VOD_NODE_VERSION = "22.13.0";
+export const MINIMUM_VOD_NODE_VERSION = "22.17.0";
 export const MINIMUM_VOD_PYTHON_VERSION = "3.11.0";
 export const VOD_HEALTH_SCHEMA =
   "chzzk-kirinuki-caption-agent/health-v1";

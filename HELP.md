@@ -10,7 +10,7 @@ Kirinuki는 사용자가 확정한 CHZZK·YouTube·SOOP VOD 구간을 이 기기
 현재 릴리스는 완전 독립형 AppImage가 아니라 Linux 소스 설치판입니다. 어떤
 자막 방식을 고르더라도 다음 기본 도구가 먼저 설치되어 있어야 합니다.
 
-- Node.js 22.13.0 이상과 npm
+- Node.js 22.17.0 이상과 npm
 - Chromium 120 이상
 - Python 3.11 이상
 - FFmpeg와 ffprobe

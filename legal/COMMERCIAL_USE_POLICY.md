@@ -84,7 +84,7 @@ positive allowlist에 의한 공개 바이너리 승인을 받지 않았습니�
 
 Electron `43.4.0`, `@electron/asar@4.2.1`, `@electron/packager@20.3.0`,
 `@electron/fuses@2.1.3`,
-FFmpeg/ffprobe `7.0.2`(`b6.1.1`)와 yt-dlp `2026.07.04`를 핀했다는 사실은
+FFmpeg/ffprobe `n8.1.2`(Shaka build `n8.1.2-1`)와 yt-dlp `2026.07.04`를 핀했다는 사실은
 라이선스 승인과 다릅니다. Electron/Chromium/Node 전체 SBOM, packaging
 dependency의 BSD-2-Clause 등 새 license ID 검토, FFmpeg의 실제 LGPL/GPL
 조건·대응 소스, yt-dlp standalone embedded component 고지가 완료될 때까지

@@ -34,17 +34,13 @@ import {
   reopenChzzkVodMaterialization as reopenChzzkVodMaterializationImplementation,
   resolveChzzkVodStateDirectory,
   runMaterializerProcess,
-  sleepWithMaterializerAbort,
-  terminateWindowsChzzkProcessTree,
-  windowsChzzkProcessTreeTerminationCommand
+  sleepWithMaterializerAbort
 } from "../scripts/chzzk-vod-materializer.js";
 import type {
   ChzzkVodMaterializerDependencies,
   ProcessResult,
   ProcessRunOptions
 } from "../scripts/chzzk-vod-materializer.js";
-import { windowsTaskkillOuterGuardTimeoutMs } from
-  "../scripts/process-tree-termination.js";
 import { vodConsumerMaterializationDirectory } from
   "../scripts/vod-consumer-scope.js";
 
@@ -896,17 +892,15 @@ test("CHZZK 정상 close도 남은 POSIX descendant group 회수 뒤에만 성�
   assert.deepEqual(groupSignals, ["SIGTERM"]);
 });
 
-test("CHZZK Windows 취소는 taskkill tree 완료와 close를 모두 기다린다", async () => {
+test("CHZZK Windows 취소는 exact child handle만 죽이고 close를 기다린다", async () => {
   const controller = new AbortController();
-  let terminatedPid = 0;
-  let releaseTreeTermination: (() => void) | undefined;
-  let leaderKillCount = 0;
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
   let capturedOptions: SpawnOptions | undefined;
   let childRef: (EventEmitter & {
     pid: number;
     stdout: PassThrough;
     stderr: PassThrough;
-    kill: () => boolean;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
   }) | undefined;
   const spawnImpl = ((_command: string, _args: readonly string[], options: SpawnOptions) => {
     capturedOptions = options;
@@ -914,8 +908,8 @@ test("CHZZK Windows 취소는 taskkill tree 완료와 close를 모두 기다린�
     child.pid = 54_321;
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    child.kill = () => {
-      leaderKillCount += 1;
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
       return true;
     };
     childRef = child;
@@ -926,13 +920,7 @@ test("CHZZK Windows 취소는 taskkill tree 완료와 close를 모두 기다린�
     signal: controller.signal
   }, {
     platform: "win32",
-    spawnImpl,
-    terminateWindowsProcessTreeImpl: async (pid) => {
-      terminatedPid = pid;
-      await new Promise<void>((resolve) => {
-        releaseTreeTermination = resolve;
-      });
-    }
+    spawnImpl
   });
   let settled = false;
   void pending.then(
@@ -944,37 +932,34 @@ test("CHZZK Windows 취소는 taskkill tree 완료와 close를 모두 기다린�
     && error.code === "CANCELLED"
   ));
   controller.abort();
-  assert.equal(terminatedPid, 54_321);
-  assert.equal(leaderKillCount, 0);
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
   childRef?.stdout.end();
   childRef?.stderr.end();
   childRef?.emit("close", 1, null);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(settled, false);
-  releaseTreeTermination?.();
   await rejected;
   assert.equal(capturedOptions?.shell, false);
   assert.equal(capturedOptions?.windowsHide, true);
   assert.equal(capturedOptions?.detached, undefined);
-  assert.equal(leaderKillCount, 0);
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
 });
 
-test("CHZZK 출력 상한 오류도 Windows tree cleanup과 close 전에 settle하지 않는다", async () => {
-  let releaseTreeTermination: (() => void) | undefined;
-  let leaderKillCount = 0;
+test("CHZZK 출력 상한 오류도 Windows exact child close 전에 settle하지 않는다", async () => {
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
   let childRef: (EventEmitter & {
     pid: number;
     stdout: PassThrough;
     stderr: PassThrough;
-    kill: () => boolean;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
   }) | undefined;
   const spawnImpl = (() => {
     const child = new EventEmitter() as NonNullable<typeof childRef>;
     child.pid = 65_432;
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    child.kill = () => {
-      leaderKillCount += 1;
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
       return true;
     };
     childRef = child;
@@ -984,12 +969,7 @@ test("CHZZK 출력 상한 오류도 Windows tree cleanup과 close 전에 settle�
     cwd: "C:\\Kirinuki"
   }, {
     platform: "win32",
-    spawnImpl,
-    terminateWindowsProcessTreeImpl: async () => {
-      await new Promise<void>((resolve) => {
-        releaseTreeTermination = resolve;
-      });
-    }
+    spawnImpl
   });
   let settled = false;
   void pending.then(
@@ -1001,86 +981,17 @@ test("CHZZK 출력 상한 오류도 Windows tree cleanup과 close 전에 settle�
     && error.code === "PROCESS_OUTPUT_LIMIT"
   ));
   childRef?.stdout.write(Buffer.alloc(MAX_CHZZK_PROCESS_OUTPUT_BYTES + 1));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
   childRef?.stdout.end();
   childRef?.stderr.end();
   childRef?.emit("close", 1, null);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(settled, false);
-  assert.equal(leaderKillCount, 0);
-  releaseTreeTermination?.();
   await rejected;
-  assert.equal(leaderKillCount, 0);
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
 });
 
-test("CHZZK Windows process tree 종료 명령은 exact taskkill argv만 만든다", () => {
-  assert.deepEqual(
-    windowsChzzkProcessTreeTerminationCommand(7_654, {
-      SystemRoot: "C:\\Windows"
-    }),
-    {
-      command: "C:\\Windows\\System32\\taskkill.exe",
-      args: ["/PID", "7654", "/T", "/F"]
-    }
-  );
-  assert.throws(
-    () => windowsChzzkProcessTreeTerminationCommand(0, {
-      SystemRoot: "C:\\Windows"
-    }),
-    (error: unknown) => (
-      error instanceof ChzzkVodMaterializationError
-      && error.code === "PROCESS_START_FAILED"
-    )
-  );
-  assert.throws(
-    () => windowsChzzkProcessTreeTerminationCommand(1, {
-      SystemRoot: "relative\\Windows"
-    }),
-    (error: unknown) => (
-      error instanceof ChzzkVodMaterializationError
-      && error.code === "PROCESS_START_FAILED"
-    )
-  );
-});
-
-test("CHZZK taskkill helper와 injected terminator는 never-settle을 bounded하게 끝낸다", async () => {
-  let helperTimeout: (() => void) | undefined;
-  let helperAlive = true;
-  const killerSignals: Array<NodeJS.Signals | number | undefined> = [];
-  const killer = new EventEmitter() as EventEmitter & {
-    kill: (signal?: NodeJS.Signals | number) => boolean;
-  };
-  killer.kill = (signal) => {
-    killerSignals.push(signal);
-    return true;
-  };
-  const helperPending = terminateWindowsChzzkProcessTree(7_654, {
-    environment: { SystemRoot: "C:\\Windows" },
-    timeoutMs: 11,
-    probeProcessImpl: () => {
-      if (!helperAlive) {
-        throw Object.assign(new Error("missing"), { code: "ESRCH" });
-      }
-    },
-    spawnImpl: (() => killer as unknown as ChildProcess) as unknown as typeof spawn,
-    setTimeoutImpl: ((callback: () => void) => {
-      helperTimeout = callback;
-      return {} as ReturnType<typeof setTimeout>;
-    }) as unknown as typeof setTimeout,
-    clearTimeoutImpl: (() => undefined) as typeof clearTimeout
-  });
-  const helperRejected = assert.rejects(helperPending, (error: unknown) => (
-    error instanceof Error
-    && "code" in error
-    && error.code === "EPROCESSTREEHELPER"
-  ));
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  helperTimeout?.();
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  helperTimeout?.();
-  await helperRejected;
-  assert.deepEqual(killerSignals, ["SIGKILL"]);
-  helperAlive = false;
-
+test("CHZZK Windows timeout은 PID fallback 없이 exact child를 한 번 종료한다", async () => {
   const scheduled: Array<{
     callback: () => void;
     delay: number;
@@ -1129,23 +1040,65 @@ test("CHZZK taskkill helper와 injected terminator는 never-settle을 bounded하
     platform: "win32",
     spawnImpl,
     setTimeoutImpl,
-    clearTimeoutImpl,
-    killGraceMs: 17,
-    terminateWindowsProcessTreeImpl: async () => await new Promise<void>(() => undefined)
+    clearTimeoutImpl
   });
   scheduled[0]?.callback();
-  assert.equal(
-    scheduled[1]?.delay,
-    windowsTaskkillOuterGuardTimeoutMs(17)
-  );
-  scheduled[1]?.callback();
   await assert.rejects(processPending, (error: unknown) => (
     error instanceof ChzzkVodMaterializationError
     && error.code === "PROCESS_TIMEOUT"
   ));
   assert.deepEqual(leaderSignals, ["SIGKILL"]);
   assert.equal(scheduled[0]?.cleared, true);
+  assert.equal(scheduled.length, 2);
   assert.equal(scheduled[1]?.cleared, true);
+});
+
+test("CHZZK Windows exact child가 닫히지 않아도 timeout 결과는 bounded하게 끝난다", async () => {
+  const scheduled: Array<{ callback: () => void; delay: number }> = [];
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    scheduled.push({ callback, delay });
+    return {};
+  }) as unknown as typeof setTimeout;
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let unrefCount = 0;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: (signal?: NodeJS.Signals | number) => boolean;
+      unref: () => void;
+    };
+    child.pid = 54_322;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      return false;
+    };
+    child.unref = () => { unrefCount += 1; };
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runMaterializerProcess("ffmpeg.exe", [], {
+    cwd: "C:\\Kirinuki",
+    timeoutMs: 123
+  }, {
+    platform: "win32",
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl: (() => undefined) as unknown as typeof clearTimeout,
+    killGraceMs: 17
+  });
+  scheduled[0]?.callback();
+  assert.equal(scheduled[1]?.delay, 17);
+  scheduled[1]?.callback();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof ChzzkVodMaterializationError
+    && error.code === "PROCESS_TIMEOUT"
+    && error.cause instanceof Error
+  ));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  assert.equal(unrefCount, 1);
 });
 
 test("선택 segment만 받고 첫 packet이 keyframe이 아니면 bounded 이전 조각을 붙인다", async () => {

@@ -25,7 +25,7 @@ Kirinuki는 CHZZK·YouTube·SOOP VOD에서 사용자가 직접 고른 구간을 
 바이너리가 아닙니다. 설치할 PC에 다음 기본 시스템 도구가 먼저 있어야 합니다.
 이 목록은 어떤 자막 방식을 고르더라도 필요한 요구사항입니다.
 
-- Node.js 22.13.0 이상과 npm (`node:sqlite`가 별도 플래그 없이 제공되는 버전)
+- Node.js 22.17.0 이상과 npm (`node:sqlite`와 Windows 파일 identity 수정이 포함된 버전)
 - Chromium 120 이상
 - Python 3.11 이상
 - FFmpeg와 ffprobe
@@ -46,10 +46,11 @@ Whisper 자막 방식을 선택할 때만 다음 빌드 도구가 추가로 필�
 [`legal/RUNTIME_DEPENDENCIES.md`](legal/RUNTIME_DEPENDENCIES.md)에 있습니다.
 
 Linux·Windows·macOS용 Electron 앱은 현재 **개발·CI 프리뷰**입니다. 이 경로는
-Electron `43.4.0`, FFmpeg/ffprobe `7.0.2`(`ffmpeg-static` 배포 tag
-`b6.1.1`)와 yt-dlp `2026.07.04` standalone artifact를 대상 OS용 앱 디렉터리에
+Electron `43.4.0`, FFmpeg/ffprobe `n8.1.2`(Shaka 정적 빌드 tag
+`n8.1.2-1`)와 yt-dlp `2026.07.04` standalone artifact를 대상 OS용 앱 디렉터리에
 넣습니다. 현재 manifest 대상은 Linux x64/arm64, macOS x64/arm64와 Windows
-x64이며, CI는 Linux x64·Windows x64·macOS arm64에서 unsigned 패키지를 만든 뒤
+x64입니다. 현재 정적 FFmpeg의 실행 하한에 맞춰 macOS 프리뷰는 15.0 이상을
+package metadata로 강제합니다. CI는 Linux x64·Windows x64·macOS arm64에서 unsigned 패키지를 만든 뒤
 실제로 실행해 내부 Studio·gateway health, 번들 미디어 도구, 검증용 MP4 처리,
 정상 종료 뒤 자식 프로세스·포트·임시 데이터 회수까지 검사합니다.
 

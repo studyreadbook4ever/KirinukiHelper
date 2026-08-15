@@ -19,7 +19,7 @@ unsigned·unnotarized 개발 산출물입니다. 어느 경우에도 내부 구�
 | npm 런타임·빌드 패키지 | `package-lock.json` 기준으로 설치 시 provision | 네트워크가 필요할 수 있음 |
 | yt-dlp | 고정 artifact를 크기와 SHA-256까지 검증해 사용자 데이터 경로에 다운로드 | 별도 명령 없음 |
 | whisper.cpp·모델·Silero VAD | Whisper 선택 시에만 고정 artifact를 검증해 다운로드·로컬 빌드 | 설치 화면에서 방식 선택 |
-| Node.js 22.13.0+·npm·Chromium 120+·Python 3.11+·FFmpeg·ffprobe | 현재 Kirinuki가 재배포하지 않음 | 운영체제에 미리 설치 |
+| Node.js 22.17.0+·npm·Chromium 120+·Python 3.11+·FFmpeg·ffprobe | 현재 Kirinuki가 재배포하지 않음 | 운영체제에 미리 설치 |
 | CMake·tar·C++ 컴파일러 | Whisper를 선택한 경우에만 whisper.cpp 로컬 빌드에 사용하며 재배포하지 않음 | Whisper를 쓸 PC에만 미리 설치 |
 | 공개 사이트 | 소개·설치·엄격한 앱 링크만 배포 | 편집은 설치된 앱에서 진행 |
 
@@ -28,7 +28,7 @@ unsigned·unnotarized 개발 산출물입니다. 어느 경우에도 내부 구�
 
 `npm run package:desktop`은 실행한 native host에 맞는 unpacked 앱 디렉터리를
 만듭니다. 이 개발 경로는 Electron `43.4.0`, FFmpeg/ffprobe
-`7.0.2`(`ffmpeg-static` tag `b6.1.1`)와 yt-dlp `2026.07.04` standalone을
+`n8.1.2`(Shaka 정적 빌드 tag `n8.1.2-1`)와 yt-dlp `2026.07.04` standalone을
 패키지합니다. 패키징 도구는 `@electron/packager@20.3.0`, ASAR 검증 도구는
 `@electron/asar@4.2.1`, fuse 도구는 `@electron/fuses@2.1.3`입니다.
 
@@ -36,7 +36,13 @@ unsigned·unnotarized 개발 산출물입니다. 어느 경우에도 내부 구�
 `src/desktop/tool-manifest.ts`에 고정되어 있습니다. 현재 artifact manifest가
 있는 대상은 `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`,
 `win32-x64`입니다. 경로 타입에 존재하는 `win32-arm64`는 실제 패키지 대상이
-아닙니다.
+아닙니다. Shaka `n8.1.2` macOS sidecar의 실행 하한 때문에 두 macOS 프리뷰는
+15.0 이상만 지원하며 앱의 `LSMinimumSystemVersion`도 같은 값으로 고정합니다.
+
+직접 HTTPS 미디어를 FFmpeg에 전달하는 경로는 FFmpeg의 기본값에 의존하지 않고
+`tls_verify=1`을 강제합니다. 각 임시 작업 폴더에 현재 Node runtime의 고정 신뢰
+루트를 private PEM으로 만들고 `ca_file`로 전달하며, FFmpeg 내부 HTTP redirect는
+0회로 막습니다. 이 파일은 공개 인증서만 담고 작업 종료 때 함께 삭제됩니다.
 
 이 프리뷰는 공개 binary release가 아닙니다. Electron 플랫폼 archive 자체의
 release manifest, Electron/Chromium/Node SBOM·전체 고지, FFmpeg target별
@@ -151,7 +157,7 @@ Node.js·npm·Chromium·Python·FFmpeg·ffprobe는 모든 자막 방식에 공�
 필요하지 않습니다.
 
 <!-- attribution-id: nodejs -->
-### Node.js 22.13.0 이상과 npm
+### Node.js 22.17.0 이상과 npm
 
 - Detection: `node --version`, `node -p process.versions`, `npm --version`
 - License depends on distributed build/components: **yes**
@@ -159,7 +165,7 @@ Node.js·npm·Chromium·Python·FFmpeg·ffprobe는 모든 자막 방식에 공�
 
 npm은 현재 Node.js 설치와 함께 시스템에서 provision된 명령을 사용합니다.
 CHZZK 작업 lease는 별도 native addon 없이 내장 `node:sqlite`를 사용하므로,
-해당 모듈이 실행 플래그 없이 제공되는 Node.js 22.13.0 이상이 필요합니다.
+해당 모듈이 실행 플래그 없이 제공되고 Windows 파일 identity가 일관된 Node.js 22.17.0 이상이 필요합니다.
 향후 Node/npm을 AppImage나 installer에 넣으면 해당 배포본의 전체 라이선스와
 bundled component notices를 산출물에 포함해야 합니다.
 
