@@ -1,13 +1,15 @@
 # Kirinuki 런타임 의존성과 배포 경계
 
-이 문서는 Linux v1 소스 설치판에서 무엇을 Kirinuki가 배포하고, 무엇을 설치
-중 검증해 내려받으며, 무엇을 사용자의 운영체제가 제공해야 하는지 구분합니다.
-라이선스 법률 의견이나 무위험 보증은 아닙니다.
+이 문서는 현재 사용자 지원 대상인 Linux v1 소스 설치판과 Linux·Windows·macOS
+Electron 개발 프리뷰에서 무엇을 포함하고, 무엇을 검증해 내려받으며, 무엇을
+사용자의 운영체제가 제공해야 하는지 구분합니다. 라이선스 법률 의견이나 무위험
+보증은 아닙니다.
 
-Kirinuki는 사용자 관점에서 앱 하나이지만 현재 모든 실행 파일을 포함한
-AppImage가 아닙니다. 편집 화면, 미디어 준비, 자막, 캐시와 내보내기를 하나의 앱
-생명주기로 관리한다는 뜻이며, 내부 구현이 단일 프로세스라는 뜻은 아닙니다.
-내부 프로세스와 연결 주소는 사용자용 독립 제품이나 관리 대상이 아닙니다.
+Kirinuki는 사용자 관점에서 앱 하나입니다. Linux 소스 설치판은 아직 모든 실행
+파일을 포함한 AppImage가 아니며, Electron 프리뷰는 실행 파일을 포함하지만
+unsigned·unnotarized 개발 산출물입니다. 어느 경우에도 내부 구현이 단일
+프로세스라는 뜻은 아닙니다. 내부 프로세스와 연결 주소는 사용자용 독립 제품이나
+관리 대상이 아닙니다.
 
 ## 한눈에 보는 경계
 
@@ -17,9 +19,31 @@ AppImage가 아닙니다. 편집 화면, 미디어 준비, 자막, 캐시와 내
 | npm 런타임·빌드 패키지 | `package-lock.json` 기준으로 설치 시 provision | 네트워크가 필요할 수 있음 |
 | yt-dlp | 고정 artifact를 크기와 SHA-256까지 검증해 사용자 데이터 경로에 다운로드 | 별도 명령 없음 |
 | whisper.cpp·모델·Silero VAD | Whisper 선택 시에만 고정 artifact를 검증해 다운로드·로컬 빌드 | 설치 화면에서 방식 선택 |
-| Node.js 22+·npm·Chromium 120+·Python 3.11+·FFmpeg·ffprobe | 현재 Kirinuki가 재배포하지 않음 | 운영체제에 미리 설치 |
+| Node.js 22.13.0+·npm·Chromium 120+·Python 3.11+·FFmpeg·ffprobe | 현재 Kirinuki가 재배포하지 않음 | 운영체제에 미리 설치 |
 | CMake·tar·C++ 컴파일러 | Whisper를 선택한 경우에만 whisper.cpp 로컬 빌드에 사용하며 재배포하지 않음 | Whisper를 쓸 PC에만 미리 설치 |
 | 공개 사이트 | 소개·설치·엄격한 앱 링크만 배포 | 편집은 설치된 앱에서 진행 |
+
+<!-- attribution-id: desktop-preview-runtime -->
+## Electron 데스크톱 개발 프리뷰
+
+`npm run package:desktop`은 실행한 native host에 맞는 unpacked 앱 디렉터리를
+만듭니다. 이 개발 경로는 Electron `43.4.0`, FFmpeg/ffprobe
+`7.0.2`(`ffmpeg-static` tag `b6.1.1`)와 yt-dlp `2026.07.04` standalone을
+패키지합니다. 패키징 도구는 `@electron/packager@20.3.0`, ASAR 검증 도구는
+`@electron/asar@4.2.1`, fuse 도구는 `@electron/fuses@2.1.3`입니다.
+
+대상별 FFmpeg·ffprobe·yt-dlp URL, wire/output byte와 SHA-256은
+`src/desktop/tool-manifest.ts`에 고정되어 있습니다. 현재 artifact manifest가
+있는 대상은 `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`,
+`win32-x64`입니다. 경로 타입에 존재하는 `win32-arm64`는 실제 패키지 대상이
+아닙니다.
+
+이 프리뷰는 공개 binary release가 아닙니다. Electron 플랫폼 archive 자체의
+release manifest, Electron/Chromium/Node SBOM·전체 고지, FFmpeg target별
+buildconf·linked library·대응 소스 의무, yt-dlp standalone embedded component
+고지, Windows 서명과 macOS Developer ID 서명·hardened runtime·공증이 아직
+완료되지 않았습니다. CI는 산출물을 업로드하지 않습니다. 전체 차단 조건은
+[`DESKTOP_BINARY_RELEASE_GATE.md`](DESKTOP_BINARY_RELEASE_GATE.md)를 따릅니다.
 
 ## 저장소 또는 웹 산출물에 포함되는 구성요소
 
@@ -113,12 +137,13 @@ reference: https://github.com/openai/whisper (MIT).
   `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987`
 - Original upstream/license: https://github.com/snakers4/silero-vad — MIT
 
-## 운영체제가 제공하는 도구 — 현재 재배포하지 않음
+## Linux 소스 설치판에서 운영체제가 제공하는 도구
 
-아래 도구는 현재 저장소, 공개 사이트, installer 또는 앱 archive에 포함하지
-않습니다. `./setup.sh`가 버전·기능을 진단할 뿐 설치하거나 시스템 설정을
-변경하지 않습니다. 사용자는 배포판 패키지 관리자 등 신뢰하는 방법으로 먼저
-설치해야 합니다.
+아래 분류는 현재 Linux 소스 설치판과 공개 사이트에 적용됩니다. `./setup.sh`가
+버전·기능을 진단할 뿐 설치하거나 시스템 설정을 변경하지 않으며, 사용자는
+배포판 패키지 관리자 등 신뢰하는 방법으로 먼저 설치해야 합니다. Electron 개발
+프리뷰는 Electron에 포함된 Node·Chromium 및 target별 FFmpeg·ffprobe를 실제로
+재배포하므로 이 system-provided 분류를 재사용하지 않습니다.
 
 Node.js·npm·Chromium·Python·FFmpeg·ffprobe는 모든 자막 방식에 공통인 기본
 요구사항입니다. **CMake, tar와 C++ 컴파일러(`g++` 또는 `clang++`)는 Whisper를
@@ -126,13 +151,15 @@ Node.js·npm·Chromium·Python·FFmpeg·ffprobe는 모든 자막 방식에 공�
 필요하지 않습니다.
 
 <!-- attribution-id: nodejs -->
-### Node.js 22 이상과 npm
+### Node.js 22.13.0 이상과 npm
 
 - Detection: `node --version`, `node -p process.versions`, `npm --version`
 - License depends on distributed build/components: **yes**
 - Redistributed by Kirinuki today: **no**
 
 npm은 현재 Node.js 설치와 함께 시스템에서 provision된 명령을 사용합니다.
+CHZZK 작업 lease는 별도 native addon 없이 내장 `node:sqlite`를 사용하므로,
+해당 모듈이 실행 플래그 없이 제공되는 Node.js 22.13.0 이상이 필요합니다.
 향후 Node/npm을 AppImage나 installer에 넣으면 해당 배포본의 전체 라이선스와
 bundled component notices를 산출물에 포함해야 합니다.
 
@@ -207,12 +234,13 @@ CHZZK, <!-- attribution-id: youtube-service --> YouTube,
 다운로드·편집·게시 권한과 플랫폼 약관은 오픈소스 라이선스와 별도의 release
 gate입니다. Kirinuki는 공식 제휴나 승인을 주장하지 않습니다.
 
-## 향후 독립 패키지로 전환할 때
+## 독립 패키지 전환과 현재 공개 차단 상태
 
 현재 “system-provided”, “설치 시 provision” 또는 “검증 후 다운로드”라는 분류는
-미래 배포에도 자동으로 유지되지 않습니다. Docker image, server layer, CDN,
+다른 배포에도 자동으로 유지되지 않습니다. Docker image, server layer, CDN,
 desktop bundle, AppImage, deb/rpm, installer 또는 자체 mirror에 artifact를 넣는
-순간 **재배포**로 다시 분류합니다.
+순간 **재배포**로 다시 분류합니다. Electron 개발 프리뷰는 이미 이 경계를
+넘었으므로 아래 검토를 완료하기 전에는 공개하지 않습니다.
 
 독립 패키지를 출시하기 전에는 최소한 다음을 완료해야 합니다.
 
@@ -224,3 +252,5 @@ desktop bundle, AppImage, deb/rpm, installer 또는 자체 mirror에 artifact를
 4. artifact별 immutable URL, 바이트 수와 SHA-256을 release evidence에
    보관합니다.
 5. 공개 웹 shell과 로컬 앱 패키지의 고지 범위를 혼합하지 않습니다.
+6. Windows native code signing과 macOS Developer ID signing·hardened runtime·
+   notarization·staple을 완료하고 최종 package에서 다시 검증합니다.

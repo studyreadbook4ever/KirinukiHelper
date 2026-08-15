@@ -5,6 +5,7 @@ import {
   canonicalSourceUrl,
   inferSourceIdentifiers
 } from "./source-platform.js";
+import type { SourceIdentifiers } from "./source-platform.js";
 import {
   KIRINUKI_LOCAL_STUDIO_ORIGIN,
   requireKirinukiStudioOrigin
@@ -66,16 +67,12 @@ function exactEmbeddablePath(
   return false;
 }
 
-/**
- * Build only platform-owned browser player URLs. No media URL, cookie, token,
- * proxy, or server-side fetch is introduced at this boundary.
- */
-export function sourceEmbedDescriptor(
-  value: unknown,
-  {
-    studioOrigin = KIRINUKI_LOCAL_STUDIO_ORIGIN
-  }: { studioOrigin?: string } = {}
-): Readonly<SourceEmbedDescriptor> | null {
+interface SupportedVodSource {
+  identifiers: SourceIdentifiers;
+  sourceUrl: string;
+}
+
+function supportedVodSource(value: unknown): SupportedVodSource | null {
   const identifiers = inferSourceIdentifiers(value);
   const sourceUrl = canonicalSourceUrl(value, identifiers);
   if (
@@ -90,14 +87,39 @@ export function sourceEmbedDescriptor(
   ) {
     return null;
   }
+  return { identifiers, sourceUrl };
+}
+
+/**
+ * Return the canonical URL only when the input is an exact VOD route that the
+ * editor can open. Redirectors and broader platform pages intentionally do not
+ * belong to this contract.
+ */
+export function canonicalSupportedVodSourceUrl(value: unknown): string | null {
+  return supportedVodSource(value)?.sourceUrl ?? null;
+}
+
+/**
+ * Build only platform-owned browser player URLs. No media URL, cookie, token,
+ * proxy, or server-side fetch is introduced at this boundary.
+ */
+export function sourceEmbedDescriptor(
+  value: unknown,
+  {
+    studioOrigin = KIRINUKI_LOCAL_STUDIO_ORIGIN
+  }: { studioOrigin?: string } = {}
+): Readonly<SourceEmbedDescriptor> | null {
+  const supported = supportedVodSource(value);
+  if (!supported) {
+    return null;
+  }
+  const { identifiers, sourceUrl } = supported;
   if (identifiers.platform === SOURCE_PLATFORM_YOUTUBE) {
-    const origin = exactStudioOrigin(studioOrigin);
+    exactStudioOrigin(studioOrigin);
     const embed = new URL(
       `https://www.youtube-nocookie.com/embed/${encodeURIComponent(identifiers.contentId)}`
     );
     embed.searchParams.set("playsinline", "1");
-    embed.searchParams.set("enablejsapi", "1");
-    embed.searchParams.set("origin", origin);
     return Object.freeze({
       platform: SOURCE_PLATFORM_YOUTUBE,
       sourceUrl,

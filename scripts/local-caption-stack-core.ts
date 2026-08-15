@@ -20,7 +20,7 @@ export const LOCAL_CAPTION_STACK_SERVICE =
 export const LOOPBACK_HOST = "127.0.0.1";
 export const DEFAULT_STT_PORT = 4318;
 export const DEFAULT_GATEWAY_PORT = 4319;
-export const MINIMUM_NODE_VERSION = "22.0.0";
+export const MINIMUM_NODE_VERSION = "22.13.0";
 
 export const PINNED_WHISPER_CPP = Object.freeze({
   version: "v1.8.6",

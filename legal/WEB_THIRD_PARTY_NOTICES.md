@@ -88,12 +88,12 @@ AudSeg 이름·버전·MIT 고지가 보존됩니다.
 ## External service runtime boundary
 
 Kirinuki 앱의 YouTube 원본 확인 화면은 YouTube 주소를 연 경우에만 브라우저가
-Google의 공식
-`https://www.youtube.com/iframe_api` loader와
-`https://www.youtube-nocookie.com` embed에 직접 연결합니다. 이 원격 서비스
-코드는 Kirinuki 앱 browser assets에 포함하거나 재허가하지 않으며, YouTube의 현재
-서비스 약관·개발자 정책과 콘텐츠 권리는 위 오픈소스 라이선스와 별도로
-적용됩니다. Kirinuki는 이 연결을 서버에서 proxy하지 않습니다.
+Google의 공식 `https://www.youtube-nocookie.com` embed에 직접 연결합니다.
+원격 JavaScript를 프로젝트·파일 권한이 있는 Kirinuki parent 문서에서 실행하지
+않으며, 앱에 포함된 격리 Player Bridge가 iframe 내부의 최소 시계·탐색·배속
+동작만 exact origin/source 계약으로 전달합니다. YouTube의 현재 서비스 약관·
+개발자 정책과 콘텐츠 권리는 위 오픈소스 라이선스와 별도로 적용됩니다.
+Kirinuki는 이 연결을 서버에서 proxy하지 않습니다.
 
 ## Corresponding source and scope
 

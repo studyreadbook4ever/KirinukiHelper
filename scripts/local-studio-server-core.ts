@@ -46,8 +46,8 @@ const BASE_SECURITY_HEADERS = Object.freeze({
   "Cross-Origin-Resource-Policy": "same-origin",
   "Permissions-Policy":
     "camera=(), display-capture=(), geolocation=(), microphone=()",
-  // YouTube IFrame Player error 153 requires the embedding client to identify
-  // its localhost origin. Cross-origin requests still receive no path/query.
+  // The YouTube privacy-enhanced embed requires the embedding client to
+  // identify its localhost origin. Cross-origin requests receive no path/query.
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY"
@@ -60,7 +60,7 @@ const HTML_CONTENT_SECURITY_POLICY = [
   "frame-src https://chzzk.naver.com https://www.youtube-nocookie.com https://vod.sooplive.com",
   "frame-ancestors 'none'",
   "form-action 'self'",
-  "script-src 'self' https://www.youtube.com",
+  "script-src 'self'",
   "style-src 'self'",
   "font-src 'self'",
   "img-src 'self' blob: data:",

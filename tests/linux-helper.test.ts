@@ -153,10 +153,10 @@ async function rawLifecycleRequest(
   }
 }
 
-test("버전 하한은 Node 22와 Chromium 120 경계를 정확히 구분한다", () => {
-  assert.equal(versionAtLeast("21.99.9", "22.0.0"), false);
-  assert.equal(versionAtLeast("22.0.0", "22.0.0"), true);
-  assert.equal(versionAtLeast("23.0.0", "22.0.0"), true);
+test("버전 하한은 Node 22.13과 Chromium 120 경계를 정확히 구분한다", () => {
+  assert.equal(versionAtLeast("22.12.99", "22.13.0"), false);
+  assert.equal(versionAtLeast("22.13.0", "22.13.0"), true);
+  assert.equal(versionAtLeast("23.0.0", "22.13.0"), true);
   assert.equal(parseBrowserMajor("Chromium 119.0.1"), 119);
   assert.equal(parseBrowserMajor("Google Chrome 120.0.1"), 120);
   assert.equal(parseBrowserMajor("unknown"), null);
@@ -1770,7 +1770,7 @@ test("도움말은 사람이 쓸 모든 명령과 안전 경계를 노출한다"
   assert.match(text, /KIRINUKI_BROWSER_PROFILE_ROOT/u);
   assert.match(
     text,
-    /기본:[^\n]*Node\.js 22\+[^\n]*FFmpeg[^\n]*ffprobe/u
+    /기본:[^\n]*Node\.js 22\.13\.0\+[^\n]*FFmpeg[^\n]*ffprobe/u
   );
   assert.match(
     text,
@@ -2064,7 +2064,7 @@ test("셸 진입점은 ZIP의 0644 권한에서도 setup을 열고 성공 뒤 �
       [
         "#!/bin/sh",
         "if [ \"$1\" = \"--version\" ]; then",
-        "  printf '%s\\n' 'v22.0.0'",
+        "  printf '%s\\n' 'v22.13.0'",
         "  exit 0",
         "fi",
         "printf '%s\\n' \"$@\"",

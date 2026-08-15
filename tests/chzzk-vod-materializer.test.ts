@@ -1,13 +1,27 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import type { ChildProcess, SpawnOptions, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  stat,
+  writeFile
+} from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
   CHZZK_VOD_MATERIALIZATION_SCHEMA_ID,
   LEGACY_CHZZK_VOD_MATERIALIZATION_SCHEMA_ID,
+  MAX_CHZZK_PROCESS_OUTPUT_BYTES,
   ChzzkVodMaterializationError,
   buildCompactConcatArgs,
   buildConcatDescription,
@@ -19,17 +33,107 @@ import {
   planChzzkVodMaterialization,
   reopenChzzkVodMaterialization as reopenChzzkVodMaterializationImplementation,
   resolveChzzkVodStateDirectory,
-  sleepWithMaterializerAbort
+  runMaterializerProcess,
+  sleepWithMaterializerAbort,
+  terminateWindowsChzzkProcessTree,
+  windowsChzzkProcessTreeTerminationCommand
 } from "../scripts/chzzk-vod-materializer.js";
 import type {
   ChzzkVodMaterializerDependencies,
   ProcessResult,
   ProcessRunOptions
 } from "../scripts/chzzk-vod-materializer.js";
+import { windowsTaskkillOuterGuardTimeoutMs } from
+  "../scripts/process-tree-termination.js";
 
 const CONTENT_ID = "14252987";
 const CANONICAL_URL = `https://chzzk.naver.com/video/${CONTENT_ID}`;
 const CONSUMER_ID = "kirinuki-test-project-primary";
+const JOB_LEASE_DATABASE_FILENAME = ".materializing-lock.sqlite3";
+const JOB_LEASE_SCHEMA_ID = "chzzk-kirinuki/chzzk-vod-job-lease-v3";
+
+type TestSqliteValue = string | number | bigint | null | Uint8Array;
+
+interface TestSqliteStatement {
+  get(...parameters: readonly TestSqliteValue[]): unknown;
+  run(...parameters: readonly TestSqliteValue[]): { changes: number | bigint };
+}
+
+interface TestSqliteDatabase {
+  close(): void;
+  prepare(sql: string): TestSqliteStatement;
+}
+
+interface TestNodeSqlite {
+  DatabaseSync: new (location: string) => TestSqliteDatabase;
+}
+
+const testRequireNodeBuiltin = createRequire(import.meta.url);
+
+function withJobLeaseDatabase<T>(
+  databasePath: string,
+  callback: (database: TestSqliteDatabase) => T
+): T {
+  const sqlite = testRequireNodeBuiltin("node:sqlite") as TestNodeSqlite;
+  const database = new sqlite.DatabaseSync(databasePath);
+  try {
+    return callback(database);
+  } finally {
+    database.close();
+  }
+}
+
+function replaceJobLeaseRow(databasePath: string, {
+  ownerId,
+  pid,
+  heartbeatAtBootMs,
+  processStartMarker
+}: {
+  ownerId: string;
+  pid: number;
+  heartbeatAtBootMs: number;
+  processStartMarker?: string;
+}): void {
+  withJobLeaseDatabase(databasePath, (database) => {
+    database.prepare("DELETE FROM materialization_job_lease").run();
+    database.prepare(`
+      INSERT INTO materialization_job_lease (
+        singleton,
+        schema_id,
+        owner_id,
+        revision,
+        pid,
+        created_at_unix_ms,
+        heartbeat_at_boot_ms,
+        process_start_marker
+      ) VALUES (1, ?, ?, 1, ?, ?, ?, ?)
+    `).run(
+      JOB_LEASE_SCHEMA_ID,
+      ownerId,
+      pid,
+      Date.now(),
+      heartbeatAtBootMs,
+      processStartMarker ?? null
+    );
+  });
+}
+
+function readJobLeaseRow(databasePath: string): Readonly<Record<string, unknown>> | undefined {
+  return withJobLeaseDatabase(databasePath, (database) => {
+    const value = database.prepare(`
+      SELECT
+        owner_id AS ownerId,
+        revision,
+        pid,
+        heartbeat_at_boot_ms AS heartbeatAtBootMs
+      FROM materialization_job_lease
+      WHERE singleton = 1
+    `).get();
+    return typeof value === "object" && value !== null
+      ? value as Readonly<Record<string, unknown>>
+      : undefined;
+  });
+}
 
 type MaterializationRequest = Parameters<typeof materializeChzzkVodImplementation>[0];
 type MaterializerDependencies = Parameters<typeof materializeChzzkVodImplementation>[1];
@@ -61,14 +165,19 @@ function reopenChzzkVodMaterialization(
 function scopedJobDirectory(
   stateDir: string,
   materializationId: string,
-  consumerId = CONSUMER_ID
+  consumerId = CONSUMER_ID,
+  storageGeneration: "v3" | "legacy" = "v3"
 ): string {
-  return path.join(
+  const platformRoot = path.join(
     stateDir,
     "consumers",
     chzzkVodConsumerScopeHash(consumerId),
     "jobs",
-    "chzzk",
+    "chzzk"
+  );
+  return path.join(
+    platformRoot,
+    ...(storageGeneration === "v3" ? ["v3"] : []),
     materializationId
   );
 }
@@ -567,6 +676,477 @@ test("정상 sleep 완료와 취소 모두 AbortSignal listener를 정리한다"
   ));
 });
 
+test("CHZZK 프로세스는 exit가 아니라 close에서 pipe를 끝까지 모아 성공한다", async () => {
+  let captured: {
+    command: string;
+    args: readonly string[];
+    options: SpawnOptions;
+  } | undefined;
+  let childRef: (EventEmitter & {
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: (signal?: NodeJS.Signals) => boolean;
+  }) | undefined;
+  const spawnImpl = ((
+    command: string,
+    args: readonly string[],
+    options: SpawnOptions
+  ) => {
+    captured = { command, args, options };
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runMaterializerProcess("ffprobe", ["-version"], {
+    cwd: "/tmp"
+  }, { spawnImpl, platform: "linux" });
+  let settled = false;
+  void pending.then(
+    () => { settled = true; },
+    () => { settled = true; }
+  );
+  childRef?.stdout.write("before-exit\n");
+  childRef?.emit("exit", 0, null);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  childRef?.stdout.end("after-exit\n");
+  childRef?.stderr.end();
+  childRef?.emit("close", 0, null);
+  const result = await pending;
+  assert.equal(result.stdout, "before-exit\nafter-exit\n");
+  assert.equal(captured?.command, "ffprobe");
+  assert.deepEqual(captured?.args, ["-version"]);
+  assert.equal(captured?.options.shell, false);
+  assert.equal(captured?.options.windowsHide, true);
+  assert.equal(captured?.options.detached, true);
+});
+
+test("CHZZK 프로세스 spawn error도 close 전에는 reject하지 않는다", async () => {
+  let childRef: (EventEmitter & {
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: () => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runMaterializerProcess("missing-ffmpeg", [], {
+    cwd: "/tmp"
+  }, { spawnImpl, platform: "linux" });
+  let settled = false;
+  void pending.then(
+    () => { settled = true; },
+    () => { settled = true; }
+  );
+  const rejected = assert.rejects(pending, (error: unknown) => (
+    error instanceof ChzzkVodMaterializationError
+    && error.code === "PROCESS_START_FAILED"
+  ));
+  childRef?.emit("error", new Error("ENOENT"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  childRef?.stdout.end();
+  childRef?.stderr.end();
+  childRef?.emit("close", -1, null);
+  await rejected;
+});
+
+test("CHZZK 프로세스 timeout은 POSIX 그룹을 TERM/KILL한 뒤 close에서 끝난다", async () => {
+  const scheduled: Array<{
+    callback: () => void;
+    delay: number;
+    cleared: boolean;
+  }> = [];
+  const handles = new Map<object, (typeof scheduled)[number]>();
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    const task = { callback, delay, cleared: false };
+    const handle = {};
+    scheduled.push(task);
+    handles.set(handle, task);
+    return handle;
+  }) as unknown as typeof setTimeout;
+  const clearTimeoutImpl = ((handle: object) => {
+    const task = handles.get(handle);
+    if (task) {
+      task.cleared = true;
+    }
+  }) as unknown as typeof clearTimeout;
+  let childRef: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: () => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.pid = 12_345;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const groupSignals: NodeJS.Signals[] = [];
+  let groupAlive = true;
+  const pending = runMaterializerProcess("ffmpeg", [], {
+    cwd: "/tmp",
+    timeoutMs: 123
+  }, {
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl,
+    killGraceMs: 17,
+    platform: "darwin",
+    probeProcessGroupImpl: () => {
+      if (!groupAlive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
+    killProcessGroupImpl: (pid, signal) => {
+      assert.equal(pid, 12_345);
+      groupSignals.push(signal);
+    }
+  });
+  let settled = false;
+  void pending.then(
+    () => { settled = true; },
+    () => { settled = true; }
+  );
+  const rejected = assert.rejects(pending, (error: unknown) => (
+    error instanceof ChzzkVodMaterializationError
+    && error.code === "PROCESS_TIMEOUT"
+  ));
+  assert.equal(scheduled[0]?.delay, 123);
+  scheduled[0]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(groupSignals, ["SIGTERM"]);
+  assert.equal(scheduled[1]?.delay, 17);
+  childRef?.stdout.end();
+  childRef?.stderr.end();
+  childRef?.emit("close", null, "SIGTERM");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  scheduled[1]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(groupSignals, ["SIGTERM", "SIGKILL"]);
+  groupAlive = false;
+  assert.equal(scheduled[2]?.delay, 17);
+  scheduled[2]?.callback();
+  await rejected;
+  assert.equal(scheduled[0]?.cleared, true);
+});
+
+test("CHZZK 정상 close도 남은 POSIX descendant group 회수 뒤에만 성공한다", async () => {
+  const scheduled: Array<{ callback: () => void; delay: number }> = [];
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    scheduled.push({ callback, delay });
+    return {} as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  let groupAlive = true;
+  const groupSignals: NodeJS.Signals[] = [];
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: () => boolean;
+    };
+    child.pid = 23_456;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end("ok\n");
+      child.stderr.end();
+      child.emit("close", 0, null);
+    });
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runMaterializerProcess("ffprobe", [], {
+    cwd: "/tmp"
+  }, {
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl: (() => undefined) as typeof clearTimeout,
+    killGraceMs: 19,
+    platform: "linux",
+    probeProcessGroupImpl: () => {
+      if (!groupAlive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
+    killProcessGroupImpl: (_pid, signal) => groupSignals.push(signal)
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(groupSignals, ["SIGTERM"]);
+  groupAlive = false;
+  assert.equal(scheduled[1]?.delay, 19);
+  scheduled[1]?.callback();
+  const result = await pending;
+  assert.equal(result.stdout, "ok\n");
+  assert.deepEqual(groupSignals, ["SIGTERM"]);
+});
+
+test("CHZZK Windows 취소는 taskkill tree 완료와 close를 모두 기다린다", async () => {
+  const controller = new AbortController();
+  let terminatedPid = 0;
+  let releaseTreeTermination: (() => void) | undefined;
+  let leaderKillCount = 0;
+  let capturedOptions: SpawnOptions | undefined;
+  let childRef: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: () => boolean;
+  }) | undefined;
+  const spawnImpl = ((_command: string, _args: readonly string[], options: SpawnOptions) => {
+    capturedOptions = options;
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.pid = 54_321;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => {
+      leaderKillCount += 1;
+      return true;
+    };
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runMaterializerProcess("ffmpeg.exe", [], {
+    cwd: "C:\\Kirinuki",
+    signal: controller.signal
+  }, {
+    platform: "win32",
+    spawnImpl,
+    terminateWindowsProcessTreeImpl: async (pid) => {
+      terminatedPid = pid;
+      await new Promise<void>((resolve) => {
+        releaseTreeTermination = resolve;
+      });
+    }
+  });
+  let settled = false;
+  void pending.then(
+    () => { settled = true; },
+    () => { settled = true; }
+  );
+  const rejected = assert.rejects(pending, (error: unknown) => (
+    error instanceof ChzzkVodMaterializationError
+    && error.code === "CANCELLED"
+  ));
+  controller.abort();
+  assert.equal(terminatedPid, 54_321);
+  assert.equal(leaderKillCount, 0);
+  childRef?.stdout.end();
+  childRef?.stderr.end();
+  childRef?.emit("close", 1, null);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  releaseTreeTermination?.();
+  await rejected;
+  assert.equal(capturedOptions?.shell, false);
+  assert.equal(capturedOptions?.windowsHide, true);
+  assert.equal(capturedOptions?.detached, undefined);
+  assert.equal(leaderKillCount, 0);
+});
+
+test("CHZZK 출력 상한 오류도 Windows tree cleanup과 close 전에 settle하지 않는다", async () => {
+  let releaseTreeTermination: (() => void) | undefined;
+  let leaderKillCount = 0;
+  let childRef: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: () => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.pid = 65_432;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => {
+      leaderKillCount += 1;
+      return true;
+    };
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runMaterializerProcess("ffprobe.exe", [], {
+    cwd: "C:\\Kirinuki"
+  }, {
+    platform: "win32",
+    spawnImpl,
+    terminateWindowsProcessTreeImpl: async () => {
+      await new Promise<void>((resolve) => {
+        releaseTreeTermination = resolve;
+      });
+    }
+  });
+  let settled = false;
+  void pending.then(
+    () => { settled = true; },
+    () => { settled = true; }
+  );
+  const rejected = assert.rejects(pending, (error: unknown) => (
+    error instanceof ChzzkVodMaterializationError
+    && error.code === "PROCESS_OUTPUT_LIMIT"
+  ));
+  childRef?.stdout.write(Buffer.alloc(MAX_CHZZK_PROCESS_OUTPUT_BYTES + 1));
+  childRef?.stdout.end();
+  childRef?.stderr.end();
+  childRef?.emit("close", 1, null);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.equal(leaderKillCount, 0);
+  releaseTreeTermination?.();
+  await rejected;
+  assert.equal(leaderKillCount, 0);
+});
+
+test("CHZZK Windows process tree 종료 명령은 exact taskkill argv만 만든다", () => {
+  assert.deepEqual(
+    windowsChzzkProcessTreeTerminationCommand(7_654, {
+      SystemRoot: "C:\\Windows"
+    }),
+    {
+      command: "C:\\Windows\\System32\\taskkill.exe",
+      args: ["/PID", "7654", "/T", "/F"]
+    }
+  );
+  assert.throws(
+    () => windowsChzzkProcessTreeTerminationCommand(0, {
+      SystemRoot: "C:\\Windows"
+    }),
+    (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "PROCESS_START_FAILED"
+    )
+  );
+  assert.throws(
+    () => windowsChzzkProcessTreeTerminationCommand(1, {
+      SystemRoot: "relative\\Windows"
+    }),
+    (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "PROCESS_START_FAILED"
+    )
+  );
+});
+
+test("CHZZK taskkill helper와 injected terminator는 never-settle을 bounded하게 끝낸다", async () => {
+  let helperTimeout: (() => void) | undefined;
+  let helperAlive = true;
+  const killerSignals: Array<NodeJS.Signals | number | undefined> = [];
+  const killer = new EventEmitter() as EventEmitter & {
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  };
+  killer.kill = (signal) => {
+    killerSignals.push(signal);
+    return true;
+  };
+  const helperPending = terminateWindowsChzzkProcessTree(7_654, {
+    environment: { SystemRoot: "C:\\Windows" },
+    timeoutMs: 11,
+    probeProcessImpl: () => {
+      if (!helperAlive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
+    spawnImpl: (() => killer as unknown as ChildProcess) as unknown as typeof spawn,
+    setTimeoutImpl: ((callback: () => void) => {
+      helperTimeout = callback;
+      return {} as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout,
+    clearTimeoutImpl: (() => undefined) as typeof clearTimeout
+  });
+  const helperRejected = assert.rejects(helperPending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "EPROCESSTREEHELPER"
+  ));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  helperTimeout?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  helperTimeout?.();
+  await helperRejected;
+  assert.deepEqual(killerSignals, ["SIGKILL"]);
+  helperAlive = false;
+
+  const scheduled: Array<{
+    callback: () => void;
+    delay: number;
+    cleared: boolean;
+  }> = [];
+  const handles = new Map<object, (typeof scheduled)[number]>();
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    const task = { callback, delay, cleared: false };
+    const handle = {};
+    scheduled.push(task);
+    handles.set(handle, task);
+    return handle;
+  }) as unknown as typeof setTimeout;
+  const clearTimeoutImpl = ((handle: object) => {
+    const task = handles.get(handle);
+    if (task) {
+      task.cleared = true;
+    }
+  }) as unknown as typeof clearTimeout;
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: (signal?: NodeJS.Signals | number) => boolean;
+    };
+    child.pid = 54_321;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      queueMicrotask(() => {
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", null, "SIGKILL");
+      });
+      return true;
+    };
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const processPending = runMaterializerProcess("ffmpeg.exe", [], {
+    cwd: "C:\\Kirinuki",
+    timeoutMs: 123
+  }, {
+    platform: "win32",
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl,
+    killGraceMs: 17,
+    terminateWindowsProcessTreeImpl: async () => await new Promise<void>(() => undefined)
+  });
+  scheduled[0]?.callback();
+  assert.equal(
+    scheduled[1]?.delay,
+    windowsTaskkillOuterGuardTimeoutMs(17)
+  );
+  scheduled[1]?.callback();
+  await assert.rejects(processPending, (error: unknown) => (
+    error instanceof ChzzkVodMaterializationError
+    && error.code === "PROCESS_TIMEOUT"
+  ));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  assert.equal(scheduled[0]?.cleared, true);
+  assert.equal(scheduled[1]?.cleared, true);
+});
+
 test("선택 segment만 받고 첫 packet이 keyframe이 아니면 bounded 이전 조각을 붙인다", async () => {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-materializer-"));
   try {
@@ -692,6 +1272,81 @@ test("완료 manifest/hash가 맞으면 조각과 ffmpeg 작업을 재사용한�
     assert.deepEqual(secondHarness.calls.segments, []);
     assert.deepEqual(secondHarness.calls.processes, []);
   } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("검증된 legacy v2는 read-only reopen하고 새 writer는 격리된 v3 경로만 쓴다", async () => {
+  const seedDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-v2-seed-"));
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-v3-isolation-"));
+  try {
+    const request = {
+      sourceUrl: CANONICAL_URL,
+      clips: [{ id: "v2-fallback", startMs: 8_000, endMs: 10_000 }],
+      handleMs: 0
+    } as const;
+    const seedHarness = createHarness({ keyframeSegments: new Set([2]) });
+    const seed = await materializeChzzkVod({ ...request, stateDir: seedDir }, {
+      fetchImpl: seedHarness.fetchImpl,
+      runProcess: seedHarness.runProcess,
+      sleep: async () => undefined
+    });
+    assert.equal(seed.receipt.schemaId, CHZZK_VOD_MATERIALIZATION_SCHEMA_ID);
+    const legacyJobDirectory = scopedJobDirectory(
+      stateDir,
+      seed.manifest.materializationId,
+      CONSUMER_ID,
+      "legacy"
+    );
+    await mkdir(legacyJobDirectory, { recursive: true });
+    await copyFile(seed.artifactPath, path.join(legacyJobDirectory, "materialized.mp4"));
+    await writeFile(
+      path.join(legacyJobDirectory, "manifest.json"),
+      `${JSON.stringify(seed.receipt)}\n`
+    );
+    const legacyLock = `${JSON.stringify({
+      schemaId: "chzzk-kirinuki/chzzk-vod-job-lock-v2",
+      ownerId: "9".repeat(48),
+      pid: process.pid,
+      createdAt: new Date().toISOString()
+    })}\n`;
+    await writeFile(path.join(legacyJobDirectory, ".materializing.lock"), legacyLock);
+
+    const reopened = await reopenChzzkVodMaterialization({
+      materializationId: seed.manifest.materializationId,
+      planFingerprint: seed.manifest.planFingerprint,
+      contentId: CONTENT_ID,
+      clips: request.clips,
+      handleMs: 0,
+      stateDir
+    });
+    assert.equal(reopened?.reused, true);
+    assert.equal(reopened?.artifactPath, path.join(legacyJobDirectory, "materialized.mp4"));
+
+    const v3Harness = createHarness({ keyframeSegments: new Set([2]) });
+    const v3 = await materializeChzzkVod({ ...request, stateDir }, {
+      fetchImpl: v3Harness.fetchImpl,
+      runProcess: v3Harness.runProcess,
+      sleep: async () => undefined
+    });
+    const expectedV3JobDirectory = scopedJobDirectory(
+      stateDir,
+      seed.manifest.materializationId
+    );
+    assert.equal(v3.reused, false);
+    assert.equal(v3.artifactPath, path.join(expectedV3JobDirectory, "materialized.mp4"));
+    assert.notEqual(path.dirname(v3.artifactPath), legacyJobDirectory);
+    assert.deepEqual(v3Harness.calls.segments, [2]);
+    assert.equal(
+      await readFile(path.join(legacyJobDirectory, ".materializing.lock"), "utf8"),
+      legacyLock
+    );
+    assert.equal(
+      (await stat(path.join(expectedV3JobDirectory, JOB_LEASE_DATABASE_FILENAME))).isFile(),
+      true
+    );
+  } finally {
+    await rm(seedDir, { recursive: true, force: true });
     await rm(stateDir, { recursive: true, force: true });
   }
 });
@@ -1148,7 +1803,9 @@ test("private v1은 legacy로 offline reopen하고 hot-load는 cold v2 승격만
 
     const legacyJobDirectory = scopedJobDirectory(
       stateDir,
-      legacyMaterializationId
+      legacyMaterializationId,
+      CONSUMER_ID,
+      "legacy"
     );
     await mkdir(legacyJobDirectory, { recursive: true });
     await copyFile(
@@ -1470,32 +2127,52 @@ test("비연속 source run은 각각 MP4로 만든 뒤 명시적 duration 경계
   }
 });
 
-test("죽은 PID가 남긴 job lock은 cache checkpoint를 보존한 채 회수한다", async () => {
-  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-stale-lock-"));
-  try {
-    const request = {
-      sourceUrl: CANONICAL_URL,
-      clips: [{ id: "stale-lock", startMs: 8_000, endMs: 10_000 }],
-      handleMs: 0,
-      stateDir
-    } as const;
-    const firstHarness = createHarness({ keyframeSegments: new Set([2]) });
-    const first = await materializeChzzkVod(request, {
-      fetchImpl: firstHarness.fetchImpl,
-      runProcess: firstHarness.runProcess,
-      sleep: async () => undefined
-    });
-    const jobDirectory = path.dirname(first.artifactPath);
-    await rm(first.artifactPath, { force: true });
-    await rm(path.join(jobDirectory, "manifest.json"), { force: true });
-    await writeFile(path.join(jobDirectory, ".materializing.lock"), JSON.stringify({
-      schemaId: "chzzk-kirinuki/chzzk-vod-job-lock-v1",
-      pid: 99_999_999,
-      createdAt: new Date().toISOString()
-    }));
+async function prepareJobLeaseFixture(
+  stateDir: string,
+  clipId: string
+): Promise<{
+  request: Readonly<{
+    sourceUrl: string;
+    clips: readonly [{ readonly id: string; readonly startMs: 8_000; readonly endMs: 10_000 }];
+    handleMs: 0;
+    stateDir: string;
+  }>;
+  databasePath: string;
+  jobDirectory: string;
+}> {
+  const request = {
+    sourceUrl: CANONICAL_URL,
+    clips: [{ id: clipId, startMs: 8_000, endMs: 10_000 }],
+    handleMs: 0,
+    stateDir
+  } as const;
+  const harness = createHarness({ keyframeSegments: new Set([2]) });
+  const seed = await materializeChzzkVod(request, {
+    fetchImpl: harness.fetchImpl,
+    runProcess: harness.runProcess,
+    sleep: async () => undefined
+  });
+  const jobDirectory = path.dirname(seed.artifactPath);
+  await rm(seed.artifactPath, { force: true });
+  await rm(path.join(jobDirectory, "manifest.json"), { force: true });
+  return {
+    request,
+    databasePath: path.join(jobDirectory, JOB_LEASE_DATABASE_FILENAME),
+    jobDirectory
+  };
+}
 
+test("죽은 PID가 남긴 SQLite job lease는 cache checkpoint를 보존한 채 CAS 회수한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-stale-lease-"));
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "stale-lease");
+    replaceJobLeaseRow(fixture.databasePath, {
+      ownerId: "a".repeat(48),
+      pid: 99_999_999,
+      heartbeatAtBootMs: Math.floor(os.uptime() * 1_000)
+    });
     const resumedHarness = createHarness({ keyframeSegments: new Set([2]) });
-    const resumed = await materializeChzzkVod(request, {
+    const resumed = await materializeChzzkVod(fixture.request, {
       fetchImpl: resumedHarness.fetchImpl,
       runProcess: resumedHarness.runProcess,
       sleep: async () => undefined
@@ -1503,7 +2180,330 @@ test("죽은 PID가 남긴 job lock은 cache checkpoint를 보존한 채 회수�
     assert.equal(resumed.reused, false);
     assert.deepEqual(resumedHarness.calls.segments, []);
     assert(resumedHarness.calls.processes.length > 0);
-    await assert.rejects(readFile(path.join(jobDirectory, ".materializing.lock")));
+    assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
+    assert.equal((await stat(fixture.databasePath)).isFile(), true);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("start marker 없는 macOS/Windows식 live PID lease도 monotonic heartbeat가 stale이면 회수한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-reused-pid-lease-"));
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "reused-pid-lease");
+    replaceJobLeaseRow(fixture.databasePath, {
+      ownerId: "b".repeat(48),
+      pid: process.pid,
+      heartbeatAtBootMs: Math.max(0, Math.floor(os.uptime() * 1_000) - 60_000)
+    });
+    const resumedHarness = createHarness({ keyframeSegments: new Set([2]) });
+    const resumed = await materializeChzzkVod(fixture.request, {
+      fetchImpl: resumedHarness.fetchImpl,
+      runProcess: resumedHarness.runProcess,
+      sleep: async () => undefined
+    });
+    assert.equal(resumed.reused, false);
+    assert.deepEqual(resumedHarness.calls.segments, []);
+    assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("현재 boot clock보다 미래인 lease는 재부팅 잔재로 보고 회수한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-future-lease-"));
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "future-lease");
+    replaceJobLeaseRow(fixture.databasePath, {
+      ownerId: "c".repeat(48),
+      pid: process.pid,
+      heartbeatAtBootMs: Math.floor(os.uptime() * 1_000) + 60_000
+    });
+    const resumedHarness = createHarness({ keyframeSegments: new Set([2]) });
+    const resumed = await materializeChzzkVod(fixture.request, {
+      fetchImpl: resumedHarness.fetchImpl,
+      runProcess: resumedHarness.runProcess,
+      sleep: async () => undefined
+    });
+    assert.equal(resumed.reused, false);
+    assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("start marker 없는 live PID lease도 fresh monotonic heartbeat이면 활성으로 유지한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-fresh-lease-"));
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "fresh-lease");
+    replaceJobLeaseRow(fixture.databasePath, {
+      ownerId: "d".repeat(48),
+      pid: process.pid,
+      heartbeatAtBootMs: Math.floor(os.uptime() * 1_000)
+    });
+    const blockedHarness = createHarness({ keyframeSegments: new Set([2]) });
+    await assert.rejects(
+      materializeChzzkVod(fixture.request, {
+        fetchImpl: blockedHarness.fetchImpl,
+        runProcess: blockedHarness.runProcess,
+        sleep: async () => undefined
+      }),
+      (error: unknown) => (
+        error instanceof ChzzkVodMaterializationError
+        && error.code === "ALREADY_RUNNING"
+      )
+    );
+    assert.equal(readJobLeaseRow(fixture.databasePath)?.ownerId, "d".repeat(48));
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("Linux start marker 불일치는 fresh heartbeat여도 재사용 PID lease로 회수한다", {
+  skip: process.platform !== "linux"
+}, async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-start-marker-lease-"));
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "start-marker-lease");
+    replaceJobLeaseRow(fixture.databasePath, {
+      ownerId: "e".repeat(48),
+      pid: process.pid,
+      heartbeatAtBootMs: Math.floor(os.uptime() * 1_000),
+      processStartMarker: "0"
+    });
+    const resumedHarness = createHarness({ keyframeSegments: new Set([2]) });
+    const resumed = await materializeChzzkVod(fixture.request, {
+      fetchImpl: resumedHarness.fetchImpl,
+      runProcess: resumedHarness.runProcess,
+      sleep: async () => undefined
+    });
+    assert.equal(resumed.reused, false);
+    assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("장기 작업 heartbeat revision은 갱신되고 CAS로 교체된 owner를 old owner가 지우지 않는다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-heartbeat-lease-"));
+  let releaseProcess: (() => void) | undefined;
+  let pending: ReturnType<typeof materializeChzzkVod> | undefined;
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "heartbeat-lease");
+    let processEntered = false;
+    let firstProcess = true;
+    const processGate = new Promise<void>((resolve) => {
+      releaseProcess = resolve;
+    });
+    const slowHarness = createHarness({ keyframeSegments: new Set([2]) });
+    pending = materializeChzzkVod(fixture.request, {
+      fetchImpl: slowHarness.fetchImpl,
+      runProcess: async (command, args, options) => {
+        if (firstProcess) {
+          firstProcess = false;
+          processEntered = true;
+          await processGate;
+        }
+        return await slowHarness.runProcess(command, args, options);
+      },
+      sleep: async () => undefined
+    });
+    for (let attempt = 0; attempt < 100 && !processEntered; attempt += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(processEntered, true);
+    const initial = readJobLeaseRow(fixture.databasePath);
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
+    const heartbeated = readJobLeaseRow(fixture.databasePath);
+    assert.equal(typeof initial?.revision, "number");
+    assert.equal(typeof heartbeated?.revision, "number");
+    assert(Number(heartbeated?.revision) > Number(initial?.revision));
+
+    const replacementOwner = "f".repeat(48);
+    withJobLeaseDatabase(fixture.databasePath, (database) => {
+      const result = database.prepare(`
+        UPDATE materialization_job_lease
+        SET owner_id = ?, revision = revision + 1, heartbeat_at_boot_ms = ?
+        WHERE singleton = 1 AND owner_id = ? AND revision = ?
+      `).run(
+        replacementOwner,
+        Math.floor(os.uptime() * 1_000),
+        String(heartbeated?.ownerId),
+        Number(heartbeated?.revision)
+      );
+      assert.equal(Number(result.changes), 1);
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
+    releaseProcess?.();
+    await assert.rejects(pending, (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "LOCK_FAILED"
+    ));
+    assert.equal(readJobLeaseRow(fixture.databasePath)?.ownerId, replacementOwner);
+    await assert.rejects(readFile(path.join(fixture.jobDirectory, "manifest.json")));
+  } finally {
+    releaseProcess?.();
+    await pending?.catch(() => undefined);
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("동시 stale-lease contender는 SQLite CAS로 한 작업만 실행한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-lease-contenders-"));
+  let releaseProcesses: (() => void) | undefined;
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "lease-contenders");
+    replaceJobLeaseRow(fixture.databasePath, {
+      ownerId: "1".repeat(48),
+      pid: 99_999_999,
+      heartbeatAtBootMs: Math.floor(os.uptime() * 1_000)
+    });
+    const processGate = new Promise<void>((resolve) => {
+      releaseProcesses = resolve;
+    });
+    let enteredProcesses = 0;
+    const contender = () => {
+      const harness = createHarness({ keyframeSegments: new Set([2]) });
+      let firstProcess = true;
+      return materializeChzzkVod(fixture.request, {
+        fetchImpl: harness.fetchImpl,
+        runProcess: async (command, args, options) => {
+          if (firstProcess) {
+            firstProcess = false;
+            enteredProcesses += 1;
+            await processGate;
+          }
+          return await harness.runProcess(command, args, options);
+        },
+        sleep: async () => undefined
+      });
+    };
+    const attempts = [contender(), contender()];
+    let rejectedBeforeRelease = false;
+    for (const attempt of attempts) {
+      void attempt.catch(() => {
+        rejectedBeforeRelease = true;
+      });
+    }
+    for (
+      let retry = 0;
+      retry < 100 && (enteredProcesses === 0 || !rejectedBeforeRelease);
+      retry += 1
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    releaseProcesses?.();
+    const results = await Promise.allSettled(attempts);
+    assert.equal(rejectedBeforeRelease, true);
+    assert.equal(enteredProcesses, 1);
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+    const rejection = results.find((result) => result.status === "rejected");
+    assert.equal(
+      rejection?.status === "rejected"
+      && rejection.reason instanceof ChzzkVodMaterializationError
+      && rejection.reason.code === "ALREADY_RUNNING",
+      true
+    );
+    assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
+  } finally {
+    releaseProcesses?.();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("stale 관찰 뒤 새 owner가 CAS하면 늦은 contender는 그 owner를 빼앗지 못한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-cas-interleave-"));
+  let releaseObserved: (() => void) | undefined;
+  let releaseWinnerProcess: (() => void) | undefined;
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "cas-interleave");
+    replaceJobLeaseRow(fixture.databasePath, {
+      ownerId: "2".repeat(48),
+      pid: 99_999_999,
+      heartbeatAtBootMs: Math.floor(os.uptime() * 1_000)
+    });
+    let staleObserved = false;
+    const observedGate = new Promise<void>((resolve) => {
+      releaseObserved = resolve;
+    });
+    const lateHarness = createHarness({ keyframeSegments: new Set([2]) });
+    const late = materializeChzzkVod(fixture.request, {
+      fetchImpl: lateHarness.fetchImpl,
+      runProcess: lateHarness.runProcess,
+      sleep: async () => undefined,
+      beforeStaleJobLeaseCompareAndSwap: async () => {
+        staleObserved = true;
+        await observedGate;
+      }
+    });
+    for (let retry = 0; retry < 100 && !staleObserved; retry += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(staleObserved, true);
+
+    let winnerEntered = false;
+    let winnerFirstProcess = true;
+    const winnerProcessGate = new Promise<void>((resolve) => {
+      releaseWinnerProcess = resolve;
+    });
+    const winnerHarness = createHarness({ keyframeSegments: new Set([2]) });
+    const winner = materializeChzzkVod(fixture.request, {
+      fetchImpl: winnerHarness.fetchImpl,
+      runProcess: async (command, args, options) => {
+        if (winnerFirstProcess) {
+          winnerFirstProcess = false;
+          winnerEntered = true;
+          await winnerProcessGate;
+        }
+        return await winnerHarness.runProcess(command, args, options);
+      },
+      sleep: async () => undefined
+    });
+    for (let retry = 0; retry < 100 && !winnerEntered; retry += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(winnerEntered, true);
+    const winnerBeforeLateCas = readJobLeaseRow(fixture.databasePath);
+    releaseObserved?.();
+    await assert.rejects(late, (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "ALREADY_RUNNING"
+    ));
+    const winnerAfterLateCas = readJobLeaseRow(fixture.databasePath);
+    assert.equal(winnerAfterLateCas?.ownerId, winnerBeforeLateCas?.ownerId);
+    assert(
+      Number(winnerAfterLateCas?.revision) >= Number(winnerBeforeLateCas?.revision)
+    );
+    releaseWinnerProcess?.();
+    await winner;
+    assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
+  } finally {
+    releaseObserved?.();
+    releaseWinnerProcess?.();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("job lease DB symlink는 SQLite open 전에 fail-closed한다", {
+  skip: process.platform === "win32"
+}, async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-lease-symlink-"));
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "lease-symlink");
+    const outside = path.join(stateDir, "outside.sqlite3");
+    await writeFile(outside, "must remain unchanged\n");
+    await rm(fixture.databasePath);
+    await symlink(outside, fixture.databasePath);
+    const harness = createHarness({ keyframeSegments: new Set([2]) });
+    await assert.rejects(materializeChzzkVod(fixture.request, {
+      fetchImpl: harness.fetchImpl,
+      runProcess: harness.runProcess,
+      sleep: async () => undefined
+    }), (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "LOCK_FAILED"
+    ));
+    assert.equal(await readFile(outside, "utf8"), "must remain unchanged\n");
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

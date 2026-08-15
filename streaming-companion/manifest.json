@@ -4,7 +4,23 @@
   "version": "3.0.0",
   "description": "Kirinuki 앱에 포함된 원본 플레이어 연결 구성요소입니다.",
   "minimum_chrome_version": "120",
+  "permissions": [
+    "storage"
+  ],
   "content_scripts": [
+    {
+      "matches": [
+        "http://127.0.0.1/*"
+      ],
+      "include_globs": [
+        "http://127.0.0.1:4320/*"
+      ],
+      "js": [
+        "studio-streaming-relay.js"
+      ],
+      "all_frames": false,
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "https://chzzk.naver.com/*",

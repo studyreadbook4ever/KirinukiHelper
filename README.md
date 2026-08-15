@@ -1,4 +1,4 @@
-# Kirinuki — Linux용 로컬 VOD 편집 앱
+# Kirinuki — 로컬 우선 VOD 편집 앱
 
 Kirinuki는 CHZZK·YouTube·SOOP VOD에서 사용자가 직접 고른 구간을 이 기기에
 필요한 만큼만 준비해 컷, 이미지, 음성, 자막을 편집하고 영상으로 내보내는
@@ -20,12 +20,12 @@ Kirinuki는 CHZZK·YouTube·SOOP VOD에서 사용자가 직접 고른 구간을 
 
 ## 현재 제공 형태
 
-현재 v1은 **Linux 소스 설치판**입니다. 아직 자체 런타임을 모두 포함한
-AppImage, Flatpak, deb/rpm 또는 완전 독립 실행형 바이너리가 아닙니다. 설치할
-PC에 다음 기본 시스템 도구가 먼저 있어야 합니다. 이 목록은 어떤 자막 방식을
-고르더라도 필요한 요구사항입니다.
+현재 일반 사용자에게 제공하는 경로는 **Linux 소스 설치판**입니다. 아직 자체
+런타임을 모두 포함한 AppImage, Flatpak, deb/rpm 또는 완전 독립 실행형
+바이너리가 아닙니다. 설치할 PC에 다음 기본 시스템 도구가 먼저 있어야 합니다.
+이 목록은 어떤 자막 방식을 고르더라도 필요한 요구사항입니다.
 
-- Node.js 22 이상과 npm
+- Node.js 22.13.0 이상과 npm (`node:sqlite`가 별도 플래그 없이 제공되는 버전)
 - Chromium 120 이상
 - Python 3.11 이상
 - FFmpeg와 ffprobe
@@ -45,7 +45,24 @@ Whisper 자막 방식을 선택할 때만 다음 빌드 도구가 추가로 필�
 자세한 배포 경계는
 [`legal/RUNTIME_DEPENDENCIES.md`](legal/RUNTIME_DEPENDENCIES.md)에 있습니다.
 
-## 설치
+Linux·Windows·macOS용 Electron 앱은 현재 **개발·CI 프리뷰**입니다. 이 경로는
+Electron `43.4.0`, FFmpeg/ffprobe `7.0.2`(`ffmpeg-static` 배포 tag
+`b6.1.1`)와 yt-dlp `2026.07.04` standalone artifact를 대상 OS용 앱 디렉터리에
+넣습니다. 현재 manifest 대상은 Linux x64/arm64, macOS x64/arm64와 Windows
+x64이며, CI는 Linux x64·Windows x64·macOS arm64에서 unsigned 패키지를 만든 뒤
+실제로 실행해 내부 Studio·gateway health, 번들 미디어 도구, 검증용 MP4 처리,
+정상 종료 뒤 자식 프로세스·포트·임시 데이터 회수까지 검사합니다.
+
+이 프리뷰 산출물은 installer가 아닌 unpacked 앱 디렉터리이며 아직 공개 다운로드가
+아닙니다. Electron/Chromium/Node 전체 고지와 SBOM, FFmpeg build configuration과
+대응 소스 의무, yt-dlp standalone의 embedded component 고지, Windows 코드 서명,
+macOS Developer ID 서명·hardened runtime·공증·staple 검증이 완료되지 않았습니다.
+따라서 `npm run package:desktop` 결과를 최종 사용자에게 배포하거나 기존 Linux
+설치판 대신 제공하면 안 됩니다. 정확한 차단 조건은
+[`legal/DESKTOP_BINARY_RELEASE_GATE.md`](legal/DESKTOP_BINARY_RELEASE_GATE.md)를
+따릅니다.
+
+## Linux 소스 설치
 
 저장소를 내려받아 `KirinukiHelper` 폴더에서 처음 한 번 실행합니다.
 
@@ -141,8 +158,9 @@ kirinuki://open?source=<URLSearchParams로 인코딩한 지원 VOD HTTPS URL>
 8. **영상 내보내기**에서 제목과 저장 위치를 정하고 결과를 확인합니다.
 
 원본 스트리밍 화면은 시각 확인용입니다. YouTube는 공식 privacy-enhanced
-IFrame API를 사용하고, CHZZK는 문서화되지 않은 embed 경로를 만들지 않으며,
-SOOP은 지원되는 공식 VOD 화면만 사용합니다. 실제 편집·자막·내보내기는 앱이
+embed와 앱에 포함된 격리 Player Bridge를 사용하고, CHZZK는 문서화되지 않은
+embed 경로를 만들지 않으며, SOOP은 지원되는 공식 VOD 화면만 사용합니다. 실제
+편집·자막·내보내기는 앱이
 검증해 준비한 로컬 미디어 또는 사용자가 직접 연결한 파일을 사용합니다.
 
 ## 자막
@@ -192,7 +210,11 @@ Kirinuki의 원격 자체 서버는 없으며 로그인, 계정, telemetry, anal
 
 ## 지원 범위와 알려진 제한
 
-- 현재 자동 설치·실행 제품 경로는 Linux와 Chromium 120 이상만 지원합니다.
+- 현재 사용자 지원 설치·실행 경로는 Linux와 Chromium 120 이상입니다.
+- Windows와 macOS 코드는 네이티브 CI에서 typecheck·unit test·unpacked package와
+  실제 packaged-runtime liveness smoke를 검사하는 단계입니다. 서명·공증,
+  실제 VOD·편집·내보내기 운영체제별 검증과 바이너리 단위 라이선스 검토 전에는
+  공개 배포판 또는 사용자 지원판으로 간주하지 않습니다.
 - 공개 완료 CHZZK·YouTube·SOOP VOD를 대상으로 하며 라이브·비공개·DRM·지역
   제한을 우회하지 않습니다.
 - 플랫폼 페이지 구조나 전송 형식이 바뀌면 해당 소스 준비가 일시적으로 실패할
@@ -210,8 +232,17 @@ Kirinuki의 원격 자체 서버는 없으며 로그인, 계정, telemetry, anal
 ```bash
 npm ci --ignore-scripts
 npm run build
+npm run build:desktop
 npm run validate
 npm test
+```
+
+현재 OS용 unsigned 개발 패키지를 검증할 때만 다음 명령을 사용합니다. 이 명령은
+고정한 Electron과 미디어 sidecar를 내려받을 수 있으며 결과를 공개 release로
+업로드하지 않습니다.
+
+```bash
+npm run package:desktop
 ```
 
 공개 사이트와 앱 편집 산출물은 서로 다른 보안 경계입니다. 공개 산출물은 앱

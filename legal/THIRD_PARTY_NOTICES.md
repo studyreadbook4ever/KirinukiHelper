@@ -1,8 +1,8 @@
 # Third-party notices — source, app browser assets and Kirinuki runtime
 
 이 문서는 Kirinuki 앱 소스 저장소, 앱에 포함되는 browser assets, 앱 setup
-과정에서 선택적으로 설치되는 내부 runtime까지 포함하는 전체 고지입니다. 제3자
-코드가 없는 공개 launch shell ZIP의 더 좁은 범위는
+과정에서 선택적으로 설치되는 내부 runtime과 Electron 개발 프리뷰까지 포함하는
+전체 고지입니다. 제3자 코드가 없는 공개 launch shell ZIP의 더 좁은 범위는
 `public-shell/THIRD_PARTY_NOTICES.md`를 기준으로 합니다. 앱 browser assets의
 배포 고지는 `web/THIRD_PARTY_NOTICES.md`에 따로 둡니다.
 기술 경로 `streaming-companion/`에는 앱이 관리하는 first-party Player Bridge
@@ -15,7 +15,11 @@ Kirinuki 프로젝트가 직접 작성한 코드는 루트 `UNLICENSE`에 따라
 아닙니다. 실제 web·Kirinuki 앱·container 배포 산출물은 출시 때 다시 감사해야
 합니다.
 
-## Linux 소스 앱의 browser assets에 포함되는 구성요소
+Electron 프리뷰 관련 절은 아직 공개 바이너리용 완결 고지가 아닙니다. 최종
+Electron/Chromium/Node SBOM, FFmpeg build별 조건과 yt-dlp standalone embedded
+component 검토가 끝나지 않았으므로 프리뷰 패키지는 외부에 배포하지 않습니다.
+
+## Linux 소스 앱과 Electron 프리뷰의 browser assets
 
 <!-- attribution-id: mediabunny -->
 ### Mediabunny 1.51.0
@@ -200,6 +204,65 @@ Astring의 MIT 조건은 저작권·허가 고지를 소프트웨어의 모든 �
 원문이 들어 있지만, 재패키징하거나 분리 배포할 때 해당 header를 제거하면
 안 됩니다.
 
+## Electron 개발 프리뷰에 추가로 들어가는 구성요소
+
+이 절은 현재 개발 package의 차이를 드러내기 위한 inventory이며 공개 배포
+승인이 아닙니다. 대상별 정확한 도구 URL·바이트·SHA-256은
+`src/desktop/tool-manifest.ts`, 공개 차단 조건은
+`legal/DESKTOP_BINARY_RELEASE_GATE.md`를 기준으로 합니다.
+
+<!-- attribution-id: desktop-preview-runtime -->
+### Electron 43.4.0
+
+- Electron source license: MIT
+- Source and license: https://github.com/electron/electron/tree/v43.4.0
+- npm package: `electron@43.4.0`
+- npm source artifact:
+  https://registry.npmjs.org/electron/-/electron-43.4.0.tgz
+
+Electron runtime에는 Chromium, Node.js와 다수의 제3자 구성요소가 포함됩니다.
+최종 패키지의 Electron `LICENSE`와 `LICENSES.chromium.html`을 보존하고 실제
+플랫폼 archive의 hash와 packaged-file SBOM을 대조해야 합니다. 현재 버전 핀만으로
+그 검토가 끝난 것으로 간주하지 않습니다.
+
+### Electron packaging toolchain
+
+- `@electron/asar@4.2.1` — MIT —
+  https://github.com/electron/asar
+- `@electron/packager@20.3.0` — BSD-2-Clause —
+  https://github.com/electron/packager
+- `@electron/fuses@2.1.3` — MIT —
+  https://github.com/electron/fuses
+
+이 패키지들은 build dependency이며 최종 app runtime에 npm package 그대로 넣지
+않습니다. 전체 transitive lockfile inventory와 canonical positive allowlist
+검토는 아직 완료되지 않았습니다.
+
+### FFmpeg·ffprobe 7.0.2 static sidecars
+
+- Distribution project/tag:
+  https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1
+- FFmpeg upstream: https://ffmpeg.org/
+- Legal guidance: https://ffmpeg.org/legal.html
+
+개발 패키지는 대상별 executable과 release의 `FFMPEG-LICENSE.txt`를 포함합니다.
+하지만 LGPL/GPL 범위는 실제 build configuration과 linked library에 따라
+달라집니다. 최종 `-version`, `-buildconf`와 link evidence를 수집하고
+`--enable-nonfree`가 없음을 확인하며 적용 조건에 맞는 라이선스 원문·대응 소스
+또는 source offer를 제공하기 전에는 공개 배포하지 않습니다.
+
+### yt-dlp 2026.07.04 standalone sidecar
+
+- License: Unlicense
+- Source and license:
+  https://github.com/yt-dlp/yt-dlp/tree/2026.07.04
+- Release: https://github.com/yt-dlp/yt-dlp/releases/tag/2026.07.04
+
+Linux의 Unix zipimport artifact와 달리 Electron 프리뷰는 대상별 official
+standalone executable을 포함합니다. standalone에 포함된 Python runtime,
+yt-dlp-ejs와 그 밖의 embedded component를 대상별로 다시 조사해 고지를
+완성하기 전에는 이 절을 최종 배포 notice로 사용하지 않습니다.
+
 ### MIT notice for runtime components
 
 - Copyright (c) 2023-2026 The ggml authors
@@ -225,21 +288,23 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## 운영체제가 제공하며 이 저장소가 재배포하지 않는 도구
+## Linux 소스 설치판에서 운영체제가 제공하는 도구
 
 <!-- attribution-id: ffmpeg -->
 ### FFmpeg
 
-`ffmpeg -version`과 `ffmpeg -buildconf`로 감지합니다. 이 저장소와 현재
-공개 shell ZIP은 FFmpeg를 재배포하지 않습니다. FFmpeg의 정확한 LGPL/GPL 및
-외부 라이브러리 의무는 사용한 build configuration에 따라 달라집니다.
+`ffmpeg -version`과 `ffmpeg -buildconf`로 감지합니다. Linux 소스 archive와
+현재 공개 shell ZIP은 FFmpeg를 재배포하지 않습니다. Electron 개발 프리뷰는
+위 별도 절의 sidecar를 포함합니다. FFmpeg의 정확한 LGPL/GPL 및 외부 라이브러리
+의무는 사용한 build configuration에 따라 달라집니다.
 Upstream: https://ffmpeg.org/
 
 <!-- attribution-id: ffprobe -->
 ### ffprobe
 
-`ffprobe -version`과 같은 FFmpeg build 정보를 확인합니다. 이 저장소가
-재배포하지 않으며 라이선스 범위는 설치된 FFmpeg build에 따라 달라집니다.
+`ffprobe -version`과 같은 FFmpeg build 정보를 확인합니다. Linux 소스 archive는
+재배포하지 않고 Electron 개발 프리뷰는 위 별도 절의 sidecar를 포함합니다.
+라이선스 범위는 실제 FFmpeg build에 따라 달라집니다.
 Upstream: https://ffmpeg.org/ffprobe.html
 
 <!-- attribution-id: nodejs -->
@@ -259,9 +324,11 @@ Upstream: https://ffmpeg.org/ffprobe.html
 <!-- attribution-id: chromium -->
 ### Chromium / Google Chrome / ChromeDriver
 
-Kirinuki 앱 화면 실행과 E2E 검증에 사용하는 외부 브라우저 도구입니다. 이 저장소가
-재배포하지 않으며 브라우저 배포본의 정확한 구성과 라이선스는 제공자·build에
-따라 달라집니다. Upstream: https://www.chromium.org/chromium-projects/
+Linux 소스 앱 화면 실행과 E2E 검증에 사용하는 외부 브라우저 도구입니다. Linux
+소스 archive는 재배포하지 않지만 Electron 개발 프리뷰에는 Electron이 제공하는
+Chromium runtime이 포함됩니다. 브라우저 배포본의 정확한 구성과 라이선스는
+제공자·build에 따라 달라집니다. Upstream:
+https://www.chromium.org/chromium-projects/
 
 ## Kirinuki 앱 내부 npm runtime
 

@@ -58,7 +58,7 @@ export const LINUX_APP_PACKAGE_ROOT_FILES = Object.freeze([
 
 export const LINUX_APP_REQUIRED_SYSTEM_PREREQUISITES = Object.freeze([
   "Linux",
-  "Node.js 22 or newer",
+  "Node.js 22.13.0 or newer",
   "npm",
   "Chromium 120 or newer",
   "Python 3.11 or newer",

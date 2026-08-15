@@ -36,7 +36,9 @@ import {
   buildExternalSelectedSourceProbeArgs,
   compatibleExternalPacketCopySignatures,
   createExternalProcessEnvironment,
+  externalPublishedArtifactInspectionBinding,
   externalVodConsumerScopeHash,
+  externalYtDlpCommand,
   materializeExternalVod as strictMaterializeExternalVod,
   missingExternalVodSections,
   normalizeExternalVodUrl,
@@ -44,7 +46,8 @@ import {
   parseExternalVodMetadata,
   planExternalVodSections,
   probeExternalVodMetadata,
-  runExternalProcess
+  runExternalProcess,
+  terminateWindowsExternalProcessTree
 } from "../scripts/external-vod-materializer.js";
 import type {
   ExternalMediaInspection,
@@ -56,6 +59,8 @@ import type {
   ExternalVodMaterializationResult,
   ExternalVodMetadata
 } from "../scripts/external-vod-materializer.js";
+import { windowsTaskkillOuterGuardTimeoutMs } from
+  "../scripts/process-tree-termination.js";
 import {
   resolveExternalVodClockProofSet
 } from "../scripts/external-vod-clock-resolver.js";
@@ -820,6 +825,133 @@ test("yt-dlp 실행 파일 누락은 외부 stderr 없이 명확한 안전 오�
       }
     }),
     /yt-dlp artifact 실행 경로는 검증된 절대 경로/u
+  );
+});
+
+test("standalone yt-dlp는 Python 없이 검증된 실행 파일을 직접 호출한다", async () => {
+  const args = buildExternalMetadataProbeArgs(YOUTUBE_URL, {
+    nodeBinary: process.execPath
+  });
+  const command = externalYtDlpCommand({
+    mode: "standalone",
+    ytDlpBinary: YT_DLP_ARTIFACT,
+    args
+  });
+  assert.equal(command.executable, YT_DLP_ARTIFACT);
+  assert.deepEqual(command.args, args);
+  assert.notEqual(command.args, args);
+  assert.notEqual(command.args[0], "-I");
+  assert.equal(Object.isFrozen(command), true);
+  assert.equal(Object.isFrozen(command.args), true);
+  assert.deepEqual(externalYtDlpCommand({
+    mode: "python-zipimport",
+    ytDlpBinary: YT_DLP_ARTIFACT,
+    pythonBinary: PYTHON_BINARY,
+    args
+  }), {
+    executable: PYTHON_BINARY,
+    args: ["-I", YT_DLP_ARTIFACT, ...args]
+  });
+
+  const metadata = await probeExternalVodMetadata(YOUTUBE_URL, {
+    cwd: "/tmp",
+    processEnv: {},
+    ytDlpMode: "standalone",
+    ytDlpBinary: YT_DLP_ARTIFACT,
+    nodeBinary: process.execPath,
+    runProcess: async (executable, actualArgs, options) => {
+      assert.equal(executable, YT_DLP_ARTIFACT);
+      assert.deepEqual(actualArgs, args);
+      assert.equal(options.shell, false);
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          id: YOUTUBE_ID,
+          extractor: "youtube",
+          duration: 120,
+          availability: "public",
+          live_status: "not_live",
+          webpage_url: YOUTUBE_URL,
+          timestamp: 1_700_000_000
+        }),
+        stderr: ""
+      };
+    }
+  });
+  assert.equal(metadata.contentId, YOUTUBE_ID);
+
+  assert.throws(() => externalYtDlpCommand({
+    mode: "standalone",
+    ytDlpBinary: "yt-dlp",
+    args
+  }), /절대 경로/u);
+  assert.throws(() => externalYtDlpCommand({
+    mode: "python-zipimport",
+    ytDlpBinary: YT_DLP_ARTIFACT,
+    args
+  }), /Python/u);
+});
+
+test("published ffprobe binding은 Linux·macOS·Windows의 exact handle 경계를 만든다", () => {
+  const linuxBinding = externalPublishedArtifactInspectionBinding({
+    platform: "linux",
+    processId: 12_345,
+    fileDescriptor: 17
+  });
+  assert.deepEqual(linuxBinding, {
+    inputPath: "/proc/12345/fd/17"
+  });
+  assert.equal(Object.isFrozen(linuxBinding), true);
+  assert.deepEqual(externalPublishedArtifactInspectionBinding({
+    platform: "darwin",
+    processId: 12_345,
+    fileDescriptor: 17
+  }), {
+    inputPath: "/dev/fd/3",
+    inheritedInputFileDescriptor: 17
+  });
+  assert.deepEqual(externalPublishedArtifactInspectionBinding({
+    platform: "win32",
+    processId: 12_345,
+    fileDescriptor: 17
+  }), {
+    inputPath: "pipe:3",
+    inheritedInputFileDescriptor: 17
+  });
+  for (const invalid of [
+    { platform: "freebsd", processId: 1, fileDescriptor: 3 },
+    { platform: "linux", processId: 0, fileDescriptor: 3 },
+    { platform: "darwin", processId: 1, fileDescriptor: -1 },
+    { platform: "win32", processId: 1, fileDescriptor: 1.5 }
+  ]) {
+    assert.throws(
+      () => externalPublishedArtifactInspectionBinding(invalid),
+      (error: unknown) => (
+        error instanceof ExternalVodMaterializationError
+        && error.code === "MEDIA_VERIFICATION_FAILED"
+      )
+    );
+  }
+  assert.equal(
+    buildExternalFfprobeArgs("/dev/fd/3", {
+      inheritedInputFileDescriptor: 17
+    }).at(-1),
+    "/dev/fd/3"
+  );
+  assert.equal(
+    buildExternalFfprobeArgs("pipe:3", {
+      inheritedInputFileDescriptor: 17
+    }).at(-1),
+    "pipe:3"
+  );
+  assert.throws(
+    () => buildExternalFfprobeArgs("relative.mp4", {
+      inheritedInputFileDescriptor: 17
+    }),
+    (error: unknown) => (
+      error instanceof ExternalVodMaterializationError
+      && error.code === "MEDIA_VERIFICATION_FAILED"
+    )
   );
 });
 
@@ -1656,6 +1788,272 @@ test("기본 프로세스 경계는 argv 배열과 shell:false를 사용한다",
   assert.equal(captured?.options.env?.temp, undefined);
 });
 
+test("ffprobe용 열린 파일은 모든 OS에서 child fd 3에 매핑하고 Windows만 process group을 만들지 않는다", async () => {
+  for (const platform of ["linux", "darwin", "win32"] as const) {
+    let captured: SpawnOptions | undefined;
+    const spawnImpl = ((_command: string, _args: readonly string[], options: SpawnOptions) => {
+      captured = options;
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill: () => boolean;
+      };
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => true;
+      queueMicrotask(() => {
+        child.stdout.end("{}\n");
+        child.stderr.end();
+        child.emit("close", 0, null);
+      });
+      return child as unknown as ChildProcess;
+    }) as unknown as typeof spawn;
+    await runExternalProcess("ffprobe", ["-i", "bound-input"], {
+      cwd: "/tmp",
+      env: {},
+      shell: false,
+      inheritedInputFileDescriptor: 17
+    }, {
+      platform,
+      spawnImpl
+    });
+    assert.deepEqual(captured?.stdio, ["ignore", "pipe", "pipe", 17], platform);
+    assert.equal(captured?.detached, platform === "win32" ? undefined : true, platform);
+    assert.equal(captured?.shell, false, platform);
+  }
+  await assert.rejects(
+    runExternalProcess("ffprobe", [], {
+      cwd: "/tmp",
+      env: {},
+      shell: false,
+      inheritedInputFileDescriptor: -1
+    }),
+    (error: unknown) => (
+      error instanceof ExternalVodMaterializationError
+      && error.code === "INVALID_PROCESS_BINARY"
+    )
+  );
+});
+
+test("Windows 취소는 leader kill이 아니라 exact process tree terminator 완료를 기다린다", async () => {
+  const controller = new AbortController();
+  let terminatedPid = 0;
+  let leaderKillCount = 0;
+  let child: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: () => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    child = new EventEmitter() as typeof child & NonNullable<typeof child>;
+    child.pid = 4_321;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => {
+      leaderKillCount += 1;
+      return true;
+    };
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("yt-dlp.exe", ["--version"], {
+    cwd: "/tmp",
+    env: {},
+    shell: false,
+    signal: controller.signal
+  }, {
+    platform: "win32",
+    spawnImpl,
+    terminateWindowsProcessTreeImpl: async (pid) => {
+      terminatedPid = pid;
+      queueMicrotask(() => {
+        child?.stdout.end();
+        child?.stderr.end();
+        child?.emit("close", 1, null);
+      });
+    }
+  });
+  controller.abort();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error && "code" in error && error.code === "ABORT_ERR"
+  ));
+  assert.equal(terminatedPid, 4_321);
+  assert.equal(leaderKillCount, 0);
+});
+
+test("Windows taskkill helper timeout은 killer를 종료하고 close까지 기다린다", async () => {
+  let timeoutCallback: (() => void) | undefined;
+  let timeoutDelay = 0;
+  let timerCleared = false;
+  let alive = true;
+  let settled = false;
+  const killerSignals: Array<NodeJS.Signals | number | undefined> = [];
+  const killer = new EventEmitter() as EventEmitter & {
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  };
+  killer.kill = (signal) => {
+    killerSignals.push(signal);
+    return true;
+  };
+  const spawnImpl = ((_command: string, _args: readonly string[], _options: SpawnOptions) => (
+    killer as unknown as ChildProcess
+  )) as unknown as typeof spawn;
+  const timerHandle = {} as ReturnType<typeof setTimeout>;
+  const pending = terminateWindowsExternalProcessTree(4_321, {
+    environment: { SystemRoot: "C:\\Windows" },
+    spawnImpl,
+    timeoutMs: 17,
+    probeProcessImpl: () => {
+      if (!alive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
+    setTimeoutImpl: ((callback: () => void, delay = 0) => {
+      timeoutCallback = callback;
+      timeoutDelay = delay;
+      return timerHandle;
+    }) as unknown as typeof setTimeout,
+    clearTimeoutImpl: ((handle: ReturnType<typeof setTimeout>) => {
+      assert.equal(handle, timerHandle);
+      timerCleared = true;
+    }) as typeof clearTimeout
+  });
+  void pending.finally(() => { settled = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(timeoutDelay, 2);
+  timeoutCallback?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(killerSignals, ["SIGKILL"]);
+  assert.equal(settled, false);
+  alive = false;
+  killer.emit("close", null, "SIGKILL");
+  await pending;
+  assert.equal(timerCleared, true);
+});
+
+test("Windows taskkill reject는 exact leader fallback 뒤 원래 취소 오류를 보존한다", async () => {
+  const controller = new AbortController();
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let childRef: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.pid = 8_765;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      queueMicrotask(() => {
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", null, "SIGKILL");
+      });
+      return true;
+    };
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("yt-dlp.exe", [], {
+    cwd: "C:\\Kirinuki",
+    env: {},
+    shell: false,
+    signal: controller.signal
+  }, {
+    platform: "win32",
+    spawnImpl,
+    terminateWindowsProcessTreeImpl: async () => {
+      throw new Error("taskkill rejected");
+    }
+  });
+  controller.abort();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ABORT_ERR"
+  ));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+});
+
+test("Windows taskkill never-settle은 bounded fallback 뒤 close 한 번으로 원래 timeout 오류를 보존한다", async () => {
+  const scheduled: Array<{
+    callback: () => void;
+    delay: number;
+    cleared: boolean;
+  }> = [];
+  const handles = new Map<object, (typeof scheduled)[number]>();
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    const task = { callback, delay, cleared: false };
+    const handle = {};
+    scheduled.push(task);
+    handles.set(handle, task);
+    return handle;
+  }) as unknown as typeof setTimeout;
+  const clearTimeoutImpl = ((handle: object) => {
+    const task = handles.get(handle);
+    if (task) {
+      task.cleared = true;
+    }
+  }) as unknown as typeof clearTimeout;
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let childRef: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.pid = 9_876;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      queueMicrotask(() => {
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", null, "SIGKILL");
+        child.emit("close", null, "SIGKILL");
+      });
+      return true;
+    };
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("ffmpeg.exe", [], {
+    cwd: "C:\\Kirinuki",
+    env: {},
+    shell: false,
+    timeoutMs: 123
+  }, {
+    platform: "win32",
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl,
+    killGraceMs: 17,
+    terminateWindowsProcessTreeImpl: async () => await new Promise<void>(() => undefined)
+  });
+  assert.equal(scheduled[0]?.delay, 123);
+  scheduled[0]?.callback();
+  assert.equal(
+    scheduled[1]?.delay,
+    windowsTaskkillOuterGuardTimeoutMs(17)
+  );
+  scheduled[1]?.callback();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ETIMEDOUT"
+  ));
+  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  assert.equal(scheduled[0]?.cleared, true);
+  assert.equal(scheduled[1]?.cleared, true);
+  assert.equal(childRef?.listenerCount("close"), 0);
+});
+
 test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM 후 KILL하고 close에서 끝난다", async () => {
   const scheduled: Array<{
     callback: () => void;
@@ -1697,6 +2095,7 @@ test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM �
     return child as unknown as ChildProcess;
   }) as unknown as typeof spawn;
   const groupSignals: NodeJS.Signals[] = [];
+  let groupAlive = true;
   const pending = runExternalProcess("yt-dlp", ["--version"], {
     cwd: "/tmp",
     env: { PATH: "/usr/bin" },
@@ -1708,6 +2107,11 @@ test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM �
     clearTimeoutImpl,
     killGraceMs: 17,
     platform: "linux",
+    probeProcessGroupImpl: () => {
+      if (!groupAlive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
     killProcessGroupImpl: (pid, signal) => {
       assert.equal(pid, 42_424);
       groupSignals.push(signal);
@@ -1716,16 +2120,21 @@ test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM �
   const rejected = assert.rejects(pending, /123ms 시간 제한/u);
   assert.equal(scheduled[0]?.delay, 123);
   scheduled[0]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(groupSignals, ["SIGTERM"]);
   assert.equal(scheduled[1]?.delay, 17);
   scheduled[1]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(groupSignals, ["SIGTERM", "SIGKILL"]);
+  groupAlive = false;
+  assert.equal(scheduled[2]?.delay, 17);
+  scheduled[2]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   childRef?.stdout.end();
   childRef?.stderr.end();
   childRef?.emit("close", null, "SIGKILL");
   await rejected;
   assert.equal(scheduled[0]?.cleared, true);
-  assert.equal(scheduled[1]?.cleared, true);
 });
 
 test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 뒤 KILL한다", async () => {
@@ -1769,6 +2178,7 @@ test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 
     return child as unknown as ChildProcess;
   }) as unknown as typeof spawn;
   const groupSignals: NodeJS.Signals[] = [];
+  let groupAlive = true;
   const pending = runExternalProcess("ffmpeg", [], {
     cwd: "/tmp",
     env: {},
@@ -1780,6 +2190,11 @@ test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 
     clearTimeoutImpl,
     killGraceMs: 25,
     platform: "linux",
+    probeProcessGroupImpl: () => {
+      if (!groupAlive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
     killProcessGroupImpl: (_pid, signal) => {
       groupSignals.push(signal);
     }
@@ -1791,6 +2206,7 @@ test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 
   );
   const rejected = assert.rejects(pending, /100ms 시간 제한/u);
   scheduled[0]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(groupSignals, ["SIGTERM"]);
   childRef?.stdout.end();
   childRef?.stderr.end();
@@ -1799,9 +2215,176 @@ test("leader가 TERM 직후 닫혀도 무시하는 descendant group에는 grace 
   assert.equal(settled, false);
   assert.equal(scheduled[1]?.delay, 25);
   scheduled[1]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(groupSignals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(scheduled[2]?.delay, 25);
+  groupAlive = false;
+  scheduled[2]?.callback();
+  await rejected;
+});
+
+test("정상 close도 남은 POSIX descendant group을 회수한 뒤에만 성공한다", async () => {
+  const scheduled: Array<{ callback: () => void; delay: number }> = [];
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    scheduled.push({ callback, delay });
+    return {} as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  let groupAlive = true;
+  const groupSignals: NodeJS.Signals[] = [];
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: () => boolean;
+    };
+    child.pid = 61_616;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end("ok\n");
+      child.stderr.end();
+      child.emit("close", 0, null);
+    });
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("ffmpeg", [], {
+    cwd: "/tmp",
+    env: {},
+    shell: false
+  }, {
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl: (() => undefined) as typeof clearTimeout,
+    killGraceMs: 13,
+    platform: "linux",
+    probeProcessGroupImpl: () => {
+      if (!groupAlive) {
+        throw Object.assign(new Error("missing"), { code: "ESRCH" });
+      }
+    },
+    killProcessGroupImpl: (_pid, signal) => groupSignals.push(signal)
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(groupSignals, ["SIGTERM"]);
+  let settled = false;
+  void pending.then(() => { settled = true; });
+  assert.equal(settled, false);
+  groupAlive = false;
+  assert.equal(scheduled[1]?.delay, 13);
+  scheduled[1]?.callback();
+  const result = await pending;
+  assert.equal(result.stdout, "ok\n");
+  assert.deepEqual(groupSignals, ["SIGTERM"]);
+});
+
+test("정상 exit 뒤 POSIX descendant가 SIGKILL에도 남으면 성공으로 처리하지 않는다", async () => {
+  const scheduled: Array<{ callback: () => void; delay: number }> = [];
+  const setTimeoutImpl = ((callback: () => void, delay = 0) => {
+    scheduled.push({ callback, delay });
+    return {} as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  const groupSignals: NodeJS.Signals[] = [];
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: () => boolean;
+    };
+    child.pid = 62_626;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 0, null);
+    });
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const pending = runExternalProcess("ffmpeg", [], {
+    cwd: "/tmp",
+    env: {},
+    shell: false
+  }, {
+    spawnImpl,
+    setTimeoutImpl,
+    clearTimeoutImpl: (() => undefined) as typeof clearTimeout,
+    killGraceMs: 11,
+    platform: "linux",
+    probeProcessGroupImpl: () => undefined,
+    killProcessGroupImpl: (_pid, signal) => groupSignals.push(signal)
+  });
+  const rejected = assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "EPROCESSGROUPALIVE"
+  ));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  scheduled[1]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  scheduled[2]?.callback();
   await rejected;
   assert.deepEqual(groupSignals, ["SIGTERM", "SIGKILL"]);
-  assert.equal(scheduled[1]?.cleared, true);
+});
+
+test("실제 POSIX 정상 exit도 SIGTERM 무시 descendant를 남기지 않는다", {
+  skip: process.platform === "win32"
+}, async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "kirinuki-process-group-test-"));
+  const pidPath = path.join(cwd, "descendant.pid");
+  t.after(async () => {
+    try {
+      const descendantPid = Number(await readFile(pidPath, "utf8"));
+      if (Number.isSafeInteger(descendantPid) && descendantPid > 0) {
+        try {
+          process.kill(descendantPid, "SIGKILL");
+        } catch (error) {
+          if (
+            !(error instanceof Error)
+            || !("code" in error)
+            || error.code !== "ESRCH"
+          ) {
+            throw error;
+          }
+        }
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+  const parentScript = [
+    "const { spawn } = require('node:child_process');",
+    "const { writeFileSync } = require('node:fs');",
+    "const descendant = spawn(process.execPath, ['-e', 'process.on(\\\"SIGTERM\\\", () => {}); setInterval(() => {}, 1000);'], { stdio: 'ignore' });",
+    "writeFileSync(process.argv[1], String(descendant.pid));",
+    "setTimeout(() => process.exit(0), 25);"
+  ].join("\n");
+  const result = await runExternalProcess(process.execPath, [
+    "-e",
+    parentScript,
+    pidPath
+  ], {
+    cwd,
+    env: process.env,
+    shell: false,
+    timeoutMs: 5_000
+  }, {
+    killGraceMs: 100,
+    platform: process.platform
+  });
+  assert.equal(result.exitCode, 0);
+  const descendantPid = Number(await readFile(pidPath, "utf8"));
+  assert.throws(
+    () => process.kill(descendantPid, 0),
+    (error: unknown) => (
+      error instanceof Error
+      && "code" in error
+      && error.code === "ESRCH"
+    )
+  );
 });
 
 test("빠른 close도 진행 중인 재귀 quota 검사가 끝나기 전에 성공하지 않는다", async (t) => {

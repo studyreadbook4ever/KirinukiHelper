@@ -1,9 +1,9 @@
-# Kirinuki 공개 웹·Linux 앱 출시 체크리스트
+# Kirinuki 공개 웹·데스크톱 앱 출시 체크리스트
 
-이 문서는 `kirinuki.eff0rtchung.kr`의 공개 시작 페이지와 Linux Kirinuki 앱을
-서로 다른 보안·배포 산출물로 검증하기 위한 release gate입니다. 공개 사이트는
-소개·설치·엄격한 앱 링크만 제공하고, 실제 편집은 설치된 앱이 소유한 창에서만
-실행합니다.
+이 문서는 `kirinuki.eff0rtchung.kr`의 공개 시작 페이지, 사용자 지원 Linux 소스
+설치판과 Linux·Windows·macOS Electron 앱을 서로 다른 보안·배포 산출물로
+검증하기 위한 release gate입니다. 공개 사이트는 소개·설치·엄격한 앱 링크만
+제공하고, 실제 편집은 설치된 앱이 소유한 창에서만 실행합니다.
 
 법률 자문이나 무위험 보증이 아닙니다. 출시 지역, 수익 모델, 플랫폼 약관과
 콘텐츠 권리는 실제 산출물을 기준으로 별도 검토해야 합니다.
@@ -18,6 +18,11 @@
   않는다.
 - [ ] Linux v1은 아직 자체 Node·Chromium·Python·FFmpeg를 포함한 AppImage가
   아니라는 사실과 시스템 요구사항을 다운로드 페이지에 표시했다.
+- [ ] Electron 프리뷰는 unsigned·unnotarized unpacked 개발 디렉터리이고 공개
+  다운로드나 Linux 소스 설치판의 대체물이 아니라는 사실을 표시했다.
+- [ ] `legal/DESKTOP_BINARY_RELEASE_GATE.md`의 Electron archive provenance,
+  SBOM·notice, FFmpeg buildconf·대응 소스, yt-dlp standalone 고지와 OS signing
+  조건이 하나라도 미완료이면 native package 업로드·release를 차단한다.
 - [ ] 사용자는 `./setup.sh`를 한 번 실행한 뒤 앱 아이콘 또는 `kirinuki`만
   사용한다. 별도 내부 프로세스·브라우저 확장·연결 주소를 시작하거나 구성하는
   절차가 사용자 문서와 UI에 없다.
@@ -50,8 +55,9 @@
   사용자 gesture 없는 무한 재시도를 사용하지 않는다.
 - [ ] JavaScript가 비활성화되어도 앱 설치 요구사항, 직접 실행 방법과 문의처를
   읽을 수 있다.
-- [ ] 모바일에서는 편집을 시작하지 않으며 Linux 데스크톱 앱이 필요하다는
-  설명과 설치 가능한 기기에서 다시 여는 방법만 제공한다.
+- [ ] 모바일에서는 편집을 시작하지 않으며 지원되는 데스크톱 설치판이 필요하다는
+  설명과 설치 가능한 기기에서 다시 여는 방법만 제공한다. 공개 전인 Windows·
+  macOS 프리뷰를 다운로드 가능한 제품처럼 안내하지 않는다.
 
 ## 2. 엄격한 앱 링크
 
@@ -102,13 +108,15 @@
 
 ## 4. Kirinuki 앱 생명주기
 
+- [ ] Linux 소스 설치판과 Electron package의 요구사항·캐시 위치·종료 소유권을
+  섞지 않고 채널별 manifest로 고정했다.
 - [ ] `./setup.sh`가 현재 저장소를 식별해 사용자 명령과 desktop entry를
   원자적으로 설치·갱신하고, Kirinuki marker가 없는 기존 파일은 덮어쓰지 않는다.
 - [ ] 앱 아이콘과 인자 없는 `kirinuki`는 같은 bootstrap 경로로 들어가며 첫
   실행·두 번째 실행·업데이트 뒤 첫 실행이 모두 멱등적이다.
 - [ ] 앱이 저장소 관리 npm 구성요소, web/editor build, 고정 runtime artifact와
   선택한 자막 구성을 스스로 확인하고 필요한 항목만 준비한다.
-- [ ] 시스템 Node.js 22+, npm, Chromium 120+, Python 3.11+, FFmpeg, ffprobe가
+- [ ] 시스템 Node.js 22.13.0+, npm, Chromium 120+, Python 3.11+, FFmpeg, ffprobe가
   없으면 정확한 항목을 안내하고 fail closed한다. `sudo`, `curl | sh`, 임의
   package-manager 설치를 자동 실행하지 않는다.
 - [ ] 앱 내부 프로세스는 이 기기에서만 접근 가능하고 임의 LAN interface나 공개
@@ -121,6 +129,8 @@
   부분 설치를 각각 검증했다.
 - [ ] 일반 사용자 문서에서 저수준 내부 명령은 제거하고 `doctor`, `status`,
   `stop`만 개발자·관리자 진단 폴백으로 분리했다.
+- [ ] Electron 앱은 native single-instance/deep-link 경로로 시작하고 마지막 창
+  종료 시 자신이 소유한 loopback server와 child process를 정상 종료한다.
 
 ## 5. 프로젝트·캐시·세션 불변조건
 
@@ -187,6 +197,14 @@
 
 ## 8. 설치 시 다운로드·시스템 도구 라이선스
 
+<!-- attribution-id: desktop-preview-runtime -->
+- [ ] Electron `43.4.0` 플랫폼 archive의 URL·크기·SHA-256과 upstream checksum,
+  Electron `LICENSE`, `LICENSES.chromium.html`, Chromium·Node 포함 SBOM을 target별
+  release evidence에 기록했다.
+- [ ] `@electron/packager@20.3.0`, `@electron/fuses@2.1.3`와 모든 transitive
+  build dependency의 exact lock artifact·라이선스를 canonical registry에서
+  검토했다.
+
 <!-- attribution-id: whisper-cpp -->
 - [ ] whisper.cpp source commit, archive byte/hash와 MIT 원문을 보존했다. binary를
   배포한다면 compile flags와 실제 linked component를 다시 조사했다.
@@ -199,6 +217,8 @@
 <!-- attribution-id: yt-dlp -->
 - [ ] yt-dlp 2026.07.04 exact artifact, Unlicense와 embedded yt-dlp-ejs,
   Meriyah, Astring header를 보존했다.
+- [ ] Electron package의 target별 yt-dlp standalone에 포함된 Python/EJS/기타
+  component를 실제 바이너리 기준으로 다시 inventory하고 최종 고지에 포함했다.
 <!-- attribution-id: ffmpeg -->
 - [ ] FFmpeg를 산출물에 포함하면 최종 `ffmpeg -version`과 `-buildconf`를
   증거로 남기고 `--enable-nonfree`가 있으면 자동 배포를 **차단**한다.
@@ -235,8 +255,8 @@
 - [ ] CHZZK 명칭·URL·아이콘이 공식 제휴나 승인을 암시하지 않으며 현재 플랫폼
   약관과 기술적 접근 방식을 출시 시점에 다시 확인했다.
 <!-- attribution-id: youtube-service -->
-- [ ] YouTube 원본 보기는 공식 privacy-enhanced embed와 문서화된 IFrame API만
-  사용하고 로그인·cookie·DRM을 우회하지 않는다.
+- [ ] YouTube 원본 보기는 공식 privacy-enhanced embed와 앱에 포함된 격리
+  Player Bridge만 사용하고 로그인·cookie·DRM을 우회하지 않는다.
 <!-- attribution-id: soop-service -->
 - [ ] SOOP 명칭·URL·아이콘이 공식 제휴나 승인을 암시하지 않으며 지원되는 공개
   VOD 방식만 사용한다.
@@ -254,6 +274,16 @@
 - [ ] `npm ci --ignore-scripts`, `npm run license:check`, `npm run build`,
   `npm run validate`, unit tests, browser tests와 release artifact scan을 같은
   commit에서 통과했다.
+- [ ] GitHub Actions native matrix가 Linux x64, Windows x64와 macOS arm64 각각의
+  실제 host에서 `npm run typecheck`, `npm test`, `npm run package:desktop`을
+  통과했고 예상한 `process.platform-process.arch`와 일치했다.
+- [ ] unsigned CI package는 업로드하지 않으며, 공개 후보는 별도 보호된 release
+  job에서만 signing secret을 사용해 생성했다.
+- [ ] macOS 앱과 모든 nested executable·dylib·FFmpeg·ffprobe·yt-dlp를 Developer
+  ID로 서명하고 hardened runtime·최소 entitlement·Apple notarization·ticket
+  staple 뒤 `codesign`, `spctl`, `stapler` 검증을 통과했다.
+- [ ] Windows 앱과 native sidecar를 Authenticode 서명·timestamp하고 최종
+  signature와 새 사용자 환경의 실행 경고를 검사했다.
 - [ ] 공개 artifact를 별도로 풀어 loopback 문자열, 내부 route, editor 초기화,
   내부 CSP 허용과 source map 비밀이 없음을 검사했다.
 - [ ] 깨끗한 Linux 계정에서 최초 설치, 첫 실행, 두 번째 실행, deep link, 앱 미설치

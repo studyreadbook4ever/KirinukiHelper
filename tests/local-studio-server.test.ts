@@ -597,7 +597,11 @@ test("HTML 보안 헤더는 CSP, no-store, COOP, nosniff와 origin-only referrer
   assert.match(headers["Content-Security-Policy"] || "", /frame-ancestors 'none'/u);
   assert.match(
     headers["Content-Security-Policy"] || "",
-    /script-src 'self' https:\/\/www\.youtube\.com(?:;|$)/u
+    /script-src 'self'(?:;|$)/u
+  );
+  assert.doesNotMatch(
+    headers["Content-Security-Policy"] || "",
+    /script-src[^;]*https:/u
   );
   assert.match(
     headers["Content-Security-Policy"] || "",

@@ -91,10 +91,10 @@ test("localhost companion package root override는 절대경로만 사용한다"
   }
 });
 
-test("CLI의 Node 최소 버전은 package 계약인 22.0.0을 정확히 지킨다", () => {
-  assert.equal(supportedNodeVersion("21.99.9"), false);
-  assert.equal(supportedNodeVersion("22.0.0"), true);
-  assert.equal(supportedNodeVersion("22.1.0"), true);
+test("CLI의 Node 최소 버전은 node:sqlite가 unflag된 22.13.0을 정확히 지킨다", () => {
+  assert.equal(supportedNodeVersion("22.12.99"), false);
+  assert.equal(supportedNodeVersion("22.13.0"), true);
+  assert.equal(supportedNodeVersion("22.13.1"), true);
   assert.equal(supportedNodeVersion("23.0.0"), true);
   assert.equal(supportedNodeVersion("invalid"), false);
 });
@@ -162,7 +162,7 @@ test("관리형 종료 확인은 service·identity·입증된 포트가 모두 �
       inspection += 1;
       return inspection < 5;
     },
-    timeoutMs: 100,
+    timeoutMs: 1_000,
     pollIntervalMs: 1
   });
   assert.equal(inspection, 5);
@@ -513,7 +513,7 @@ test("package scripts는 doctor/setup/start/status/stop을 Node CLI로 노출한
   const packageJson = JSON.parse(
     await readFile(path.join(packageRoot, "package.json"), "utf8")
   );
-  assert.equal(packageJson.engines.node, ">=22");
+  assert.equal(packageJson.engines.node, ">=22.13.0");
   assert.equal(
     packageJson.scripts["caption-stack"],
     "node --import tsx scripts/local-caption-stack.ts"

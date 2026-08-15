@@ -43,6 +43,21 @@ export interface StreamingBridgeContentEndpointOptions {
   readonly adapter: StreamingBridgeContentAdapter;
   readonly hostWindow?: Window;
   readonly createEventId?: () => string;
+  readonly messageTransport?: StreamingBridgeContentMessageTransport;
+  /** Test seam; production direct transport requires native postMessage. */
+  readonly isTrustedMessageEvent?: (event: MessageEvent<unknown>) => boolean;
+  /** Test seam; production must use the default native `event.isTrusted`. */
+  readonly isTrustedKeyboardEvent?: (event: KeyboardEvent) => boolean;
+}
+
+export interface StreamingBridgeContentMessageTransport {
+  readonly subscribe: (
+    listener: (message: unknown, origin: string) => void
+  ) => () => void;
+  readonly send: (
+    message: StreamingBridgeResponse | StreamingBridgeShortcutMessage,
+    targetOrigin: string
+  ) => void | Promise<void>;
 }
 
 type ResponseErrorCode =
@@ -189,7 +204,10 @@ export function installStreamingBridgeContentEndpoint({
   allowedParentOrigins,
   adapter,
   hostWindow = window,
-  createEventId = () => `shortcut-${crypto.randomUUID()}`
+  createEventId = () => `shortcut-${crypto.randomUUID()}`,
+  messageTransport,
+  isTrustedMessageEvent = (event) => event.isTrusted,
+  isTrustedKeyboardEvent = (event) => event.isTrusted
 }: StreamingBridgeContentEndpointOptions): () => void {
   const origins = new Set(allowedParentOrigins.map(exactAllowedWebAppOrigin));
   if (origins.size === 0) {
@@ -209,12 +227,31 @@ export function installStreamingBridgeContentEndpoint({
   let activeOrigin = "";
   let activeSource: StreamingBridgeShortcutMessage["source"] | null = null;
 
-  const respond = (
+  const transport: StreamingBridgeContentMessageTransport = messageTransport || {
+    subscribe(listener): () => void {
+      const onMessage = (event: MessageEvent<unknown>): void => {
+        if (
+          isTrustedMessageEvent(event)
+          && event.source === parentWindow
+          && origins.has(event.origin)
+        ) {
+          listener(event.data, event.origin);
+        }
+      };
+      hostWindow.addEventListener("message", onMessage);
+      return () => hostWindow.removeEventListener("message", onMessage);
+    },
+    send(message, targetOrigin): void {
+      parentWindow.postMessage(message, targetOrigin);
+    }
+  };
+
+  const respond = async (
     response: StreamingBridgeResponse,
     targetOrigin: string
-  ): void => {
+  ): Promise<void> => {
     if (!disposed) {
-      parentWindow.postMessage(response, targetOrigin);
+      await transport.send(response, targetOrigin);
     }
   };
 
@@ -224,7 +261,7 @@ export function installStreamingBridgeContentEndpoint({
   ): Promise<void> => {
     const highest = latestGeneration.get(origin) || 0;
     if (request.generation < highest) {
-      respond(failureResponse(
+      await respond(failureResponse(
         request,
         "stale-generation",
         "오래된 스트리밍 제어 요청은 실행하지 않았습니다."
@@ -296,7 +333,7 @@ export function installStreamingBridgeContentEndpoint({
       if (request.generation === (latestGeneration.get(origin) || 0)) {
         requestResults.get(origin)?.set(request.requestId, response);
       }
-      respond(response, origin);
+      await respond(response, origin);
     } catch (error) {
       const code = error instanceof StreamingBridgeContentError
         ? error.code
@@ -308,38 +345,37 @@ export function installStreamingBridgeContentEndpoint({
       if (request.generation === (latestGeneration.get(origin) || 0)) {
         requestResults.get(origin)?.set(request.requestId, response);
       }
-      respond(response, origin);
+      await respond(response, origin);
     }
   };
 
-  const onMessage = (event: MessageEvent<unknown>): void => {
+  const onMessage = (message: unknown, origin: string): void => {
     if (
       disposed
-      || event.source !== parentWindow
-      || !origins.has(event.origin)
+      || !origins.has(origin)
     ) {
       return;
     }
-    const request = parseStreamingBridgeRequest(event.data);
+    const request = parseStreamingBridgeRequest(message);
     if (!request) {
       return;
     }
-    const highest = latestGeneration.get(event.origin) || 0;
+    const highest = latestGeneration.get(origin) || 0;
     if (request.generation > highest) {
-      latestGeneration.set(event.origin, request.generation);
-      requestResults.set(event.origin, new Map());
+      latestGeneration.set(origin, request.generation);
+      requestResults.set(origin, new Map());
     }
-    const results = requestResults.get(event.origin)
+    const results = requestResults.get(origin)
       || new Map<string, StreamingBridgeResponse | null>();
     if (results.has(request.requestId)) {
       const cached = results.get(request.requestId);
       if (cached) {
-        respond(cached, event.origin);
+        void respond(cached, origin).catch(() => undefined);
       }
       return;
     }
     results.set(request.requestId, null);
-    requestResults.set(event.origin, results);
+    requestResults.set(origin, results);
     if (results.size > 512) {
       const oldest = results.keys().next().value;
       if (typeof oldest === "string") {
@@ -347,12 +383,15 @@ export function installStreamingBridgeContentEndpoint({
       }
     }
     queueTail = queueTail.then(
-      () => execute(request, event.origin),
-      () => execute(request, event.origin)
+      () => execute(request, origin),
+      () => execute(request, origin)
     );
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (!isTrustedKeyboardEvent(event)) {
+      return;
+    }
     const key = streamingShortcutKeyFromEvent(event);
     if (
       disposed
@@ -370,7 +409,7 @@ export function installStreamingBridgeContentEndpoint({
       return;
     }
     event.preventDefault();
-    void Promise.resolve(adapter.readSource()).then((value) => {
+    void Promise.resolve(adapter.readSource()).then(async (value) => {
       const actualSource = createStreamingBridgeSourceIdentity(value);
       if (
         disposed
@@ -392,7 +431,7 @@ export function installStreamingBridgeContentEndpoint({
       };
       const parsedShortcut = parseStreamingBridgeShortcutMessage(shortcut);
       if (parsedShortcut) {
-        parentWindow.postMessage(parsedShortcut, origin);
+        await transport.send(parsedShortcut, origin);
       }
     }).catch(() => {
       // A shortcut is fail-closed when the iframe source changed or cannot be
@@ -400,14 +439,14 @@ export function installStreamingBridgeContentEndpoint({
     });
   };
 
-  hostWindow.addEventListener("message", onMessage);
+  const unsubscribeTransport = transport.subscribe(onMessage);
   hostWindow.addEventListener("keydown", onKeyDown, true);
   return () => {
     if (disposed) {
       return;
     }
     disposed = true;
-    hostWindow.removeEventListener("message", onMessage);
+    unsubscribeTransport();
     hostWindow.removeEventListener("keydown", onKeyDown, true);
     latestGeneration.clear();
     requestResults.clear();

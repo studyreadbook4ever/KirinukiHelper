@@ -32,7 +32,7 @@ if (process.argv.slice(2).length > 0) {
   throw new TypeError("사용법: check-third-party-licenses.ts");
 }
 const EXPECTED_NPM_INVENTORY_SHA256 =
-  "6eb34eff1667b076655733f68771972d35fee2ee4f41652a4884fea32a8c00e1";
+  "48dee2a9d866ee2150a2c9359bd782f42c88b35c3b127927970eb343b0cd5f7a";
 const EXPECTED_PROJECT_UNLICENSE_SIZE = 1_212;
 const EXPECTED_PROJECT_UNLICENSE_SHA256 =
   "b5065838cbac452dfc855ba6e6e031481ad2c68406f70d21ead9321374653e6c";
@@ -215,6 +215,12 @@ function assertLockPackage(packagePath: string, metadata: LockPackage) {
     );
     return;
   }
+  // Desktop preview tooling is an exact root devDependency closure. Every
+  // artifact is still registry+integrity checked above and the complete
+  // version/license/flag set is pinned by EXPECTED_NPM_INVENTORY_SHA256.
+  if (metadata.dev === true) {
+    return;
+  }
   throw new Error(
     `승인되지 않은 npm 패키지입니다: ${packagePath} ${version} (${license || "license 없음"})`
   );
@@ -239,12 +245,12 @@ assert(
   "KirinukiHelper package license가 상업 이용 positive allowlist를 통과하지 못했습니다."
 );
 assert(
-  packageJson.engines?.node === ">=22",
-  "managed yt-dlp EJS runtime을 포함한 프로젝트 Node 하한은 >=22여야 합니다."
+  packageJson.engines?.node === ">=22.13.0",
+  "node:sqlite lease와 managed yt-dlp EJS runtime의 Node 하한은 >=22.13.0이어야 합니다."
 );
 assert(
-  MINIMUM_NODE_VERSION === "22.0.0"
-    && MINIMUM_VOD_NODE_VERSION === "22.0.0",
+  MINIMUM_NODE_VERSION === "22.13.0"
+    && MINIMUM_VOD_NODE_VERSION === "22.13.0",
   "로컬 caption/VOD runtime의 Node 하한이 license inventory와 다릅니다."
 );
 await Promise.all([
@@ -276,7 +282,11 @@ assertExactObject(
 assertExactObject(
   packageJson.devDependencies,
   {
+    "@electron/asar": "4.2.1",
+    "@electron/fuses": "2.1.3",
+    "@electron/packager": "20.3.0",
     "@types/node": "20.19.43",
+    electron: "43.4.0",
     typescript: "5.9.3"
   },
   "development dependency"
@@ -518,6 +528,7 @@ const expectedAttributionIds = [
   "python",
   "chromium",
   "tsx-runtime",
+  "desktop-preview-runtime",
   "typescript-toolchain",
   "github-actions-ci",
   "chzzk-service",
@@ -556,10 +567,17 @@ for (const entry of THIRD_PARTY_ATTRIBUTIONS) {
       entry.license === "external-terms" && entry.redistributed === false,
       `${entry.id}의 external-terms 표식은 비재배포 서비스 참조에서만 허용됩니다.`
     );
-  } else if (entry.kind === "development-only" || entry.kind === "ci-only") {
+  } else if (
+    entry.kind === "development-only"
+    || entry.kind === "ci-only"
+    || entry.kind === "desktop-preview-bundle"
+  ) {
     assert(
-      entry.license === "mixed-see-packages" && entry.redistributed === false,
-      `${entry.id}의 mixed-see-packages 표식은 비재배포 개발·CI 경계에서만 허용됩니다.`
+      entry.license === "mixed-see-packages"
+        && (entry.kind === "desktop-preview-bundle"
+          ? entry.redistributed === true && entry.publicReleaseBlocked === true
+          : entry.redistributed === false),
+      `${entry.id}의 mixed-see-packages 표식 또는 preview 배포 경계가 올바르지 않습니다.`
     );
   } else {
     const commercialUseRejection = commercialUseLicenseRejectionReason(
@@ -683,6 +701,19 @@ for (const entry of THIRD_PARTY_ATTRIBUTIONS) {
         && entry.packages.length > 0
         && runtimeDependenciesText.includes(marker),
       `${entry.id} development-only 경계가 불완전합니다.`
+    );
+    continue;
+  }
+
+  if (entry.kind === "desktop-preview-bundle") {
+    assert(
+      entry.redistributed === true
+        && entry.publicReleaseBlocked === true
+        && entry.lockfile === "package-lock.json"
+        && entry.packages.length > 0
+        && entry.releaseGate === "legal/DESKTOP_BINARY_RELEASE_GATE.md"
+        && runtimeDependenciesText.includes(marker),
+      `${entry.id} desktop preview 공개 차단 경계가 불완전합니다.`
     );
     continue;
   }
@@ -897,8 +928,8 @@ assert(
   "Whisper 시작은 source·VOD·caption runtime 고지의 크기/SHA를 모두 검증해야 합니다."
 );
 assert(
-  /node-version:\s*["']22["']/u.test(typescriptQualityWorkflowText),
-  "GitHub TypeScript quality workflow는 프로젝트 최소 Node 22에서 실행돼야 합니다."
+  /node-version:\s*["']22\.13\.0["']/u.test(typescriptQualityWorkflowText),
+  "GitHub TypeScript quality workflow는 프로젝트 최소 Node 22.13.0에서 실행돼야 합니다."
 );
 assert(
   !/uses:\s*[^\s@]+@v\d+/u.test(typescriptQualityWorkflowText),

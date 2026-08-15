@@ -33,6 +33,7 @@ import {
 } from "../src/lib/session-archive.js";
 import {
   SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
+  STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
   STREAMING_COMPANION_JAVASCRIPT_PATH,
   buildStreamingCompanion
 } from "./build-streaming-companion.js";
@@ -745,9 +746,10 @@ async function waitForIframeTarget(
   ) as Promise<DevToolsTarget>;
 }
 
-async function evaluateTarget(
+async function targetCommand(
   target: DevToolsTarget,
-  expression: string
+  method: string,
+  params: Record<string, unknown>
 ): Promise<unknown> {
   const socketUrl = String(target.webSocketDebuggerUrl || "");
   if (!socketUrl.startsWith("ws://127.0.0.1:")
@@ -766,11 +768,7 @@ async function evaluateTarget(
       callback();
     };
     socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({
-        id: 1,
-        method: "Runtime.evaluate",
-        params: { expression, returnByValue: true }
-      }));
+      socket.send(JSON.stringify({ id: 1, method, params }));
     });
     socket.addEventListener("error", () => {
       finish(() => reject(new Error("iframe target WebSocket 연결 실패")));
@@ -780,18 +778,36 @@ async function evaluateTarget(
       if (!isRecord(envelope) || envelope.id !== 1) {
         return;
       }
-      const result = isRecord(envelope.result) && isRecord(envelope.result.result)
-        ? envelope.result.result.value
-        : undefined;
-      finish(() => resolve(result));
+      if (isRecord(envelope.error)) {
+        const commandError = envelope.error;
+        finish(() => reject(new Error(
+          `iframe target command 실패: ${String(commandError.message || method)}`
+        )));
+        return;
+      }
+      finish(() => resolve(envelope.result));
     });
   });
+}
+
+async function evaluateTarget(
+  target: DevToolsTarget,
+  expression: string
+): Promise<unknown> {
+  const result = await targetCommand(target, "Runtime.evaluate", {
+    expression,
+    returnByValue: true
+  });
+  return isRecord(result) && isRecord(result.result)
+    ? result.result.value
+    : undefined;
 }
 
 interface StreamingBridgeFixtureState {
   readonly currentTime: number;
   readonly playbackRate: number;
   readonly emittedTransientFailures: number;
+  readonly unsignedResponseAttempts: number;
   readonly calls: Array<{
     action?: unknown;
     deltaSeconds?: unknown;
@@ -836,66 +852,48 @@ function inlineScriptSource(value: string): string {
   return value.replace(/<\/script/giu, "<\\/script");
 }
 
-function streamingBridgeFixtureDocument(companionJavaScript: string): string {
+function streamingBridgeFixtureDocument(mediaBytes: Buffer): string {
   const fixtureBootstrap = `
     (() => {
       const video = document.querySelector("#fixture-stream-video");
       const input = document.querySelector("#fixture-stream-input");
-      let currentTime = 80.5;
-      let playbackRate = 1;
-      let paused = false;
       let transientSnapshotFailuresRemaining = 0;
       let emittedTransientFailures = 0;
+      let unsignedResponseAttempts = 0;
       const calls = [];
-      const seekable = Object.freeze({
-        length: 1,
-        start: () => 0,
-        end: () => 200
-      });
-      Object.defineProperties(video, {
-        currentTime: {
-          configurable: true,
-          get: () => currentTime,
-          set: (value) => { currentTime = Number(value); }
-        },
-        duration: { configurable: true, get: () => 200 },
-        readyState: { configurable: true, get: () => 4 },
-        paused: { configurable: true, get: () => paused },
-        playbackRate: {
-          configurable: true,
-          get: () => playbackRate,
-          set: (value) => { playbackRate = Number(value); }
-        },
-        seekable: { configurable: true, get: () => seekable }
-      });
-      video.play = async () => { paused = false; };
-      video.pause = () => { paused = true; };
-      video.load = () => undefined;
+      const consumeTransientSnapshotFailure = () => {
+        if (transientSnapshotFailuresRemaining <= 0) return;
+        transientSnapshotFailuresRemaining -= 1;
+        emittedTransientFailures += 1;
+        throw new Error("fixture transient player state");
+      };
+      video.addEventListener("loadedmetadata", () => {
+        video.currentTime = 80.5;
+        video.pause();
+      }, { once: true });
       addEventListener("message", (event) => {
         const message = event.data;
+        const authenticated = message?.protocol === "kirinuki-streaming-bridge-auth/v1"
+          && message?.type === "KIRINUKI_STREAMING_BRIDGE_FRAME_REQUEST";
+        const request = authenticated ? message.inner : message;
         if (
-          message?.protocol === "kirinuki-streaming-bridge/v2"
-          && message?.type === "KIRINUKI_STREAMING_BRIDGE_REQUEST"
+          request?.protocol === "kirinuki-streaming-bridge/v2"
+          && request?.type === "KIRINUKI_STREAMING_BRIDGE_REQUEST"
         ) {
-          calls.push(structuredClone(message));
-          if (
-            message.action === "snapshot"
-            && transientSnapshotFailuresRemaining > 0
-          ) {
-            transientSnapshotFailuresRemaining -= 1;
-            emittedTransientFailures += 1;
-            event.stopImmediatePropagation();
+          calls.push(structuredClone(request));
+          if (authenticated) {
+            unsignedResponseAttempts += 1;
             parent.postMessage({
-              protocol: message.protocol,
+              protocol: request.protocol,
               type: "KIRINUKI_STREAMING_BRIDGE_RESPONSE",
-              requestId: message.requestId,
-              generation: message.generation,
-              action: message.action,
-              source: message.source,
+              requestId: request.requestId,
+              generation: request.generation,
+              action: request.action,
+              source: request.source,
               ok: false,
               error: {
-                code: "action-failed",
-                message: "스트리밍 플레이어 동작이 실패했습니다."
+                code: "source-mismatch",
+                message: "unsigned page-world forgery"
               }
             }, event.origin);
           }
@@ -906,11 +904,34 @@ function streamingBridgeFixtureDocument(companionJavaScript: string): string {
         input,
         calls,
         resetCalls: () => { calls.length = 0; },
-        failNextSnapshot: () => { transientSnapshotFailuresRemaining += 1; },
+        failNextSnapshot: () => {
+          if (location.hostname === "vod.sooplive.com") {
+            transientSnapshotFailuresRemaining += 1;
+            return;
+          }
+          const originalUrl = location.href;
+          history.replaceState(null, "", "/kirinuki-transient-player-state");
+          emittedTransientFailures += 1;
+          setTimeout(() => history.replaceState(null, "", originalUrl), 450);
+        },
+        forgeUnsignedShortcut: () => {
+          const request = [...calls].reverse().find((value) => value?.source);
+          if (!request) return false;
+          parent.postMessage({
+            protocol: "kirinuki-streaming-bridge/v2",
+            type: "KIRINUKI_STREAMING_BRIDGE_SHORTCUT",
+            eventId: "unsigned-page-shortcut-0001",
+            generation: request.generation,
+            source: request.source,
+            key: "E"
+          }, "http://127.0.0.1:4320");
+          return true;
+        },
         state: () => ({
-          currentTime,
-          playbackRate,
+          currentTime: video.currentTime,
+          playbackRate: video.playbackRate,
           emittedTransientFailures,
+          unsignedResponseAttempts,
           calls: [...calls]
         })
       };
@@ -928,7 +949,10 @@ function streamingBridgeFixtureDocument(companionJavaScript: string): string {
           get fileItems() { return fileItems; },
           get playIdx() { return 0; },
           get currentFileItem() { return fileItems[0]; },
-          get playingTime() { return currentTime; },
+          get playingTime() {
+            consumeTransientSnapshotFailure();
+            return video.currentTime;
+          },
           get media() { return video; },
           get isChangeFileSeeking() { return false; },
           get isSeeking() { return false; },
@@ -938,7 +962,7 @@ function streamingBridgeFixtureDocument(companionJavaScript: string): string {
           fileItems,
           playerController,
           config: { titleNo: contentId, totalFileDuration: 200 },
-          seek: (targetSeconds) => { currentTime = Number(targetSeconds); }
+          seek: (targetSeconds) => { video.currentTime = Number(targetSeconds); }
         };
       }
     })();
@@ -955,10 +979,9 @@ function streamingBridgeFixtureDocument(companionJavaScript: string): string {
   </style>
 </head>
 <body>
-  <video id="fixture-stream-video" tabindex="0" aria-label="원본 스트리밍 fixture"></video>
+  <video id="fixture-stream-video" tabindex="0" preload="auto" src="data:video/webm;base64,${mediaBytes.toString("base64")}#t=80.5" aria-label="원본 스트리밍 fixture"></video>
   <input id="fixture-stream-input" aria-label="단축키 차단 fixture">
   <script>${inlineScriptSource(fixtureBootstrap)}</script>
-  <script>${inlineScriptSource(companionJavaScript)}</script>
 </body>
 </html>`;
 }
@@ -969,13 +992,48 @@ function rawHttpFixtureResponse(html: string): string {
     "HTTP/1.1 200 OK",
     "Content-Type: text/html; charset=utf-8",
     "Cache-Control: no-store",
-    "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+    "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; media-src data:",
     `Content-Length: ${contentLength}`,
     "Connection: close",
     "",
     html
   ].join("\r\n");
   return Buffer.from(response).toString("base64");
+}
+
+async function buildStreamingBridgeFixtureMedia(): Promise<Buffer> {
+  const ffmpeg = await resolveExecutable("FFMPEG_BINARY", ["ffmpeg"]);
+  const outputPath = path.join(tempRoot, "streaming-bridge-fixture.webm");
+  const stderr: Buffer[] = [];
+  const child = spawn(ffmpeg, [
+    "-y",
+    "-v", "error",
+    "-f", "lavfi",
+    "-i", "color=c=black:s=16x16:r=1",
+    "-t", "200",
+    "-an",
+    "-c:v", "libvpx-vp9",
+    "-deadline", "realtime",
+    "-cpu-used", "8",
+    "-b:v", "1k",
+    outputPath
+  ], {
+    shell: false,
+    stdio: ["ignore", "ignore", "pipe"]
+  });
+  child.stderr.on("data", (chunk: Buffer | string) => {
+    stderr.push(Buffer.from(chunk));
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  if (exitCode !== 0) {
+    throw new Error(
+      `streaming bridge media fixture 생성 실패 (${exitCode}): ${Buffer.concat(stderr).toString("utf8")}`
+    );
+  }
+  return readFile(outputPath);
 }
 
 function rawHttpJsonFixtureResponse(
@@ -1004,12 +1062,10 @@ function rawHttpJsonFixtureResponse(
 
 async function installStreamingBridgeFixtureInterception({
   debuggerAddress,
-  companionJavaScript,
-  soopCompanionJavaScript
+  mediaBytes
 }: {
   debuggerAddress: string;
-  companionJavaScript: string;
-  soopCompanionJavaScript: string;
+  mediaBytes: Buffer;
 }): Promise<StreamingBridgeFixtureInterception> {
   const pageTarget = await waitFor(
     async () => (await browserTargets(debuggerAddress)).find((target) => (
@@ -1026,11 +1082,9 @@ async function installStreamingBridgeFixtureInterception({
     String(pageTarget.webSocketDebuggerUrl)
   );
   const genericFixtureResponse = rawHttpFixtureResponse(
-    streamingBridgeFixtureDocument(companionJavaScript)
+    streamingBridgeFixtureDocument(mediaBytes)
   );
-  const soopFixtureResponse = rawHttpFixtureResponse(
-    streamingBridgeFixtureDocument(soopCompanionJavaScript)
-  );
+  const soopFixtureResponse = genericFixtureResponse;
   const interceptedUrls: string[] = [];
   let interceptionError: Error | null = null;
   const unsubscribe = connection.on("Network.requestIntercepted", (params) => {
@@ -1051,7 +1105,10 @@ async function installStreamingBridgeFixtureInterception({
       ? soopFixtureResponse
       : genericFixtureResponse;
     void connection.send("Network.continueInterceptedRequest", isFixtureDocument
-      ? { interceptionId, rawResponse: fixtureResponse }
+      ? {
+        interceptionId,
+        rawResponse: fixtureResponse
+      }
       : { interceptionId }).then(() => {
         if (isFixtureDocument) {
           interceptedUrls.push(url);
@@ -1469,6 +1526,47 @@ async function dispatchStreamingFrameShortcut({
   selector?: string;
   extras?: string;
 }): Promise<boolean> {
+  if (extras === "{}") {
+    await evaluateTarget(target, `(() => {
+      const target = document.querySelector(${JSON.stringify(selector)});
+      if (!target) throw new Error("streaming shortcut fixture target 없음");
+      target.focus();
+      globalThis.__kirinukiTrustedKeyObservation = null;
+      addEventListener("keydown", (event) => {
+        setTimeout(() => {
+          globalThis.__kirinukiTrustedKeyObservation = {
+            isTrusted: event.isTrusted,
+            defaultPrevented: event.defaultPrevented
+          };
+        }, 0);
+      }, { capture: true, once: true });
+      return true;
+    })()`);
+    const upper = key.toUpperCase();
+    const virtualKeyCode = upper.charCodeAt(0);
+    const common = {
+      key: key.toLowerCase(),
+      code: `Key${upper}`,
+      windowsVirtualKeyCode: virtualKeyCode,
+      nativeVirtualKeyCode: virtualKeyCode
+    };
+    await targetCommand(target, "Input.dispatchKeyEvent", {
+      type: "rawKeyDown",
+      ...common
+    });
+    await targetCommand(target, "Input.dispatchKeyEvent", {
+      type: "keyUp",
+      ...common
+    });
+    await delay(30);
+    const observed = await evaluateTarget(
+      target,
+      "globalThis.__kirinukiTrustedKeyObservation"
+    );
+    return isRecord(observed)
+      && observed.isTrusted === true
+      && observed.defaultPrevented === true;
+  }
   const value = await evaluateTarget(target, `(() => {
     const target = document.querySelector(${JSON.stringify(selector)});
     if (!target) throw new Error("streaming shortcut fixture target 없음");
@@ -1503,6 +1601,8 @@ interface StreamingShortcutSequenceResult {
   readonly disabledButtonIgnored: boolean;
   readonly controlsEnabled: boolean;
   readonly transientFailureRecovered: boolean;
+  readonly unsignedResponseIgnored: boolean;
+  readonly unsignedShortcutIgnored: boolean;
   readonly calls: StreamingBridgeFixtureState["calls"];
 }
 
@@ -1539,15 +1639,47 @@ async function runStreamingShortcutSequence({
   expectedEmbedUrl,
   expectedStart = "00:01:20.500",
   expectedEnd = "00:01:25.500",
-  verifyFrameShortcutGuards = false
+  verifyFrameShortcutGuards = false,
+  verifyAuthenticatedForgeryGuards = false
 }: {
   debuggerAddress: string;
   expectedEmbedUrl: string;
   expectedStart?: string;
   expectedEnd?: string;
   verifyFrameShortcutGuards?: boolean;
+  verifyAuthenticatedForgeryGuards?: boolean;
 }): Promise<StreamingShortcutSequenceResult> {
   const target = await waitForIframeTarget(debuggerAddress, expectedEmbedUrl);
+  await waitFor(
+    async () => evaluateTarget(target, `(() => {
+      const video = document.querySelector("#fixture-stream-video");
+      return video instanceof HTMLVideoElement ? {
+        ready: video.readyState >= HTMLMediaElement.HAVE_METADATA
+          && Number.isFinite(video.duration)
+          && video.duration >= 199,
+        readyState: video.readyState,
+        networkState: video.networkState,
+        duration: video.duration,
+        currentSrc: video.currentSrc,
+        errorCode: video.error?.code || 0,
+        errorMessage: video.error?.message || ""
+      } : { ready: false, missing: true };
+    })()`),
+    (value) => isRecord(value) && value.ready === true,
+    "streaming bridge 실제 media fixture metadata를 읽지 못했습니다."
+  );
+  await evaluateTarget(target, `(() => {
+    const video = document.querySelector("#fixture-stream-video");
+    if (!(video instanceof HTMLVideoElement)) return false;
+    video.currentTime = 80.5;
+    video.pause();
+    return true;
+  })()`);
+  await waitFor(
+    () => streamingBridgeFixtureState(target),
+    (value) => Math.abs(value.currentTime - 80.5) <= 0.05,
+    "streaming bridge 실제 media fixture를 80.5초에 맞추지 못했습니다."
+  );
   await waitFor(
     () => execute<{ enabled: boolean; status: string }>(`
       return {
@@ -1559,6 +1691,24 @@ async function runStreamingShortcutSequence({
     (value) => value.enabled && value.status.includes("원본 스트리밍 연결 완료"),
     "production streaming bridge가 컷 제어를 활성화하지 못했습니다."
   );
+  let unsignedResponseIgnored = true;
+  let unsignedShortcutIgnored = true;
+  if (verifyAuthenticatedForgeryGuards) {
+    const before = await execute<string>(`
+      return document.querySelector('.clip-row [data-field="start"]')?.value || "";
+    `);
+    const forged = await evaluateTarget(
+      target,
+      "globalThis.__kirinukiStreamingBridgeFixture?.forgeUnsignedShortcut?.() === true"
+    );
+    await delay(120);
+    const after = await execute<string>(`
+      return document.querySelector('.clip-row [data-field="start"]')?.value || "";
+    `);
+    const fixtureState = await streamingBridgeFixtureState(target);
+    unsignedShortcutIgnored = forged === true && after === before;
+    unsignedResponseIgnored = fixtureState.unsignedResponseAttempts > 0;
+  }
   const frameBeforeTransientFailure = await execute<boolean>(`
     globalThis.__kirinukiStreamingFrameBeforeTransientFailure =
       document.querySelector("#stream-preview-frame");
@@ -1753,6 +1903,8 @@ async function runStreamingShortcutSequence({
     videoFocusedAllowed,
     disabledButtonIgnored,
     transientFailureRecovered,
+    unsignedResponseIgnored,
+    unsignedShortcutIgnored,
     calls: finalState.calls
   };
 }
@@ -1979,15 +2131,16 @@ async function main(): Promise<void> {
   const soopCompanionJavaScriptBytes = companionBuild.outputs.get(
     SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH
   );
-  if (!companionJavaScriptBytes || !soopCompanionJavaScriptBytes) {
+  const studioRelayJavaScriptBytes = companionBuild.outputs.get(
+    STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH
+  );
+  if (
+    !companionJavaScriptBytes
+    || !soopCompanionJavaScriptBytes
+    || !studioRelayJavaScriptBytes
+  ) {
     throw new Error("production streaming companion bundle을 준비하지 못했습니다.");
   }
-  const companionJavaScript = Buffer.from(
-    companionJavaScriptBytes
-  ).toString("utf8");
-  const soopCompanionJavaScript = Buffer.from(
-    soopCompanionJavaScriptBytes
-  ).toString("utf8");
   const companionRoot = path.join(root, "streaming-companion");
   const serverMode = await ensureStudioServer();
   for (const relativePath of ["web/studio.js", "web/editor/editor.js"]) {
@@ -2052,12 +2205,8 @@ async function main(): Promise<void> {
             "--disable-dev-shm-usage",
             "--no-first-run",
             "--no-default-browser-check",
-            ...(liveEmbedSmoke
-              ? [
-                `--disable-extensions-except=${companionRoot}`,
-                `--load-extension=${companionRoot}`
-              ]
-              : []),
+            `--disable-extensions-except=${companionRoot}`,
+            `--load-extension=${companionRoot}`,
             `--user-data-dir=${profileRoot}`
           ]
         }
@@ -2099,11 +2248,9 @@ async function main(): Promise<void> {
     || argument.includes("chrome-extension://")
   ));
   assert(
-    liveEmbedSmoke
-      ? extensionArguments.length === 2
-        && extensionArguments.every((argument) => argument.endsWith(companionRoot))
-      : extensionArguments.length === 0,
-    "localhost smoke에는 legacy Extension이 아니라 opt-in live용 최소 streaming companion만 허용됩니다."
+    extensionArguments.length === 2
+      && extensionArguments.every((argument) => argument.endsWith(companionRoot)),
+    "localhost smoke는 exact 최소 streaming companion 하나만 로드해야 합니다."
   );
   await cdp("Network.enable", {});
   await cdp("Network.setBlockedURLs", {
@@ -2405,14 +2552,13 @@ async function main(): Promise<void> {
     ? null
     : await installStreamingBridgeFixtureInterception({
       debuggerAddress,
-      companionJavaScript,
-      soopCompanionJavaScript
+      mediaBytes: await buildStreamingBridgeFixtureMedia()
     });
 
   const chzzkUrl = "https://chzzk.naver.com/video/14514980";
   const transitionChzzkUrl = "https://chzzk.naver.com/video/14514981";
   const youtubeUrl = "https://youtu.be/M7lc1UVf-VE?t=5";
-  const youtubeEmbed = "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE?playsinline=1&enablejsapi=1&origin=http%3A%2F%2F127.0.0.1%3A4320";
+  const youtubeEmbed = "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE?playsinline=1";
   const soopUrl = "https://vod.sooplive.co.kr/player/169475287?change_second=3";
   const soopEmbed = "https://vod.sooplive.com/player/169475287/embed?autoPlay=true&showChat=false&mutePlay=true";
   const sessionArchiveJson = await buildSmokeSessionArchive(chzzkUrl);
@@ -2443,7 +2589,8 @@ async function main(): Promise<void> {
   } else {
     chzzkStreamingBridge = await runStreamingShortcutSequence({
       debuggerAddress,
-      expectedEmbedUrl: chzzkUrl
+      expectedEmbedUrl: chzzkUrl,
+      verifyAuthenticatedForgeryGuards: true
     });
   }
   assert(
@@ -2457,6 +2604,8 @@ async function main(): Promise<void> {
         && chzzkStreamingBridge.allHandled
         && chzzkStreamingBridge.orderedBridgeActions
         && chzzkStreamingBridge.transientFailureRecovered
+        && chzzkStreamingBridge.unsignedResponseIgnored
+        && chzzkStreamingBridge.unsignedShortcutIgnored
         && chzzkStreamingBridge.iframeVisible
         && chzzkStreamingBridge.iframePreserved
         && chzzkStreamingBridge.controlsEnabled),
@@ -2466,43 +2615,6 @@ async function main(): Promise<void> {
     })}`
   );
   process.stderr.write("[browser-smoke] CHZZK streaming bridge 검증 완료\n");
-  if (!liveEmbedSmoke) {
-    await execute(`
-      globalThis.__kirinukiYouTubeCalls = { seeks: [], rates: [], destroyed: 0 };
-      globalThis.YT = {
-        Player: class {
-          constructor(frame, options) {
-            this.frame = frame;
-            this.options = options;
-            this.currentTime = 12.5;
-            this.duration = 120;
-            this.playbackRate = 1;
-            this.playerState = 1;
-            queueMicrotask(() => options.events.onReady({ target: this }));
-          }
-          destroy() {
-            globalThis.__kirinukiYouTubeCalls.destroyed += 1;
-            this.frame.remove();
-          }
-          getCurrentTime() { return this.currentTime; }
-          getDuration() { return this.duration; }
-          getPlaybackRate() { return this.playbackRate; }
-          getPlayerState() { return this.playerState; }
-          seekTo(seconds) {
-            this.currentTime = seconds;
-            globalThis.__kirinukiYouTubeCalls.seeks.push(seconds);
-            this.options.events.onStateChange?.({ target: this, data: 1 });
-          }
-          setPlaybackRate(rate) {
-            this.playbackRate = rate;
-            globalThis.__kirinukiYouTubeCalls.rates.push(rate);
-            this.options.events.onPlaybackRateChange?.({ target: this, data: rate });
-          }
-        }
-      };
-      return true;
-    `);
-  }
   const youtubeFrame = await setSourceAndVerify({
     inputUrl: youtubeUrl,
     expectedSourceLabel: "YouTube VOD",
@@ -2526,228 +2638,57 @@ async function main(): Promise<void> {
       && youtubeStreamingFrame.frameUrl === youtubeEmbed,
     `YouTube 원본 streaming iframe이 유지되지 않았습니다: ${JSON.stringify(youtubeStreamingFrame)}`
   );
+  let youtubeLiveBridge: { enabled: boolean; frameHidden: boolean } | null = null;
+  let youtubeStreamingBridge: StreamingShortcutSequenceResult | null = null;
   if (liveEmbedSmoke) {
-    await waitFor(
-      () => execute<{ enabled: boolean; status: string }>(`
+    youtubeLiveBridge = await waitFor(
+      () => execute<{ enabled: boolean; frameHidden: boolean }>(`
+        const frame = document.querySelector("#stream-preview-frame");
         return {
           enabled: ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
             .every((id) => !document.querySelector("#" + id)?.disabled),
-          status: document.querySelector("#stream-cut-console-status")?.textContent || ""
+          frameHidden: Boolean(frame?.hidden)
         };
       `),
-      (value) => value.enabled && value.status.includes("공식 플레이어 연결 완료"),
-      "실제 YouTube IFrame Player API가 컷 제어를 활성화하지 못했습니다.",
+      (value) => value.enabled && value.frameHidden === false,
+      "실제 YouTube iframe의 격리된 Player Bridge가 컷 제어를 활성화하지 못했습니다.",
       20_000
     );
-  }
-  if (!liveEmbedSmoke) {
-    await execute(`
-      document.querySelector("#stream-preview-frame")
-        ?.dispatchEvent(new Event("load"));
-      return true;
-    `);
-    await waitFor(
-      () => execute<{
-        controlsEnabled: boolean;
-        officialPlayerReady: boolean;
-        shortcutBridgeReady: boolean;
-      }>(`
-        return {
-          controlsEnabled: ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-            .every((id) => !document.querySelector("#" + id)?.disabled),
-          officialPlayerReady: (document.querySelector("#stream-cut-console-status")?.textContent || "")
-            .includes("공식 플레이어 연결 완료"),
-          shortcutBridgeReady: (document.querySelector("#stream-preview-status")?.textContent || "")
-            .includes("단축키를 연결했습니다")
-        };
-      `),
-      (value) => (
-        value.controlsEnabled
-        && value.officialPlayerReady
-        && value.shortcutBridgeReady
-      ),
-      "공식 YT.Player와 YouTube 플레이어 단축키 연결이 함께 준비되지 않았습니다."
-    );
-
-    const youtubeFixtureTarget = await waitForIframeTarget(
+  } else {
+    youtubeStreamingBridge = await runStreamingShortcutSequence({
       debuggerAddress,
-      youtubeEmbed
-    );
-    await waitFor(
-      () => streamingBridgeFixtureState(youtubeFixtureTarget),
-      (value) => (
-        value.calls.length > 0
-        && value.calls.every((call) => call.action === "snapshot")
-      ),
-      "YouTube companion의 snapshot-only handshake를 확인하지 못했습니다."
-    );
-    await execute(`
-      const row = document.querySelector(".clip-row");
-      const start = row?.querySelector('[data-field="start"]');
-      const end = row?.querySelector('[data-field="end"]');
-      const frame = document.querySelector("#stream-preview-frame");
-      if (
-        !(start instanceof HTMLInputElement)
-        || !(end instanceof HTMLInputElement)
-        || !(frame instanceof HTMLIFrameElement)
-      ) {
-        throw new Error("YouTube iframe 단축키 fixture 요소가 없습니다.");
-      }
-      start.value = "";
-      end.value = "";
-      start.dispatchEvent(new Event("input", { bubbles: true }));
-      end.dispatchEvent(new Event("input", { bubbles: true }));
-      globalThis.__kirinukiYouTubeFrameBeforeSequence = frame;
-      globalThis.__kirinukiYouTubeShortcutMessages = [];
-      globalThis.__kirinukiYouTubeShortcutMessageListener = (event) => {
-        const currentFrame = document.querySelector("#stream-preview-frame");
-        const message = event.data;
-        if (
-          currentFrame instanceof HTMLIFrameElement
-          && event.source === currentFrame.contentWindow
-          && event.origin === "https://www.youtube-nocookie.com"
-          && message?.protocol === "kirinuki-streaming-bridge/v2"
-          && message?.type === "KIRINUKI_STREAMING_BRIDGE_SHORTCUT"
-        ) {
-          globalThis.__kirinukiYouTubeShortcutMessages.push(structuredClone(message));
-        }
-      };
-      addEventListener(
-        "message",
-        globalThis.__kirinukiYouTubeShortcutMessageListener
-      );
-      return true;
-    `);
-
-    const youtubeHandled: boolean[] = [];
-    youtubeHandled.push(await dispatchStreamingFrameShortcut({
-      target: youtubeFixtureTarget,
-      key: "E"
-    }));
-    await waitFor(
-      () => execute<string>(`
-        return document.querySelector('.clip-row [data-field="start"]')?.value || "";
-      `),
-      (value) => value === "00:00:12.500",
-      "YouTube iframe의 E가 공식 player 시각을 시작점으로 캡처하지 못했습니다."
-    );
-    youtubeHandled.push(await dispatchStreamingFrameShortcut({
-      target: youtubeFixtureTarget,
-      key: "F"
-    }));
-    await waitFor(
-      () => execute<number[]>(
-        "return [...globalThis.__kirinukiYouTubeCalls.seeks];"
-      ),
-      (value) => value.at(-1) === 17.5,
-      "YouTube iframe의 F가 공식 player seekTo(+5초)를 호출하지 못했습니다."
-    );
-    youtubeHandled.push(await dispatchStreamingFrameShortcut({
-      target: youtubeFixtureTarget,
-      key: "R"
-    }));
-    await waitFor(
-      () => execute<string>(`
-        return document.querySelector('.clip-row [data-field="end"]')?.value || "";
-      `),
-      (value) => value === "00:00:17.500",
-      "YouTube iframe의 R이 공식 player 시각을 끝점으로 캡처하지 못했습니다."
-    );
-    youtubeHandled.push(await dispatchStreamingFrameShortcut({
-      target: youtubeFixtureTarget,
-      key: "D"
-    }));
-    await waitFor(
-      () => execute<number[]>(
-        "return [...globalThis.__kirinukiYouTubeCalls.seeks];"
-      ),
-      (value) => value.at(-1) === 12.5,
-      "YouTube iframe의 D가 공식 player seekTo(-5초)를 호출하지 못했습니다."
-    );
-    youtubeHandled.push(await dispatchStreamingFrameShortcut({
-      target: youtubeFixtureTarget,
-      key: "Y"
-    }));
-    await waitFor(
-      () => execute<number[]>(
-        "return [...globalThis.__kirinukiYouTubeCalls.rates];"
-      ),
-      (value) => value.at(-1) === 0.25,
-      "YouTube iframe의 Y가 공식 player 0.25배속을 호출하지 못했습니다."
-    );
-    youtubeHandled.push(await dispatchStreamingFrameShortcut({
-      target: youtubeFixtureTarget,
-      key: "U"
-    }));
-    await waitFor(
-      () => execute<number[]>(
-        "return [...globalThis.__kirinukiYouTubeCalls.rates];"
-      ),
-      (value) => value.at(-1) === 2,
-      "YouTube iframe의 U가 공식 player 2배속을 호출하지 못했습니다."
-    );
-
-    const youtubeBridgeState = await streamingBridgeFixtureState(
-      youtubeFixtureTarget
-    );
-    const youtubeControls = await execute<{
-      start: string;
-      end: string;
-      seeks: number[];
-      rates: number[];
-      frameVisible: boolean;
-      framePreserved: boolean;
-      shortcutKeys: string[];
-      shortcutMessagesValid: boolean;
-    }>(`
-      const row = document.querySelector(".clip-row");
-      const frame = document.querySelector("#stream-preview-frame");
-      const messages = [...globalThis.__kirinukiYouTubeShortcutMessages];
-      removeEventListener(
-        "message",
-        globalThis.__kirinukiYouTubeShortcutMessageListener
-      );
-      return {
-        start: row.querySelector('[data-field="start"]').value,
-        end: row.querySelector('[data-field="end"]').value,
-        seeks: [...globalThis.__kirinukiYouTubeCalls.seeks],
-        rates: [...globalThis.__kirinukiYouTubeCalls.rates],
-        frameVisible: frame instanceof HTMLIFrameElement
-          && frame.hidden === false
-          && frame.getBoundingClientRect().width > 0
-          && frame.getBoundingClientRect().height > 0,
-        framePreserved: frame === globalThis.__kirinukiYouTubeFrameBeforeSequence,
-        shortcutKeys: messages.map((message) => message.key),
-        shortcutMessagesValid: messages.every((message) => (
-          message.protocol === "kirinuki-streaming-bridge/v2"
-          && message.type === "KIRINUKI_STREAMING_BRIDGE_SHORTCUT"
-          && message.source?.platform === "YOUTUBE"
-          && message.source?.sessionId === "youtube:vod:M7lc1UVf-VE"
-        ))
-      };
-    `);
-    const youtubeBridgeIsSnapshotOnly = youtubeBridgeState.calls.length > 0
-      && youtubeBridgeState.calls.every((call) => call.action === "snapshot");
-    assert(
-      youtubeControls.start === "00:00:12.500"
-        && youtubeControls.end === "00:00:17.500"
-        && youtubeControls.seeks.join(",") === "17.5,12.5"
-        && youtubeControls.rates.join(",") === "0.25,2"
-        && youtubeControls.frameVisible
-        && youtubeControls.framePreserved
-        && youtubeControls.shortcutKeys.join(",") === "E,F,R,D,Y,U"
-        && youtubeControls.shortcutMessagesValid
-        && youtubeHandled.every(Boolean)
-        && youtubeBridgeIsSnapshotOnly
-        && youtubeBridgeState.currentTime === 80.5
-        && youtubeBridgeState.playbackRate === 1,
-      `YouTube iframe 단축키가 공식 player 권한 경계를 지키지 못했습니다: ${JSON.stringify({
-        youtubeControls,
-        youtubeHandled,
-        youtubeBridgeState
-      })}`
-    );
+      expectedEmbedUrl: youtubeEmbed,
+      verifyFrameShortcutGuards: true,
+      verifyAuthenticatedForgeryGuards: true
+    });
   }
+  assert(
+    liveEmbedSmoke
+      ? Boolean(youtubeLiveBridge?.enabled && youtubeLiveBridge.frameHidden === false)
+      : Boolean(youtubeStreamingBridge
+        && youtubeStreamingBridge.start === "00:01:20.500"
+        && youtubeStreamingBridge.end === "00:01:25.500"
+        && youtubeStreamingBridge.currentTime === 80.5
+        && youtubeStreamingBridge.playbackRate === 2
+        && youtubeStreamingBridge.allHandled
+        && youtubeStreamingBridge.orderedBridgeActions
+        && youtubeStreamingBridge.transientFailureRecovered
+        && youtubeStreamingBridge.unsignedResponseIgnored
+        && youtubeStreamingBridge.unsignedShortcutIgnored
+        && youtubeStreamingBridge.iframeVisible
+        && youtubeStreamingBridge.iframePreserved
+        && youtubeStreamingBridge.controlsEnabled
+        && youtubeStreamingBridge.inputBlocked
+        && youtubeStreamingBridge.imeBlocked
+        && youtubeStreamingBridge.modifierBlocked
+        && youtubeStreamingBridge.repeatBlocked
+        && youtubeStreamingBridge.videoFocusedAllowed
+        && youtubeStreamingBridge.disabledButtonIgnored),
+    `YouTube 원본 streaming bridge 제어가 깨졌습니다: ${JSON.stringify({
+      youtubeLiveBridge,
+      youtubeStreamingBridge
+    })}`
+  );
   process.stderr.write("[browser-smoke] YouTube streaming player 검증 완료\n");
   const soopFrame = await setSourceAndVerify({
     inputUrl: soopUrl,
@@ -2780,38 +2721,29 @@ async function main(): Promise<void> {
       verifyFrameShortcutGuards: true
     });
   }
-  const destroyedYouTubePlayers = liveEmbedSmoke
-    ? 1
-    : await execute<number>(
-      "return Number(globalThis.__kirinukiYouTubeCalls?.destroyed || 0)"
-    );
   assert(
-    destroyedYouTubePlayers === 1
-      && (
-        liveEmbedSmoke
-          ? Boolean(soopLiveBridge?.enabled && soopLiveBridge.frameHidden === false)
-          : Boolean(
-            soopStreamingBridge
-            && soopStreamingBridge.start === "00:01:20.500"
-            && soopStreamingBridge.end === "00:01:25.500"
-            && soopStreamingBridge.currentTime === 80.5
-            && soopStreamingBridge.playbackRate === 2
-            && soopStreamingBridge.allHandled
-            && soopStreamingBridge.orderedBridgeActions
-            && soopStreamingBridge.transientFailureRecovered
-            && soopStreamingBridge.iframeVisible
-            && soopStreamingBridge.iframePreserved
-            && soopStreamingBridge.controlsEnabled
-            && soopStreamingBridge.inputBlocked
-            && soopStreamingBridge.imeBlocked
-            && soopStreamingBridge.modifierBlocked
-            && soopStreamingBridge.repeatBlocked
-            && soopStreamingBridge.videoFocusedAllowed
-            && soopStreamingBridge.disabledButtonIgnored
-          )
+    liveEmbedSmoke
+      ? Boolean(soopLiveBridge?.enabled && soopLiveBridge.frameHidden === false)
+      : Boolean(
+        soopStreamingBridge
+        && soopStreamingBridge.start === "00:01:20.500"
+        && soopStreamingBridge.end === "00:01:25.500"
+        && soopStreamingBridge.currentTime === 80.5
+        && soopStreamingBridge.playbackRate === 2
+        && soopStreamingBridge.allHandled
+        && soopStreamingBridge.orderedBridgeActions
+        && soopStreamingBridge.transientFailureRecovered
+        && soopStreamingBridge.iframeVisible
+        && soopStreamingBridge.iframePreserved
+        && soopStreamingBridge.controlsEnabled
+        && soopStreamingBridge.inputBlocked
+        && soopStreamingBridge.imeBlocked
+        && soopStreamingBridge.modifierBlocked
+        && soopStreamingBridge.repeatBlocked
+        && soopStreamingBridge.videoFocusedAllowed
+        && soopStreamingBridge.disabledButtonIgnored
       ),
     `SOOP 원본 streaming bridge·단축키 경계가 깨졌습니다: ${JSON.stringify({
-      destroyedYouTubePlayers,
       soopLiveBridge,
       soopStreamingBridge
     })}`
@@ -5063,13 +4995,23 @@ async function main(): Promise<void> {
     ok: true,
     server: serverMode,
     runtime: "localhost-web",
-    extensionFlags: false,
+    extensionFlags: "exact-minimal-companion",
     gateway4319: "blocked-by-cdp",
     externalEmbedMode: liveEmbedSmoke ? "live" : "production-companion-fixtures",
     iframe: {
       CHZZK: { url: chzzkUrl, ...chzzkFrame },
       YOUTUBE: { url: youtubeEmbed, ...youtubeFrame },
       SOOP: { url: soopEmbed, ...soopFrame }
+    },
+    authenticatedRelayForgeryGuards: liveEmbedSmoke ? "live-mode" : {
+      chzzkUnsignedResponseIgnored:
+        chzzkStreamingBridge?.unsignedResponseIgnored === true,
+      chzzkUnsignedShortcutIgnored:
+        chzzkStreamingBridge?.unsignedShortcutIgnored === true,
+      youtubeUnsignedResponseIgnored:
+        youtubeStreamingBridge?.unsignedResponseIgnored === true,
+      youtubeUnsignedShortcutIgnored:
+        youtubeStreamingBridge?.unsignedShortcutIgnored === true
     },
     sourceFallback: openedSource,
     clipCoverage: clipState.coverage,

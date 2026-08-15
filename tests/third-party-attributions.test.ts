@@ -16,6 +16,8 @@ test("commercial-use license policy is an exact positive allowlist", () => {
     COMMERCIAL_USE_APPROVED_LICENSE_IDS,
     [
       "Apache-2.0",
+      "BlueOak-1.0.0",
+      "BSD-2-Clause",
       "ISC",
       "MIT",
       "MIT-or-Unlicense",
@@ -106,9 +108,16 @@ test("boundary pseudo-license IDs stay in non-product attribution kinds", () => 
       assert.equal(entry.redistributed, false);
       continue;
     }
-    if (entry.kind === "development-only" || entry.kind === "ci-only") {
+    if (
+      entry.kind === "development-only"
+      || entry.kind === "ci-only"
+      || entry.kind === "desktop-preview-bundle"
+    ) {
       assert.equal(entry.license, "mixed-see-packages");
-      assert.equal(entry.redistributed, false);
+      assert.equal(
+        entry.redistributed,
+        entry.kind === "desktop-preview-bundle"
+      );
       continue;
     }
     assert.equal(commercialUseLicenseRejectionReason(entry.license), null);

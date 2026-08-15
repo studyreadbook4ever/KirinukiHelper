@@ -423,7 +423,7 @@ test("README와 HELP는 기본 요구사항과 Whisper 전용 빌드 도구를 �
   for (const document of documents) {
     assert.match(
       document,
-      /기본[^\n]*도구[\s\S]*Node\.js 22 이상[\s\S]*FFmpeg와 ffprobe/u
+      /기본[^\n]*도구[\s\S]*Node\.js 22\.13\.0 이상[\s\S]*FFmpeg와 ffprobe/u
     );
     assert.match(
       document,

@@ -8,7 +8,7 @@ test("플랫폼별 VOD는 client-side exact embed descriptor로만 변환한다"
   assert.equal(youtube?.kind, "official-embed");
   assert.equal(
     youtube?.embedUrl,
-    "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE?playsinline=1&enablejsapi=1&origin=http%3A%2F%2F127.0.0.1%3A4320"
+    "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE?playsinline=1"
   );
   assert.deepEqual(
     sourceEmbedDescriptor("https://www.youtube.com/live/M7lc1UVf-VE?feature=share"),
@@ -47,12 +47,12 @@ test("live·clip·목록·스푸핑 URL은 스트리밍 창을 만들지 않는�
   }
 });
 
-test("YouTube embed의 origin은 localhost 또는 고정 공개 배포 origin만 허용한다", () => {
+test("YouTube embed 생성은 localhost 또는 고정 공개 배포 문서에서만 허용한다", () => {
   assert.equal(
     sourceEmbedDescriptor("https://youtu.be/M7lc1UVf-VE", {
       studioOrigin: "https://kirinuki.eff0rtchung.kr"
     })?.embedUrl,
-    "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE?playsinline=1&enablejsapi=1&origin=https%3A%2F%2Fkirinuki.eff0rtchung.kr"
+    "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE?playsinline=1"
   );
   assert.throws(
     () => sourceEmbedDescriptor("https://youtu.be/M7lc1UVf-VE", {

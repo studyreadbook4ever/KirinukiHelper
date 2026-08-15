@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
+  STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
   STREAMING_COMPANION_DEFAULT_STUDIO_ORIGIN,
   STREAMING_COMPANION_HTTPS_ORIGINS_ENV,
   STREAMING_COMPANION_STUDIO_ORIGIN_ENV,
@@ -69,6 +70,7 @@ test("앱 player bridge manifest와 JavaScript는 같은 입력에서 바이트 
   for (const relativePath of [
     STREAMING_COMPANION_JAVASCRIPT_PATH,
     SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
+    STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
     STREAMING_COMPANION_MANIFEST_PATH
   ]) {
     assert.deepEqual(
@@ -82,11 +84,22 @@ test("앱 player bridge manifest와 JavaScript는 같은 입력에서 바이트 
   const soopJavaScriptBytes = first.outputs.get(
     SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH
   );
+  const studioRelayJavaScriptBytes = first.outputs.get(
+    STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH
+  );
   const manifestBytes = first.outputs.get(STREAMING_COMPANION_MANIFEST_PATH);
-  assert(javascriptBytes && soopJavaScriptBytes && manifestBytes);
+  assert(
+    javascriptBytes
+      && soopJavaScriptBytes
+      && studioRelayJavaScriptBytes
+      && manifestBytes
+  );
   const javascript = new TextDecoder().decode(javascriptBytes);
   const soopJavaScript = new TextDecoder().decode(soopJavaScriptBytes);
-  for (const bundle of [javascript, soopJavaScript]) {
+  const studioRelayJavaScript = new TextDecoder().decode(
+    studioRelayJavaScriptBytes
+  );
+  for (const bundle of [javascript, soopJavaScript, studioRelayJavaScript]) {
     assert.match(bundle, /http:\/\/127\.0\.0\.1:4320/u);
     assert.doesNotMatch(bundle, /https:\/\/kirinuki\.eff0rtchung\.kr/u);
     assert.doesNotMatch(bundle, /<all_urls>|chrome\.runtime|sidePanel/u);
@@ -95,21 +108,39 @@ test("앱 player bridge manifest와 JavaScript는 같은 입력에서 바이트 
 
   const manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as {
     readonly version?: string;
+    readonly permissions?: readonly string[];
+    readonly host_permissions?: readonly string[];
     readonly content_scripts?: ReadonlyArray<{
       readonly all_frames?: boolean;
+      readonly include_globs?: readonly string[];
       readonly js?: readonly string[];
       readonly matches?: readonly string[];
       readonly run_at?: string;
       readonly world?: string;
     }>;
   };
-  const contentScript = manifest.content_scripts?.[0];
-  const soopContentScript = manifest.content_scripts?.[1];
+  const studioRelayContentScript = manifest.content_scripts?.[0];
+  const contentScript = manifest.content_scripts?.[1];
+  const soopContentScript = manifest.content_scripts?.[2];
   const appManifest = JSON.parse(
     await readFile(new URL("../package.json", import.meta.url), "utf8")
   ) as { readonly version?: string };
   assert.equal(manifest.version, appManifest.version);
-  assert.equal(manifest.content_scripts?.length, 2);
+  assert.deepEqual(manifest.permissions, ["storage"]);
+  assert.equal(manifest.host_permissions, undefined);
+  assert.equal(manifest.content_scripts?.length, 3);
+  assert.equal(studioRelayContentScript?.all_frames, false);
+  assert.equal(studioRelayContentScript?.run_at, "document_start");
+  assert.equal(studioRelayContentScript?.world, undefined);
+  assert.deepEqual(studioRelayContentScript?.matches, [
+    "http://127.0.0.1/*"
+  ]);
+  assert.deepEqual(studioRelayContentScript?.include_globs, [
+    "http://127.0.0.1:4320/*"
+  ]);
+  assert.deepEqual(studioRelayContentScript?.js, [
+    STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH
+  ]);
   assert.equal(contentScript?.all_frames, true);
   assert.equal(contentScript?.run_at, "document_start");
   assert.deepEqual(contentScript?.matches, [
@@ -133,4 +164,10 @@ test("앱 player bridge manifest와 JavaScript는 같은 입력에서 바이트 
   );
   assert.match(javascript, /www\.youtube-nocookie\.com/u);
   assert.match(javascript, /A-Za-z0-9_-\]\{11\}/u);
+  assert.match(javascript, /HMAC/u);
+  assert.match(studioRelayJavaScript, /HMAC/u);
+  assert.match(
+    studioRelayJavaScript,
+    /KIRINUKI_STREAMING_BRIDGE_STUDIO_DELIVERY/u
+  );
 });

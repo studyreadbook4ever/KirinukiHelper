@@ -26,16 +26,13 @@ test("E/R은 저장된 추정 시각이 아니라 플레이어의 fresh snapshot
   );
   assert.match(
     capture,
-    /SOURCE_PLATFORM_YOUTUBE[\s\S]*currentYouTubePlayerTime\(\)/u
-  );
-  assert.match(
-    capture,
     /const client = streamingBridgeClient[\s\S]*await runTransientSafeStreamingAction\([\s\S]*client\.snapshot\(\)[\s\S]*latestStreamingSnapshot\.currentTime/u
   );
   assert.match(capture, /writeCapturedPlayerTime\(field, currentTime\)/u);
   assert.doesNotMatch(
     capture,
-    /localPreview|materialization|setInterval|Date\.now/iu
+    /SOURCE_PLATFORM_YOUTUBE|currentYouTubePlayerTime|localPreview|materialization|setInterval|Date\.now/iu,
+    "플랫폼별 추정 시계나 제거된 YouTube 직접 API로 우회해서는 안 됩니다."
   );
 });
 

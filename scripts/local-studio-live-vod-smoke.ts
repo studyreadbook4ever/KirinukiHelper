@@ -1418,7 +1418,8 @@ async function main(): Promise<void> {
   await Promise.all([
     access(path.join(companionRoot, "manifest.json")),
     access(path.join(companionRoot, "soop-streaming-companion.js")),
-    access(path.join(companionRoot, "streaming-companion.js"))
+    access(path.join(companionRoot, "streaming-companion.js")),
+    access(path.join(companionRoot, "studio-streaming-relay.js"))
   ]);
   const runtime = await assertRunningRuntimes();
   const [chromedriver, chromium, port] = await Promise.all([

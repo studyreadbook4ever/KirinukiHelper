@@ -94,6 +94,11 @@ import {
   fetchExternalVodBytes
 } from "./external-vod-transfer.js";
 import {
+  terminatePosixProcessGroup,
+  terminateWindowsProcessTreeWithTaskkill,
+  windowsTaskkillOuterGuardTimeoutMs
+} from "./process-tree-termination.js";
+import {
   MAX_VOD_CONSUMER_ID_LENGTH,
   VOD_CONSUMER_SCOPE_HASH_DOMAIN,
   normalizeVodConsumerId,
@@ -174,6 +179,7 @@ const PUBLIC_AVAILABILITY = new Set(["public", "unlisted"]);
 const ALLOWED_LIVE_STATUS = new Set(["not_live", "was_live"]);
 const SAFE_ENVIRONMENT_KEYS = new Set([
   "COMSPEC",
+  "ELECTRON_RUN_AS_NODE",
   "LANG",
   "LC_ALL",
   "LC_CTYPE",
@@ -349,6 +355,12 @@ export interface ExternalProcessRunOptions {
   workingDirectoryByteLimit?: number;
   /** The default runner keeps this many filesystem bytes free while writing. */
   minimumAvailableDiskBytes?: number;
+  /**
+   * Maps an already-open regular file into child fd/handle 3. This is used
+   * only by the final ffprobe publication check so macOS and Windows retain
+   * the same handle-bound TOCTOU protection as Linux.
+   */
+  inheritedInputFileDescriptor?: number;
 }
 
 export type ExternalProcessRunner = (
@@ -457,6 +469,7 @@ export interface ExternalVodMaterializerDependencies {
   ) => Promise<ExternalMediaInspection>;
   hashFile?: (filePath: string, signal?: AbortSignal) => Promise<string>;
   ytDlpBinary?: string;
+  ytDlpMode?: ExternalYtDlpMode;
   pythonBinary?: string;
   nodeBinary?: string;
   ffmpegBinary?: string;
@@ -470,7 +483,8 @@ export interface ExternalVodMaterializerDependencies {
       runProcess: ExternalProcessRunner;
       processEnv: NodeJS.ProcessEnv;
       ytDlpBinary: string;
-      pythonBinary: string;
+      ytDlpMode: ExternalYtDlpMode;
+      pythonBinary?: string;
       nodeBinary: string;
       ffprobeBinary: string;
       fetchImpl?: typeof globalThis.fetch;
@@ -484,6 +498,13 @@ export interface ExternalVodMaterializerDependencies {
     bsize: number | bigint;
   }>;
 }
+
+export const EXTERNAL_YT_DLP_MODES = Object.freeze([
+  "python-zipimport",
+  "standalone"
+] as const);
+
+export type ExternalYtDlpMode = typeof EXTERNAL_YT_DLP_MODES[number];
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -914,6 +935,47 @@ function isolatedYtDlpInvocationArgs(
     verifiedAbsoluteToolPath(ytDlpArtifact, "yt-dlp artifact"),
     ...ytDlpArgs
   ];
+}
+
+function externalYtDlpMode(value: unknown): ExternalYtDlpMode {
+  const normalized = String(value || "python-zipimport").trim();
+  if ((EXTERNAL_YT_DLP_MODES as readonly string[]).includes(normalized)) {
+    return normalized as ExternalYtDlpMode;
+  }
+  fail(
+    "yt-dlp 실행 방식은 python-zipimport 또는 standalone이어야 합니다.",
+    "INVALID_PROCESS_BINARY"
+  );
+}
+
+export function externalYtDlpCommand({
+  mode,
+  ytDlpBinary,
+  pythonBinary,
+  args
+}: {
+  mode: ExternalYtDlpMode;
+  ytDlpBinary: unknown;
+  pythonBinary?: unknown;
+  args: readonly string[];
+}): Readonly<{ executable: string; args: readonly string[] }> {
+  const resolvedMode = externalYtDlpMode(mode);
+  const artifact = verifiedAbsoluteToolPath(
+    ytDlpBinary,
+    resolvedMode === "standalone"
+      ? "yt-dlp standalone"
+      : "yt-dlp artifact"
+  );
+  if (resolvedMode === "standalone") {
+    return Object.freeze({
+      executable: artifact,
+      args: Object.freeze([...args])
+    });
+  }
+  return Object.freeze({
+    executable: verifiedAbsoluteToolPath(pythonBinary, "Python"),
+    args: Object.freeze(isolatedYtDlpInvocationArgs(artifact, args))
+  });
 }
 
 function nodeRuntimeArgument(value: unknown = process.execPath): string {
@@ -1688,6 +1750,67 @@ function availableFileSystemBytes(fileSystem: {
 }
 
 /** Default process boundary. It never invokes a shell. */
+export function windowsProcessTreeTerminationCommand(
+  processId: number,
+  environment: NodeJS.ProcessEnv = process.env
+): Readonly<{ command: string; args: readonly string[] }> {
+  if (!Number.isSafeInteger(processId) || processId <= 0) {
+    fail("Windows 외부 도구 process tree 식별자가 올바르지 않습니다.", "INVALID_PROCESS_BINARY");
+  }
+  const systemRoot = String(environment.SystemRoot || environment.SYSTEMROOT || "");
+  if (
+    !systemRoot
+    || systemRoot.trim() !== systemRoot
+    || !path.win32.isAbsolute(systemRoot)
+    || /[\u0000-\u001f\u007f]/u.test(systemRoot)
+  ) {
+    fail("Windows SystemRoot 경로를 안전하게 확인하지 못했습니다.", "INVALID_PROCESS_BINARY");
+  }
+  return Object.freeze({
+    command: path.win32.join(systemRoot, "System32", "taskkill.exe"),
+    args: Object.freeze(["/PID", String(processId), "/T", "/F"])
+  });
+}
+
+export async function terminateWindowsExternalProcessTree(
+  processId: number,
+  {
+    spawnImpl = spawn,
+    setTimeoutImpl = setTimeout,
+    clearTimeoutImpl = clearTimeout,
+    timeoutMs = EXTERNAL_PROCESS_KILL_GRACE_MS,
+    environment = process.env,
+    probeProcessImpl = (pid: number) => process.kill(pid, 0),
+    confirmTargetIdentityImpl
+  }: {
+    spawnImpl?: typeof spawn;
+    setTimeoutImpl?: typeof setTimeout;
+    clearTimeoutImpl?: typeof clearTimeout;
+    timeoutMs?: number;
+    environment?: NodeJS.ProcessEnv;
+    probeProcessImpl?: (pid: number) => void;
+    confirmTargetIdentityImpl?: () => Promise<boolean>;
+  } = {}
+): Promise<void> {
+  const invocation = windowsProcessTreeTerminationCommand(processId, environment);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    fail("Windows process tree 종료 시간 제한이 올바르지 않습니다.", "INVALID_PROCESS_TIMEOUT");
+  }
+  await terminateWindowsProcessTreeWithTaskkill({
+    processId,
+    command: invocation.command,
+    args: invocation.args,
+    spawnImpl,
+    probeProcessImpl,
+    ...(confirmTargetIdentityImpl
+      ? { confirmTargetIdentityImpl }
+      : {}),
+    setTimeoutImpl,
+    clearTimeoutImpl,
+    timeoutMs
+  });
+}
+
 export async function runExternalProcess(
   command: string,
   args: readonly string[],
@@ -1697,6 +1820,12 @@ export async function runExternalProcess(
     setTimeoutImpl = setTimeout,
     clearTimeoutImpl = clearTimeout,
     killProcessGroupImpl = (pid, signal) => process.kill(-pid, signal),
+    probeProcessGroupImpl = (pid) => process.kill(-pid, 0),
+    terminateWindowsProcessTreeImpl = async (pid, cleanupTimeoutMs) => {
+      await terminateWindowsExternalProcessTree(pid, {
+        timeoutMs: cleanupTimeoutMs
+      });
+    },
     killGraceMs = EXTERNAL_PROCESS_KILL_GRACE_MS,
     platform = process.platform,
     statFileSystemImpl = statFileSystem
@@ -1705,6 +1834,11 @@ export async function runExternalProcess(
     setTimeoutImpl?: typeof setTimeout;
     clearTimeoutImpl?: typeof clearTimeout;
     killProcessGroupImpl?: (pid: number, signal: NodeJS.Signals) => void;
+    probeProcessGroupImpl?: (pid: number) => void;
+    terminateWindowsProcessTreeImpl?: (
+      pid: number,
+      cleanupTimeoutMs: number
+    ) => Promise<void>;
     killGraceMs?: number;
     platform?: NodeJS.Platform;
     statFileSystemImpl?: (directory: string) => Promise<{
@@ -1740,6 +1874,15 @@ export async function runExternalProcess(
   ) {
     fail("외부 도구 디스크 여유 상한이 올바르지 않습니다.", "DISK_SPACE_CHECK_FAILED");
   }
+  if (
+    options.inheritedInputFileDescriptor !== undefined
+    && (
+      !Number.isSafeInteger(options.inheritedInputFileDescriptor)
+      || options.inheritedInputFileDescriptor < 0
+    )
+  ) {
+    fail("외부 도구에 전달할 파일 디스크립터가 올바르지 않습니다.", "INVALID_PROCESS_BINARY");
+  }
   return await new Promise<ExternalProcessResult>((resolve, reject) => {
     const useProcessGroup = platform !== "win32";
     const privateWorkingDirectory = path.resolve(options.cwd);
@@ -1748,6 +1891,7 @@ export async function runExternalProcess(
         !TEMPORARY_ENVIRONMENT_KEYS.has(key.toUpperCase())
       ))
     );
+    const inheritedInputFileDescriptor = options.inheritedInputFileDescriptor;
     const spawnOptions = {
       cwd: privateWorkingDirectory,
       env: {
@@ -1757,7 +1901,14 @@ export async function runExternalProcess(
         TMPDIR: privateWorkingDirectory
       },
       shell: false as const,
-      stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+      stdio: inheritedInputFileDescriptor === undefined
+        ? ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"]
+        : ["ignore", "pipe", "pipe", inheritedInputFileDescriptor] as [
+          "ignore",
+          "pipe",
+          "pipe",
+          number
+        ],
       windowsHide: true,
       ...(useProcessGroup ? { detached: true } : {})
     };
@@ -1776,7 +1927,9 @@ export async function runExternalProcess(
     let closed = false;
     let childError: Error | undefined;
     let terminationError: Error | undefined;
+    let cleanupError: Error | undefined;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    let processTreeTimeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let resourceMonitor: ReturnType<typeof setInterval> | undefined;
     let resourceInspectionPromise: Promise<void> | undefined;
@@ -1792,18 +1945,12 @@ export async function runExternalProcess(
         clearTimeoutImpl(timer);
       }
     };
-    const sendSignal = (signal: NodeJS.Signals) => {
-      const pid = child.pid;
-      if (useProcessGroup && Number.isSafeInteger(pid) && Number(pid) > 0) {
-        try {
-          killProcessGroupImpl(Number(pid), signal);
-          return;
-        } catch (error) {
-          if (isRecord(error) && error.code === "ESRCH") {
-            return;
-          }
-        }
-      }
+    const processId = (): number | undefined => (
+      Number.isSafeInteger(child.pid) && Number(child.pid) > 0
+        ? Number(child.pid)
+        : undefined
+    );
+    const signalLeader = (signal: NodeJS.Signals) => {
       if (closed) {
         return;
       }
@@ -1813,24 +1960,78 @@ export async function runExternalProcess(
         // A close/error event owns settlement; a concurrently exited child is safe.
       }
     };
+    const recordCleanupError = (error: unknown): void => {
+      cleanupError ??= error instanceof Error
+        ? error
+        : new Error("외부 도구 process tree를 종료하지 못했습니다.");
+    };
+    const ensurePosixProcessGroupCleanup = (
+      pid: number
+    ): Promise<void> => {
+      if (!processGroupCleanupPromise) {
+        processGroupCleanupPromise = terminatePosixProcessGroup({
+          processGroupId: pid,
+          signalProcessGroupImpl: killProcessGroupImpl,
+          probeProcessGroupImpl,
+          graceMs: killGraceMs,
+          setTimeoutImpl
+        }).catch(recordCleanupError);
+      }
+      return processGroupCleanupPromise;
+    };
     const terminate = (error: Error) => {
       if (terminationError) {
         return;
       }
       terminationError = error;
-      sendSignal("SIGTERM");
-      if (useProcessGroup) {
+      const pid = processId();
+      if (
+        platform === "win32"
+        && pid !== undefined
+      ) {
         processGroupCleanupPromise = new Promise<void>((resolveCleanup) => {
-          forceKillTimer = setTimeoutImpl(() => {
-            sendSignal("SIGKILL");
+          let cleanupSettled = false;
+          const finishCleanup = (treeError?: unknown): void => {
+            if (cleanupSettled) {
+              return;
+            }
+            cleanupSettled = true;
+            clearTimer(processTreeTimeoutTimer);
+            if (treeError !== undefined) {
+              recordCleanupError(treeError);
+              signalLeader("SIGKILL");
+            }
             resolveCleanup();
-          }, killGraceMs);
+          };
+          const cleanupTimeoutMs = Math.max(1, killGraceMs);
+          processTreeTimeoutTimer = setTimeoutImpl(() => {
+            finishCleanup(Object.assign(
+              new Error("Windows 외부 도구 process tree terminator가 응답하지 않았습니다."),
+              { code: "EPROCESSTREEOUTER" }
+            ));
+          }, windowsTaskkillOuterGuardTimeoutMs(cleanupTimeoutMs));
+          let cleanupResult: Promise<void>;
+          try {
+            cleanupResult = terminateWindowsProcessTreeImpl(pid, cleanupTimeoutMs);
+          } catch (treeError) {
+            finishCleanup(treeError);
+            return;
+          }
+          void cleanupResult.then(
+            () => finishCleanup(),
+            (treeError: unknown) => finishCleanup(treeError)
+          );
         });
-      } else {
-        forceKillTimer = setTimeoutImpl(() => {
-          sendSignal("SIGKILL");
-        }, killGraceMs);
+        return;
       }
+      if (useProcessGroup && pid !== undefined) {
+        void ensurePosixProcessGroupCleanup(pid);
+        return;
+      }
+      signalLeader("SIGTERM");
+      forceKillTimer = setTimeoutImpl(() => {
+        signalLeader("SIGKILL");
+      }, killGraceMs);
     };
     const normalizedResourceInspectionError = (error: unknown): Error => (
       error instanceof Error
@@ -1917,6 +2118,10 @@ export async function runExternalProcess(
       }
       options.signal?.removeEventListener("abort", abortListener);
       void (async () => {
+        const pid = processId();
+        if (useProcessGroup && pid !== undefined) {
+          await ensurePosixProcessGroupCleanup(pid);
+        }
         const inFlightInspection = resourceInspectionPromise;
         if (inFlightInspection) {
           await inFlightInspection;
@@ -1938,8 +2143,18 @@ export async function runExternalProcess(
           await processGroupCleanupPromise;
         }
         clearTimer(forceKillTimer);
-        const error = terminationError ?? childError ?? resourceInspectionError;
+        clearTimer(processTreeTimeoutTimer);
+        const error = terminationError
+          ?? childError
+          ?? resourceInspectionError
+          ?? cleanupError;
         if (error) {
+          if (cleanupError && cleanupError !== error && error.cause === undefined) {
+            Object.defineProperty(error, "cause", {
+              configurable: true,
+              value: cleanupError
+            });
+          }
           reject(error);
         } else {
           resolve({
@@ -2025,7 +2240,22 @@ async function checkedProcess(
   return result;
 }
 
-export function buildExternalFfprobeArgs(filePath: string): string[] {
+export function buildExternalFfprobeArgs(
+  filePath: string,
+  {
+    inheritedInputFileDescriptor
+  }: {
+    inheritedInputFileDescriptor?: number;
+  } = {}
+): string[] {
+  const inputPath = inheritedInputFileDescriptor === undefined
+    ? path.resolve(filePath)
+    : filePath === "/dev/fd/3" || filePath === "pipe:3"
+      ? filePath
+      : fail(
+        "열린 파일 핸들 검사 입력이 허용된 ffprobe descriptor가 아닙니다.",
+        "MEDIA_VERIFICATION_FAILED"
+      );
   return [
     "-v", "error",
     "-show_streams",
@@ -2034,7 +2264,7 @@ export function buildExternalFfprobeArgs(filePath: string): string[] {
     "-show_data_hash", "sha256",
     "-of", "json",
     "--",
-    path.resolve(filePath)
+    inputPath
   ];
 }
 
@@ -2481,7 +2711,11 @@ export async function inspectExternalMp4(
   const result = await checkedProcess(
     runProcess,
     executableName(ffprobeBinary, "ffprobe"),
-    buildExternalFfprobeArgs(filePath),
+    buildExternalFfprobeArgs(filePath, {
+      ...(options.inheritedInputFileDescriptor === undefined
+        ? {}
+        : { inheritedInputFileDescriptor: options.inheritedInputFileDescriptor })
+    }),
     {
       ...options,
       timeoutMs: EXTERNAL_FFPROBE_TIMEOUT_MS
@@ -2498,6 +2732,7 @@ export async function probeExternalVodMetadata(
     runProcess = runExternalProcess,
     processEnv = process.env,
     ytDlpBinary = processEnv.KIRINUKI_YT_DLP_BINARY,
+    ytDlpMode = externalYtDlpMode(processEnv.KIRINUKI_YT_DLP_MODE),
     pythonBinary = processEnv.KIRINUKI_YT_DLP_PYTHON_BINARY,
     nodeBinary = process.execPath,
     cwd = process.cwd(),
@@ -2505,6 +2740,7 @@ export async function probeExternalVodMetadata(
   }: {
     runProcess?: ExternalProcessRunner;
     ytDlpBinary?: string;
+    ytDlpMode?: ExternalYtDlpMode;
     pythonBinary?: string;
     nodeBinary?: string;
     processEnv?: NodeJS.ProcessEnv;
@@ -2515,13 +2751,16 @@ export async function probeExternalVodMetadata(
   const source = typeof sourceValue === "string"
     ? normalizeExternalVodUrl(sourceValue)
     : normalizeExternalVodUrl(sourceValue.canonicalUrl, sourceValue.platform);
+  const command = externalYtDlpCommand({
+    mode: ytDlpMode,
+    ytDlpBinary,
+    ...(pythonBinary === undefined ? {} : { pythonBinary }),
+    args: buildExternalMetadataProbeArgs(source, { nodeBinary })
+  });
   const result = await checkedProcess(
     runProcess,
-    verifiedAbsoluteToolPath(pythonBinary, "Python"),
-    isolatedYtDlpInvocationArgs(
-      ytDlpBinary,
-      buildExternalMetadataProbeArgs(source, { nodeBinary })
-    ),
+    command.executable,
+    command.args,
     processOptions(cwd, processEnv, signal, EXTERNAL_METADATA_TIMEOUT_MS),
     "METADATA_PROBE_FAILED",
     `${source.platform} 공개 VOD 정보를 yt-dlp로 확인하지 못했습니다.`
@@ -2596,7 +2835,8 @@ async function resolveExternalVodClockProofs(
     runProcess: ExternalProcessRunner;
     processEnv: NodeJS.ProcessEnv;
     ytDlpBinary: string;
-    pythonBinary: string;
+    ytDlpMode: ExternalYtDlpMode;
+    pythonBinary?: string;
     nodeBinary: string;
     ffprobeBinary: string;
     fetchImpl?: typeof globalThis.fetch;
@@ -2606,19 +2846,24 @@ async function resolveExternalVodClockProofs(
   const resolveSelectedPart = async (
     part: ExternalVodClockMetadataPart
   ) => {
+    const command = externalYtDlpCommand({
+      mode: context.ytDlpMode,
+      ytDlpBinary: context.ytDlpBinary,
+      ...(context.pythonBinary === undefined
+        ? {}
+        : { pythonBinary: context.pythonBinary }),
+      args: buildExternalSelectedSourceProbeArgs({
+        source: metadata,
+        ...(part.playlistItem === undefined
+          ? {}
+          : { playlistItem: part.playlistItem }),
+        nodeBinary: context.nodeBinary
+      })
+    });
     const selected = await checkedProcess(
       context.runProcess,
-      context.pythonBinary,
-      isolatedYtDlpInvocationArgs(
-        context.ytDlpBinary,
-        buildExternalSelectedSourceProbeArgs({
-          source: metadata,
-          ...(part.playlistItem === undefined
-            ? {}
-            : { playlistItem: part.playlistItem }),
-          nodeBinary: context.nodeBinary
-        })
-      ),
+      command.executable,
+      command.args,
       processOptions(
         context.cwd,
         context.processEnv,
@@ -4344,18 +4589,55 @@ async function inheritExternalSourceRoots({
   return inherited;
 }
 
+export function externalPublishedArtifactInspectionBinding({
+  platform,
+  processId,
+  fileDescriptor
+}: {
+  platform: NodeJS.Platform | string;
+  processId: number;
+  fileDescriptor: number;
+}): Readonly<{
+  inputPath: string;
+  inheritedInputFileDescriptor?: number;
+}> {
+  if (!(["linux", "darwin", "win32"] as const).includes(
+    platform as "linux" | "darwin" | "win32"
+  )) {
+    fail(
+      "게시된 로컬 MP4를 열린 파일 핸들에 결속해 검사할 수 없는 운영체제입니다.",
+      "MEDIA_VERIFICATION_FAILED"
+    );
+  }
+  if (!Number.isSafeInteger(processId) || processId <= 0) {
+    fail(
+      "게시된 로컬 MP4 검사 프로세스 식별자가 올바르지 않습니다.",
+      "MEDIA_VERIFICATION_FAILED"
+    );
+  }
+  if (!Number.isSafeInteger(fileDescriptor) || fileDescriptor < 0) {
+    fail(
+      "게시된 로컬 MP4의 파일 디스크립터를 확인하지 못했습니다.",
+      "MEDIA_VERIFICATION_FAILED"
+    );
+  }
+  if (platform === "linux") {
+    return Object.freeze({
+      inputPath: `/proc/${processId}/fd/${fileDescriptor}`
+    });
+  }
+  return Object.freeze({
+    inputPath: platform === "darwin" ? "/dev/fd/3" : "pipe:3",
+    inheritedInputFileDescriptor: fileDescriptor
+  });
+}
+
 async function inspectPublishedExternalVodArtifact(
   published: PublishedExternalVodArtifact,
   inspectMedia: NonNullable<ExternalVodMaterializerDependencies["inspectMedia"]>,
   options: ExternalProcessRunOptions,
   signal?: AbortSignal
 ): Promise<ExternalMediaInspection> {
-  if (process.platform !== "linux") {
-    fail(
-      "게시된 로컬 MP4를 파일 디스크립터에 결속해 검사할 수 없는 운영체제입니다.",
-      "MEDIA_VERIFICATION_FAILED"
-    );
-  }
   const handle = await openExternalRegularFileNoFollow(published.artifactPath);
   try {
     const before = await inspectOpenedExternalRegularFile(
@@ -4382,8 +4664,20 @@ async function inspectPublishedExternalVodArtifact(
         "MEDIA_VERIFICATION_FAILED"
       );
     }
-    const descriptorPath = `/proc/${process.pid}/fd/${handle.fd}`;
-    const inspection = await inspectMedia(descriptorPath, options);
+    const binding = externalPublishedArtifactInspectionBinding({
+      platform: process.platform,
+      processId: process.pid,
+      fileDescriptor: handle.fd
+    });
+    const inspection = await inspectMedia(
+      binding.inputPath,
+      binding.inheritedInputFileDescriptor === undefined
+        ? options
+        : {
+          ...options,
+          inheritedInputFileDescriptor: binding.inheritedInputFileDescriptor
+        }
+    );
     const after = await inspectOpenedExternalRegularFile(
       handle,
       published.artifactPath,
@@ -5272,11 +5566,15 @@ export async function materializeExternalVod(
       ?? processEnv.KIRINUKI_YT_DLP_BINARY,
     "yt-dlp artifact"
   );
-  const pythonBinary = verifiedAbsoluteToolPath(
-    dependencies.pythonBinary
-      ?? processEnv.KIRINUKI_YT_DLP_PYTHON_BINARY,
-    "Python"
+  const ytDlpMode = externalYtDlpMode(
+    dependencies.ytDlpMode
+      ?? processEnv.KIRINUKI_YT_DLP_MODE
   );
+  const configuredPythonBinary = dependencies.pythonBinary
+    ?? processEnv.KIRINUKI_YT_DLP_PYTHON_BINARY;
+  const pythonBinary = ytDlpMode === "python-zipimport"
+    ? verifiedAbsoluteToolPath(configuredPythonBinary, "Python")
+    : undefined;
   const nodeBinary = executableName(
     dependencies.nodeBinary
       ?? processEnv.KIRINUKI_YT_DLP_NODE_BINARY
@@ -5325,7 +5623,8 @@ export async function materializeExternalVod(
       return await probeExternalVodMetadata(source, {
         runProcess,
         ytDlpBinary,
-        pythonBinary,
+        ytDlpMode,
+        ...(pythonBinary === undefined ? {} : { pythonBinary }),
         nodeBinary,
         processEnv,
         cwd: metadataProbeDirectory,
@@ -5349,7 +5648,8 @@ export async function materializeExternalVod(
           runProcess,
           processEnv,
           ytDlpBinary,
-          pythonBinary,
+          ytDlpMode,
+          ...(pythonBinary === undefined ? {} : { pythonBinary }),
           nodeBinary,
           ffprobeBinary,
           ...(dependencies.fetchImpl ? { fetchImpl: dependencies.fetchImpl } : {}),
@@ -5731,7 +6031,8 @@ export async function materializeExternalVod(
     const completionRawMetadata = await probeExternalVodMetadata(source, {
       runProcess,
       ytDlpBinary,
-      pythonBinary,
+      ytDlpMode,
+      ...(pythonBinary === undefined ? {} : { pythonBinary }),
       nodeBinary,
       processEnv,
       cwd: attemptDirectory,

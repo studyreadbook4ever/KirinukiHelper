@@ -380,8 +380,13 @@ test("browser smoke도 로컬 materialization fixture 대신 streaming bridge와
   );
   assert.match(
     capturePhase,
-    /waitForIframeTarget\([\s\S]*youtubeEmbed[\s\S]*dispatchStreamingFrameShortcut\([\s\S]*youtubeBridgeState\.calls\.every\(\(call\) => call\.action === "snapshot"\)/u,
-    "YouTube smoke는 iframe VIDEO 단축키를 보내고 bridge playback 명령이 없음을 확인해야 합니다."
+    /youtubeStreamingBridge\s*=\s*await runStreamingShortcutSequence\(\{[\s\S]*expectedEmbedUrl:\s*youtubeEmbed,[\s\S]*verifyFrameShortcutGuards:\s*true[\s\S]*youtubeStreamingBridge\.orderedBridgeActions[\s\S]*youtubeStreamingBridge\.inputBlocked[\s\S]*youtubeStreamingBridge\.imeBlocked[\s\S]*youtubeStreamingBridge\.modifierBlocked[\s\S]*youtubeStreamingBridge\.repeatBlocked[\s\S]*youtubeStreamingBridge\.videoFocusedAllowed[\s\S]*youtubeStreamingBridge\.disabledButtonIgnored/u,
+    "YouTube smoke는 격리 Bridge의 전체 명령 순서와 iframe 단축키 보호를 검증해야 합니다."
+  );
+  assert.match(
+    smoke,
+    /function bridgeActionSubsequence[\s\S]*call\.action === "snapshot"[\s\S]*call\.action === "seek-absolute"[\s\S]*call\.action === "set-playback-rate"[\s\S]*async function runStreamingShortcutSequence[\s\S]*dispatchStudioShortcut\("E"\)[\s\S]*dispatchStudioShortcut\("F"\)[\s\S]*dispatchStudioShortcut\("R"\)[\s\S]*dispatchStudioShortcut\("D"\)[\s\S]*dispatchStudioShortcut\("Y"\)[\s\S]*dispatchStudioShortcut\("U"\)[\s\S]*dispatchStreamingFrameShortcut/u,
+    "결정론적 smoke는 snapshot·탐색·배속 명령과 iframe 단축키 전달을 함께 실행해야 합니다."
   );
   assert.match(
     capturePhase,
