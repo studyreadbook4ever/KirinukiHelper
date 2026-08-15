@@ -70,11 +70,15 @@ const HTTP_REQUEST_TIMEOUT_MS = 2_000;
 const MAX_HTTP_RESPONSE_BYTES = 64 * 1024;
 const MAX_APP_OUTPUT_BYTES = 512 * 1024;
 const TOOL_TIMEOUT_MS = 30_000;
+const WINDOWS_PROCESS_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
 const WINDOWS_PROCESS_SNAPSHOT_SOURCE = String.raw`
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 
 public static class KirinukiProcessSnapshot
 {
@@ -160,8 +164,9 @@ public static class KirinukiProcessSnapshot
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 
-    public static void WriteAll()
+    public static void WriteAll(string outputPath)
     {
+        List<string> records = new List<string>();
         IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (snapshot == INVALID_HANDLE_VALUE)
         {
@@ -215,7 +220,7 @@ public static class KirinukiProcessSnapshot
                             && GetProcessTimes(process, out creation, out exit, out kernel, out user)
                         )
                         {
-                            Console.Out.WriteLine(String.Format(
+                            records.Add(String.Format(
                                 CultureInfo.InvariantCulture,
                                 "{0},{1},{2}",
                                 currentPid,
@@ -245,6 +250,11 @@ public static class KirinukiProcessSnapshot
         {
             CloseHandle(snapshot);
         }
+        File.WriteAllLines(
+            outputPath,
+            records.ToArray(),
+            new UTF8Encoding(false)
+        );
     }
 }
 `;
@@ -440,6 +450,123 @@ async function runTool(
     `번들 도구가 실패했습니다: ${path.basename(command)} (${result.exitCode})`
   );
   return Object.freeze({ stdout: result.stdout, stderr: result.stderr });
+}
+
+async function runWindowsProcessSnapshotTool(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  outputPath: string
+): Promise<string> {
+  // Windows PowerShell Add-Type can leave a compiler descendant holding its
+  // inherited stdio handles after PowerShell exits. Keep this probe off Node
+  // pipes and read its flushed result from the private smoke directory so the
+  // exact parent-process exit remains a bounded completion boundary.
+  const reservation = await open(
+    outputPath,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
+    0o600
+  );
+  await reservation.close();
+  try {
+    const child = spawn(command, [...args], {
+      cwd,
+      env: {
+        ...env,
+        TEMP: cwd,
+        TMP: cwd,
+        TMPDIR: cwd
+      },
+      shell: false,
+      stdio: ["ignore", "ignore", "ignore"],
+      windowsHide: true
+    });
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let terminationError: Error | undefined;
+      let killDeadline: ReturnType<typeof setTimeout> | undefined;
+      const timeout = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        terminationError = Object.assign(
+          new Error("Windows process snapshot이 시간 제한을 넘었습니다."),
+          { code: "ETIMEDOUT" }
+        );
+        let killed = false;
+        try {
+          killed = child.kill("SIGKILL");
+        } catch {
+          // The retained process handle can already be closing.
+        }
+        if (!killed) {
+          Object.defineProperty(terminationError, "cause", {
+            configurable: true,
+            value: new Error(
+              "Windows process snapshot의 exact child 종료 요청이 실패했습니다."
+            )
+          });
+        }
+        killDeadline = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          child.unref();
+          reject(terminationError);
+        }, WINDOWS_TASKKILL_TIMEOUT_MS);
+        killDeadline.unref?.();
+      }, TOOL_TIMEOUT_MS);
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        if (killDeadline !== undefined) {
+          clearTimeout(killDeadline);
+        }
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      child.once("error", (error) => finish(error));
+      child.once("exit", (code, signal) => {
+        if (terminationError) {
+          finish(terminationError);
+          return;
+        }
+        if (code !== 0 || signal !== null) {
+          finish(new Error(
+            `Windows process snapshot이 실패했습니다: code=${code}, signal=${signal ?? "none"}`
+          ));
+          return;
+        }
+        finish();
+      });
+    });
+    const handle = await open(
+      outputPath,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0)
+    );
+    try {
+      const metadata = await handle.stat();
+      invariant(
+        metadata.isFile()
+          && metadata.size > 0
+          && metadata.size <= WINDOWS_PROCESS_SNAPSHOT_MAX_BYTES,
+        "Windows process snapshot 파일이 안전한 크기의 regular file이 아닙니다."
+      );
+      return (await handle.readFile()).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  } finally {
+    await rm(outputPath, { force: true });
+  }
 }
 
 export function matchesExactDesktopToolVersion(
@@ -823,31 +950,45 @@ async function processSnapshot(
 ): Promise<ReadonlyMap<number, Readonly<ProcessIdentity>>> {
   let command: string;
   let args: readonly string[];
+  let stdout: string;
   if (process.platform === "win32") {
     const systemRoot = String(process.env.SystemRoot || process.env.SYSTEMROOT || "");
     invariant(path.win32.isAbsolute(systemRoot), "Windows SystemRoot를 확인하지 못했습니다.");
     command = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const outputPath = path.join(
+      cwd,
+      `.process-snapshot-${randomBytes(16).toString("hex")}.txt`
+    );
     const source = Buffer.from(
       WINDOWS_PROCESS_SNAPSHOT_SOURCE,
       "utf8"
     ).toString("base64");
+    const encodedOutputPath = Buffer.from(outputPath, "utf8").toString("base64");
     const script = [
       "$ErrorActionPreference='Stop'",
       `$source=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${source}'))`,
+      `$output=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedOutputPath}'))`,
       "Add-Type -TypeDefinition $source -Language CSharp",
-      "[KirinukiProcessSnapshot]::WriteAll()"
+      "[KirinukiProcessSnapshot]::WriteAll($output)"
     ].join(";");
     args = [
       "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
       Buffer.from(script, "utf16le").toString("base64")
     ];
+    stdout = await runWindowsProcessSnapshotTool(
+      command,
+      args,
+      cwd,
+      env,
+      outputPath
+    );
   } else {
     command = "/bin/ps";
     args = ["-axo", "pid=,ppid=,lstart="];
+    stdout = (await runTool(command, args, cwd, env)).stdout;
   }
-  const result = await runTool(command, args, cwd, env);
   const records = new Map<number, Readonly<ProcessIdentity>>();
-  for (const line of result.stdout.split(/\r?\n/u)) {
+  for (const line of stdout.split(/\r?\n/u)) {
     const match = process.platform === "win32"
       ? /^(\d+),(\d+),(.+)$/u.exec(line.trim())
       : /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
