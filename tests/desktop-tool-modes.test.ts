@@ -53,6 +53,8 @@ async function cacheFixture(): Promise<Readonly<{
   const manifest: Readonly<DesktopToolTargetManifest> = Object.freeze({
     schema: DESKTOP_TOOL_MANIFEST_SCHEMA,
     target: "linux-x64",
+    ffmpegVersion: "fixture-ffmpeg",
+    ffprobeVersion: "fixture-ffprobe",
     ffmpeg: artifact("ffmpeg", contents.ffmpeg),
     ffprobe: artifact("ffprobe", contents.ffprobe),
     ffmpegLicense: artifact("FFMPEG-LICENSE.txt", contents.license),

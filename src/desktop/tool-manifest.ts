@@ -4,7 +4,6 @@ export const DESKTOP_TOOL_MANIFEST_SCHEMA =
   "kirinuki-desktop-tools/v1" as const;
 
 export const DESKTOP_FFMPEG_RELEASE = Object.freeze({
-  projectVersion: "7.0.2",
   distributionTag: "b6.1.1",
   baseUrl:
     "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1"
@@ -28,6 +27,8 @@ export interface DesktopToolArtifact {
 export interface DesktopToolTargetManifest {
   readonly schema: typeof DESKTOP_TOOL_MANIFEST_SCHEMA;
   readonly target: DesktopBundleTarget;
+  readonly ffmpegVersion: string;
+  readonly ffprobeVersion: string;
   readonly ffmpeg: Readonly<DesktopToolArtifact>;
   readonly ffprobe: Readonly<DesktopToolArtifact>;
   readonly ffmpegLicense: Readonly<DesktopToolArtifact>;
@@ -35,6 +36,8 @@ export interface DesktopToolTargetManifest {
 }
 
 interface TargetValues {
+  readonly ffmpegVersion: string;
+  readonly ffprobeVersion: string;
   readonly ffmpegSize: number;
   readonly ffmpegCompressedSize: number;
   readonly ffmpegSha256: string;
@@ -50,6 +53,8 @@ interface TargetValues {
 
 const TARGET_VALUES = Object.freeze({
   "linux-x64": {
+    ffmpegVersion: "7.0.2-static",
+    ffprobeVersion: "7.0.2-static",
     ffmpegSize: 79_826_272,
     ffmpegCompressedSize: 29_354_986,
     ffmpegSha256:
@@ -67,6 +72,8 @@ const TARGET_VALUES = Object.freeze({
       "6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae"
   },
   "linux-arm64": {
+    ffmpegVersion: "7.0.2-static",
+    ffprobeVersion: "7.0.2-static",
     ffmpegSize: 51_134_160,
     ffmpegCompressedSize: 25_568_691,
     ffmpegSha256:
@@ -84,6 +91,8 @@ const TARGET_VALUES = Object.freeze({
       "b6ce97646773070d7a7ffd6bbbdcaecb47c48483909c54c915bf08a7a9b5e0b1"
   },
   "darwin-x64": {
+    ffmpegVersion: "6.1.1-tessus",
+    ffprobeVersion: "6.1.1-tessus",
     ffmpegSize: 78_862_176,
     ffmpegCompressedSize: 25_296_431,
     ffmpegSha256:
@@ -101,6 +110,8 @@ const TARGET_VALUES = Object.freeze({
       "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
   },
   "darwin-arm64": {
+    ffmpegVersion: "6.0",
+    ffprobeVersion: "6.0",
     ffmpegSize: 45_568_216,
     ffmpegCompressedSize: 19_246_198,
     ffmpegSha256:
@@ -118,6 +129,8 @@ const TARGET_VALUES = Object.freeze({
       "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
   },
   "win32-x64": {
+    ffmpegVersion: "6.1.1-essentials_build-www.gyan.dev",
+    ffprobeVersion: "6.1.1-essentials_build-www.gyan.dev",
     ffmpegSize: 82_797_568,
     ffmpegCompressedSize: 29_581_307,
     ffmpegSha256:
@@ -175,6 +188,8 @@ export function desktopToolTargetManifest(
   return Object.freeze({
     schema: DESKTOP_TOOL_MANIFEST_SCHEMA,
     target: target as DesktopBundleTarget,
+    ffmpegVersion: values.ffmpegVersion,
+    ffprobeVersion: values.ffprobeVersion,
     ffmpeg: artifact(
       executableName(target as DesktopBundleTarget, "ffmpeg"),
       `${DESKTOP_FFMPEG_RELEASE.baseUrl}/${ffmpegAssetBase}.gz`,

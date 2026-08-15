@@ -24,41 +24,47 @@ const CASES: readonly Readonly<{
   arch: DesktopArchitecture;
   resourcesRoot: string;
   ytDlpAsset: string;
+  ffmpegVersion: string;
 }>[] = Object.freeze([
   {
     target: "linux-x64",
     platform: "linux",
     arch: "x64",
     resourcesRoot: "/opt/Kirinuki/resources",
-    ytDlpAsset: "yt-dlp_linux"
+    ytDlpAsset: "yt-dlp_linux",
+    ffmpegVersion: "7.0.2-static"
   },
   {
     target: "linux-arm64",
     platform: "linux",
     arch: "arm64",
     resourcesRoot: "/opt/Kirinuki-arm64/resources",
-    ytDlpAsset: "yt-dlp_linux_aarch64"
+    ytDlpAsset: "yt-dlp_linux_aarch64",
+    ffmpegVersion: "7.0.2-static"
   },
   {
     target: "darwin-x64",
     platform: "darwin",
     arch: "x64",
     resourcesRoot: "/Applications/Kirinuki x64.app/Contents/Resources",
-    ytDlpAsset: "yt-dlp_macos"
+    ytDlpAsset: "yt-dlp_macos",
+    ffmpegVersion: "6.1.1-tessus"
   },
   {
     target: "darwin-arm64",
     platform: "darwin",
     arch: "arm64",
     resourcesRoot: "/Applications/Kirinuki.app/Contents/Resources",
-    ytDlpAsset: "yt-dlp_macos"
+    ytDlpAsset: "yt-dlp_macos",
+    ffmpegVersion: "6.0"
   },
   {
     target: "win32-x64",
     platform: "win32",
     arch: "x64",
     resourcesRoot: "C:\\Program Files\\Kirinuki\\resources",
-    ytDlpAsset: "yt-dlp.exe"
+    ytDlpAsset: "yt-dlp.exe",
+    ffmpegVersion: "6.1.1-essentials_build-www.gyan.dev"
   }
 ]);
 
@@ -80,6 +86,8 @@ test("desktop tool manifest pins every packaged target and matches runtime paths
 
     assert.equal(manifest.schema, DESKTOP_TOOL_MANIFEST_SCHEMA, entry.target);
     assert.equal(manifest.target, entry.target);
+    assert.equal(manifest.ffmpegVersion, entry.ffmpegVersion, entry.target);
+    assert.equal(manifest.ffprobeVersion, entry.ffmpegVersion, entry.target);
     assert.equal(tools.bundleTarget, entry.target);
     assert.equal(Object.isFrozen(manifest), true);
     assert.equal(Object.isFrozen(tools), true);

@@ -27,9 +27,9 @@ import {
   DESKTOP_NATIVE_SMOKE_TOKEN_ENV
 } from "../src/desktop/native-smoke-contract.js";
 import {
-  DESKTOP_FFMPEG_RELEASE,
   DESKTOP_PACKAGED_TARGETS,
-  DESKTOP_YT_DLP_RELEASE
+  DESKTOP_YT_DLP_RELEASE,
+  desktopToolTargetManifest
 } from "../src/desktop/tool-manifest.js";
 import {
   resolveDesktopBundledTools
@@ -264,6 +264,16 @@ async function runTool(
   return Object.freeze({ stdout: result.stdout, stderr: result.stderr });
 }
 
+export function matchesExactDesktopToolVersion(
+  stdout: string,
+  tool: "ffmpeg" | "ffprobe",
+  expectedVersion: string
+): boolean {
+  const [firstLine = ""] = stdout.split(/\r?\n/u, 1);
+  const match = /^(ffmpeg|ffprobe) version ([^\s]+)(?:[ \t].*)?$/u.exec(firstLine);
+  return match?.[1] === tool && match[2] === expectedVersion;
+}
+
 function parseTopLevelMp4Boxes(bytes: Buffer): readonly string[] {
   const boxes: string[] = [];
   let offset = 0;
@@ -298,6 +308,7 @@ async function verifyPackagedTools(
   smokeRoot: string
 ): Promise<void> {
   const [platform, arch] = target.split("-") as [DesktopPlatform, "x64" | "arm64"];
+  const manifest = desktopToolTargetManifest(target);
   const tools = resolveDesktopBundledTools({ platform, arch, resourcesRoot });
   await Promise.all([
     assertRegularPath(tools.ffmpeg.command, "file", "packaged ffmpeg", true),
@@ -311,14 +322,18 @@ async function verifyPackagedTools(
     runTool(tools.ytDlp.command, ["--version"], smokeRoot, environment)
   ]);
   invariant(
-    ffmpegVersion.stdout.startsWith(
-      `ffmpeg version ${DESKTOP_FFMPEG_RELEASE.projectVersion}`
+    matchesExactDesktopToolVersion(
+      ffmpegVersion.stdout,
+      "ffmpeg",
+      manifest.ffmpegVersion
     ),
     "packaged ffmpeg version이 manifest와 다릅니다."
   );
   invariant(
-    ffprobeVersion.stdout.startsWith(
-      `ffprobe version ${DESKTOP_FFMPEG_RELEASE.projectVersion}`
+    matchesExactDesktopToolVersion(
+      ffprobeVersion.stdout,
+      "ffprobe",
+      manifest.ffprobeVersion
     ),
     "packaged ffprobe version이 manifest와 다릅니다."
   );
@@ -1083,8 +1098,8 @@ async function runNativePackageSmoke(): Promise<void> {
       status: "ok",
       target,
       tools: {
-        ffmpeg: DESKTOP_FFMPEG_RELEASE.projectVersion,
-        ffprobe: DESKTOP_FFMPEG_RELEASE.projectVersion,
+        ffmpeg: desktopToolTargetManifest(target).ffmpegVersion,
+        ffprobe: desktopToolTargetManifest(target).ffprobeVersion,
         ytDlp: DESKTOP_YT_DLP_RELEASE.version
       },
       fdBinding: process.platform === "linux"

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   isDesktopPackageSmokeEntrypoint,
+  matchesExactDesktopToolVersion,
   reclaimCapturedWindowsProcessIdentities,
   terminateOwnedPosixProcessGroup
 } from "../scripts/desktop-package-smoke.js";
@@ -45,6 +46,32 @@ test("desktop package smoke entrypoint follows native path case semantics", () =
     modulePath: canonical,
     platform: "win32"
   }), false);
+});
+
+test("desktop package smoke는 target별 exact FFmpeg version token만 허용한다", () => {
+  for (const [tool, version, stdout] of [
+    ["ffmpeg", "7.0.2-static", "ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/\nconfiguration"],
+    ["ffprobe", "6.0", "ffprobe version 6.0 Copyright (c)\nconfiguration"],
+    ["ffmpeg", "6.1.1-tessus", "ffmpeg version 6.1.1-tessus  https://evermeet.cx/ffmpeg/\r\nconfiguration"],
+    ["ffprobe", "6.1.1-essentials_build-www.gyan.dev", "ffprobe version 6.1.1-essentials_build-www.gyan.dev Copyright (c)\r\nconfiguration"]
+  ] as const) {
+    assert.equal(matchesExactDesktopToolVersion(stdout, tool, version), true);
+  }
+
+  for (const stdout of [
+    "ffmpeg version 7.0.2-static-malicious Copyright (c)\n",
+    "ffmpeg version 7.0.2 Copyright (c)\n",
+    "ffprobe version 7.0.2-static Copyright (c)\n",
+    " ffmpeg version 7.0.2-static Copyright (c)\n",
+    "ffmpeg version 7.0.2-staticmalicious Copyright (c)\n",
+    ""
+  ]) {
+    assert.equal(
+      matchesExactDesktopToolVersion(stdout, "ffmpeg", "7.0.2-static"),
+      false,
+      stdout
+    );
+  }
 });
 
 test("Windows smoke cleanup은 끝난 root를 건너뛰고 exact descendant를 회수한다", async () => {
