@@ -13,11 +13,27 @@ import {
   assertExactRegularFileTree,
   assertExactRegularFileTreeSnapshot,
   copyExactRegularFileTree,
+  desktopAsarLookupPath,
   snapshotRegularFileTree,
   snapshotExactRegularFileTree,
   verifyDesktopAsar
 } from "../scripts/desktop-package-files.js";
 import { WEB_PACKAGE_FILES } from "../scripts/web-package-files.js";
+
+test("ASAR canonical 경로는 조회 시에만 대상 OS 구분자로 바뀐다", () => {
+  assert.equal(
+    desktopAsarLookupPath("web/editor/audseg-worker.js", "/"),
+    "web/editor/audseg-worker.js"
+  );
+  assert.equal(
+    desktopAsarLookupPath("web/editor/audseg-worker.js", "\\"),
+    "web\\editor\\audseg-worker.js"
+  );
+  assert.throws(
+    () => desktopAsarLookupPath("../outside", "\\"),
+    /allowlist 경로/u
+  );
+});
 
 async function fixture(): Promise<Readonly<{
   parent: string;

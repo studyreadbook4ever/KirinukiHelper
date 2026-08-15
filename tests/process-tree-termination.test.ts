@@ -108,6 +108,37 @@ test("POSIX group은 TERM grace 뒤 KILL하고 post-KILL ESRCH까지 기다린�
   assert.equal(settled, true);
 });
 
+test("POSIX group probe의 EPERM은 소멸이 아니라 bounded present로 처리한다", async () => {
+  const timers = manualTimers();
+  let probes = 0;
+  const signals: NodeJS.Signals[] = [];
+  const pending = terminatePosixProcessGroup({
+    processGroupId: 5_433,
+    graceMs: 100,
+    setTimeoutImpl: timers.setTimeoutImpl,
+    signalProcessGroupImpl: (_pid, signal) => signals.push(signal),
+    probeProcessGroupImpl: () => {
+      probes += 1;
+      if (probes === 1) {
+        return;
+      }
+      if (probes < 4) {
+        throw Object.assign(new Error("present but temporarily unsignalable"), {
+          code: "EPERM"
+        });
+      }
+      throw esrch();
+    }
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(signals, ["SIGTERM"]);
+  await timers.runNext();
+  await timers.runNext();
+  await pending;
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(probes, 4);
+});
+
 test("POSIX group이 SIGKILL 뒤에도 남으면 fail-closed 한다", async () => {
   const timers = manualTimers();
   const pending = terminatePosixProcessGroup({

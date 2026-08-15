@@ -24,6 +24,13 @@ function isEsrch(error: unknown): boolean {
     && error.code === "ESRCH";
 }
 
+function isEperm(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === "EPERM";
+}
+
 function phaseTimeoutMs(totalTimeoutMs: number): number {
   return Math.max(
     1,
@@ -97,7 +104,12 @@ export async function pollProcessAbsence({
       if (isEsrch(error)) {
         return true;
       }
-      throw error;
+      // POSIX kill(pid, 0) reports EPERM when the target still exists but is
+      // not currently signalable. Treat that as present and keep the bounded
+      // poll; only ESRCH proves that the owned group disappeared.
+      if (!isEperm(error)) {
+        throw error;
+      }
     }
     if (remainingMs === 0) {
       return false;

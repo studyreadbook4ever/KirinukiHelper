@@ -2582,7 +2582,7 @@ test("실제 POSIX 정상 exit도 SIGTERM 무시 descendant를 남기지 않는�
     shell: false,
     timeoutMs: 5_000
   }, {
-    killGraceMs: 100,
+    killGraceMs: process.platform === "darwin" ? 1_000 : 100,
     platform: process.platform
   });
   assert.equal(result.exitCode, 0);

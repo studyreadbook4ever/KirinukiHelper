@@ -378,6 +378,19 @@ function asarRelativePath(entry: string): string {
   return entry.replace(/^[/\\]+/u, "").split(path.sep).join("/");
 }
 
+export function desktopAsarLookupPath(
+  canonicalRelativePath: string,
+  separator: "/" | "\\" = path.sep as "/" | "\\"
+): string {
+  invariant(
+    separator === "/" || separator === "\\",
+    "ASAR 조회 경로 구분자가 올바르지 않습니다."
+  );
+  const [normalized] = normalizeExpectedFiles([canonicalRelativePath]);
+  invariant(normalized !== undefined, "ASAR 조회 경로가 비어 있습니다.");
+  return normalized.split("/").join(separator);
+}
+
 export function verifyDesktopAsar(
   archivePath: string,
   expectedIdentities: readonly DesktopPackageFileIdentity[]
@@ -389,7 +402,11 @@ export function verifyDesktopAsar(
   const actualDirectories: string[] = [];
   for (const entry of listPackage(archivePath, { isPack: false })) {
     const relativePath = asarRelativePath(entry);
-    const metadata = statFile(archivePath, relativePath, false);
+    const metadata = statFile(
+      archivePath,
+      desktopAsarLookupPath(relativePath),
+      false
+    );
     if ("link" in metadata) {
       throw new Error(`데스크톱 ASAR에 심볼릭 링크가 있습니다: ${relativePath}`);
     }
@@ -414,7 +431,8 @@ export function verifyDesktopAsar(
       + `actual=${JSON.stringify(actualDirectories)}`
   );
   for (const expected of expectedIdentities) {
-    const metadata = statFile(archivePath, expected.relativePath, false);
+    const lookupPath = desktopAsarLookupPath(expected.relativePath);
+    const metadata = statFile(archivePath, lookupPath, false);
     invariant(
       !("link" in metadata)
         && !("files" in metadata)
@@ -422,7 +440,7 @@ export function verifyDesktopAsar(
         && Boolean(metadata.executable) === expected.executable,
       `데스크톱 ASAR 파일 metadata가 다릅니다: ${expected.relativePath}`
     );
-    const bytes = extractFile(archivePath, expected.relativePath, false);
+    const bytes = extractFile(archivePath, lookupPath, false);
     invariant(
       createHash("sha256").update(bytes).digest("hex") === expected.sha256,
       `데스크톱 ASAR 파일 SHA-256이 다릅니다: ${expected.relativePath}`
