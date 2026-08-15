@@ -70,6 +70,184 @@ const HTTP_REQUEST_TIMEOUT_MS = 2_000;
 const MAX_HTTP_RESPONSE_BYTES = 64 * 1024;
 const MAX_APP_OUTPUT_BYTES = 512 * 1024;
 const TOOL_TIMEOUT_MS = 30_000;
+const WINDOWS_PROCESS_SNAPSHOT_SOURCE = String.raw`
+using System;
+using System.ComponentModel;
+using System.Globalization;
+using System.Runtime.InteropServices;
+
+public static class KirinukiProcessSnapshot
+{
+    private const uint TH32CS_SNAPPROCESS = 0x00000002;
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
+    private const int ERROR_NO_MORE_FILES = 18;
+    private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public UIntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILETIME
+    {
+        public uint Low;
+        public uint High;
+
+        public ulong Ticks
+        {
+            get { return ((ulong)High << 32) | Low; }
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_BASIC_INFORMATION
+    {
+        public IntPtr Reserved1;
+        public IntPtr PebBaseAddress;
+        public IntPtr Reserved2_0;
+        public IntPtr Reserved2_1;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessTimes(
+        IntPtr process,
+        out FILETIME creation,
+        out FILETIME exit,
+        out FILETIME kernel,
+        out FILETIME user
+    );
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr process,
+        int informationClass,
+        ref PROCESS_BASIC_INFORMATION information,
+        int informationLength,
+        out int returnLength
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static void WriteAll()
+    {
+        IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == INVALID_HANDLE_VALUE)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        try
+        {
+            PROCESSENTRY32 entry = new PROCESSENTRY32();
+            entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+            if (!Process32FirstW(snapshot, ref entry))
+            {
+                int error = Marshal.GetLastWin32Error();
+                if (error == ERROR_NO_MORE_FILES)
+                {
+                    return;
+                }
+                throw new Win32Exception(error);
+            }
+
+            while (true)
+            {
+                IntPtr process = OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION,
+                    false,
+                    entry.th32ProcessID
+                );
+                if (process != IntPtr.Zero)
+                {
+                    try
+                    {
+                        FILETIME creation;
+                        FILETIME exit;
+                        FILETIME kernel;
+                        FILETIME user;
+                        PROCESS_BASIC_INFORMATION basic = new PROCESS_BASIC_INFORMATION();
+                        int returned;
+                        int status = NtQueryInformationProcess(
+                            process,
+                            0,
+                            ref basic,
+                            Marshal.SizeOf(typeof(PROCESS_BASIC_INFORMATION)),
+                            out returned
+                        );
+                        long currentPid = basic.UniqueProcessId.ToInt64();
+                        long currentParentPid = basic.InheritedFromUniqueProcessId.ToInt64();
+                        if (
+                            status == 0
+                            && currentPid == entry.th32ProcessID
+                            && currentParentPid == entry.th32ParentProcessID
+                            && GetProcessTimes(process, out creation, out exit, out kernel, out user)
+                        )
+                        {
+                            Console.Out.WriteLine(String.Format(
+                                CultureInfo.InvariantCulture,
+                                "{0},{1},{2}",
+                                currentPid,
+                                currentParentPid,
+                                creation.Ticks
+                            ));
+                        }
+                    }
+                    finally
+                    {
+                        CloseHandle(process);
+                    }
+                }
+
+                if (!Process32NextW(snapshot, ref entry))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error != ERROR_NO_MORE_FILES)
+                    {
+                        throw new Win32Exception(error);
+                    }
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+    }
+}
+`;
 const PORTS = Object.freeze([
   DEFAULT_CAPTION_GATEWAY_PORT,
   DEFAULT_STUDIO_PORT
@@ -649,9 +827,19 @@ async function processSnapshot(
     const systemRoot = String(process.env.SystemRoot || process.env.SYSTEMROOT || "");
     invariant(path.win32.isAbsolute(systemRoot), "Windows SystemRoot를 확인하지 못했습니다.");
     command = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const source = Buffer.from(
+      WINDOWS_PROCESS_SNAPSHOT_SOURCE,
+      "utf8"
+    ).toString("base64");
+    const script = [
+      "$ErrorActionPreference='Stop'",
+      `$source=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${source}'))`,
+      "Add-Type -TypeDefinition $source -Language CSharp",
+      "[KirinukiProcessSnapshot]::WriteAll()"
+    ].join(";");
     args = [
-      "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-      "Get-CimInstance Win32_Process | ForEach-Object { [Console]::Out.WriteLine(('{0},{1},{2}' -f $_.ProcessId,$_.ParentProcessId,$_.CreationDate.ToUniversalTime().Ticks)) }"
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64")
     ];
   } else {
     command = "/bin/ps";
@@ -1044,6 +1232,8 @@ async function runNativePackageSmoke(): Promise<void> {
     });
     output = captureAppOutput(appChild);
     const completion = appCompletion(appChild);
+    const ready = waitForReady(appChild, completion, token);
+    void ready.catch(() => undefined);
     await withTimeout(new Promise<void>((resolve, reject) => {
       appChild?.once("spawn", resolve);
       appChild?.once("error", reject);
@@ -1054,7 +1244,7 @@ async function runNativePackageSmoke(): Promise<void> {
     invariant(appRootIdentity !== undefined, "packaged app launch identity를 찾지 못했습니다.");
     capturedProcesses = Object.freeze([appRootIdentity]);
     await Promise.all([
-      waitForReady(appChild, completion, token),
+      ready,
       waitForHealth(
         "studio health",
         () => requestJson(DEFAULT_STUDIO_PORT, "/v1/studio/health"),
@@ -1135,7 +1325,12 @@ async function runNativePackageSmoke(): Promise<void> {
       }
     }
     try {
-      await rm(smokeRoot, { recursive: true, force: true });
+      await rm(smokeRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100
+      });
     } catch (error) {
       cleanupErrors.push(error instanceof Error
         ? error
