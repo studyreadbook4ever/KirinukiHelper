@@ -1,4 +1,5 @@
 import { constants as fsConstants } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import {
   lstat,
   open,
@@ -114,6 +115,46 @@ function safeInternalRelativePath(relativePath: string): boolean {
   );
 }
 
+function publicShellReadOnlyOpenFlags(): number {
+  return process.platform === "win32"
+    ? fsConstants.O_RDONLY
+    : fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
+}
+
+function samePublicShellFileSnapshot(
+  left: BigIntStats,
+  right: BigIntStats
+): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode
+    && left.nlink === right.nlink
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs;
+}
+
+export function normalizedPublicShellDeviceId(
+  value: bigint,
+  platform: NodeJS.Platform | string = process.platform
+): bigint {
+  // Node 22/libuv before libuv #4698 can expose the Windows path-stat volume
+  // serial at 64 bits but fstat at 32 bits for the same file object.
+  return platform === "win32" ? BigInt.asUintN(32, value) : value;
+}
+
+export function samePublicShellFileObjectIdentity(
+  left: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">,
+  right: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">,
+  platform: NodeJS.Platform | string = process.platform
+): boolean {
+  return normalizedPublicShellDeviceId(left.dev, platform)
+      === normalizedPublicShellDeviceId(right.dev, platform)
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.nlink === right.nlink;
+}
+
 async function readSecurePublicShellFile(
   publicShellRoot: string,
   relativePath: string,
@@ -131,7 +172,7 @@ async function readSecurePublicShellFile(
     return null;
   }
   try {
-    const rootMetadata = await lstat(root);
+    const rootMetadata = await lstat(root, { bigint: true });
     if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
       return null;
     }
@@ -142,10 +183,10 @@ async function readSecurePublicShellFile(
 
     const segments = relativePath.split("/");
     let cursor = root;
-    let finalMetadata: Awaited<ReturnType<typeof lstat>> | null = null;
+    let finalMetadata: BigIntStats | null = null;
     for (let index = 0; index < segments.length; index += 1) {
       cursor = path.join(cursor, segments[index]!);
-      const metadata = await lstat(cursor);
+      const metadata = await lstat(cursor, { bigint: true });
       if (metadata.isSymbolicLink()) {
         return null;
       }
@@ -159,9 +200,9 @@ async function readSecurePublicShellFile(
     }
     if (
       !finalMetadata?.isFile()
-      || finalMetadata.nlink !== 1
-      || finalMetadata.size < 0
-      || finalMetadata.size > maximumBytes
+      || finalMetadata.nlink !== 1n
+      || finalMetadata.size < 0n
+      || finalMetadata.size > BigInt(maximumBytes)
       || await realpath(candidate) !== candidate
     ) {
       return null;
@@ -169,29 +210,31 @@ async function readSecurePublicShellFile(
 
     const handle = await open(
       candidate,
-      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+      publicShellReadOnlyOpenFlags()
     );
     try {
-      const before = await handle.stat();
+      const before = await handle.stat({ bigint: true });
       if (
         !before.isFile()
-        || before.nlink !== 1
-        || before.dev !== finalMetadata.dev
-        || before.ino !== finalMetadata.ino
-        || before.size !== finalMetadata.size
-        || before.size > maximumBytes
+        || before.nlink !== 1n
+        || before.size > BigInt(maximumBytes)
+        || !samePublicShellFileObjectIdentity(finalMetadata, before)
       ) {
         return null;
       }
       const bytes = await handle.readFile();
-      const after = await handle.stat();
+      const after = await handle.stat({ bigint: true });
       if (
-        bytes.byteLength !== before.size
-        || after.dev !== before.dev
-        || after.ino !== before.ino
-        || after.size !== before.size
-        || after.mtimeMs !== before.mtimeMs
-        || after.ctimeMs !== before.ctimeMs
+        bytes.byteLength !== Number(before.size)
+        || !samePublicShellFileSnapshot(before, after)
+      ) {
+        return null;
+      }
+      const pathAfter = await lstat(candidate, { bigint: true });
+      if (
+        pathAfter.isSymbolicLink()
+        || !samePublicShellFileSnapshot(finalMetadata, pathAfter)
+        || !samePublicShellFileObjectIdentity(pathAfter, after)
       ) {
         return null;
       }

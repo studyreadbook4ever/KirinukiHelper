@@ -23,11 +23,16 @@ import {
   DEFAULT_COMPLETED_VOD_JOB_TTL_MS,
   VOD_ARTIFACT_CHUNK_BYTES,
   createChzzkVodJobManager,
+  normalizedChzzkVodArtifactDeviceId,
   normalizeChzzkVodMaterializationRequest,
-  sameChzzkVodArtifactObjectIdentity
+  parseVodConsumerPurgeQuarantineChildName,
+  sameChzzkVodArtifactObjectIdentity,
+  vodConsumerPurgeQuarantineChildName
 } from "../scripts/chzzk-vod-job-manager.js";
 import {
+  vodMaterializationPathSegment,
   vodConsumerScopeHash,
+  vodConsumerScopePathSegment,
   vodConsumerScopeRoot
 } from "../scripts/vod-consumer-scope.js";
 import type {
@@ -242,7 +247,10 @@ function quarantineScopePath(
   return path.join(
     artifactRoot,
     VOD_CONSUMER_PURGE_QUARANTINE_DIRECTORY,
-    `consumer-${vodConsumerScopeHash(consumerId)}-${nonce}`
+    vodConsumerPurgeQuarantineChildName(
+      vodConsumerScopeHash(consumerId),
+      nonce
+    )
   );
 }
 
@@ -258,8 +266,10 @@ function inspected(
   return {
     size: artifact.sizeBytes,
     mtimeMs,
+    rawDev: "2049",
     dev: "2049",
     ino: "424242",
+    nlink: "1",
     mtimeNs: mtimeNs.toString(),
     ctimeNs: (mtimeNs + BigInt(version)).toString(),
     regular: true,
@@ -286,6 +296,42 @@ test("path lstat과 fd stat은 timestamp 표현이 달라도 같은 파일 객�
     ...handleIdentity,
     symlink: true
   }), false);
+  assert.equal(sameChzzkVodArtifactObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    nlink: "2"
+  }), false);
+});
+
+test("Windows path stat과 fd stat의 volume serial 표현만 low 32-bit로 정규화한다", () => {
+  const low32 = 0x89abcdefn;
+  const pathDevice = (0x12345678n << 32n) | low32;
+  assert.equal(
+    normalizedChzzkVodArtifactDeviceId(pathDevice, "win32"),
+    normalizedChzzkVodArtifactDeviceId(low32, "win32")
+  );
+  assert.equal(
+    normalizedChzzkVodArtifactDeviceId(pathDevice, "linux"),
+    pathDevice.toString()
+  );
+});
+
+test("Windows consumer quarantine 이름은 짧고 case-fold-safe하며 exact parser로 검증한다", () => {
+  const scopeHash = "ab".repeat(32);
+  const nonce = "cd".repeat(16);
+  const name = vodConsumerPurgeQuarantineChildName(scopeHash, nonce, "win32");
+  assert.match(name, /^q-[0-9a-v]{52}-[0-9a-v]{26}$/u);
+  assert.deepEqual(parseVodConsumerPurgeQuarantineChildName(name, "win32"), {
+    consumerScopePathSegment: vodConsumerScopePathSegment(scopeHash, "win32"),
+    quarantineNoncePathSegment: vodMaterializationPathSegment(nonce, "win32")
+  });
+  assert.equal(
+    parseVodConsumerPurgeQuarantineChildName(`${name}x`, "win32"),
+    null
+  );
+  assert.equal(parseVodConsumerPurgeQuarantineChildName(
+    `q-${"A".repeat(52)}-${"0".repeat(26)}`,
+    "win32"
+  ), null);
 });
 
 test("요청은 공개 CHZZK VOD, 고정 10초, 명시적 권리 확인만 받는다", () => {
@@ -1959,9 +2005,12 @@ test("consumer purge rm 실패로 남은 quarantine은 다음 startup에서 회�
   );
   const leftovers = await readdir(quarantineRoot);
   assert.equal(leftovers.length, 1);
-  assert.match(
-    leftovers[0] || "",
-    new RegExp(`^consumer-${vodConsumerScopeHash(consumerId)}-[a-f0-9]{32}$`, "u")
+  const leftoverName = leftovers[0] || "";
+  const parsedLeftover = parseVodConsumerPurgeQuarantineChildName(leftoverName);
+  assert.ok(parsedLeftover);
+  assert.equal(
+    parsedLeftover.consumerScopePathSegment,
+    vodConsumerScopePathSegment(vodConsumerScopeHash(consumerId))
   );
   const orphanPath = path.join(quarantineRoot, leftovers[0] || "");
   await access(path.join(orphanPath, path.relative(scopeRoot, artifactPath)));

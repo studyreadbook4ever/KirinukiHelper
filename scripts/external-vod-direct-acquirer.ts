@@ -846,11 +846,17 @@ export async function acquireExternalVodDirectSection(
   assertPrivateOutputPath(workDirectory, outputPath);
   await mkdir(workDirectory, { recursive: true, mode: 0o700 });
   await mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-  const acquisitionDirectory = await mkdtemp(path.join(workDirectory, ".direct-acquire-"));
+  const acquisitionDirectory = await mkdtemp(path.join(
+    workDirectory,
+    process.platform === "win32" ? ".d-" : ".direct-acquire-"
+  ));
   await chmod(acquisitionDirectory, 0o700);
   let published = false;
   try {
-    const temporaryOutputPath = path.join(acquisitionDirectory, "section.mp4");
+    const temporaryOutputPath = path.join(
+      acquisitionDirectory,
+      process.platform === "win32" ? "s.mp4" : "section.mp4"
+    );
     const processOptions: ExternalVodDirectProcessOptions = {
       cwd: acquisitionDirectory,
       timeoutMs: processTimeoutMs,

@@ -45,6 +45,8 @@ import type {
 } from "../scripts/chzzk-vod-materializer.js";
 import { windowsTaskkillOuterGuardTimeoutMs } from
   "../scripts/process-tree-termination.js";
+import { vodConsumerMaterializationDirectory } from
+  "../scripts/vod-consumer-scope.js";
 
 const CONTENT_ID = "14252987";
 const CANONICAL_URL = `https://chzzk.naver.com/video/${CONTENT_ID}`;
@@ -168,17 +170,16 @@ function scopedJobDirectory(
   consumerId = CONSUMER_ID,
   storageGeneration: "v3" | "legacy" = "v3"
 ): string {
-  const platformRoot = path.join(
-    stateDir,
-    "consumers",
-    chzzkVodConsumerScopeHash(consumerId),
-    "jobs",
-    "chzzk"
-  );
-  return path.join(
-    platformRoot,
-    ...(storageGeneration === "v3" ? ["v3"] : []),
+  const legacyDirectory = vodConsumerMaterializationDirectory({
+    stateDirectory: stateDir,
+    consumerScopeHash: chzzkVodConsumerScopeHash(consumerId),
+    platform: "chzzk",
     materializationId
+  });
+  return path.join(
+    path.dirname(legacyDirectory),
+    ...(storageGeneration === "v3" ? ["v3"] : []),
+    path.basename(legacyDirectory)
   );
 }
 

@@ -60,26 +60,47 @@ const TEST_NOTICES = Object.freeze({
   size: 1234,
   sha256: "a".repeat(64)
 });
+const FIXTURE_ROOT = path.resolve(os.tmpdir(), "kirinuki-vod-test");
+const FIXTURE_PACKAGE_ROOT = path.join(FIXTURE_ROOT, "package");
+const FIXTURE_NODE_PATH = path.join(FIXTURE_ROOT, "tools", "node", "node");
+const FIXTURE_PYTHON_PATH = path.join(
+  FIXTURE_ROOT,
+  "tools",
+  "python",
+  "python3"
+);
+const FIXTURE_FFMPEG_PATH = path.join(
+  FIXTURE_ROOT,
+  "tools",
+  "media",
+  "ffmpeg"
+);
+const FIXTURE_FFPROBE_PATH = path.join(
+  FIXTURE_ROOT,
+  "tools",
+  "media",
+  "ffprobe"
+);
 
 function fixturePaths() {
   return resolveVodRuntimePaths({
     env: {
-      XDG_DATA_HOME: "/tmp/kirinuki-vod-test/data",
-      XDG_CONFIG_HOME: "/tmp/kirinuki-vod-test/config",
-      XDG_STATE_HOME: "/tmp/kirinuki-vod-test/state",
-      XDG_RUNTIME_DIR: "/tmp/kirinuki-vod-test/run"
+      XDG_DATA_HOME: path.join(FIXTURE_ROOT, "data"),
+      XDG_CONFIG_HOME: path.join(FIXTURE_ROOT, "config"),
+      XDG_STATE_HOME: path.join(FIXTURE_ROOT, "state"),
+      XDG_RUNTIME_DIR: path.join(FIXTURE_ROOT, "run")
     },
-    homeDir: "/tmp/kirinuki-vod-test/home",
-    packageRoot: "/opt/kirinuki"
+    homeDir: path.join(FIXTURE_ROOT, "home"),
+    packageRoot: FIXTURE_PACKAGE_ROOT
   });
 }
 
 function fixtureConfig() {
   return createVodRuntimeConfig(fixturePaths(), {
-    node: { path: "/opt/node/bin/node", version: "22.18.0" },
-    python: { path: "/opt/python/bin/python3", version: "3.12.4" },
-    ffmpeg: { path: "/opt/media/bin/ffmpeg", version: "7.1.1" },
-    ffprobe: { path: "/opt/media/bin/ffprobe", version: "7.1.1" }
+    node: { path: FIXTURE_NODE_PATH, version: "22.18.0" },
+    python: { path: FIXTURE_PYTHON_PATH, version: "3.12.4" },
+    ffmpeg: { path: FIXTURE_FFMPEG_PATH, version: "7.1.1" },
+    ffprobe: { path: FIXTURE_FFPROBE_PATH, version: "7.1.1" }
   }, {
     installedAt: "2026-08-10T00:00:00.000Z",
     notices: TEST_NOTICES
@@ -104,31 +125,35 @@ test("yt-dlp는 공식 2026.07.04 zipimport와 bundled EJS를 불변 pin한다",
   );
 });
 
-test("Linux XDG 경로는 자막 stack과 독립된 VOD runtime namespace를 쓴다", () => {
+test("XDG 경로는 자막 stack과 독립된 VOD runtime namespace를 쓴다", () => {
   const paths = fixturePaths();
   assert.equal(
     paths.dataRoot,
-    path.resolve("/tmp/kirinuki-vod-test/data/kirinuki-vod-runtime")
+    path.join(FIXTURE_ROOT, "data", "kirinuki-vod-runtime")
   );
   assert.equal(
     paths.configPath,
-    path.resolve("/tmp/kirinuki-vod-test/config/kirinuki-vod-runtime/config.json")
+    path.join(FIXTURE_ROOT, "config", "kirinuki-vod-runtime", "config.json")
   );
   assert.equal(
     paths.stateRoot,
-    path.resolve("/tmp/kirinuki-vod-test/state/kirinuki-vod-runtime")
+    path.join(FIXTURE_ROOT, "state", "kirinuki-vod-runtime")
   );
   assert.equal(
     paths.runtimeRoot,
-    path.resolve("/tmp/kirinuki-vod-test/run/kirinuki-vod-runtime")
+    path.join(FIXTURE_ROOT, "run", "kirinuki-vod-runtime")
   );
   assert.equal(
     paths.ytDlpPath,
-    path.resolve(
-      "/tmp/kirinuki-vod-test/data/kirinuki-vod-runtime/bin/yt-dlp-2026.07.04"
+    path.join(
+      FIXTURE_ROOT,
+      "data",
+      "kirinuki-vod-runtime",
+      "bin",
+      "yt-dlp-2026.07.04"
     )
   );
-  assert.equal(paths.packageRoot, path.resolve("/opt/kirinuki"));
+  assert.equal(paths.packageRoot, FIXTURE_PACKAGE_ROOT);
   for (const [key, value] of ([
     ["XDG_DATA_HOME", "relative/data"],
     ["XDG_CONFIG_HOME", " /tmp/config"],
@@ -242,9 +267,9 @@ test("설정은 pin·절대 도구 경로·앱 Origin·VOD state를 강하게 �
   assert.equal(config.origin, KIRINUKI_LOCAL_STUDIO_ORIGIN);
   assert.equal(config.packageRoot, paths.packageRoot);
   assert.equal(config.ytDlp.path, paths.ytDlpPath);
-  assert.equal(config.python.path, "/opt/python/bin/python3");
-  assert.equal(config.ffmpeg.path, "/opt/media/bin/ffmpeg");
-  assert.equal(config.ffprobe.path, "/opt/media/bin/ffprobe");
+  assert.equal(config.python.path, FIXTURE_PYTHON_PATH);
+  assert.equal(config.ffmpeg.path, FIXTURE_FFMPEG_PATH);
+  assert.equal(config.ffprobe.path, FIXTURE_FFPROBE_PATH);
   assert.deepEqual(validateVodRuntimeConfig(config, paths), config);
   assert.equal(vodRuntimeOriginMatchesRequestedStudio(config, {}), true);
   assert.throws(
@@ -399,13 +424,14 @@ test("gateway child 환경은 비밀을 제거하고 관리형 절대 도구와 
   );
   assert.doesNotMatch(String(environment.PATH), /secret/u);
 
+  const dataHome = path.join(FIXTURE_ROOT, "data");
   const manager = vodManagerEnvironment({
-    XDG_DATA_HOME: "/tmp/kirinuki-vod-test/data",
+    XDG_DATA_HOME: dataHome,
     ACCESS_TOKEN: "secret",
     NODE_OPTIONS: "--inspect",
     LANG: "C.UTF-8"
   }, fixturePaths(), { instanceNonce: TEST_INSTANCE_NONCE });
-  assert.equal(manager.XDG_DATA_HOME, "/tmp/kirinuki-vod-test/data");
+  assert.equal(manager.XDG_DATA_HOME, dataHome);
   assert.equal(manager.ACCESS_TOKEN, undefined);
   assert.equal(manager.NODE_OPTIONS, undefined);
   assert.equal(manager.KIRINUKI_PACKAGE_ROOT, fixturePaths().packageRoot);
@@ -495,47 +521,48 @@ test("health probe 계약은 exact Origin·protocol·schema·managed binding을 
 });
 
 test("실제 toolchain probe 계약은 exact Python→yt-dlp와 ffmpeg 기능을 모두 요구한다", () => {
+  const config = fixtureConfig();
   const calls: Array<{ executable: string; args: readonly string[] }> = [];
   const runCommand = (executable: string, args: readonly string[]) => {
     calls.push({ executable, args });
-    if (executable === "/opt/node/bin/node") {
+    if (executable === config.node.path) {
       return { status: 0, stdout: "v22.18.0\n", stderr: "" };
     }
-    if (executable === "/opt/python/bin/python3" && args.length === 1) {
+    if (executable === config.python.path && args.length === 1) {
       return { status: 0, stdout: "Python 3.12.4\n", stderr: "" };
     }
-    if (executable === "/opt/python/bin/python3") {
+    if (executable === config.python.path) {
       return { status: 0, stdout: "2026.07.04\n", stderr: "" };
     }
-    if (executable === "/opt/media/bin/ffmpeg" && args[0] === "-version") {
+    if (executable === config.ffmpeg.path && args[0] === "-version") {
       return { status: 0, stdout: "ffmpeg version 7.1.1\n", stderr: "" };
     }
-    if (executable === "/opt/media/bin/ffmpeg" && args[1] === "-encoders") {
+    if (executable === config.ffmpeg.path && args[1] === "-encoders") {
       return {
         status: 0,
         stdout: " V....D libx264 h264\n A....D aac AAC\n",
         stderr: ""
       };
     }
-    if (executable === "/opt/media/bin/ffmpeg" && args[1] === "-muxers") {
+    if (executable === config.ffmpeg.path && args[1] === "-muxers") {
       return { status: 0, stdout: "  E  mp4 MP4\n", stderr: "" };
     }
     return { status: 0, stdout: "ffprobe version 7.1.1\n", stderr: "" };
   };
-  const inspection = inspectVodToolchain(fixtureConfig(), { runCommand });
+  const inspection = inspectVodToolchain(config, { runCommand });
   assert.equal(inspection.ready, true);
   assert.deepEqual(
     calls.find((call) => (
-      call.executable === "/opt/python/bin/python3"
+      call.executable === config.python.path
       && call.args.length === 3
     )),
     {
-      executable: "/opt/python/bin/python3",
-      args: ["-I", fixtureConfig().ytDlp.path, "--version"]
+      executable: config.python.path,
+      args: ["-I", config.ytDlp.path, "--version"]
     }
   );
 
-  const missingAac = inspectVodToolchain(fixtureConfig(), {
+  const missingAac = inspectVodToolchain(config, {
     runCommand: (executable, args) => {
       const result = runCommand(executable, args);
       return args[1] === "-encoders"

@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import {
   link,
+  lstat,
   mkdtemp,
   mkdir,
   open,
@@ -37,9 +38,12 @@ import {
   buildExternalMetadataProbeArgs,
   buildExternalSelectedSourceProbeArgs,
   compatibleExternalPacketCopySignatures,
+  copyVerifiedExternalVodFileAtomic,
   createExternalProcessEnvironment,
+  externalVodArtifactCacheFileName,
   externalPublishedArtifactInspectionBinding,
   externalVodConsumerScopeHash,
+  externalVodSourceRootCacheFileName,
   externalYtDlpCommand,
   materializeExternalVod as strictMaterializeExternalVod,
   missingExternalVodSections,
@@ -49,6 +53,8 @@ import {
   planExternalVodSections,
   probeExternalVodMetadata,
   runExternalProcess,
+  normalizedExternalFileDeviceId,
+  sameExternalFileCrossApiObjectIdentity,
   terminateWindowsExternalProcessTree
 } from "../scripts/external-vod-materializer.js";
 import type {
@@ -79,6 +85,11 @@ import type { ExternalVodHlsTimeline } from
   "../scripts/external-vod-hls-acquirer.js";
 import { normalizeChzzkVodMaterialization } from
   "../src/lib/chzzk-vod-materialization.js";
+import {
+  vodConsumerMaterializationDirectory,
+  vodConsumerScopePathSegment,
+  vodMaterializationPathSegment
+} from "../scripts/vod-consumer-scope.js";
 
 const YOUTUBE_ID = "abcdefghijk";
 const YOUTUBE_URL = `https://www.youtube.com/watch?v=${YOUTUBE_ID}`;
@@ -89,6 +100,41 @@ const SOOP_URL = `https://vod.sooplive.com/player/${SOOP_ID}`;
 const PYTHON_BINARY = path.resolve("/usr/bin/python3");
 const YT_DLP_ARTIFACT = path.resolve("/opt/kirinuki/yt-dlp");
 const TEST_CONSUMER_ID = "kirinuki-test-editor-project";
+
+function externalJobDirectory(
+  stateDirectory: string,
+  consumerId: string,
+  platform: "chzzk" | "youtube" | "soop",
+  materializationId: string
+): string {
+  return vodConsumerMaterializationDirectory({
+    stateDirectory,
+    consumerScopeHash: externalVodConsumerScopeHash(consumerId),
+    platform,
+    materializationId
+  });
+}
+
+function isHlsAcquisitionPath(value: string): boolean {
+  return value.includes(".hls-acquire-")
+    || value.split(/[\\/]/u).some((segment) => segment.startsWith(".h-"));
+}
+
+function isDirectAcquisitionPath(value: string): boolean {
+  return value.includes(".direct-acquire-")
+    || value.split(/[\\/]/u).some((segment) => segment.startsWith(".d-"));
+}
+
+function isPublishedArtifactEntry(value: string): boolean {
+  return /^(?:materialized-|m-)/u.test(path.basename(value));
+}
+
+function isAttemptEntry(value: string): boolean {
+  return value.split(/[\\/]/u).some((segment) => (
+    /^attempt-[a-f0-9]+$/u.test(segment)
+    || /^\.a-[a-f0-9]+$/u.test(segment)
+  ));
+}
 
 function soopSourceClockIdentity(
   parts: readonly { id: string; durationSeconds: number }[]
@@ -418,6 +464,79 @@ test("외부 VOD consumer scope는 domain-separated SHA-256만 경로 식별자�
   }
 });
 
+test("Windows VOD cache 경로는 case-fold-safe 256-bit 이름과 짧은 물리 layout을 쓴다", () => {
+  const zeroHash = `00${"00".repeat(31)}`;
+  const base64CaseCollisionHash = `68${"00".repeat(31)}`;
+  assert.equal(
+    Buffer.from(zeroHash, "hex").toString("base64url").toLowerCase(),
+    Buffer.from(base64CaseCollisionHash, "hex").toString("base64url").toLowerCase(),
+    "mixed-case base64url이라면 NTFS에서 충돌하는 digest fixture여야 합니다."
+  );
+  const zeroSegment = vodConsumerScopePathSegment(zeroHash, "win32");
+  const collisionSegment = vodConsumerScopePathSegment(
+    base64CaseCollisionHash,
+    "win32"
+  );
+  assert.match(zeroSegment, /^[0-9a-v]{52}$/u);
+  assert.match(collisionSegment, /^[0-9a-v]{52}$/u);
+  assert.notEqual(zeroSegment, collisionSegment);
+  assert.notEqual(zeroSegment.toLowerCase(), collisionSegment.toLowerCase());
+  assert.equal(vodConsumerScopePathSegment(zeroHash, "linux"), zeroHash);
+
+  const materializationId = "ab".repeat(16);
+  assert.match(
+    vodMaterializationPathSegment(materializationId, "win32"),
+    /^[0-9a-v]{26}$/u
+  );
+  const windowsJob = vodConsumerMaterializationDirectory({
+    stateDirectory: path.resolve("/state"),
+    consumerScopeHash: zeroHash,
+    platform: "youtube",
+    materializationId,
+    runtimePlatform: "win32"
+  });
+  assert.deepEqual(windowsJob.split(path.sep).slice(-5), [
+    "c",
+    zeroSegment,
+    "j",
+    "y",
+    vodMaterializationPathSegment(materializationId, "win32")
+  ]);
+  assert.match(
+    externalVodArtifactCacheFileName(zeroHash, "01".repeat(16), "win32"),
+    /^m-[0-9a-v]{26}\.mp4$/u
+  );
+  assert.equal(
+    externalVodSourceRootCacheFileName(zeroHash, "win32"),
+    `r-${zeroSegment}.mp4`
+  );
+});
+
+test("Windows path stat과 fd stat은 low32 dev만 정규화하고 ino·size·nlink는 exact다", () => {
+  const low32 = 0x89abcdefn;
+  const pathDevice = (0x12345678n << 32n) | low32;
+  const pathIdentity = { dev: pathDevice, ino: 7n, size: 11n, nlink: 1n };
+  const handleIdentity = { ...pathIdentity, dev: low32 };
+  assert.equal(normalizedExternalFileDeviceId(pathDevice, "win32"), low32);
+  assert.equal(normalizedExternalFileDeviceId(pathDevice, "linux"), pathDevice);
+  assert.equal(
+    sameExternalFileCrossApiObjectIdentity(pathIdentity, handleIdentity, "win32"),
+    true
+  );
+  assert.equal(
+    sameExternalFileCrossApiObjectIdentity(pathIdentity, handleIdentity, "linux"),
+    false
+  );
+  assert.equal(sameExternalFileCrossApiObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    ino: 8n
+  }, "win32"), false);
+  assert.equal(sameExternalFileCrossApiObjectIdentity(pathIdentity, {
+    ...handleIdentity,
+    nlink: 2n
+  }, "win32"), false);
+});
+
 test("동일 semantic 계획도 consumer별 물리 job을 격리하고 같은 consumer만 재사용한다", async (t) => {
   const stateDir = await mkdtemp(path.join(
     os.tmpdir(),
@@ -438,11 +557,9 @@ test("동일 semantic 계획도 consumer별 물리 job을 격리하고 같은 co
     consumerId: consumerA
   }, youtubeFixtureDependencies());
   const firstAJobDirectory = path.dirname(firstA.artifactPath);
-  assert.equal(firstAJobDirectory, path.join(
+  assert.equal(firstAJobDirectory, externalJobDirectory(
     stateDir,
-    "consumers",
-    externalVodConsumerScopeHash(consumerA),
-    "jobs",
+    consumerA,
     "youtube",
     firstA.manifest.materializationId
   ));
@@ -496,11 +613,9 @@ test("동일 semantic 계획도 consumer별 물리 job을 격리하고 같은 co
   assert.equal(rebuiltA.manifest.planFingerprint, firstB.manifest.planFingerprint);
   assert.equal(rebuiltA.manifest.materializationId, firstB.manifest.materializationId);
   assert.notEqual(rebuiltA.artifactPath, firstB.artifactPath);
-  assert.equal(path.dirname(firstB.artifactPath), path.join(
+  assert.equal(path.dirname(firstB.artifactPath), externalJobDirectory(
     stateDir,
-    "consumers",
-    externalVodConsumerScopeHash(consumerB),
-    "jobs",
+    consumerB,
     "youtube",
     firstB.manifest.materializationId
   ));
@@ -1699,7 +1814,7 @@ test("CHZZK 0초·비영점 조각은 컨테이너 합집합과 각 A/V 스트�
     assert.ok(outputPath);
     await writeFile(
       outputPath,
-      outputPath.includes(".hls-acquire-")
+      isHlsAcquisitionPath(outputPath)
         ? "chzzk-strict-section"
         : "chzzk-zero-final"
     );
@@ -2664,7 +2779,7 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
     assert.equal(options.timeoutMs, 5 * 60 * 1_000);
     const outputPath = args.at(-1);
     assert.ok(outputPath);
-    if (options.cwd.includes(".hls-acquire-")) {
+    if (isHlsAcquisitionPath(options.cwd)) {
       (sectionCalls as string[][]).push([...args]);
       const durationMs = Math.round(Number(optionValue(args, "-t")) * 1_000);
       await writeFile(outputPath, `strict-section:${durationMs}`);
@@ -2732,11 +2847,9 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
   }]);
   assert.ok(normalizeChzzkVodMaterialization(first.manifest));
   assert.equal(first.receipt.schemaId, EXTERNAL_VOD_CACHE_SCHEMA);
-  assert.equal(path.dirname(first.artifactPath), path.join(
+  assert.equal(path.dirname(first.artifactPath), externalJobDirectory(
     stateDir,
-    "consumers",
-    externalVodConsumerScopeHash(TEST_CONSUMER_ID),
-    "jobs",
+    TEST_CONSUMER_ID,
     "soop",
     first.manifest.materializationId
   ));
@@ -2922,7 +3035,7 @@ test("최종 ffprobe 뒤 source가 교체돼도 게시본을 다시 검사하고
   assert.equal(sourceSwapped, true);
   assert.equal(publishedProbeCalls, 1);
   const entries = await readdir(stateDir, { recursive: true });
-  assert.equal(entries.some((entry) => path.basename(entry).startsWith("materialized-")), false);
+  assert.equal(entries.some(isPublishedArtifactEntry), false);
   assert.equal(entries.some((entry) => entry.endsWith("manifest.json")), false);
 });
 
@@ -2947,7 +3060,7 @@ test("게시 경로를 바꿨다가 복원해도 semantic probe는 열린 fd만 
         descriptorProbeCalls += 1;
         const entries = await readdir(stateDir, { recursive: true });
         const artifactEntry = entries.find((entry) => (
-          path.basename(entry).startsWith("materialized-")
+          isPublishedArtifactEntry(entry)
           && entry.endsWith(".mp4")
         ));
         assert.ok(artifactEntry);
@@ -2976,7 +3089,7 @@ test("게시 경로를 바꿨다가 복원해도 semantic probe는 열린 fd만 
   assert.equal(descriptorProbeCalls, 1);
   assert.equal(inspectedContent, "youtube-final-mp4");
   const entries = await readdir(stateDir, { recursive: true });
-  assert.equal(entries.some((entry) => path.basename(entry).startsWith("materialized-")), false);
+  assert.equal(entries.some(isPublishedArtifactEntry), false);
   assert.equal(entries.some((entry) => entry.endsWith("manifest.json")), false);
 });
 
@@ -3037,7 +3150,7 @@ test("게시 중 같은 inode가 변조되면 자신이 만든 hard-link만 정�
     }
   );
   const entries = await readdir(stateDir, { recursive: true });
-  assert.equal(entries.some((entry) => path.basename(entry).startsWith("materialized-")), false);
+  assert.equal(entries.some(isPublishedArtifactEntry), false);
 });
 
 test("게시 원본에 기존 hard-link가 있으면 nlink 1 경계를 통과하지 못한다", async (t) => {
@@ -3141,7 +3254,7 @@ test("SOOP 선택 source proof의 파트 identity가 계획과 다르면 즉시 
     if (command === "ffmpeg") {
       const outputPath = args.at(-1);
       assert.ok(outputPath);
-      if (outputPath.includes(".hls-acquire-")) {
+      if (isHlsAcquisitionPath(outputPath)) {
         await writeFile(outputPath, "strict-soop-section");
         return { exitCode: 0, stdout: "", stderr: "" };
       }
@@ -3291,7 +3404,7 @@ test("다운로드 완료 전 metadata 재검증에서 sourceVersionId 변화가
     if (command === "ffmpeg") {
       const outputPath = args.at(-1);
       assert.ok(outputPath);
-      if (outputPath.includes(".hls-acquire-")) {
+      if (isHlsAcquisitionPath(outputPath)) {
         await writeFile(outputPath, "stable-soop-section");
         return { exitCode: 0, stdout: "", stderr: "" };
       }
@@ -3398,7 +3511,7 @@ test("strict section 검사 실패는 취득 작업 폴더와 부분 파일을 �
   const entries = await readdir(stateDir, { recursive: true });
   assert.deepEqual(
     entries.filter((entry) => (
-      /section-|\.part$|\.direct-acquire-/u.test(entry)
+      /section-|\.part$/u.test(entry) || isDirectAcquisitionPath(entry)
     )),
     []
   );
@@ -3435,7 +3548,7 @@ test("필수 오디오가 없는 strict section은 최종 mux 전에 거부한�
     if (command === "ffmpeg") {
       const outputPath = args.at(-1);
       assert.ok(outputPath);
-      if (outputPath.includes(".hls-acquire-")) {
+      if (isHlsAcquisitionPath(outputPath)) {
         sectionCalls += 1;
         await writeFile(outputPath, `strict-section:${sectionCalls}`);
         return { exitCode: 0, stdout: "", stderr: "" };
@@ -3522,7 +3635,7 @@ test("동일 계획의 동시 attempt는 BUSY나 공유 삭제 없이 원자적 
     assert.equal(command, "ffmpeg");
     const outputPath = args.at(-1);
     assert.ok(outputPath);
-    if (outputPath.includes(".direct-acquire-")) {
+    if (isDirectAcquisitionPath(outputPath)) {
       downloadCalls += 1;
       if (downloadCalls === 1) {
         await firstDownloadWaiting;
@@ -3571,7 +3684,142 @@ test("동일 계획의 동시 attempt는 BUSY나 공유 삭제 없이 원자적 
   assert.equal(downloadCalls, 2);
   const entries = await readdir(stateDir, { recursive: true });
   assert.equal(entries.some((entry) => entry.endsWith(".materializing.lock")), false);
-  assert.equal(entries.some((entry) => /attempt-[a-f0-9]+\//u.test(entry)), false);
+  assert.equal(entries.some(isAttemptEntry), false);
+  const sourceRootEntries = entries.filter((entry) => (
+    /^(?:root-|r-)/u.test(path.basename(entry))
+    && entry.endsWith(".mp4")
+  ));
+  assert.ok(sourceRootEntries.length > 0);
+  for (const entry of sourceRootEntries) {
+    assert.equal(
+      (await lstat(path.join(stateDir, entry), { bigint: true })).nlink,
+      1n,
+      "동시 copy publish 뒤 공유 source root는 단일 링크여야 합니다."
+    );
+  }
+});
+
+test("content-addressed copy는 attempt staging 검증 뒤 corrupt destination을 원자 교체한다", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-copy-atomic-"));
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const rootsDirectory = path.join(directory, "roots");
+  const stagingDirectory = path.join(directory, "attempts", "attempt-a");
+  await mkdir(rootsDirectory, { recursive: true, mode: 0o700 });
+  const sourcePath = path.join(stagingDirectory, "source.mp4");
+  const destinationPath = path.join(rootsDirectory, "root.mp4");
+  const preservedCorruptLink = path.join(directory, "preserved-corrupt-link");
+  await mkdir(stagingDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(sourcePath, "verified-root-bytes");
+  await writeFile(destinationPath, "corrupt-root-bytes");
+  await link(destinationPath, preservedCorruptLink);
+
+  await copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory,
+    expectedHash: sha256Buffer("verified-root-bytes"),
+    expectedSize: Buffer.byteLength("verified-root-bytes")
+  });
+
+  assert.equal(await readFile(destinationPath, "utf8"), "verified-root-bytes");
+  assert.equal(await readFile(preservedCorruptLink, "utf8"), "corrupt-root-bytes");
+  assert.equal((await lstat(destinationPath, { bigint: true })).nlink, 1n);
+  assert.equal((await lstat(preservedCorruptLink, { bigint: true })).nlink, 1n);
+  assert.deepEqual(
+    (await readdir(rootsDirectory)).filter((entry) => entry.startsWith(".t-")),
+    [],
+    "강제 종료 전 partial이 persistent roots namespace에 생성되면 안 됩니다."
+  );
+  assert.deepEqual(
+    (await readdir(stagingDirectory)).filter((entry) => entry.startsWith(".t-")),
+    [],
+    "정상 완료 뒤 invocation-owned staging은 비워져야 합니다."
+  );
+});
+
+test("검증 실패 copy는 deterministic destination을 게시하거나 덮어쓰지 않는다", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-copy-reject-"));
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const stagingDirectory = path.join(directory, "attempt");
+  const sourcePath = path.join(directory, "source.mp4");
+  const destinationPath = path.join(directory, "root.mp4");
+  await writeFile(sourcePath, "wrong-root");
+  await writeFile(destinationPath, "existing-root");
+
+  await assert.rejects(copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory,
+    expectedHash: sha256Buffer("right-root"),
+    expectedSize: Buffer.byteLength("right-root")
+  }), (error: unknown) => (
+    error instanceof ExternalVodMaterializationError
+    && error.code === "CACHE_INTEGRITY_FAILED"
+  ));
+  assert.equal(await readFile(destinationPath, "utf8"), "existing-root");
+  assert.deepEqual(await readdir(stagingDirectory), []);
+});
+
+test("atomic destination 사전 검증은 이미 취소된 신호를 성공이나 경로 오류로 삼키지 않는다", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-copy-cancel-"));
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const bytes = "already-verified-root";
+  const sourcePath = path.join(directory, "source.mp4");
+  const destinationPath = path.join(directory, "root.mp4");
+  await writeFile(sourcePath, bytes);
+  await writeFile(destinationPath, bytes);
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory: path.join(directory, "attempt"),
+    expectedHash: sha256Buffer(bytes),
+    expectedSize: Buffer.byteLength(bytes),
+    signal: controller.signal
+  }), (error: unknown) => (
+    error instanceof ExternalVodMaterializationError
+    && error.code === "CANCELLED"
+  ));
+  assert.equal(await readFile(destinationPath, "utf8"), bytes);
+});
+
+test("동시 atomic copy publisher는 동일 expected bytes로 함께 수렴한다", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-copy-race-"));
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const bytes = "same-verified-root";
+  const sourcePath = path.join(directory, "source.mp4");
+  const destinationPath = path.join(directory, "roots", "root.mp4");
+  await mkdir(path.dirname(destinationPath), { recursive: true, mode: 0o700 });
+  await writeFile(sourcePath, bytes);
+  const publish = (name: string) => copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory: path.join(directory, "attempts", name),
+    expectedHash: sha256Buffer(bytes),
+    expectedSize: Buffer.byteLength(bytes)
+  });
+
+  await Promise.all(Array.from({ length: 16 }, (_value, index) => (
+    publish(`attempt-${index}`)
+  )));
+  assert.equal(await readFile(destinationPath, "utf8"), bytes);
+  assert.equal((await lstat(destinationPath, { bigint: true })).nlink, 1n);
+  for (let index = 0; index < 16; index += 1) {
+    assert.deepEqual(
+      await readdir(path.join(directory, "attempts", `attempt-${index}`)),
+      []
+    );
+  }
 });
 
 test("동시 publish 뒤 한 attempt의 검증 실패가 다른 attempt의 committed artifact를 지우지 않는다", async (t) => {
@@ -3668,13 +3916,12 @@ test("immutable artifact 게시 뒤 receipt 원자 저장 실패는 그 attempt�
         !blockedReceiptWrite
         && isPublishedInspectionInput(filePath, options)
       ) {
-        const platformDirectory = path.join(
+        const platformDirectory = path.dirname(externalJobDirectory(
           stateDir,
-          "consumers",
-          externalVodConsumerScopeHash(TEST_CONSUMER_ID),
-          "jobs",
-          "youtube"
-        );
+          TEST_CONSUMER_ID,
+          "youtube",
+          "0".repeat(32)
+        ));
         const jobDirectories = (await readdir(platformDirectory, {
           withFileTypes: true
         })).filter((entry) => entry.isDirectory());
@@ -3700,14 +3947,14 @@ test("immutable artifact 게시 뒤 receipt 원자 저장 실패는 그 attempt�
   assert.equal(blockedReceiptWrite, true);
   const entries = await readdir(stateDir, { recursive: true });
   assert.equal(
-    entries.some((entry) => path.basename(entry).startsWith("materialized-")),
+    entries.some(isPublishedArtifactEntry),
     false
   );
   assert.equal(
     entries.some((entry) => entry.includes("manifest.json.tmp-")),
     false
   );
-  assert.equal(entries.some((entry) => /attempt-[a-f0-9]+\//u.test(entry)), false);
+  assert.equal(entries.some(isAttemptEntry), false);
 });
 
 test("YouTube hot-load는 기존 clip 부분집합 root를 상속하고 새 lineage의 실제 공백만 받는다", async (t) => {
@@ -3738,7 +3985,7 @@ test("YouTube hot-load는 기존 clip 부분집합 root를 상속하고 새 line
     const outputPath = args.at(-1);
     assert.ok(outputPath);
     const durationMs = Math.round(Number(optionValue(args, "-t")) * 1_000);
-    if (outputPath.includes(".direct-acquire-")) {
+    if (isDirectAcquisitionPath(outputPath)) {
       const startMs = Math.round(Number(optionValue(args, "-ss")) * 1_000);
       const expression = `*${(startMs / 1_000).toFixed(3)}-${(
         (startMs + durationMs) / 1_000
@@ -3923,12 +4170,12 @@ test("YouTube hot-load는 기존 clip 부분집합 root를 상속하고 새 line
   );
   await assert.rejects(
     readFile(path.join(
-      warmStateDir,
-      "consumers",
-      externalVodConsumerScopeHash(TEST_CONSUMER_ID),
-      "jobs",
-      "youtube",
-      restarted.manifest.materializationId,
+      externalJobDirectory(
+        warmStateDir,
+        TEST_CONSUMER_ID,
+        "youtube",
+        restarted.manifest.materializationId
+      ),
       "partial-roots.json"
     )),
     (error: unknown) => (
@@ -4008,7 +4255,7 @@ test("HLS hot-load는 같은 playlist라도 겹치는 경계 fragment bytes가 �
     const durationMs = Math.round(Number(optionValue(args, "-t")) * 1_000);
     await writeFile(
       outputPath,
-      outputPath.includes(".hls-acquire-")
+      isHlsAcquisitionPath(outputPath)
         ? `section:${generation}:${durationMs}`
         : `final:${durationMs}`
     );
@@ -4178,7 +4425,7 @@ test("HLS hot-load는 선택 sequence가 맞닿기만 해도 선행 바이트 �
     const durationMs = Math.round(Number(optionValue(args, "-t")) * 1_000);
     await writeFile(
       outputPath,
-      outputPath.includes(".hls-acquire-")
+      isHlsAcquisitionPath(outputPath)
         ? `section:${generation}:${durationMs}`
         : `final:${durationMs}`
     );
@@ -4286,11 +4533,9 @@ test("증명 없는 v1·v2 base receipt는 승격하지 않고 fail-closed 한�
   ].entries()) {
     const planFingerprint = sha256Buffer(`proofless-plan-${index}`);
     const materializationId = planFingerprint.slice(0, 32);
-    const legacyJobDirectory = path.join(
+    const legacyJobDirectory = externalJobDirectory(
       stateDir,
-      "consumers",
-      externalVodConsumerScopeHash(TEST_CONSUMER_ID),
-      "jobs",
+      TEST_CONSUMER_ID,
       "soop",
       materializationId
     );

@@ -42,7 +42,9 @@ import {
   CHZZK_VOD_CONSUMER_CACHE_PURGE_REQUEST_SCHEMA,
   CHZZK_VOD_CONSUMER_CACHE_PURGE_RESULT_SCHEMA,
   VOD_CONSUMER_PURGE_QUARANTINE_DIRECTORY,
-  VOD_ARTIFACT_CHUNK_BYTES
+  VOD_ARTIFACT_CHUNK_BYTES,
+  normalizedChzzkVodArtifactDeviceId,
+  vodConsumerPurgeQuarantineChildName
 } from "../scripts/chzzk-vod-job-manager.js";
 import {
   vodConsumerScopeHash,
@@ -335,6 +337,7 @@ function identityFromBigIntStats(
   const bigintStatus = status as unknown as {
     dev: bigint;
     ino: bigint;
+    nlink: bigint;
     size: bigint;
     mtimeNs: bigint;
     ctimeNs: bigint;
@@ -344,8 +347,10 @@ function identityFromBigIntStats(
   return {
     size: Number(bigintStatus.size),
     mtimeMs: Number(bigintStatus.mtimeNs) / 1_000_000,
-    dev: bigintStatus.dev.toString(),
+    rawDev: bigintStatus.dev.toString(),
+    dev: normalizedChzzkVodArtifactDeviceId(bigintStatus.dev),
     ino: bigintStatus.ino.toString(),
+    nlink: bigintStatus.nlink.toString(),
     mtimeNs: bigintStatus.mtimeNs.toString(),
     ctimeNs: bigintStatus.ctimeNs.toString(),
     regular: bigintStatus.isFile(),
@@ -422,7 +427,10 @@ test("gateway ready는 listen 전에 남은 consumer quarantine만 회수하고 
   const orphanRoot = path.join(
     vodStateDir,
     VOD_CONSUMER_PURGE_QUARANTINE_DIRECTORY,
-    `consumer-${vodConsumerScopeHash(consumerId)}-${"a".repeat(32)}`
+    vodConsumerPurgeQuarantineChildName(
+      vodConsumerScopeHash(consumerId),
+      "a".repeat(32)
+    )
   );
   const orphanFile = path.join(orphanRoot, "orphan.bin");
   const currentFile = path.join(

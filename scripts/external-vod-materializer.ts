@@ -102,8 +102,10 @@ import {
   MAX_VOD_CONSUMER_ID_LENGTH,
   VOD_CONSUMER_SCOPE_HASH_DOMAIN,
   normalizeVodConsumerId,
+  vodMaterializationPathSegment,
   vodConsumerMaterializationDirectory,
-  vodConsumerScopeHash
+  vodConsumerScopeHash,
+  vodConsumerScopePathSegment
 } from "./vod-consumer-scope.js";
 
 export const LEGACY_EXTERNAL_VOD_CACHE_SCHEMA =
@@ -3126,6 +3128,31 @@ function sameExternalFileIdentity(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+/**
+ * Node 22/libuv before libuv #4698 exposes a Windows path-stat volume serial
+ * as 64 bits while fstat exposes its unsigned low 32 bits. Normalize only that
+ * representation mismatch; inode, size, and link count still bind the named
+ * path directly to the already-open file descriptor.
+ */
+export function normalizedExternalFileDeviceId(
+  value: bigint,
+  platform: NodeJS.Platform | string = process.platform
+): bigint {
+  return platform === "win32" ? BigInt.asUintN(32, value) : value;
+}
+
+export function sameExternalFileCrossApiObjectIdentity(
+  left: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">,
+  right: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">,
+  platform: NodeJS.Platform | string = process.platform
+): boolean {
+  return normalizedExternalFileDeviceId(left.dev, platform)
+      === normalizedExternalFileDeviceId(right.dev, platform)
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.nlink === right.nlink;
+}
+
 function sameExternalFileSnapshot(
   left: BigIntStats,
   right: BigIntStats
@@ -3148,6 +3175,51 @@ function sameExternalFileContentSnapshot(
     && left.mtimeNs === right.mtimeNs
     && left.nlink > 0n
     && right.nlink > 0n;
+}
+
+export function externalVodSourceRootCacheFileName(
+  hashSha256: string,
+  platform: NodeJS.Platform | string = process.platform
+): string {
+  if (!/^[a-f0-9]{64}$/u.test(hashSha256)) {
+    throw new TypeError("외부 VOD source root 해시가 올바르지 않습니다.");
+  }
+  return platform === "win32"
+    ? `r-${vodConsumerScopePathSegment(hashSha256, platform)}.mp4`
+    : `root-${hashSha256}.mp4`;
+}
+
+export function externalVodArtifactCacheFileName(
+  hashSha256: string,
+  nonceHex: string,
+  platform: NodeJS.Platform | string = process.platform
+): string {
+  if (
+    !/^[a-f0-9]{64}$/u.test(hashSha256)
+    || (platform === "win32"
+      ? !/^[a-f0-9]{32}$/u.test(nonceHex)
+      : !/^[a-f0-9]{16}$/u.test(nonceHex))
+  ) {
+    throw new TypeError("외부 VOD artifact 캐시 이름 입력이 올바르지 않습니다.");
+  }
+  return platform === "win32"
+    ? `m-${vodMaterializationPathSegment(nonceHex, platform)}.mp4`
+    : `materialized-${hashSha256}-${nonceHex}.mp4`;
+}
+
+function validExternalVodArtifactCacheFileName(
+  cacheFileName: string,
+  hashSha256: string
+): boolean {
+  if (!/^[a-f0-9]{64}$/u.test(hashSha256)) {
+    return false;
+  }
+  if (process.platform === "win32") {
+    return /^m-[0-9a-v]{26}\.mp4$/u.test(cacheFileName);
+  }
+  const prefix = `materialized-${hashSha256}-`;
+  return cacheFileName.startsWith(prefix)
+    && /^[a-f0-9]{16}\.mp4$/u.test(cacheFileName.slice(prefix.length));
 }
 
 function validatedOpenRegularFileStatus(
@@ -3177,6 +3249,15 @@ function validatedOpenRegularFileStatus(
   return Number(status.size);
 }
 
+function externalReadOnlyOpenFlags(): number {
+  // Windows/libuv does not implement O_NOFOLLOW as an open flag. On that
+  // platform adjacent lstat snapshots plus direct dev/ino/size/nlink binding
+  // reject reparse/path swaps. POSIX retains kernel-level O_NOFOLLOW too.
+  return process.platform === "win32"
+    ? fsConstants.O_RDONLY
+    : fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
+}
+
 async function hashExternalFileHandle(
   handle: FileHandle,
   sizeBytes: number,
@@ -3203,10 +3284,7 @@ async function hashExternalFileHandle(
 
 async function openExternalRegularFileNoFollow(filePath: string): Promise<FileHandle> {
   try {
-    return await open(
-      filePath,
-      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
-    );
+    return await open(filePath, externalReadOnlyOpenFlags());
   } catch {
     fail(
       "외부 VOD 파일을 심볼릭 링크 없이 안전하게 열지 못했습니다.",
@@ -3219,16 +3297,33 @@ async function assertNamedPathMatchesOpenFile(
   filePath: string,
   status: BigIntStats
 ): Promise<void> {
-  let namedStatus: BigIntStats;
+  let pathBefore: BigIntStats;
   try {
-    namedStatus = await lstat(filePath, { bigint: true });
+    pathBefore = await lstat(filePath, { bigint: true });
   } catch {
     fail("외부 VOD 파일 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
   }
   if (
-    namedStatus.isSymbolicLink()
-    || !sameExternalFileContentSnapshot(status, namedStatus)
+    pathBefore.isSymbolicLink()
+    || !pathBefore.isFile()
+    || !sameExternalFileCrossApiObjectIdentity(pathBefore, status)
   ) {
+    fail("외부 VOD 파일 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+  try {
+    const pathAfter = await lstat(filePath, { bigint: true });
+    if (
+      pathAfter.isSymbolicLink()
+      || !pathAfter.isFile()
+      || !sameExternalFileSnapshot(pathBefore, pathAfter)
+      || !sameExternalFileCrossApiObjectIdentity(pathAfter, status)
+    ) {
+      fail("외부 VOD 파일 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+    }
+  } catch (error) {
+    if (error instanceof ExternalVodMaterializationError) {
+      throw error;
+    }
     fail("외부 VOD 파일 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
   }
 }
@@ -3791,7 +3886,7 @@ function normalizedSourceRootReceipts(
       || sizeBytes > MAX_EXTERNAL_VOD_WORK_BYTES
       || !Number.isSafeInteger(durationMs)
       || durationMs !== sourceEndMs - sourceStartMs
-      || cacheFileName !== `root-${hashSha256}.mp4`
+      || cacheFileName !== externalVodSourceRootCacheFileName(hashSha256)
       || !streamSignature
       || !clockEvidence
       || clockEvidence.sectionId !== [
@@ -4100,12 +4195,10 @@ async function reusableExternalVodReceipt({
       }, sourceRoots);
     }
     const cacheFileName = String(artifact.cacheFileName);
-    if (
-      !new RegExp(
-        `^materialized-${artifact.hashSha256}-[a-f0-9]{16}\\.mp4$`,
-        "u"
-      ).test(cacheFileName)
-    ) {
+    if (!validExternalVodArtifactCacheFileName(
+      cacheFileName,
+      String(artifact.hashSha256)
+    )) {
       return undefined;
     }
     const artifactPath = path.resolve(jobDirectory, cacheFileName);
@@ -4214,11 +4307,10 @@ async function publishExternalVodArtifact({
     for (let attempt = 0; attempt < 4; attempt += 1) {
       // Never expose one shared uncommitted pathname. A failed publisher can
       // therefore remove only its own immutable artifact, even cross-process.
-      cacheFileName = "materialized-"
-        + sourceSnapshot.hashSha256
-        + "-"
-        + randomBytes(8).toString("hex")
-        + ".mp4";
+      cacheFileName = externalVodArtifactCacheFileName(
+        sourceSnapshot.hashSha256,
+        randomBytes(process.platform === "win32" ? 16 : 8).toString("hex")
+      );
       artifactPath = path.join(jobDirectory, cacheFileName);
       try {
         await link(sourcePath, artifactPath);
@@ -4300,12 +4392,31 @@ async function removeCreatedArtifactIfIdentityMatches({
     return;
   }
   try {
-    const currentArtifact = await lstat(artifactPath, { bigint: true });
+    const pathBefore = await lstat(artifactPath, { bigint: true });
     if (
-      currentArtifact.isFile()
-      && sameExternalFileIdentity(currentArtifact, status)
+      pathBefore.isSymbolicLink()
+      || !pathBefore.isFile()
+      || normalizedExternalFileDeviceId(pathBefore.dev)
+        !== normalizedExternalFileDeviceId(status.dev)
+      || pathBefore.ino !== status.ino
     ) {
-      await rm(artifactPath, { force: true });
+      return;
+    }
+    const handle = await openExternalRegularFileNoFollow(artifactPath);
+    try {
+      const currentArtifact = await handle.stat({ bigint: true });
+      const pathAfter = await lstat(artifactPath, { bigint: true });
+      if (
+        currentArtifact.isFile()
+        && sameExternalFileIdentity(currentArtifact, status)
+        && sameExternalFileCrossApiObjectIdentity(pathBefore, currentArtifact)
+        && sameExternalFileSnapshot(pathBefore, pathAfter)
+        && sameExternalFileCrossApiObjectIdentity(pathAfter, currentArtifact)
+      ) {
+        await rm(artifactPath, { force: true });
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
     }
   } catch {
     // Never mask the validation error and never remove a replacement inode.
@@ -4385,27 +4496,112 @@ function sourceRootId(
   }));
 }
 
-async function copyOpenFileNoClobber(
-  sourcePath: string,
-  destinationPath: string,
-  signal?: AbortSignal
-): Promise<void> {
+async function existingAtomicDestinationSnapshot({
+  destinationPath,
+  expectedHash,
+  expectedSize,
+  signal
+}: {
+  destinationPath: string;
+  expectedHash: string;
+  expectedSize: number;
+  signal?: AbortSignal;
+}): Promise<ExternalFileSnapshot | undefined> {
+  try {
+    const existing = await inspectExternalRegularFileNoFollow(destinationPath, {
+      maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES,
+      requireSingleLink: true,
+      ...(signal ? { signal } : {})
+    });
+    return existing.hashSha256 === expectedHash
+      && existing.sizeBytes === expectedSize
+      ? existing
+      : undefined;
+  } catch (error) {
+    if (error instanceof ExternalVodMaterializationError) {
+      if (error.code === "CANCELLED") {
+        throw error;
+      }
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Copies one already-proven content-addressed root into invocation-owned
+ * staging, verifies its bytes before publication, then atomically replaces the
+ * deterministic destination. Concurrent publishers can replace one another
+ * only with the same expected bytes. A crash before rename leaves data only in
+ * the invocation's attempt directory; a crash after rename leaves a complete,
+ * verified destination and no link-count recovery window.
+ */
+export async function copyVerifiedExternalVodFileAtomic({
+  sourcePath,
+  destinationPath,
+  stagingDirectory,
+  expectedHash,
+  expectedSize,
+  signal
+}: {
+  sourcePath: string;
+  destinationPath: string;
+  stagingDirectory: string;
+  expectedHash: string;
+  expectedSize: number;
+  signal?: AbortSignal;
+}): Promise<ExternalFileSnapshot> {
+  if (
+    !path.isAbsolute(sourcePath)
+    || !path.isAbsolute(destinationPath)
+    || !path.isAbsolute(stagingDirectory)
+    || !/^[a-f0-9]{64}$/u.test(expectedHash)
+    || !Number.isSafeInteger(expectedSize)
+    || expectedSize <= 0
+    || expectedSize > MAX_EXTERNAL_VOD_WORK_BYTES
+  ) {
+    fail("원본 조각의 원자 게시 입력이 올바르지 않습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+  await ensurePrivateDirectory(stagingDirectory);
+  const existingDestination = await existingAtomicDestinationSnapshot({
+    destinationPath,
+    expectedHash,
+    expectedSize,
+    ...(signal ? { signal } : {})
+  });
+  if (existingDestination) {
+    return existingDestination;
+  }
   const source = await openExternalRegularFileNoFollow(sourcePath);
   let destination: FileHandle | undefined;
+  let temporaryPath = "";
   try {
     const before = await source.stat({ bigint: true });
     const sizeBytes = validatedOpenRegularFileStatus(before, {
       maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES
     });
-    try {
-      destination = await open(destinationPath, "wx", 0o600);
-    } catch (error) {
-      if (isRecord(error) && error.code === "EEXIST") {
-        return;
+    if (sizeBytes !== expectedSize) {
+      fail("재사용할 원본 조각의 크기가 다릅니다.", "CACHE_INTEGRITY_FAILED");
+    }
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      temporaryPath = path.join(
+        stagingDirectory,
+        `.t-${randomBytes(16).toString("hex")}`
+      );
+      try {
+        destination = await open(temporaryPath, "wx", 0o600);
+        break;
+      } catch (error) {
+        if (!(isRecord(error) && error.code === "EEXIST")) {
+          throw error;
+        }
       }
-      throw error;
+    }
+    if (!destination) {
+      fail("원본 조각의 고유 임시 파일을 만들지 못했습니다.", "CACHE_INTEGRITY_FAILED");
     }
     const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const digest = createHash("sha256");
     let position = 0;
     while (position < sizeBytes) {
       abortIfRequested(signal);
@@ -4414,6 +4610,7 @@ async function copyOpenFileNoClobber(
       if (bytesRead <= 0) {
         fail("재사용할 원본 조각을 끝까지 읽지 못했습니다.", "CACHE_INTEGRITY_FAILED");
       }
+      digest.update(buffer.subarray(0, bytesRead));
       let written = 0;
       while (written < bytesRead) {
         const result = await destination.write(
@@ -4430,17 +4627,106 @@ async function copyOpenFileNoClobber(
       position += bytesRead;
     }
     await destination.sync();
+    const temporaryStatus = await destination.stat({ bigint: true });
+    if (
+      !temporaryStatus.isFile()
+      || temporaryStatus.nlink !== 1n
+      || temporaryStatus.size !== BigInt(expectedSize)
+    ) {
+      fail("복사한 원본 조각 임시 파일이 안전하지 않습니다.", "CACHE_INTEGRITY_FAILED");
+    }
     const after = await source.stat({ bigint: true });
-    if (!sameExternalFileSnapshot(before, after)) {
+    if (
+      !sameExternalFileSnapshot(before, after)
+      || digest.digest("hex") !== expectedHash
+    ) {
       fail("재사용할 원본 조각이 복사 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
     }
+    await assertNamedPathMatchesOpenFile(temporaryPath, temporaryStatus);
+    await destination.close();
+    destination = undefined;
+    // A concurrent publisher may have completed while this invocation copied.
+    // Preserve its already-correct inode and avoid disrupting active readers.
+    const concurrentlyPublished = await existingAtomicDestinationSnapshot({
+      destinationPath,
+      expectedHash,
+      expectedSize,
+      ...(signal ? { signal } : {})
+    });
+    if (concurrentlyPublished) {
+      await rm(temporaryPath, { force: true });
+      temporaryPath = "";
+      return concurrentlyPublished;
+    }
+    try {
+      await rename(temporaryPath, destinationPath);
+    } catch (error) {
+      // Windows can refuse replacement while another native reader has not
+      // granted delete sharing. Accept only a destination independently proven
+      // to contain the same expected immutable bytes; otherwise preserve the
+      // original rename failure.
+      const lockedDestination = await existingAtomicDestinationSnapshot({
+        destinationPath,
+        expectedHash,
+        expectedSize,
+        ...(signal ? { signal } : {})
+      });
+      if (lockedDestination) {
+        await rm(temporaryPath, { force: true });
+        temporaryPath = "";
+        return lockedDestination;
+      }
+      throw error;
+    }
+    temporaryPath = "";
+
+    // Another verified publisher may atomically install the same content
+    // between our rename and validation. Retry only transient path/fd races;
+    // every accepted destination is independently hashed and single-linked.
+    let lastRaceError: ExternalVodMaterializationError | undefined;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      abortIfRequested(signal);
+      try {
+        const published = await inspectExternalRegularFileNoFollow(
+          destinationPath,
+          {
+            maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES,
+            requireSingleLink: true,
+            ...(signal ? { signal } : {})
+          }
+        );
+        if (
+          published.hashSha256 !== expectedHash
+          || published.sizeBytes !== expectedSize
+        ) {
+          fail("원자 게시된 원본 조각의 해시 또는 크기가 다릅니다.", "CACHE_INTEGRITY_FAILED");
+        }
+        return published;
+      } catch (error) {
+        if (
+          !(error instanceof ExternalVodMaterializationError)
+          || error.code !== "CACHE_INTEGRITY_FAILED"
+          || attempt === 3
+        ) {
+          throw error;
+        }
+        lastRaceError = error;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 1));
+    }
+    throw lastRaceError ?? new ExternalVodMaterializationError(
+      "원자 게시된 원본 조각을 안정적으로 재검증하지 못했습니다.",
+      "CACHE_INTEGRITY_FAILED"
+    );
   } catch (error) {
     await destination?.close().catch(() => undefined);
     destination = undefined;
-    await rm(destinationPath, { force: true }).catch(() => undefined);
     throw error;
   } finally {
     await destination?.close().catch(() => undefined);
+    if (temporaryPath) {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
     await source.close().catch(() => undefined);
   }
 }
@@ -4448,6 +4734,7 @@ async function copyOpenFileNoClobber(
 async function inheritVerifiedRootFile({
   sourcePath,
   destinationPath,
+  stagingDirectory,
   expectedHash,
   expectedSize,
   hashFile,
@@ -4455,26 +4742,31 @@ async function inheritVerifiedRootFile({
 }: {
   sourcePath: string;
   destinationPath: string;
+  stagingDirectory: string;
   expectedHash: string;
   expectedSize: number;
   hashFile?: NonNullable<ExternalVodMaterializerDependencies["hashFile"]>;
   signal?: AbortSignal;
 }): Promise<void> {
   await ensurePrivateDirectory(path.dirname(destinationPath));
-  try {
-    await link(sourcePath, destinationPath);
-  } catch (error) {
-    if (isRecord(error) && error.code === "EXDEV") {
-      await copyOpenFileNoClobber(sourcePath, destinationPath, signal);
-    } else if (!(isRecord(error) && error.code === "EEXIST")) {
-      throw error;
-    }
-  }
-  const inherited = await inspectExternalRegularFileNoFollow(destinationPath, {
-    maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES,
-    ...(hashFile ? { supplementalHashFile: hashFile } : {}),
+  // Source roots are shared across concurrent attempts. Copying keeps every
+  // verified path at nlink=1, so the mandatory path↔fd nlink binding cannot be
+  // invalidated merely because a sibling stages or removes another hard link.
+  let inherited = await copyVerifiedExternalVodFileAtomic({
+    sourcePath,
+    destinationPath,
+    stagingDirectory,
+    expectedHash,
+    expectedSize,
     ...(signal ? { signal } : {})
   });
+  if (hashFile) {
+    inherited = await inspectExternalRegularFileNoFollow(destinationPath, {
+      maximumBytes: MAX_EXTERNAL_VOD_WORK_BYTES,
+      supplementalHashFile: hashFile,
+      ...(signal ? { signal } : {})
+    });
+  }
   if (
     inherited.hashSha256 !== expectedHash
     || inherited.sizeBytes !== expectedSize
@@ -4489,6 +4781,7 @@ async function publishExternalSourceRoot({
   streamSignature,
   clockEvidence,
   jobDirectory,
+  stagingDirectory,
   hashFile,
   signal
 }: {
@@ -4501,6 +4794,7 @@ async function publishExternalSourceRoot({
   streamSignature: ExternalSectionStreamSignature;
   clockEvidence: ExternalVodPersistedSectionClockEvidence;
   jobDirectory: string;
+  stagingDirectory: string;
   hashFile?: NonNullable<ExternalVodMaterializerDependencies["hashFile"]>;
   signal?: AbortSignal;
 }): Promise<{ receipt: ExternalVodSourceRootReceipt; path: string }> {
@@ -4517,12 +4811,13 @@ async function publishExternalSourceRoot({
   ) {
     fail("게시할 원본 조각과 시간축 취득 증거가 다릅니다.", "CLOCK_EVIDENCE_MISMATCH");
   }
-  const cacheFileName = `root-${source.hashSha256}.mp4`;
+  const cacheFileName = externalVodSourceRootCacheFileName(source.hashSha256);
   const rootsDirectory = path.join(jobDirectory, "roots");
   const rootPath = path.join(rootsDirectory, cacheFileName);
   await inheritVerifiedRootFile({
     sourcePath,
     destinationPath: rootPath,
+    stagingDirectory,
     expectedHash: source.hashSha256,
     expectedSize: source.sizeBytes,
     ...(hashFile ? { hashFile } : {}),
@@ -4560,12 +4855,14 @@ async function inheritExternalSourceRoots({
   roots,
   sourcePaths,
   jobDirectory,
+  stagingDirectory,
   hashFile,
   signal
 }: {
   roots: readonly ExternalVodSourceRootReceipt[];
   sourcePaths: ReadonlyMap<string, string>;
   jobDirectory: string;
+  stagingDirectory: string;
   hashFile?: NonNullable<ExternalVodMaterializerDependencies["hashFile"]>;
   signal?: AbortSignal;
 }): Promise<Map<string, string>> {
@@ -4579,6 +4876,7 @@ async function inheritExternalSourceRoots({
     await inheritVerifiedRootFile({
       sourcePath,
       destinationPath,
+      stagingDirectory,
       expectedHash: root.hashSha256,
       expectedSize: root.sizeBytes,
       ...(hashFile ? { hashFile } : {}),
@@ -5869,7 +6167,9 @@ export async function materializeExternalVod(
   await ensurePrivateDirectory(attemptsDirectory);
   const attemptDirectory = path.join(
     attemptsDirectory,
-    `attempt-${randomBytes(16).toString("hex")}`
+    process.platform === "win32"
+      ? `.a-${randomBytes(16).toString("hex")}`
+      : `attempt-${randomBytes(16).toString("hex")}`
   );
   await mkdir(attemptDirectory, { mode: 0o700 });
   const concatListPath = path.join(attemptDirectory, "sections.concat.txt");
@@ -5941,6 +6241,7 @@ export async function materializeExternalVod(
         roots: baseMaterialization.receipt.sourceRoots,
         sourcePaths: baseMaterialization.sourceRootPaths,
         jobDirectory,
+        stagingDirectory: attemptDirectory,
         ...(request.signal ? { signal: request.signal } : {})
       });
       sourceRoots.push(
@@ -6005,6 +6306,7 @@ export async function materializeExternalVod(
             streamSignature,
             clockEvidence,
             jobDirectory,
+            stagingDirectory: attemptDirectory,
             ...(request.signal ? { signal: request.signal } : {})
           });
           sourceRoots.push(publishedRoot.receipt);
@@ -6105,6 +6407,7 @@ export async function materializeExternalVod(
       await inheritVerifiedRootFile({
         sourcePath: rootPath,
         destinationPath: concatPath,
+        stagingDirectory: attemptDirectory,
         expectedHash: root.hashSha256,
         expectedSize: root.sizeBytes,
         ...(request.signal ? { signal: request.signal } : {})

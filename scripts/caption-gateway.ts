@@ -63,6 +63,7 @@ import {
   VOD_ARTIFACT_CHUNK_BYTES,
   ChzzkVodJobManagerError,
   createChzzkVodJobManager,
+  normalizedChzzkVodArtifactDeviceId,
   sameChzzkVodArtifactObjectIdentity
 } from "./chzzk-vod-job-manager.js";
 import type {
@@ -839,8 +840,10 @@ function sameMediaIdentity(
   return Boolean(
     metadata.isFile()
     && Number(metadata.size) === expectedIdentity.size
-    && metadata.dev.toString() === expectedIdentity.dev
+    && metadata.dev.toString() === expectedIdentity.rawDev
+    && normalizedChzzkVodArtifactDeviceId(metadata.dev) === expectedIdentity.dev
     && metadata.ino.toString() === expectedIdentity.ino
+    && metadata.nlink.toString() === expectedIdentity.nlink
     && metadata.mtimeNs.toString() === expectedIdentity.mtimeNs
     && metadata.ctimeNs.toString() === expectedIdentity.ctimeNs
   );
@@ -853,8 +856,10 @@ function mediaIdentityFromStats(
   return {
     size: Number(metadata.size),
     mtimeMs: Number(metadata.mtimeNs) / 1_000_000,
-    dev: metadata.dev.toString(),
+    rawDev: metadata.dev.toString(),
+    dev: normalizedChzzkVodArtifactDeviceId(metadata.dev),
     ino: metadata.ino.toString(),
+    nlink: metadata.nlink.toString(),
     mtimeNs: metadata.mtimeNs.toString(),
     ctimeNs: metadata.ctimeNs.toString(),
     regular: metadata.isFile(),

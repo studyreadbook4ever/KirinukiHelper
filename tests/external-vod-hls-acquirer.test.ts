@@ -13,6 +13,7 @@ import {
   ExternalVodHlsAcquisitionError,
   acquireExternalVodHlsSection as acquireExternalVodHlsSectionImplementation,
   buildExternalVodHlsConcatDescription,
+  externalVodHlsFragmentFileName,
   buildExternalVodHlsTrimArgs,
   externalVodHlsPlaylistFingerprintSha256,
   parseExternalVodHlsPersistedClockEvidence,
@@ -165,13 +166,22 @@ test("concat manifest and FFmpeg args retain microsecond clock precision", () =>
   const description = buildExternalVodHlsConcatDescription([
     { durationUs: 2_001_234 },
     { durationUs: 1_998_766 }
-  ]);
+  ], "linux");
   assert.equal(description, [
     "ffconcat version 1.0",
     "file 'fragment-000001.mp4'",
     "duration 2.001234",
     "file 'fragment-000002.mp4'",
     "duration 1.998766",
+    ""
+  ].join("\n"));
+  assert.equal(externalVodHlsFragmentFileName(0, "win32"), "f-000001.mp4");
+  assert.equal(buildExternalVodHlsConcatDescription([
+    { durationUs: 2_001_234 }
+  ], "win32"), [
+    "ffconcat version 1.0",
+    "file 'f-000001.mp4'",
+    "duration 2.001234",
     ""
   ].join("\n"));
 
@@ -251,7 +261,10 @@ test("strict acquisition writes init+fragment files, trims once, and emits no ra
         assert.ok(concatPath);
         assert.ok(generatedPath);
         observedManifest = await readFile(concatPath, "utf8");
-        const fragmentPath = path.join(path.dirname(concatPath), "fragment-000001.mp4");
+        const fragmentPath = path.join(
+          path.dirname(concatPath),
+          externalVodHlsFragmentFileName(0)
+        );
         const assembled = await readFile(fragmentPath);
         assert.deepEqual(assembled, Buffer.concat([initBytes, fragmentBytes]));
         await writeFile(generatedPath, Buffer.from("mock-mp4"), { flag: "wx" });
