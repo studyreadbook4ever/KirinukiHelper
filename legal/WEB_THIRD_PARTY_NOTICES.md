@@ -1,13 +1,15 @@
-# Web distribution third-party notices
+# Kirinuki app browser-assets third-party notices
 
-이 문서는 **Kirinuki 웹 정적 배포물 안에 실제로 포함되는 구성요소만** 다룹니다.
-로컬 companion이 나중에 내려받는 실행 파일·모델, 운영체제가 제공하는 도구,
-companion 실행용·개발 전용 npm 패키지는 이 패키지의 일부가 아닙니다.
-전체 개발·로컬 runtime
+이 문서는 **Kirinuki Linux 소스 앱의 `web/` browser assets에 실제로 포함되는
+구성요소만** 다룹니다. 공개 사이트의 shell-only ZIP에는 이 editor bundle과
+아래 제3자 구성요소가 들어가지 않습니다.
+Kirinuki 앱 setup이 나중에 내려받는 실행 파일·모델, 운영체제가 제공하는 도구,
+앱 내부 엔진 실행용·개발 전용 npm 패키지는 이 패키지의 일부가 아닙니다.
+전체 개발·앱 runtime
 인벤토리는 저장소의 `legal/OPEN_SOURCE_INVENTORY.md`와
 `legal/RUNTIME_DEPENDENCIES.md`를 확인하세요.
 
-KirinukiHelper가 직접 작성한 코드는 패키지의 `UNLICENSE`를 따릅니다. 아래
+Kirinuki 프로젝트가 직접 작성한 코드는 패키지의 `UNLICENSE`를 따릅니다. 아래
 제3자 구성요소와 별도 라이선스 소스는 그 퍼블릭 도메인 헌정 대상이 아니며
 Unlicense로 재허가되지 않습니다.
 
@@ -27,7 +29,7 @@ Unlicense로 재허가되지 않습니다.
 
 Mediabunny는 브라우저에서 로컬 미디어를 읽고 인코딩·mux하는 데 사용됩니다.
 `mediabunny@1.51.0` TypeScript 소스가 위의 정확한 npm source package에
-포함되어 있습니다. KirinukiHelper의 adapter와 upstream Mediabunny의
+포함되어 있습니다. Kirinuki의 adapter와 upstream Mediabunny의
 MPL-2.0 코드를 구분해 관리합니다.
 
 <!-- attribution-id: audseg -->
@@ -85,17 +87,18 @@ AudSeg 이름·버전·MIT 고지가 보존됩니다.
 
 ## External service runtime boundary
 
-YouTube 원본 확인 화면은 YouTube 주소를 연 경우에만 브라우저가 Google의 공식
+Kirinuki 앱의 YouTube 원본 확인 화면은 YouTube 주소를 연 경우에만 브라우저가
+Google의 공식
 `https://www.youtube.com/iframe_api` loader와
 `https://www.youtube-nocookie.com` embed에 직접 연결합니다. 이 원격 서비스
-코드는 Kirinuki 웹 패키지에 포함하거나 재허가하지 않으며, YouTube의 현재
+코드는 Kirinuki 앱 browser assets에 포함하거나 재허가하지 않으며, YouTube의 현재
 서비스 약관·개발자 정책과 콘텐츠 권리는 위 오픈소스 라이선스와 별도로
 적용됩니다. Kirinuki는 이 연결을 서버에서 proxy하지 않습니다.
 
 ## Corresponding source and scope
 
-웹 앱의 TypeScript 소스, 고정된 `package-lock.json`, 빌드 스크립트와
-전체 인벤토리는 다음 저장소에 있습니다.
+앱 UI의 TypeScript 소스, 고정된 `package-lock.json`, 빌드
+스크립트와 전체 인벤토리는 다음 저장소에 있습니다.
 
 https://github.com/studyreadbook4ever/KirinukiHelper
 

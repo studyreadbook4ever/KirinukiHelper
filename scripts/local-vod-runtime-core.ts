@@ -6,10 +6,10 @@ import path from "node:path";
 import {
   KIRINUKI_GATEWAY_ORIGIN_BINDING,
   KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  isKirinukiStudioOrigin,
-  resolveKirinukiStudioOrigin
+  isKirinukiLocalStudioOrigin,
+  resolveKirinukiAppOrigin
 } from "../src/lib/local-runtime-origin.js";
-import type { KirinukiStudioOrigin } from "../src/lib/local-runtime-origin.js";
+import type { KirinukiAppOrigin } from "../src/lib/local-runtime-origin.js";
 
 export const LOCAL_VOD_RUNTIME_SCHEMA =
   "kirinuki-local-vod-runtime/v1";
@@ -390,7 +390,7 @@ export function createVodRuntimeConfig(
   }: {
     installedAt?: string;
     notices: ArtifactManifest;
-    origin?: KirinukiStudioOrigin;
+    origin?: KirinukiAppOrigin;
   }
 ): Readonly<LocalVodRuntimeConfig> {
   return Object.freeze({
@@ -398,7 +398,7 @@ export function createVodRuntimeConfig(
     installedAt,
     host: VOD_LOOPBACK_HOST,
     gatewayPort: DEFAULT_VOD_GATEWAY_PORT,
-    origin: resolveKirinukiStudioOrigin(origin),
+    origin: resolveKirinukiAppOrigin(origin),
     packageRoot: paths.packageRoot,
     vodStateDir: paths.vodStateDir,
     ytDlp: Object.freeze({
@@ -482,7 +482,7 @@ export function validateVodRuntimeConfig(
     || typeof config.gatewayPort !== "number"
     || !Number.isInteger(config.gatewayPort)
     || config.gatewayPort !== DEFAULT_VOD_GATEWAY_PORT
-    || !isKirinukiStudioOrigin(config.origin)
+    || !isKirinukiLocalStudioOrigin(config.origin)
     || config.packageRoot !== paths.packageRoot
     || config.vodStateDir !== paths.vodStateDir
     || config.noticesPath !== paths.noticesPath

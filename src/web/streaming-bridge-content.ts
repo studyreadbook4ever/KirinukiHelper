@@ -417,6 +417,8 @@ export function installStreamingBridgeContentEndpoint({
 export interface HtmlVideoStreamingBridgeAdapterOptions {
   readonly readSource: StreamingBridgeContentAdapter["readSource"];
   readonly hostDocument?: Document;
+  readonly seekHandoffDurationMs?: number;
+  readonly seekVerificationTimeoutMs?: number;
 }
 
 export interface SoopVodStreamingBridgeAdapterOptions {
@@ -460,6 +462,11 @@ const SOOP_LOGICAL_END_EPSILON_SECONDS = 0.025;
 const SOOP_SEEK_TARGET_TOLERANCE_SECONDS = 0.35;
 const SOOP_DEFAULT_SEEK_VERIFICATION_TIMEOUT_MS = 2_500;
 const SOOP_SEEK_POLL_INTERVAL_MS = 25;
+const HTML_VIDEO_DEFAULT_SEEK_VERIFICATION_TIMEOUT_MS = 1_500;
+const HTML_VIDEO_SEEK_POLL_INTERVAL_MS = 25;
+const HTML_VIDEO_SEEK_STABLE_MS = 250;
+const HTML_VIDEO_SEEK_TARGET_TOLERANCE_SECONDS = 0.25;
+const HTML_VIDEO_DEFAULT_SEEK_HANDOFF_MS = 5_000;
 
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -1014,18 +1021,24 @@ function primaryVideo(
   const candidates = videos
     .map((video) => videoCandidate(video, hostDocument))
     .filter((candidate): candidate is VideoCandidate => candidate !== null);
+  const visibleCandidates = candidates.filter(({ visibleScore }) => (
+    Number.isFinite(visibleScore)
+  ));
+  const selectableCandidates = visibleCandidates.length > 0
+    ? visibleCandidates
+    : candidates;
   const retained = previous
-    ? candidates.find(({ video }) => video === previous)
+    ? selectableCandidates.find(({ video }) => video === previous)
     : null;
   if (retained) {
     return retained.video;
   }
-  candidates.sort((left, right) => (
+  selectableCandidates.sort((left, right) => (
     right.duration - left.duration
     || right.readyState - left.readyState
     || right.visibleScore - left.visibleScore
   ));
-  return candidates[0]?.video || null;
+  return selectableCandidates[0]?.video || null;
 }
 
 function requirePrimaryVideo(
@@ -1041,10 +1054,9 @@ function requirePrimaryVideo(
   return video;
 }
 
-function htmlVideoSnapshot(
-  selectPrimaryVideo: () => HTMLVideoElement | null
+function htmlVideoSnapshotForVideo(
+  video: HTMLVideoElement | null
 ): StreamingBridgePlayerSnapshot {
-  const video = selectPrimaryVideo();
   if (!video) {
     return unavailableHtmlVideoSnapshot();
   }
@@ -1138,6 +1150,110 @@ function clampedAbsoluteTarget(
   return Math.min(maximum, Math.max(minimum, targetSeconds));
 }
 
+function boundedHtmlVideoSeekTimeout(value: unknown): number {
+  const timeout = value === undefined
+    ? HTML_VIDEO_DEFAULT_SEEK_VERIFICATION_TIMEOUT_MS
+    : Number(value);
+  if (!Number.isFinite(timeout) || timeout < 300 || timeout > 2_400) {
+    throw new TypeError("HTML video seek 검증 제한 시간은 300~2400ms여야 합니다.");
+  }
+  return Math.round(timeout);
+}
+
+function boundedHtmlVideoSeekHandoffDuration(value: unknown): number {
+  const duration = value === undefined
+    ? HTML_VIDEO_DEFAULT_SEEK_HANDOFF_MS
+    : Number(value);
+  if (!Number.isFinite(duration) || duration < 300 || duration > 5_000) {
+    throw new TypeError("HTML video seek 인계 시간은 300~5000ms여야 합니다.");
+  }
+  return Math.round(duration);
+}
+
+async function verifyStableHtmlVideoSeek({
+  selectPrimaryVideo,
+  targetSeconds,
+  timeoutMs,
+  video
+}: {
+  readonly selectPrimaryVideo: () => HTMLVideoElement | null;
+  readonly targetSeconds: number;
+  readonly timeoutMs: number;
+  readonly video: HTMLVideoElement;
+}): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let stableSince: number | null = null;
+  let stableMediaTime: number | null = null;
+  do {
+    const selected = selectPrimaryVideo();
+    const currentTime = selected === video
+      ? safelyRead(() => video.currentTime)
+      : undefined;
+    const seeking = selected === video
+      ? safelyRead(() => video.seeking)
+      : undefined;
+    const readyState = selected === video
+      ? safelyRead(() => video.readyState)
+      : undefined;
+    const paused = selected === video
+      ? safelyRead(() => video.paused)
+      : undefined;
+    const playbackRate = selected === video
+      ? safelyRead(() => video.playbackRate)
+      : undefined;
+    const now = Date.now();
+    const usablePlayerState = (
+      typeof currentTime === "number"
+      && Number.isFinite(currentTime)
+      && seeking === false
+      && typeof readyState === "number"
+      && Number.isFinite(readyState)
+      && readyState >= 2
+      && typeof paused === "boolean"
+      && typeof playbackRate === "number"
+      && Number.isFinite(playbackRate)
+      && playbackRate > 0
+      && playbackRate <= 16
+    );
+    const initialTargetMatched = usablePlayerState
+      && Math.abs(currentTime - targetSeconds)
+        <= HTML_VIDEO_SEEK_TARGET_TOLERANCE_SECONDS;
+    const elapsedSeconds = stableSince === null
+      ? 0
+      : Math.max(0, (now - stableSince) / 1_000);
+    const allowedAdvance = paused === false && typeof playbackRate === "number"
+      ? elapsedSeconds * playbackRate
+      : 0;
+    const stableTrajectoryMatched = usablePlayerState
+      && stableMediaTime !== null
+      && currentTime >= stableMediaTime
+        - HTML_VIDEO_SEEK_TARGET_TOLERANCE_SECONDS
+      && currentTime <= stableMediaTime
+        + allowedAdvance
+        + HTML_VIDEO_SEEK_TARGET_TOLERANCE_SECONDS;
+    if (
+      (stableSince === null && initialTargetMatched)
+      || (stableSince !== null && stableTrajectoryMatched)
+    ) {
+      if (stableSince === null) {
+        stableSince = now;
+        stableMediaTime = currentTime;
+      }
+      if (now - stableSince >= HTML_VIDEO_SEEK_STABLE_MS) {
+        return;
+      }
+    } else {
+      stableSince = null;
+      stableMediaTime = null;
+    }
+    await delay(HTML_VIDEO_SEEK_POLL_INTERVAL_MS);
+  } while (Date.now() <= deadline);
+  throw new StreamingBridgeContentError(
+    "player-state-transient",
+    "플랫폼 HTML video의 절대 탐색 결과가 안정적으로 유지되지 않았습니다."
+  );
+}
+
 /**
  * Small DOM adapter matching the legacy Extension's proven HTMLVideoElement
  * controls. It reads/changes only the live streaming element and never fetches
@@ -1145,19 +1261,94 @@ function clampedAbsoluteTarget(
  */
 export function createHtmlVideoStreamingBridgeAdapter({
   readSource,
-  hostDocument = document
+  hostDocument = document,
+  seekHandoffDurationMs,
+  seekVerificationTimeoutMs
 }: HtmlVideoStreamingBridgeAdapterOptions): StreamingBridgeContentAdapter {
+  const handoffDuration = boundedHtmlVideoSeekHandoffDuration(
+    seekHandoffDurationMs
+  );
+  const verificationTimeout = boundedHtmlVideoSeekTimeout(
+    seekVerificationTimeoutMs
+  );
   let previousPrimaryVideo: HTMLVideoElement | null = null;
+  let verifiedSeekHandoff: {
+    video: HTMLVideoElement;
+    playbackRate: number;
+    targetSeconds: number;
+    expiresAt: number;
+  } | null = null;
   const selectPrimaryVideo = (): HTMLVideoElement | null => {
     previousPrimaryVideo = primaryVideo(hostDocument, previousPrimaryVideo);
     return previousPrimaryVideo;
   };
   return Object.freeze({
     readSource,
-    snapshot: () => htmlVideoSnapshot(selectPrimaryVideo),
-    seekAbsolute(targetSeconds: number): void {
+    async snapshot(): Promise<StreamingBridgePlayerSnapshot> {
+      const video = selectPrimaryVideo();
+      const handoff = verifiedSeekHandoff;
+      if (!video || !handoff) {
+        return htmlVideoSnapshotForVideo(video);
+      }
+      if (Date.now() > handoff.expiresAt) {
+        verifiedSeekHandoff = null;
+        return htmlVideoSnapshotForVideo(video);
+      }
+
+      const observedTime = safelyRead(() => video.currentTime);
+      const clockRolledBehindTarget = (
+        typeof observedTime !== "number"
+        || !Number.isFinite(observedTime)
+        || observedTime < handoff.targetSeconds
+          - HTML_VIDEO_SEEK_TARGET_TOLERANCE_SECONDS
+      );
+      if (video === handoff.video && !clockRolledBehindTarget) {
+        return htmlVideoSnapshotForVideo(video);
+      }
+
+      // CHZZK can replace only its HTMLVideoElement immediately after a
+      // verified seek while keeping the iframe and source identity intact.
+      // The replacement starts at 0, so accepting its first snapshot would
+      // silently move an E/F/R cut back to the beginning. Transfer the recent
+      // app-owned seek once to that exact replacement and require the same
+      // stable-player proof before exposing its clock. The short absolute
+      // deadline keeps an intentional later reset to 0 fully observable.
+      const replacementTarget = clampedAbsoluteTarget(
+        video,
+        handoff.targetSeconds
+      );
+      video.playbackRate = handoff.playbackRate;
+      video.currentTime = replacementTarget;
+      await verifyStableHtmlVideoSeek({
+        selectPrimaryVideo,
+        targetSeconds: replacementTarget,
+        timeoutMs: verificationTimeout,
+        video
+      });
+      if (verifiedSeekHandoff === handoff) {
+        verifiedSeekHandoff = {
+          ...handoff,
+          video
+        };
+      }
+      return htmlVideoSnapshotForVideo(video);
+    },
+    async seekAbsolute(targetSeconds: number): Promise<void> {
       const video = requirePrimaryVideo(selectPrimaryVideo);
-      video.currentTime = clampedAbsoluteTarget(video, targetSeconds);
+      const target = clampedAbsoluteTarget(video, targetSeconds);
+      video.currentTime = target;
+      await verifyStableHtmlVideoSeek({
+        selectPrimaryVideo,
+        targetSeconds: target,
+        timeoutMs: verificationTimeout,
+        video
+      });
+      verifiedSeekHandoff = {
+        video,
+        playbackRate: safelyRead(() => video.playbackRate) || 1,
+        targetSeconds: target,
+        expiresAt: Date.now() + handoffDuration
+      };
     },
     setPlaybackRate(playbackRate: 0.25 | 2): void {
       requirePrimaryVideo(selectPrimaryVideo).playbackRate = playbackRate;

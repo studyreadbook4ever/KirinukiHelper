@@ -7,4 +7,4 @@ KIRINUKI_SCRIPT_DIR="$(
   pwd -P
 )"
 
-exec bash "$KIRINUKI_SCRIPT_DIR/kirinuki.sh" setup "$@"
+exec bash "$KIRINUKI_SCRIPT_DIR/kirinuki.sh" setup --yes "$@"

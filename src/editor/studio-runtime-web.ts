@@ -352,7 +352,7 @@ export async function verifyStudioUsagePolicyGate({
   if (!session || session.attestation.target.projectId !== projectId) {
     return {
       ok: false,
-      error: "이번 localhost 편집 세션의 권리·책임 확인을 찾지 못했습니다. 시작 화면에서 양식을 다시 확인해 주세요."
+      error: "이번 편집의 권리·책임 확인을 찾지 못했습니다. 시작 화면에서 양식을 다시 확인해 주세요."
     };
   }
   if (gateToken) {
@@ -395,7 +395,7 @@ export async function completeStudioEditorSession({
   ) {
     return {
       ok: false,
-      error: "완료할 localhost 편집 세션이 현재 프로젝트와 다릅니다."
+      error: "끝내려는 편집 작업이 현재 프로젝트와 다릅니다. 시작 화면에서 다시 열어 주세요."
     };
   }
   sessionStorage.removeItem(WEB_STUDIO_SESSION_STORAGE_KEY);
@@ -439,7 +439,7 @@ export async function studioEditorReady({
     return {
       ok: false,
       connected: false,
-      error: "현재 편집 문서와 localhost 세션 세대가 달라 원본을 연결하지 않았습니다."
+      error: "다른 편집 작업으로 전환되어 이 문서에는 원본을 연결하지 않았습니다. 시작 화면에서 현재 작업을 다시 열어 주세요."
     };
   }
   refreshWebUsageSession(session);
@@ -495,7 +495,7 @@ export async function runStudioSourceAction({
     return {
       ok: false,
       connected: false,
-      error: "현재 편집 문서와 localhost 세션 세대가 달라 원본 동작을 실행하지 않았습니다."
+      error: "다른 편집 작업으로 전환되어 이 문서에서는 원본 동작을 실행하지 않았습니다. 시작 화면에서 현재 작업을 다시 열어 주세요."
     };
   }
   let target: string;

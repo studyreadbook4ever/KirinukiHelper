@@ -225,7 +225,7 @@ function normalizeSessionToken(value: unknown): string {
     secret.length > MAX_SESSION_TOKEN_LENGTH
     || /[\r\n]/u.test(secret)
   ) {
-    throw new Error("로컬 companion 세션 토큰 형식이 올바르지 않습니다.");
+    throw new Error("Kirinuki 내부 자막 엔진의 연결 정보가 올바르지 않습니다.");
   }
   return secret;
 }
@@ -233,7 +233,7 @@ function normalizeSessionToken(value: unknown): string {
 export function captionAgentSessionEndpoint(endpoint: unknown): string {
   const url = new URL(normalizeCaptionAgentEndpoint(endpoint));
   if (!isLoopbackCaptionAgentEndpoint(url.toString())) {
-    throw new Error("자동 연결은 이 기기의 로컬 companion에서만 사용할 수 있습니다.");
+    throw new Error("자동 연결은 Kirinuki 앱이 관리하는 내부 자막 엔진에서만 사용할 수 있습니다.");
   }
   url.pathname = "/v1/session";
   url.search = "";
@@ -268,7 +268,7 @@ export function normalizeCaptionAgentEndpoint(value: unknown): string {
   const localHttp = url.protocol === "http:" && isLoopbackHostname(url.hostname);
   if (!localHttp) {
     throw new Error(
-      "자막 companion은 이 기기의 127.0.0.1·localhost HTTP 주소만 사용할 수 있습니다."
+      "내부 자막 엔진은 Kirinuki 앱이 관리하는 로컬 연결만 사용할 수 있습니다."
     );
   }
   return url.toString();
@@ -423,7 +423,7 @@ export function captionAgentRuntimeIdentity(
     ? capability.availableModels.map((entry) => String(entry))
     : [];
   if (!availableModels.includes(model)) {
-    throw new Error(`로컬 companion이 ${model} 모델을 지원하지 않습니다.`);
+    throw new Error(`Kirinuki 내부 자막 엔진이 ${model} 모델을 지원하지 않습니다.`);
   }
   const provider = boundedCapabilityString(
     capability.provider,
@@ -864,7 +864,7 @@ export function createCaptionAgentRequest({
   captionAgentAudioFootprint(durationMs);
   if (model !== LOCAL_WHISPER_CAPTION_MODEL) {
     throw new Error(
-      "로컬 companion 요청은 Whisper 초벌에서만 사용합니다. AudSeg는 브라우저에서 직접 실행합니다."
+      "Kirinuki 내부 자막 엔진 요청은 Whisper 초벌에서만 사용합니다. AudSeg는 브라우저에서 직접 실행합니다."
     );
   }
   if (!audioBase64) {
@@ -1454,7 +1454,7 @@ export async function pairCaptionAgent({
     });
     const payload = await parseResponse(response);
     if (!isPlainObject(payload)) {
-      throw new Error("로컬 companion 연결 응답이 JSON 객체가 아닙니다.");
+      throw new Error("Kirinuki 내부 자막 엔진의 연결 응답이 올바르지 않습니다.");
     }
     assertExactResponseFields(payload, [
       "schema",
@@ -1462,18 +1462,18 @@ export async function pairCaptionAgent({
       "authentication",
       "expires",
       "token"
-    ], "로컬 companion 연결 응답");
+    ], "Kirinuki 내부 자막 엔진 연결 응답");
     if (
       payload.schema !== CAPTION_AGENT_SESSION_SCHEMA
       || payload.status !== "ok"
       || payload.authentication !== "bearer-process-memory"
       || payload.expires !== "companion-restart"
     ) {
-      throw new Error("로컬 companion 연결 응답 버전이 맞지 않습니다.");
+      throw new Error("Kirinuki 내부 자막 엔진의 연결 응답 버전이 맞지 않습니다.");
     }
     const token = normalizeSessionToken(payload.token);
     if (!token) {
-      throw new Error("로컬 companion이 세션 토큰을 반환하지 않았습니다.");
+      throw new Error("Kirinuki 내부 자막 엔진이 연결 정보를 반환하지 않았습니다.");
     }
     return token;
   } finally {

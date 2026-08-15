@@ -9,7 +9,7 @@ import type { BuildOptions, LogLevel } from "esbuild";
 import { GENERATED_JAVASCRIPT_BANNER } from "./generated-javascript.js";
 import {
   KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  resolveKirinukiStudioOrigin
+  resolveKirinukiAppOrigin
 } from "../src/lib/local-runtime-origin.js";
 
 export const STREAMING_COMPANION_DEFAULT_STUDIO_ORIGIN =
@@ -68,15 +68,15 @@ export function resolveStreamingCompanionStudioOrigins(
     );
   }
   const configured = sharedOrigin ?? legacyBuildOrigin;
-  return Object.freeze([resolveKirinukiStudioOrigin(configured)]);
+  return Object.freeze([resolveKirinukiAppOrigin(configured)]);
 }
 
-function manifestBytes(): Uint8Array {
+function manifestBytes(appVersion: string): Uint8Array {
   const manifest = {
     manifest_version: 3,
-    name: "Kirinuki Streaming Companion",
-    version: "2.0.0",
-    description: "Kirinuki Studio의 임베드 스트리밍 플레이어를 클라이언트에서 제어합니다.",
+    name: "Kirinuki Player Bridge",
+    version: appVersion,
+    description: "Kirinuki 앱에 포함된 원본 플레이어 연결 구성요소입니다.",
     minimum_chrome_version: "120",
     content_scripts: [
       {
@@ -109,6 +109,17 @@ export async function buildStreamingCompanion({
 }: StreamingCompanionBuildOptions): Promise<StreamingCompanionBuildResult> {
   const companionRoot = path.join(rootDirectory, "streaming-companion");
   const allowedStudioOrigins = resolveStreamingCompanionStudioOrigins(env);
+  const packageMetadata = JSON.parse(
+    await readFile(path.join(rootDirectory, "package.json"), "utf8")
+  ) as { readonly version?: unknown };
+  if (
+    typeof packageMetadata.version !== "string"
+    || !/^\d+(?:\.\d+){0,3}$/u.test(packageMetadata.version)
+  ) {
+    throw new TypeError(
+      "Kirinuki 앱 version은 Chromium manifest와 공유할 숫자 형식이어야 합니다."
+    );
+  }
   const commonBuildOptions = {
     absWorkingDir: rootDirectory,
     bundle: true,
@@ -154,7 +165,7 @@ export async function buildStreamingCompanion({
   const outputs = new Map<string, Uint8Array>([
     [STREAMING_COMPANION_JAVASCRIPT_PATH, genericJavaScript.contents],
     [SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH, soopJavaScript.contents],
-    [STREAMING_COMPANION_MANIFEST_PATH, manifestBytes()]
+    [STREAMING_COMPANION_MANIFEST_PATH, manifestBytes(packageMetadata.version)]
   ]);
   if (write) {
     await mkdir(companionRoot, { recursive: true });

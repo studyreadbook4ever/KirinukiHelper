@@ -1,4 +1,4 @@
-/** Browser origins that may be explicitly bound to Kirinuki's loopback runtime. */
+/** Browser origins that Kirinuki documents may be served from. */
 export const KIRINUKI_LOCAL_STUDIO_ORIGIN = "http://127.0.0.1:4320";
 export const KIRINUKI_PUBLIC_STUDIO_ORIGIN =
   "https://kirinuki.eff0rtchung.kr";
@@ -13,6 +13,13 @@ export const KIRINUKI_GATEWAY_ORIGIN_BINDING = "exact-local-studio";
 export type KirinukiStudioOrigin =
   | typeof KIRINUKI_LOCAL_STUDIO_ORIGIN
   | typeof KIRINUKI_PUBLIC_STUDIO_ORIGIN;
+
+/**
+ * The installed application is the only document allowed to talk to private
+ * media engines.  The public origin is a launch/install shell, not a runtime
+ * client.
+ */
+export type KirinukiAppOrigin = typeof KIRINUKI_LOCAL_STUDIO_ORIGIN;
 
 export function isKirinukiStudioOrigin(
   value: unknown
@@ -45,6 +52,31 @@ export function resolveKirinukiStudioOrigin(
     return KIRINUKI_LOCAL_STUDIO_ORIGIN;
   }
   return requireKirinukiStudioOrigin(value);
+}
+
+export function requireKirinukiAppOrigin(
+  value: unknown,
+  label: string = "Kirinuki 앱 Origin"
+): KirinukiAppOrigin {
+  if (value !== KIRINUKI_LOCAL_STUDIO_ORIGIN) {
+    throw new TypeError(
+      `${label}은 설치된 Kirinuki 앱의 고정 Origin이어야 합니다.`
+    );
+  }
+  return value;
+}
+
+/**
+ * Runtime configuration deliberately has no public opt-in.  Omitting the
+ * value selects the one app origin; every other value fails closed.
+ */
+export function resolveKirinukiAppOrigin(
+  value: unknown = undefined
+): KirinukiAppOrigin {
+  if (value === undefined || value === "") {
+    return KIRINUKI_LOCAL_STUDIO_ORIGIN;
+  }
+  return requireKirinukiAppOrigin(value);
 }
 
 export function assertKirinukiStudioDocumentOrigin(

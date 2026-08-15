@@ -178,14 +178,14 @@ test("자막 설정은 Whisper와 AudSeg 두 방식 및 loopback 주소만 허�
   assert.equal(isAudSegCaptionModel(LOCAL_WHISPER_CAPTION_MODEL), false);
 });
 
-test("companion 주소는 loopback HTTP만 허용하고 URL 자격정보를 거부한다", () => {
+test("내부 자막 엔진 주소는 앱의 로컬 연결만 허용하고 URL 자격정보를 거부한다", () => {
   assert.equal(
     normalizeCaptionAgentEndpoint("http://127.0.0.1:4319/v1/captions"),
     "http://127.0.0.1:4319/v1/captions"
   );
   assert.throws(
     () => normalizeCaptionAgentEndpoint("https://captions.example/v1/captions"),
-    /127\.0\.0\.1/u
+      /내부 자막 엔진|로컬 연결/u
   );
   assert.throws(
     () => normalizeCaptionAgentEndpoint(

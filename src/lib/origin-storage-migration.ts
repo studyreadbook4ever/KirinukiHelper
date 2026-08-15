@@ -332,9 +332,9 @@ function createTransferId(): string {
 }
 
 function requiredExtensionOrigin(value: unknown): string {
-  const origin = requiredText(value, "Extension origin", 128);
+  const origin = requiredText(value, "이전 Kirinuki 저장소 origin", 128);
   if (!EXTENSION_ORIGIN_PATTERN.test(origin)) {
-    fail("마이그레이션 원본은 정확한 Chrome Extension origin이어야 합니다.");
+    fail("데이터 이동 원본은 정확한 이전 Kirinuki 저장소여야 합니다.");
   }
   return origin;
 }
@@ -627,7 +627,7 @@ export async function parseOriginStorageMigration(
   assertOnlyKeys(source, ["origin", "databaseName", "databaseVersion"], "마이그레이션 원본");
   const sourceOrigin = requiredExtensionOrigin(source.origin);
   if (expectedSourceOrigin !== undefined && sourceOrigin !== expectedSourceOrigin) {
-    fail("마이그레이션 원본 Extension origin이 현재 빌드와 다릅니다.");
+    fail("데이터 이동 원본 저장소가 현재 빌드와 다릅니다.");
   }
   const databaseName = requiredText(source.databaseName, "원본 IndexedDB 이름", 128);
   if (

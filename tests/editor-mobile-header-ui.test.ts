@@ -155,7 +155,7 @@ test("시작 화면과 직접 editor URL 모두 모바일 진입을 fail-closed�
   );
   assert.match(
     editorSource,
-    /async function initialize\(\) \{\s*if \(currentClientCannotUseEditor\(\)\) \{\s*showEditorMobileGate\(\);\s*return;\s*\}\s*const verifiedProjectId = await verifyEditorUsagePolicyGate\(\);/u
+    /async function initialize\(\) \{\s*if \(!isKirinukiLocalStudioOrigin\(location\.origin\)\) \{\s*showEditorAppGate\(\);\s*return;\s*\}\s*if \(currentClientCannotUseEditor\(\)\) \{\s*showEditorMobileGate\(\);\s*return;\s*\}\s*const verifiedProjectId = await verifyEditorUsagePolicyGate\(\);/u
   );
   for (const html of [webEditorHtml]) {
     assert.match(html, /id="editor-mobile-gate"[^>]*hidden/u);

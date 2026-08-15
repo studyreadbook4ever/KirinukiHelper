@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -15,20 +16,10 @@ import {
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-test("companion Studio origin은 localhost 기본값과 명시적 공개 Origin 하나만 허용한다", () => {
+test("앱의 player bridge는 앱 전용 Origin 하나만 허용한다", () => {
   assert.deepEqual(resolveStreamingCompanionStudioOrigins({}), [
     STREAMING_COMPANION_DEFAULT_STUDIO_ORIGIN
   ]);
-  assert.deepEqual(resolveStreamingCompanionStudioOrigins({
-    [STREAMING_COMPANION_STUDIO_ORIGIN_ENV]:
-      "https://kirinuki.eff0rtchung.kr"
-  }), [
-    "https://kirinuki.eff0rtchung.kr"
-  ]);
-  assert.deepEqual(resolveStreamingCompanionStudioOrigins({
-    [STREAMING_COMPANION_HTTPS_ORIGINS_ENV]:
-      "https://kirinuki.eff0rtchung.kr"
-  }), ["https://kirinuki.eff0rtchung.kr"]);
   for (const invalid of [
     "http://studio.example",
     "https://*.example",
@@ -37,6 +28,7 @@ test("companion Studio origin은 localhost 기본값과 명시적 공개 Origin 
     " https://studio.example",
     "https://studio.example, https://other.example",
     "https://studio.example:443",
+    "https://kirinuki.eff0rtchung.kr",
     "https://kirinuki.eff0rtchung.kr/"
   ]) {
     assert.throws(
@@ -54,10 +46,10 @@ test("companion Studio origin은 localhost 기본값과 명시적 공개 Origin 
   }), /서로 다릅니다/u);
 });
 
-test("companion manifest와 JavaScript는 같은 입력에서 바이트 단위로 결정적이다", async () => {
+test("앱 player bridge manifest와 JavaScript는 같은 입력에서 바이트 단위로 결정적이다", async () => {
   const env = {
     [STREAMING_COMPANION_STUDIO_ORIGIN_ENV]:
-      "https://kirinuki.eff0rtchung.kr"
+      STREAMING_COMPANION_DEFAULT_STUDIO_ORIGIN
   };
   const [first, second] = await Promise.all([
     buildStreamingCompanion({
@@ -95,8 +87,8 @@ test("companion manifest와 JavaScript는 같은 입력에서 바이트 단위�
   const javascript = new TextDecoder().decode(javascriptBytes);
   const soopJavaScript = new TextDecoder().decode(soopJavaScriptBytes);
   for (const bundle of [javascript, soopJavaScript]) {
-    assert.match(bundle, /https:\/\/kirinuki\.eff0rtchung\.kr/u);
-    assert.doesNotMatch(bundle, /http:\/\/127\.0\.0\.1:4320/u);
+    assert.match(bundle, /http:\/\/127\.0\.0\.1:4320/u);
+    assert.doesNotMatch(bundle, /https:\/\/kirinuki\.eff0rtchung\.kr/u);
     assert.doesNotMatch(bundle, /<all_urls>|chrome\.runtime|sidePanel/u);
   }
   assert.match(soopJavaScript, /vodCore/u);
@@ -113,7 +105,10 @@ test("companion manifest와 JavaScript는 같은 입력에서 바이트 단위�
   };
   const contentScript = manifest.content_scripts?.[0];
   const soopContentScript = manifest.content_scripts?.[1];
-  assert.equal(manifest.version, "2.0.0");
+  const appManifest = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8")
+  ) as { readonly version?: string };
+  assert.equal(manifest.version, appManifest.version);
   assert.equal(manifest.content_scripts?.length, 2);
   assert.equal(contentScript?.all_frames, true);
   assert.equal(contentScript?.run_at, "document_start");

@@ -9,7 +9,7 @@ import {
   CHZZK_VOD_CONSUMER_CACHE_PURGE_RESULT_SCHEMA,
   CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
   CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA,
-  LOCAL_VOD_COMPANION_ENDPOINT,
+  KIRINUKI_MEDIA_ENGINE_ENDPOINT,
   ChzzkVodMaterializationClientError,
   cancelChzzkVodMaterialization,
   chzzkVodMaterializationEndpoint,
@@ -117,15 +117,15 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
-test("caption companion 주소에서 플랫폼 중립 VOD materialization 주소만 파생한다", () => {
-  assert.equal(LOCAL_VOD_COMPANION_ENDPOINT, ENDPOINT);
+test("내부 미디어 엔진 주소에서 플랫폼 중립 VOD materialization 주소만 파생한다", () => {
+  assert.equal(KIRINUKI_MEDIA_ENGINE_ENDPOINT, ENDPOINT);
   assert.equal(
     chzzkVodMaterializationEndpoint(ENDPOINT),
     "http://127.0.0.1:4319/v1/vod/materializations"
   );
   assert.throws(
     () => chzzkVodMaterializationEndpoint("https://remote.example/v1/captions"),
-    /127\.0\.0\.1/
+    /내부 자막 엔진|로컬 연결/
   );
 });
 
@@ -438,7 +438,7 @@ test("poll은 terminal 실패의 semantic 공개 오류 코드를 예외에 보�
   assert.deepEqual(observed, ["SOURCE_CLOCK_VERIFICATION_FAILED"]);
 });
 
-test("poll HTTP 실패도 안전한 companion 오류 코드와 상태를 보존한다", async () => {
+test("poll HTTP 실패도 안전한 내부 엔진 오류 코드와 상태를 보존한다", async () => {
   await assert.rejects(
     waitForChzzkVodMaterialization({
       endpoint: ENDPOINT,

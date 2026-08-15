@@ -119,7 +119,7 @@ function openExistingDatabase(factory: IDBFactory): Promise<IDBDatabase> {
     };
     request.onerror = () => reject(absent
       ? migrationError(
-        "이 Extension origin에 이전 Kirinuki 편집 데이터가 없습니다.",
+        "이전 Kirinuki 편집 저장소에 옮길 데이터가 없습니다.",
         "ORIGIN_STORAGE_MIGRATION_SOURCE_EMPTY"
       )
       : request.error || migrationError(
@@ -127,14 +127,14 @@ function openExistingDatabase(factory: IDBFactory): Promise<IDBDatabase> {
         "ORIGIN_STORAGE_MIGRATION_DATABASE_OPEN_FAILED"
       ));
     request.onblocked = () => reject(migrationError(
-      "다른 Extension 편집기 탭이 마이그레이션을 막고 있습니다.",
+      "다른 이전 Kirinuki 편집 창이 데이터 이동을 막고 있습니다.",
       "ORIGIN_STORAGE_MIGRATION_DATABASE_BLOCKED"
     ));
     request.onsuccess = () => {
       if (absent) {
         request.result.close();
         reject(migrationError(
-          "이 Extension origin에 이전 Kirinuki 편집 데이터가 없습니다.",
+          "이전 Kirinuki 편집 저장소에 옮길 데이터가 없습니다.",
           "ORIGIN_STORAGE_MIGRATION_SOURCE_EMPTY"
         ));
         return;
@@ -153,12 +153,12 @@ function openImportDatabase(factory: IDBFactory): Promise<IDBDatabase> {
     );
     request.onerror = () => reject(
       request.error || migrationError(
-        "localhost Kirinuki IndexedDB를 열지 못했습니다.",
+        "이 기기의 Kirinuki 편집 저장소를 열지 못했습니다.",
         "ORIGIN_STORAGE_MIGRATION_DATABASE_OPEN_FAILED"
       )
     );
     request.onblocked = () => reject(migrationError(
-      "다른 localhost 편집기 탭이 마이그레이션을 막고 있습니다.",
+      "다른 Kirinuki 편집 탭이 이전 저장 데이터 이동을 막고 있습니다.",
       "ORIGIN_STORAGE_MIGRATION_DATABASE_BLOCKED"
     ));
     request.onsuccess = () => resolve(request.result);
@@ -301,7 +301,7 @@ export async function importCurrentOriginStorageMigration(
 ): Promise<OriginStorageMigrationImportResult> {
   if (targetOrigin !== ORIGIN_STORAGE_MIGRATION_TARGET_ORIGIN) {
     throw migrationError(
-      "이 마이그레이션은 고정된 Kirinuki localhost origin에서만 가져올 수 있습니다.",
+      "이전 저장 데이터는 현재 Kirinuki 앱의 고정 저장 영역에서만 가져올 수 있습니다.",
       "ORIGIN_STORAGE_MIGRATION_WRONG_TARGET"
     );
   }
@@ -360,7 +360,7 @@ export async function importCurrentOriginStorageMigration(
       && error.name === "ConstraintError"
     ) {
       throw migrationError(
-        "localhost 저장소에 같은 ID가 이미 있어 아무 데이터도 덮어쓰지 않았습니다.",
+        "이 기기의 Kirinuki 저장소에 같은 작업이 이미 있어 아무 데이터도 덮어쓰지 않았습니다.",
         "ORIGIN_STORAGE_MIGRATION_CONFLICT"
       );
     }

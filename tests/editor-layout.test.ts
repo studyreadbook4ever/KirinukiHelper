@@ -109,9 +109,15 @@ test("편집기 chrome은 장식 문구와 중복 상태 표시를 없애고 저
   assert.doesNotMatch(css, /content:\s*"ADVERTISEMENT"|\.spark\b|\.locked-label\b/u);
   assert.match(html, /id="exit-short-form"[^>]*aria-label="본편 편집으로 돌아가기"[\s\S]*본편 편집으로/u);
   assert.match(html, /id="create-local-draft"[\s\S]*지금 저장/u);
-  assert.match(html, /id="open-local-drafts"[\s\S]*저장본 목록/u);
+  assert.match(html, /id="open-local-drafts"[\s\S]*저장·복구본/u);
+  assert.match(html, /id="local-draft-status"[^>]*>편집 중 임시 복구 · 탭 종료 시 폐기</u);
+  assert.match(html, /탭 종료 뒤에는 ‘지금 저장’으로 만든 버전만 남습니다/u);
+  assert.match(html, /이 복구본도 탭 종료 시 폐기됩니다/u);
+  assert.match(html, /AudSeg 방식으로 설치한 앱은 재실행만으로 Whisper가 추가되지 않습니다/u);
+  assert.match(html, /\.\/setup\.sh --mode whisper/u);
   assert.match(main, /local_draft_status\.dataset\.state = state/u);
-  assert.match(main, /state === "saved"[\s\S]*자동 저장됨/u);
+  assert.match(main, /state === "saved"[\s\S]*편집 중 임시 복구됨/u);
+  assert.match(main, /탭 종료 시 임시본 폐기/u);
 });
 
 test("자막 스타일 비교 trigger와 dialog가 접근 가능한 이름·설명을 연결한다", async () => {

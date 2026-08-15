@@ -1,4 +1,4 @@
-name: Web and streaming companion quality
+name: Kirinuki app quality
 
 on:
   pull_request:
@@ -33,13 +33,13 @@ jobs:
       - name: Run the fail-closed TypeScript quality gate
         run: npm run check
 
-      - name: Prove generated web and companion artifacts are current
+      - name: Prove generated app artifacts are current
         run: |
           git diff --check -- web streaming-companion
           git diff --exit-code -- web streaming-companion
 
   web-browser-e2e:
-    name: Localhost web browser E2E
+    name: Kirinuki app browser E2E
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -62,11 +62,13 @@ jobs:
           chrome-version: stable
           install-chromedriver: true
 
-      - name: Build the localhost web app
-        run: npm run build
-
-      - name: Run the localhost browser E2E
-        run: npm run test:browser
+      - name: Build, test, and verify the complete release artifacts
+        run: npm run package
         env:
           CHROMIUM_BINARY: ${{ steps.setup-chrome.outputs.chrome-path }}
           CHROMEDRIVER_BINARY: ${{ steps.setup-chrome.outputs.chromedriver-path }}
+
+      - name: Prove release packaging kept tracked sources clean
+        run: |
+          git diff --check
+          git diff --exit-code

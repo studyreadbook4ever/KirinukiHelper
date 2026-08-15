@@ -95,9 +95,7 @@ export async function buildWebDistribution(): Promise<void> {
     )
   ]);
 
-  console.log(
-    "localhost 웹+최소 스트리밍 companion 빌드 완료: web/, streaming-companion/"
-  );
+  console.log("Kirinuki 앱 화면과 내부 Player Bridge 빌드 완료");
 }
 
 const invokedPath = process.argv[1];

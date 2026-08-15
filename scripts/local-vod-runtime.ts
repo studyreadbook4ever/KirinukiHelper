@@ -69,7 +69,7 @@ import type {
 } from "./local-vod-runtime-core.js";
 import { typescriptCommandArgs } from "./typescript-runtime.js";
 import {
-  resolveKirinukiStudioOrigin
+  resolveKirinukiAppOrigin
 } from "../src/lib/local-runtime-origin.js";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -129,8 +129,8 @@ Kirinuki 로컬 VOD runtime
 보안 계약:
   쿠키·로그인·API 키를 입력하거나 전달·저장하지 않습니다.
   gateway는 항상 127.0.0.1:4319에만 bind합니다.
-  공개 Studio는 setup 때 KIRINUKI_ALLOWED_ORIGIN=https://kirinuki.eff0rtchung.kr를
-  명시한 경우에만 허용하며, 생략하면 기존 localhost Origin 전용입니다.
+  앱 내부 Origin http://127.0.0.1:4320 하나만 허용합니다.
+  공개 사이트와 Cloudflare Tunnel에는 이 내부 엔진을 연결하지 않습니다.
 `.trim();
 }
 
@@ -1049,7 +1049,7 @@ export async function setupVodRuntime(
   }
   const paths = runtimePaths();
   const tools = inspectRequiredTools();
-  const studioOrigin = resolveKirinukiStudioOrigin(
+  const studioOrigin = resolveKirinukiAppOrigin(
     process.env.KIRINUKI_ALLOWED_ORIGIN
   );
   const report = {
@@ -1171,7 +1171,7 @@ export function vodRuntimeOriginMatchesRequestedStudio(
 ): boolean {
   return Boolean(
     config
-    && config.origin === resolveKirinukiStudioOrigin(
+    && config.origin === resolveKirinukiAppOrigin(
       environment.KIRINUKI_ALLOWED_ORIGIN
     )
   );
@@ -1197,7 +1197,7 @@ export async function collectVodRuntimeStatus(
   const notices = config ? await inspectVodNotices(config) : null;
   const toolchainReady = Boolean(toolchain?.ready);
   const managed = vodGatewayOwnedByPid(health, manager);
-  const expectedOrigin = resolveKirinukiStudioOrigin(
+  const expectedOrigin = resolveKirinukiAppOrigin(
     environment.KIRINUKI_ALLOWED_ORIGIN
   );
   const originMatchesCurrentStudio = vodRuntimeOriginMatchesRequestedStudio(

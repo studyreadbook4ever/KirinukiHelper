@@ -43,8 +43,7 @@ import type {
 import {
   KIRINUKI_GATEWAY_ORIGIN_BINDING,
   KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  KIRINUKI_PUBLIC_STUDIO_ORIGIN,
-  isKirinukiStudioOrigin
+  isKirinukiLocalStudioOrigin
 } from "../src/lib/local-runtime-origin.js";
 import {
   SOURCE_PLATFORM_CHZZK,
@@ -486,11 +485,10 @@ export function resolveCaptionGatewayConfig(
   );
   if (
     configuredOriginValue !== allowedOrigin
-    || !isKirinukiStudioOrigin(allowedOrigin)
+    || !isKirinukiLocalStudioOrigin(allowedOrigin)
   ) {
     throw new CaptionGatewayError(
-      "KIRINUKI_ALLOWED_ORIGIN은 정확히 허용된 Kirinuki Studio Origin이어야 합니다. "
-      + `(${KIRINUKI_LOCAL_STUDIO_ORIGIN} 또는 ${KIRINUKI_PUBLIC_STUDIO_ORIGIN})`,
+      `KIRINUKI_ALLOWED_ORIGIN은 설치된 Kirinuki 앱 Origin(${KIRINUKI_LOCAL_STUDIO_ORIGIN})이어야 합니다.`,
       {
         code: "INVALID_CONFIGURATION",
         httpStatus: 500
@@ -739,7 +737,7 @@ function sendGatewayClosing(
   sendJson(response, 503, {
     error: {
       code: "GATEWAY_SHUTTING_DOWN",
-      message: "로컬 companion이 종료 중이라 새 요청을 받을 수 없습니다."
+      message: "Kirinuki 내부 자막 엔진이 종료 중이라 새 요청을 받을 수 없습니다."
     }
   });
 }
@@ -2115,7 +2113,7 @@ export function createCaptionGatewayServer({
       await Promise.resolve();
       if (!gatewayShutdownController.signal.aborted) {
         gatewayShutdownController.abort(new DOMException(
-          "로컬 companion을 종료합니다.",
+          "Kirinuki 내부 자막 엔진을 종료합니다.",
           "AbortError"
         ));
       }
@@ -2125,7 +2123,7 @@ export function createCaptionGatewayServer({
       for (const controller of activePipelineControllers) {
         if (!controller.signal.aborted) {
           controller.abort(new DOMException(
-            "로컬 companion을 종료합니다.",
+            "Kirinuki 내부 자막 엔진을 종료합니다.",
             "AbortError"
           ));
         }
@@ -2164,7 +2162,7 @@ export function createCaptionGatewayServer({
         if (failures.length > 1) {
           throw new AggregateError(
             failures,
-            "로컬 companion 종료 정리 중 여러 작업이 실패했습니다."
+            "Kirinuki 내부 자막 엔진 종료 정리 중 여러 작업이 실패했습니다."
           );
         }
       });
@@ -2203,7 +2201,7 @@ export function createCaptionGatewayServer({
             () => undefined
           );
           throw new CaptionGatewayError(
-            "로컬 companion 종료가 안전 종료 deadline을 넘었습니다.",
+            "Kirinuki 내부 자막 엔진 종료가 안전 종료 deadline을 넘었습니다.",
             {
               code: "GATEWAY_SHUTDOWN_DEADLINE_EXCEEDED",
               httpStatus: 503

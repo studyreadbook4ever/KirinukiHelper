@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import {
   KIRINUKI_GATEWAY_ORIGIN_BINDING,
-  KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  KIRINUKI_LOCAL_STUDIO_ORIGIN
 } from "../src/lib/local-runtime-origin.js";
 import {
   Agent,
@@ -792,16 +791,15 @@ test("게이트웨이 설정은 exact Origin과 세션 인증을 강제한다", 
     DEFAULT_CAPTION_REQUEST_BODY_TIMEOUT_MS
   );
 
-  const publicConfig = resolveCaptionGatewayConfig({
+  const maximumConfig = resolveCaptionGatewayConfig({
     ...TEST_ENV,
-    KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
     KIRINUKI_MAX_CONCURRENT_CAPTION_PIPELINES: String(
       MAX_CONCURRENT_CAPTION_PIPELINES
     )
   });
-  assert.equal(publicConfig.allowedOrigin, KIRINUKI_PUBLIC_STUDIO_ORIGIN);
+  assert.equal(maximumConfig.allowedOrigin, KIRINUKI_LOCAL_STUDIO_ORIGIN);
   assert.equal(
-    publicConfig.maxConcurrentCaptionPipelines,
+    maximumConfig.maxConcurrentCaptionPipelines,
     MAX_CONCURRENT_CAPTION_PIPELINES
   );
   assert.equal(
@@ -816,6 +814,7 @@ test("게이트웨이 설정은 exact Origin과 세션 인증을 강제한다", 
 
   for (const invalidOrigin of [
     "*",
+    "https://kirinuki.eff0rtchung.kr",
     "https://kirinuki.eff0rtchung.kr/",
     "https://kirinuki.eff0rtchung.kr.attacker.example",
     " https://kirinuki.eff0rtchung.kr",
@@ -891,7 +890,7 @@ test("게이트웨이 설정은 exact Origin과 세션 인증을 강제한다", 
   }
 });
 
-test("gateway start 경로는 공개 Origin 설정이어도 127.0.0.1에만 bind한다", async (t) => {
+test("내부 자막 엔진은 앱 Origin으로 127.0.0.1에만 bind한다", async (t) => {
   const reservation = createNetServer();
   await new Promise<void>((resolve, reject) => {
     reservation.once("error", reject);
@@ -905,8 +904,7 @@ test("gateway start 경로는 공개 Origin 설정이어도 127.0.0.1에만 bind
   const runtime = await startCaptionGateway({
     env: {
       ...TEST_ENV,
-      KIRINUKI_AGENT_PORT: String(port),
-      KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+      KIRINUKI_AGENT_PORT: String(port)
     }
   });
   t.after(() => runtime.shutdown());
@@ -914,7 +912,7 @@ test("gateway start 경로는 공개 Origin 설정이어도 127.0.0.1에만 bind
   assert.ok(address && typeof address !== "string");
   assert.equal(address.address, "127.0.0.1");
   assert.equal(address.port, port);
-  assert.equal(runtime.config.allowedOrigin, KIRINUKI_PUBLIC_STUDIO_ORIGIN);
+  assert.equal(runtime.config.allowedOrigin, KIRINUKI_LOCAL_STUDIO_ORIGIN);
 });
 
 test("관리형 gateway는 health·자동 pairing·Whisper-only capability를 제공한다", async (t) => {
@@ -1013,18 +1011,13 @@ test("관리형 gateway는 health·자동 pairing·Whisper-only capability를 �
   );
 });
 
-test("gateway CORS에는 인증·프로토콜·JSON·미디어 접근 헤더만 노출한다", async (t) => {
-  const { port } = await listenTestServer(t, {
-    env: {
-      ...TEST_ENV,
-      KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
-    }
-  });
+test("gateway CORS에는 앱 Origin과 필요한 접근 헤더만 노출한다", async (t) => {
+  const { port } = await listenTestServer(t, { env: TEST_ENV });
   const preflight = await localHttpJson({
     port,
     method: "OPTIONS",
     headers: {
-      Origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+      Origin: KIRINUKI_LOCAL_STUDIO_ORIGIN,
       "Access-Control-Request-Method": "POST",
       "Access-Control-Request-Private-Network": "true"
     }
@@ -1032,7 +1025,7 @@ test("gateway CORS에는 인증·프로토콜·JSON·미디어 접근 헤더만 
   assert.equal(preflight.status, 204);
   assert.equal(
     preflight.headers["access-control-allow-origin"],
-    KIRINUKI_PUBLIC_STUDIO_ORIGIN
+    KIRINUKI_LOCAL_STUDIO_ORIGIN
   );
   assert.equal(
     preflight.headers["access-control-allow-headers"],

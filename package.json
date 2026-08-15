@@ -1,6 +1,6 @@
 {
-  "name": "kirinuki-local-web-studio",
-  "version": "2.7.0",
+  "name": "kirinuki-app",
+  "version": "3.0.0",
   "private": true,
   "license": "Unlicense",
   "type": "module",
@@ -10,6 +10,8 @@
     "studio-server:start": "node --import tsx scripts/local-studio-server.ts start",
     "studio-server:status": "node --import tsx scripts/local-studio-server.ts status",
     "studio-server:stop": "node --import tsx scripts/local-studio-server.ts stop",
+    "public-shell:start": "node --import tsx scripts/public-shell-server.ts",
+    "public-shell:check": "node --import tsx scripts/check-public-deployment.ts",
     "dev:web": "npm run build && node --import tsx scripts/local-studio-server.ts start --foreground",
     "dev:editor": "node --import tsx scripts/dev-web.ts",
     "build": "node --import tsx scripts/build-web.ts",
@@ -31,6 +33,8 @@
     "migration:check": "node --import tsx scripts/check-typescript-migration.ts",
     "test": "node --import tsx scripts/run-tests.ts",
     "test:browser": "node --import tsx scripts/local-studio-browser-smoke.ts",
+    "test:browser:public-shell": "node --import tsx scripts/public-shell-browser-smoke.ts",
+    "test:package:web:reproducibility": "node --import tsx scripts/verify-web-package-reproducibility.ts",
     "acceptance:localhost": "node --import tsx scripts/local-studio-user-acceptance.ts",
     "test:browser:live-embeds": "KIRINUKI_LIVE_EMBED_SMOKE=1 node --import tsx scripts/local-studio-browser-smoke.ts",
     "test:browser:live-vod": "KIRINUKI_LIVE_VOD_SMOKE=1 node --import tsx scripts/local-studio-live-vod-smoke.ts",
@@ -43,6 +47,7 @@
     "check:full": "npm run check && npm run test:browser",
     "package": "node --import tsx scripts/release-package.ts",
     "package:web": "node --import tsx scripts/package-web.ts",
+    "package:linux": "node --import tsx scripts/package-linux-app.ts",
     "streaming:companion:build": "node --import tsx scripts/build-streaming-companion.ts"
   },
   "engines": {

@@ -18,6 +18,7 @@ import {
   KIRINUKI_LOCAL_STUDIO_ORIGIN,
   KIRINUKI_PUBLIC_STUDIO_ORIGIN,
   KIRINUKI_STUDIO_ORIGIN_PLACEHOLDER,
+  resolveKirinukiAppOrigin,
   resolveKirinukiStudioOrigin
 } from "../src/lib/local-runtime-origin.js";
 import type {
@@ -67,6 +68,27 @@ const HTML_CONTENT_SECURITY_POLICY = [
   "worker-src 'self' blob:",
   "connect-src 'self' http://127.0.0.1:4319"
 ].join("; ");
+
+const STATIC_CSP_META_PATTERN =
+  /^[ \t]*<meta http-equiv="Content-Security-Policy" content="[^"]*">\r?\n?/gmu;
+
+/**
+ * The tracked HTML carries a public-site CSP that cannot reach app-private
+ * engines.  The installed app serves the same HTML with its stricter HTTP
+ * header instead, so the two policies do not accidentally intersect and
+ * disable local media access.
+ */
+export function withoutStaticContentSecurityPolicyMeta(
+  html: string
+): string {
+  const matches = html.match(STATIC_CSP_META_PATTERN) || [];
+  if (matches.length !== 1) {
+    throw new Error(
+      "Kirinuki HTML에는 public-site Content-Security-Policy meta가 정확히 하나 있어야 합니다."
+    );
+  }
+  return html.replace(STATIC_CSP_META_PATTERN, "");
+}
 
 const MIME_TYPES = Object.freeze(new Map<string, string>([
   [".css", "text/css; charset=utf-8"],
@@ -716,10 +738,13 @@ async function serveStaticAsset(
           "Studio HTML의 배포 Origin meta placeholder가 올바르지 않습니다."
         );
       }
-      const rendered = Buffer.from(html.replace(
-        KIRINUKI_STUDIO_ORIGIN_PLACEHOLDER,
-        studioOrigin
-      ), "utf8");
+      const rendered = Buffer.from(
+        withoutStaticContentSecurityPolicyMeta(html).replace(
+          KIRINUKI_STUDIO_ORIGIN_PLACEHOLDER,
+          studioOrigin
+        ),
+        "utf8"
+      );
       contentLength = rendered.byteLength;
       bytes = requestMethod === "HEAD" ? null : rendered;
     }
@@ -744,7 +769,7 @@ export function createLocalStudioHttpServer({
   migrationNonce
 }: StudioServerOptions): Server {
   const root = requiredAbsolutePath(repoRoot, "레포지토리");
-  const configuredOrigin = resolveKirinukiStudioOrigin(studioOrigin);
+  const configuredOrigin = resolveKirinukiAppOrigin(studioOrigin);
   const health = studioHealthPayload(instanceNonce, port, configuredOrigin);
   if (!enableLegacyMigration && migrationNonce !== undefined) {
     throw new TypeError(
@@ -788,17 +813,6 @@ export function createLocalStudioHttpServer({
         return;
       }
       const rawTarget = request.url || "";
-      if (
-        configuredOrigin === KIRINUKI_PUBLIC_STUDIO_ORIGIN
-        && directLoopbackRequest
-        && studioRequestPath(rawTarget) !== "/v1/studio/health"
-      ) {
-        // In public mode loopback is a management plane only. Serving the
-        // public application at a second browser origin would split storage,
-        // companion trust and the server-injected Origin binding.
-        sendText(response, 404, "Not Found\n");
-        return;
-      }
       if (request.method !== "GET" && request.method !== "HEAD") {
         sendText(response, 405, "Method Not Allowed\n", {
           Allow: "GET, HEAD"

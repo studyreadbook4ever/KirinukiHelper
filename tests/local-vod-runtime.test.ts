@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   KIRINUKI_GATEWAY_ORIGIN_BINDING,
-  KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  KIRINUKI_LOCAL_STUDIO_ORIGIN
 } from "../src/lib/local-runtime-origin.js";
 import {
   chmod,
@@ -217,7 +216,7 @@ test("artifact 검증은 regular non-symlink·크기·SHA·실행 비트를 모�
   }
 });
 
-test("설정은 pin·절대 도구 경로·Origin·VOD state를 강하게 묶고 공개 read가 검증한다", async () => {
+test("설정은 pin·절대 도구 경로·앱 Origin·VOD state를 강하게 묶는다", async () => {
   const paths = fixturePaths();
   const config = fixtureConfig();
   assert.equal(config.schema, LOCAL_VOD_RUNTIME_SCHEMA);
@@ -230,7 +229,14 @@ test("설정은 pin·절대 도구 경로·Origin·VOD state를 강하게 묶고
   assert.equal(config.ffmpeg.path, "/opt/media/bin/ffmpeg");
   assert.equal(config.ffprobe.path, "/opt/media/bin/ffprobe");
   assert.deepEqual(validateVodRuntimeConfig(config, paths), config);
-  const publicConfig = createVodRuntimeConfig(paths, {
+  assert.equal(vodRuntimeOriginMatchesRequestedStudio(config, {}), true);
+  assert.throws(
+    () => vodRuntimeOriginMatchesRequestedStudio(config, {
+      KIRINUKI_ALLOWED_ORIGIN: "https://kirinuki.eff0rtchung.kr"
+    }),
+    /Kirinuki 앱 Origin/u
+  );
+  assert.throws(() => createVodRuntimeConfig(paths, {
     node: config.node,
     python: config.python,
     ffmpeg: config.ffmpeg,
@@ -238,21 +244,8 @@ test("설정은 pin·절대 도구 경로·Origin·VOD state를 강하게 묶고
   }, {
     installedAt: config.installedAt,
     notices: TEST_NOTICES,
-    origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN
-  });
-  assert.equal(publicConfig.origin, KIRINUKI_PUBLIC_STUDIO_ORIGIN);
-  assert.equal(vodRuntimeOriginMatchesRequestedStudio(config, {}), true);
-  assert.equal(vodRuntimeOriginMatchesRequestedStudio(publicConfig, {
-    KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
-  }), true);
-  assert.equal(vodRuntimeOriginMatchesRequestedStudio(publicConfig, {}), false);
-  assert.throws(
-    () => vodRuntimeOriginMatchesRequestedStudio(config, {
-      KIRINUKI_ALLOWED_ORIGIN: "https://example.com"
-    }),
-    /Kirinuki Studio Origin.*고정된/u
-  );
-  assert.deepEqual(validateVodRuntimeConfig(publicConfig, paths), publicConfig);
+    origin: "https://kirinuki.eff0rtchung.kr" as never
+  }), /Kirinuki 앱 Origin/u);
   assert.throws(
     () => validateVodRuntimeConfig({
       ...config,

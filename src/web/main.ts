@@ -41,7 +41,9 @@ import {
 } from "../lib/session-archive.js";
 import {
   KIRINUKI_STUDIO_ORIGIN_META_NAME,
-  assertKirinukiStudioDocumentOrigin
+  assertKirinukiStudioDocumentOrigin,
+  isKirinukiLocalStudioOrigin,
+  isKirinukiPublicStudioOrigin
 } from "../lib/local-runtime-origin.js";
 import {
   currentClientCannotUseEditor
@@ -113,12 +115,40 @@ export {
   parseStudioTimecode
 } from "./studio-timecode.js";
 
-assertKirinukiStudioDocumentOrigin(
+const activeStudioOrigin = assertKirinukiStudioDocumentOrigin(
   location.origin,
   document.querySelector<HTMLMetaElement>(
     `meta[name="${KIRINUKI_STUDIO_ORIGIN_META_NAME}"]`
   )?.content
 );
+
+const publicLaunchShell = requiredElement<HTMLElement>("#public-launch-shell");
+const localAppSurface = requiredElement<HTMLElement>("#local-app-surface");
+const localProjectDeleteDialog = requiredElement<HTMLDialogElement>(
+  "#local-project-delete-dialog"
+);
+
+function setDocumentSurface(surface: "public" | "local"): void {
+  const showPublic = surface === "public";
+  publicLaunchShell.hidden = !showPublic;
+  publicLaunchShell.inert = !showPublic;
+  localAppSurface.hidden = showPublic;
+  localAppSurface.inert = showPublic;
+  localProjectDeleteDialog.hidden = showPublic;
+  localProjectDeleteDialog.inert = showPublic;
+  document.body.dataset.kirinukiSurface = surface;
+}
+
+function startPublicLaunchShell(): void {
+  setDocumentSurface("public");
+  const launchLink = requiredElement<HTMLAnchorElement>(
+    "#launch-kirinuki-app"
+  );
+  const guide = requiredElement<HTMLElement>("#public-launch-guide");
+  launchLink.addEventListener("click", () => {
+    guide.hidden = false;
+  });
+}
 
 const HANDLE_SECONDS = 10;
 const MINIMUM_SELECTION_SECONDS = 0.1;
@@ -141,6 +171,9 @@ function requiredElementWithin<T extends Element>(
   }
   return element;
 }
+
+function startLocalApplication(): void {
+setDocumentSurface("local");
 
 const elements = {
   form: requiredElement<HTMLFormElement>("#start-form"),
@@ -558,7 +591,10 @@ function syncStreamingBridgeSource(): void {
     source,
     ...transport,
     requestTimeoutMs: 900,
-    maxDeliveryAttempts: 2
+    // Cross-origin players can briefly stall while switching media parts.
+    // Exact request IDs make a third delivery idempotent while avoiding a
+    // false user-facing failure after only 1.8 seconds.
+    maxDeliveryAttempts: 3
   });
   const client = streamingBridgeClient;
   streamingBridgeShortcutUnsubscribe = client.subscribeShortcuts(
@@ -649,7 +685,7 @@ async function connectStreamingBridge(
         continue;
       }
       setStreamCutBackgroundStatus(
-        `PC 도우미가 없거나 현재 버전과 맞지 않습니다: ${errorMessage(error)} Kirinuki 브라우저를 완전히 종료한 뒤 다시 실행해 주세요.`
+        `Kirinuki의 원본 플레이어 연결부가 현재 버전과 맞지 않습니다: ${errorMessage(error)} 앱을 완전히 종료한 뒤 다시 열어 주세요.`
       );
       updateCaptureConsoleAvailability();
       return;
@@ -673,7 +709,7 @@ async function connectStreamingShortcutBridge(
   }
   try {
     // A snapshot is only a same-source handshake here. YouTube playback stays
-    // exclusively on the official IFrame API; the companion forwards keys.
+    // exclusively on the official IFrame API; the app-owned bridge forwards keys.
     await client.snapshot();
     if (
       client !== streamingBridgeClient
@@ -695,7 +731,7 @@ async function connectStreamingShortcutBridge(
       return;
     }
     elements.streamStatus.textContent =
-      `YouTube 영상은 열렸지만 PC 도우미가 단축키에 응답하지 않습니다: ${errorMessage(error)}`;
+      `YouTube 영상은 열렸지만 Kirinuki의 원본 플레이어 연결부가 단축키에 응답하지 않습니다: ${errorMessage(error)}`;
   }
 }
 
@@ -2570,3 +2606,10 @@ const initialLocalProjectCleanup = localProjectLifecycleCleanupQueue.enqueue(asy
   }
 });
 observeLocalProjectLifecycleCleanup(initialLocalProjectCleanup);
+}
+
+if (isKirinukiLocalStudioOrigin(activeStudioOrigin)) {
+  startLocalApplication();
+} else if (isKirinukiPublicStudioOrigin(activeStudioOrigin)) {
+  startPublicLaunchShell();
+}

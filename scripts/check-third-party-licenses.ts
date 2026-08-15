@@ -27,6 +27,7 @@ import { PRETENDARD_FONT } from "./pretendard-font.js";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const embeddedAudSegRoot = path.join(root, "AudSeg");
 const webRoot = path.join(root, "web");
+const publicShellRoot = path.join(root, "public-shell");
 if (process.argv.slice(2).length > 0) {
   throw new TypeError("사용법: check-third-party-licenses.ts");
 }
@@ -224,9 +225,9 @@ const [packageJson, packageLock] = await Promise.all([
   bytes("package-lock.json").then(parseJson<PackageLock>)
 ]);
 assert(
-  packageJson.name === "kirinuki-local-web-studio"
-    && packageLock.name === "kirinuki-local-web-studio"
-    && packageLock.packages?.[""]?.name === "kirinuki-local-web-studio",
+  packageJson.name === "kirinuki-app"
+    && packageLock.name === "kirinuki-app"
+    && packageLock.packages?.[""]?.name === "kirinuki-app",
   "root package metadata가 localhost web studio를 가리키지 않습니다."
 );
 assert(
@@ -343,7 +344,9 @@ const [
   compiledEditor,
   compiledAudSegWorker,
   localCaptionStackSource,
-  typescriptQualityWorkflow
+  typescriptQualityWorkflow,
+  publicShellNotice,
+  publicShellProjectLicense
 ] = await Promise.all([
   bytes("UNLICENSE"),
   bytes("licenses/UNLICENSE.txt", webRoot),
@@ -365,11 +368,17 @@ const [
   bytes("editor/editor.js", webRoot),
   bytes("editor/audseg-worker.js", webRoot),
   bytes("scripts/local-caption-stack.ts"),
-  bytes(".github/workflows/typescript-quality.yml")
+  bytes(".github/workflows/typescript-quality.yml"),
+  bytes("THIRD_PARTY_NOTICES.md", publicShellRoot),
+  bytes("licenses/UNLICENSE.txt", publicShellRoot)
 ]);
 assert(
   projectLicense.equals(distributedProjectLicense),
   "KirinukiHelper Unlicense 원문과 web 배포 사본이 다릅니다."
+);
+assert(
+  projectLicense.equals(publicShellProjectLicense),
+  "KirinukiHelper Unlicense 원문과 공개 shell 사본이 다릅니다."
 );
 assert(
   projectLicense.toString("utf8").startsWith(
@@ -454,14 +463,14 @@ for (const requiredPath of [
 ]) {
   assert(
     WEB_PACKAGE_FILES.includes(requiredPath),
-    `web 배포 allowlist에 라이선스 파일이 없습니다: ${requiredPath}`
+    `앱 web assets allowlist에 라이선스 파일이 없습니다: ${requiredPath}`
   );
 }
 assert(
   WEB_PACKAGE_FILES.every((relativePath) => (
     !relativePath.startsWith("knowledge/")
   )),
-  "정책 캐시 또는 내부 지식 파일이 web 정적 배포 목록에 있습니다."
+  "정책 캐시 또는 내부 지식 파일이 앱 web assets 목록에 있습니다."
 );
 
 const webNoticeText = webNotices.toString("utf8");
@@ -789,12 +798,24 @@ assert(
 );
 
 assert(
-  webNoticeText.includes("웹 정적 배포물 안에 실제로 포함되는 구성요소만")
+  webNoticeText.includes("Kirinuki Linux 소스 앱의 `web/` browser assets에 실제로 포함되는")
     && !webNoticeText.includes(PINNED_YT_DLP.sha256)
     && !webNoticeText.includes(PINNED_WHISPER_CPP.archive.sha256)
     && !webNoticeText.includes("ffmpeg -buildconf")
     && !webNoticeText.includes("TypeScript 5.9.3"),
   "web 고지가 runtime/system/development 범위를 포함하고 있습니다."
+);
+const publicShellNoticeText = publicShellNotice.toString("utf8");
+assert(
+  publicShellNoticeText.includes("Kirinuki public launch shell notices")
+    && publicShellNoticeText.includes("제3자 JavaScript, 글꼴")
+    && !publicShellNoticeText.includes("<!-- attribution-id:")
+    && !/(?:Mediabunny|AudSeg|Pretendard|Paperlogy|iframe_api|127\.0\.0\.1|localhost)/u.test(
+      publicShellNoticeText
+    )
+    && !publicShellNoticeText.includes(PINNED_YT_DLP.sha256)
+    && !publicShellNoticeText.includes(PINNED_WHISPER_CPP.archive.sha256),
+  "공개 launch shell 고지가 앱 내부·runtime 제3자 범위를 포함하고 있습니다."
 );
 assert(
   runtimeNoticeText.includes("법률 자문")

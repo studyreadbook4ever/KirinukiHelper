@@ -19,14 +19,17 @@ interface VideoMetrics {
 }
 
 interface FakeVideoOptions {
-  readonly width?: number;
-  readonly height?: number;
+  readonly width?: number | (() => number);
+  readonly height?: number | (() => number);
   readonly currentTime?: number | (() => number);
   readonly duration?: number | (() => number);
   readonly paused?: boolean | (() => boolean);
   readonly playbackRate?: number | (() => number);
   readonly readyState?: number | (() => number);
   readonly seekable?: () => TimeRanges;
+  readonly seeking?: boolean | (() => boolean);
+  readonly setCurrentTime?: (value: number) => void;
+  readonly setPlaybackRate?: (value: number) => void;
 }
 
 function readOption<T>(value: T | (() => T) | undefined, fallback: T): T {
@@ -62,13 +65,16 @@ function fakeVideo(options: FakeVideoOptions = {}): {
     getBoundingClientRect(): DOMRect {
       metrics.rectReads += 1;
       return {
-        width: options.width ?? 1280,
-        height: options.height ?? 720
+        width: readOption(options.width, 1280),
+        height: readOption(options.height, 720)
       } as DOMRect;
     },
     get currentTime(): number {
       metrics.currentTimeReads += 1;
       return readOption(options.currentTime, 42.5);
+    },
+    set currentTime(value: number) {
+      options.setCurrentTime?.(value);
     },
     get duration(): number {
       return readOption(options.duration, 180);
@@ -79,12 +85,18 @@ function fakeVideo(options: FakeVideoOptions = {}): {
     get playbackRate(): number {
       return readOption(options.playbackRate, 1);
     },
+    set playbackRate(value: number) {
+      options.setPlaybackRate?.(value);
+    },
     get readyState(): number {
       return readOption(options.readyState, 4);
     },
     get seekable(): TimeRanges {
       metrics.seekableReads += 1;
       return options.seekable?.() || staticTimeRanges(0, 180);
+    },
+    get seeking(): boolean {
+      return readOption(options.seeking, false);
     }
   } as HTMLVideoElement;
   return { element, metrics };
@@ -151,6 +163,36 @@ test("video 후보 점수는 한 번씩만 읽고 DOM 교체 뒤 새 primary vid
   assert.equal(large.metrics.rectReads, 1);
   assert.equal(replacement.metrics.rectReads, 1);
   assert.equal(replacement.metrics.currentTimeReads, 1);
+});
+
+test("숨겨진 이전 video와 보이는 새 video가 공존하면 새 primary를 고른다", async () => {
+  let previousWidth = 1280;
+  let previousHeight = 720;
+  const previous = fakeVideo({
+    width: () => previousWidth,
+    height: () => previousHeight,
+    currentTime: 11,
+    duration: 300
+  });
+  const replacement = fakeVideo({
+    width: 1280,
+    height: 720,
+    currentTime: 44,
+    duration: 180
+  });
+  let videos: readonly HTMLVideoElement[] = [previous.element];
+  const adapter = adapterFor(fakeDocument(() => videos));
+  assert.equal((await adapter.snapshot()).currentTime, 11);
+
+  previousWidth = 0;
+  previousHeight = 0;
+  videos = [previous.element, replacement.element];
+
+  assert.equal(
+    (await adapter.snapshot()).currentTime,
+    44,
+    "DOM에 남은 hidden video를 새 visible video보다 우선했습니다."
+  );
 });
 
 test("광고 의미 조상의 video를 제외하고 연결된 원본 video 선택을 유지한다", async () => {
@@ -280,6 +322,320 @@ test("필수 media getter가 순간 실패하면 raw 오류 대신 strict unavai
     seekableEnd: null
   });
   assert.deepEqual(normalizeStreamingBridgePlayerSnapshot(snapshot), snapshot);
+});
+
+test("HTML video seek는 목표 시각이 안정적으로 유지된 뒤에만 성공한다", async () => {
+  let currentTime = 12;
+  const video = fakeVideo({
+    currentTime: () => currentTime,
+    paused: true,
+    setCurrentTime: (value) => {
+      currentTime = value;
+    }
+  });
+  const adapter = createHtmlVideoStreamingBridgeAdapter({
+    hostDocument: fakeDocument(() => [video.element]),
+    seekVerificationTimeoutMs: 400,
+    readSource: () => ({
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "169475287"
+    })
+  });
+
+  await adapter.seekAbsolute(37.25);
+
+  assert.equal(currentTime, 37.25);
+  assert.ok(
+    video.metrics.currentTimeReads >= 2,
+    "한 번 보인 목표 시각만 믿고 seek 성공을 확정했습니다."
+  );
+});
+
+test("HTML video seek는 목표에서 0.9초 어긋난 고정 시각을 거부한다", async () => {
+  let currentTime = 0;
+  const video = fakeVideo({
+    currentTime: () => currentTime,
+    paused: true,
+    setCurrentTime: (value) => {
+      currentTime = value - 0.9;
+    }
+  });
+  const adapter = createHtmlVideoStreamingBridgeAdapter({
+    hostDocument: fakeDocument(() => [video.element]),
+    seekVerificationTimeoutMs: 350,
+    readSource: () => ({
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "169475287"
+    })
+  });
+
+  await assert.rejects(
+    async () => adapter.seekAbsolute(37.25),
+    (error: unknown) => (
+      error instanceof Error
+      && (error as Error & { code?: string }).code === "player-state-transient"
+    )
+  );
+});
+
+test("HTML video seek는 정상적인 2배속 재생 궤적을 허용한다", async () => {
+  let target = 0;
+  let assignedAt = 0;
+  const video = fakeVideo({
+    currentTime: () => target + Math.max(0, Date.now() - assignedAt) * 2 / 1_000,
+    paused: false,
+    playbackRate: 2,
+    setCurrentTime: (value) => {
+      target = value;
+      assignedAt = Date.now();
+    }
+  });
+  const adapter = createHtmlVideoStreamingBridgeAdapter({
+    hostDocument: fakeDocument(() => [video.element]),
+    seekVerificationTimeoutMs: 400,
+    readSource: () => ({
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "169475287"
+    })
+  });
+
+  await adapter.seekAbsolute(37.25);
+  assert.ok(target === 37.25);
+});
+
+test("HTML video seek는 seeking getter 실패와 미준비 video를 fail closed한다", async () => {
+  const fixtures = [
+    fakeVideo({
+      currentTime: 37.25,
+      seeking: () => {
+        throw new Error("transient getter failure");
+      }
+    }),
+    fakeVideo({ currentTime: 37.25, readyState: 0 })
+  ];
+
+  for (const fixture of fixtures) {
+    const adapter = createHtmlVideoStreamingBridgeAdapter({
+      hostDocument: fakeDocument(() => [fixture.element]),
+      seekVerificationTimeoutMs: 300,
+      readSource: () => ({
+        platform: "CHZZK",
+        contentType: "vod",
+        contentId: "169475287"
+      })
+    });
+    await assert.rejects(
+      async () => adapter.seekAbsolute(37.25),
+      (error: unknown) => (
+        error instanceof Error
+        && (error as Error & { code?: string }).code === "player-state-transient"
+      )
+    );
+  }
+});
+
+test("HTML video seek가 잠시 목표를 보인 뒤 되튕기면 transient 오류로 닫힌다", async () => {
+  let currentTime = 0;
+  let reboundTimer: ReturnType<typeof setTimeout> | undefined;
+  const video = fakeVideo({
+    currentTime: () => currentTime,
+    setCurrentTime: (value) => {
+      currentTime = value;
+      reboundTimer = setTimeout(() => {
+        currentTime = 0;
+      }, 75);
+    }
+  });
+  const adapter = createHtmlVideoStreamingBridgeAdapter({
+    hostDocument: fakeDocument(() => [video.element]),
+    seekVerificationTimeoutMs: 350,
+    readSource: () => ({
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "169475287"
+    })
+  });
+
+  try {
+    await assert.rejects(
+      async () => adapter.seekAbsolute(37.25),
+      (error: unknown) => (
+        error instanceof Error
+        && error.name === "StreamingBridgeContentError"
+        && (error as Error & { code?: string }).code === "player-state-transient"
+      )
+    );
+  } finally {
+    if (reboundTimer) {
+      clearTimeout(reboundTimer);
+    }
+  }
+});
+
+test("HTML video seek 도중 primary video가 교체되면 성공으로 오인하지 않는다", async () => {
+  let currentTime = 0;
+  const first = fakeVideo({
+    currentTime: () => currentTime,
+    setCurrentTime: (value) => {
+      currentTime = value;
+    }
+  });
+  const replacement = fakeVideo({ currentTime: 37.25 });
+  let videos: readonly HTMLVideoElement[] = [first.element];
+  const adapter = createHtmlVideoStreamingBridgeAdapter({
+    hostDocument: fakeDocument(() => videos),
+    seekVerificationTimeoutMs: 350,
+    readSource: () => ({
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "169475287"
+    })
+  });
+  const replacementTimer = setTimeout(() => {
+    videos = [replacement.element];
+  }, 75);
+
+  try {
+    await assert.rejects(
+      async () => adapter.seekAbsolute(37.25),
+      (error: unknown) => (
+        error instanceof Error
+        && (error as Error & { code?: string }).code === "player-state-transient"
+      )
+    );
+  } finally {
+    clearTimeout(replacementTimer);
+  }
+});
+
+test("검증된 seek 직후 primary video가 0초 요소로 교체되면 목표 시각을 인계한다", async () => {
+  let firstTime = 0;
+  const first = fakeVideo({
+    currentTime: () => firstTime,
+    paused: true,
+    setCurrentTime: (value) => {
+      firstTime = value;
+    }
+  });
+  let replacementTime = 0;
+  let replacementAssignments = 0;
+  const replacement = fakeVideo({
+    currentTime: () => replacementTime,
+    paused: true,
+    setCurrentTime: (value) => {
+      replacementAssignments += 1;
+      replacementTime = value;
+    }
+  });
+  let videos: readonly HTMLVideoElement[] = [first.element];
+  const adapter = createHtmlVideoStreamingBridgeAdapter({
+    hostDocument: fakeDocument(() => videos),
+    seekVerificationTimeoutMs: 400,
+    readSource: () => ({
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "169475287"
+    })
+  });
+
+  await adapter.seekAbsolute(37.25);
+  videos = [replacement.element];
+  const snapshot = await adapter.snapshot();
+
+  assert.equal(snapshot.currentTime, 37.25);
+  assert.equal(replacementAssignments, 1);
+});
+
+test("검증된 seek 뒤 같은 video가 즉시 0초로 되튕겨도 목표 시각을 복구한다", async () => {
+  let currentTime = 0;
+  const video = fakeVideo({
+    currentTime: () => currentTime,
+    paused: true,
+    setCurrentTime: (value) => {
+      currentTime = value;
+    }
+  });
+  const adapter = createHtmlVideoStreamingBridgeAdapter({
+    hostDocument: fakeDocument(() => [video.element]),
+    seekVerificationTimeoutMs: 400,
+    readSource: () => ({
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "169475287"
+    })
+  });
+
+  await adapter.seekAbsolute(37.25);
+  currentTime = 0;
+
+  assert.equal((await adapter.snapshot()).currentTime, 37.25);
+});
+
+test("seek 인계 시간이 끝난 뒤 같은 video에서 사용자가 0초로 이동하면 그대로 읽는다", async () => {
+  let currentTime = 0;
+  const video = fakeVideo({
+    currentTime: () => currentTime,
+    paused: true,
+    setCurrentTime: (value) => {
+      currentTime = value;
+    }
+  });
+  const adapter = createHtmlVideoStreamingBridgeAdapter({
+    hostDocument: fakeDocument(() => [video.element]),
+    seekHandoffDurationMs: 300,
+    seekVerificationTimeoutMs: 400,
+    readSource: () => ({
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "169475287"
+    })
+  });
+
+  await adapter.seekAbsolute(37.25);
+  await new Promise((resolve) => setTimeout(resolve, 325));
+  currentTime = 0;
+
+  assert.equal((await adapter.snapshot()).currentTime, 0);
+});
+
+test("교체 video가 seek 인계를 적용하지 않으면 0초 snapshot을 fail closed한다", async () => {
+  let firstTime = 0;
+  const first = fakeVideo({
+    currentTime: () => firstTime,
+    paused: true,
+    setCurrentTime: (value) => {
+      firstTime = value;
+    }
+  });
+  const replacement = fakeVideo({
+    currentTime: 0,
+    paused: true,
+    setCurrentTime: () => undefined
+  });
+  let videos: readonly HTMLVideoElement[] = [first.element];
+  const adapter = createHtmlVideoStreamingBridgeAdapter({
+    hostDocument: fakeDocument(() => videos),
+    seekVerificationTimeoutMs: 300,
+    readSource: () => ({
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "169475287"
+    })
+  });
+
+  await adapter.seekAbsolute(37.25);
+  videos = [replacement.element];
+
+  await assert.rejects(
+    async () => adapter.snapshot(),
+    (error: unknown) => (
+      error instanceof Error
+      && (error as Error & { code?: string }).code === "player-state-transient"
+    )
+  );
 });
 
 interface SoopFixturePart {
