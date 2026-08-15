@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   StaleSerialOperationGenerationError,
+  createCoalescedAutomaticOperation,
   createGenerationBoundSerialOperationQueue,
   createLatestSerialOperationQueue,
   createSerialOperationGate
@@ -202,5 +203,198 @@ test("latest barrier는 기다리던 실패보다 뒤에 예약된 성공을 권
 
   firstMayFail.resolve();
   await Promise.all([failedObserved, retry, barrier]);
+  assert.equal(queue.pendingCount, 0);
+});
+
+test("자동 정리 burst는 대기 슬롯 하나로 합쳐지고 필수 정리가 이를 추월한다", async () => {
+  const queue = createLatestSerialOperationQueue();
+  const blockerMayFinish = deferred();
+  const order: string[] = [];
+  let automaticRuns = 0;
+  const errors: unknown[] = [];
+  const blocker = queue.enqueue(async () => {
+    order.push("blocker-start");
+    await blockerMayFinish.promise;
+    order.push("blocker-end");
+  });
+  const automatic = createCoalescedAutomaticOperation({
+    enqueue: queue.enqueue,
+    operation: async () => {
+      automaticRuns += 1;
+      order.push("automatic");
+    },
+    onError: (error) => errors.push(error)
+  });
+
+  for (let index = 0; index < 100; index += 1) {
+    assert.equal(automatic.request(), true);
+  }
+  assert.deepEqual(automatic.snapshot(), {
+    epoch: 0,
+    phase: "queued",
+    trailingRequested: false
+  });
+  assert.equal(queue.pendingCount, 2);
+
+  automatic.supersede();
+  const mandatory = queue.enqueue(async () => {
+    order.push("mandatory");
+  });
+  blockerMayFinish.resolve();
+  await Promise.all([blocker, mandatory]);
+  await queue.waitForLatest();
+  await Promise.resolve();
+
+  assert.equal(automaticRuns, 0);
+  assert.deepEqual(order, ["blocker-start", "blocker-end", "mandatory"]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(automatic.snapshot(), {
+    epoch: 1,
+    phase: "idle",
+    trailingRequested: false
+  });
+});
+
+test("실행 중 자동 정리에 쏟아진 이벤트는 후속 정리 한 번만 만든다", async () => {
+  const queue = createLatestSerialOperationQueue();
+  const firstMayFinish = deferred();
+  const order: string[] = [];
+  let automaticRuns = 0;
+  const automatic = createCoalescedAutomaticOperation({
+    enqueue: queue.enqueue,
+    operation: async () => {
+      automaticRuns += 1;
+      order.push(`automatic-${automaticRuns}-start`);
+      if (automaticRuns === 1) {
+        await firstMayFinish.promise;
+      }
+      order.push(`automatic-${automaticRuns}-end`);
+    }
+  });
+
+  automatic.request();
+  await Promise.resolve();
+  assert.equal(automatic.snapshot().phase, "running");
+  for (let index = 0; index < 100; index += 1) {
+    automatic.request();
+  }
+  assert.equal(automatic.snapshot().trailingRequested, true);
+  firstMayFinish.resolve();
+  await queue.waitForLatest();
+
+  assert.equal(automaticRuns, 2);
+  assert.deepEqual(order, [
+    "automatic-1-start",
+    "automatic-1-end",
+    "automatic-2-start",
+    "automatic-2-end"
+  ]);
+  assert.equal(queue.pendingCount, 0);
+});
+
+test("필수 정리는 실행 중 자동 정리를 보존하고 그 이전 후속 요청만 흡수한다", async () => {
+  const queue = createLatestSerialOperationQueue();
+  const automaticMayFinish = deferred();
+  const order: string[] = [];
+  let automaticRuns = 0;
+  const automatic = createCoalescedAutomaticOperation({
+    enqueue: queue.enqueue,
+    operation: async () => {
+      automaticRuns += 1;
+      order.push("automatic-start");
+      await automaticMayFinish.promise;
+      order.push("automatic-end");
+    }
+  });
+
+  automatic.request();
+  await Promise.resolve();
+  for (let index = 0; index < 100; index += 1) {
+    automatic.request();
+  }
+  automatic.supersede();
+  const mandatory = queue.enqueue(async () => {
+    order.push("mandatory");
+  });
+  automaticMayFinish.resolve();
+  await mandatory;
+  await queue.waitForLatest();
+
+  assert.equal(automaticRuns, 1);
+  assert.deepEqual(order, ["automatic-start", "automatic-end", "mandatory"]);
+  assert.deepEqual(automatic.snapshot(), {
+    epoch: 1,
+    phase: "idle",
+    trailingRequested: false
+  });
+});
+
+test("필수 정리 뒤에 도착한 자동 이벤트는 최신 후속 정리 하나로 보존된다", async () => {
+  const queue = createLatestSerialOperationQueue();
+  const automaticMayFinish = deferred();
+  const order: string[] = [];
+  let automaticRuns = 0;
+  const automatic = createCoalescedAutomaticOperation({
+    enqueue: queue.enqueue,
+    operation: async () => {
+      automaticRuns += 1;
+      order.push(`automatic-${automaticRuns}-start`);
+      if (automaticRuns === 1) {
+        await automaticMayFinish.promise;
+      }
+      order.push(`automatic-${automaticRuns}-end`);
+    }
+  });
+
+  automatic.request();
+  await Promise.resolve();
+  automatic.supersede();
+  const mandatory = queue.enqueue(async () => {
+    order.push("mandatory");
+  });
+  for (let index = 0; index < 100; index += 1) {
+    automatic.request();
+  }
+  automaticMayFinish.resolve();
+  await mandatory;
+  await queue.waitForLatest();
+
+  assert.equal(automaticRuns, 2);
+  assert.deepEqual(order, [
+    "automatic-1-start",
+    "automatic-1-end",
+    "mandatory",
+    "automatic-2-start",
+    "automatic-2-end"
+  ]);
+});
+
+test("실패한 자동 정리는 ticket을 반환하고 다음 명시 요청이 복구한다", async () => {
+  const queue = createLatestSerialOperationQueue();
+  const errors: unknown[] = [];
+  let shouldFail = true;
+  let runs = 0;
+  const automatic = createCoalescedAutomaticOperation({
+    enqueue: queue.enqueue,
+    operation: async () => {
+      runs += 1;
+      if (shouldFail) {
+        throw new Error("automatic inventory failed");
+      }
+    },
+    onError: (error) => errors.push(error)
+  });
+
+  automatic.request();
+  await assert.rejects(queue.waitForLatest(), /automatic inventory failed/u);
+  await Promise.resolve();
+  assert.equal(automatic.snapshot().phase, "idle");
+  assert.equal(errors.length, 1);
+
+  shouldFail = false;
+  automatic.request();
+  await queue.waitForLatest();
+  assert.equal(runs, 2);
+  assert.equal(automatic.snapshot().phase, "idle");
   assert.equal(queue.pendingCount, 0);
 });

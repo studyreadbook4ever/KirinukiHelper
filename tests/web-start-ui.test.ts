@@ -199,7 +199,15 @@ test("raw close 뒤 살아 있는 시작 탭은 focus·pageshow·visible 복귀�
   );
   assert.match(
     source,
-    /function scheduleLocalProjectLifecycleRefresh\(\)[\s\S]*window\.setTimeout\([\s\S]*observeLocalProjectLifecycleCleanup\(queueLocalProjectLifecycleCleanup\(\)\)/u
+    /automaticLocalProjectLifecycleCleanup =[\s\S]*createCoalescedAutomaticOperation\([\s\S]*enqueue: \(operation\) => localProjectLifecycleCleanupQueue\.enqueue\(operation\)[\s\S]*operation: \(\) => performLocalProjectLifecycleCleanup\(\)/u
+  );
+  assert.match(
+    source,
+    /function queueMandatoryLocalProjectLifecycleCleanup\([\s\S]*automaticLocalProjectLifecycleCleanup\.supersede\(\)[\s\S]*localProjectLifecycleCleanupQueue\.enqueue/u
+  );
+  assert.match(
+    source,
+    /function scheduleLocalProjectLifecycleRefresh\(\)[\s\S]*window\.setTimeout\([\s\S]*requestAutomaticLocalProjectLifecycleCleanup\(\)/u
   );
   assert.match(
     source,
@@ -207,7 +215,7 @@ test("raw close 뒤 살아 있는 시작 탭은 focus·pageshow·visible 복귀�
   );
   assert.match(
     source,
-    /window\.addEventListener\("pageshow", \(event\) => \{[\s\S]*event\.persisted[\s\S]*openingEditor = false;[\s\S]*clearCurrentTabWebEditorSession\(\);[\s\S]*observeLocalProjectLifecycleCleanup\(queueLocalProjectLifecycleCleanup\(\)\)/u
+    /window\.addEventListener\("pageshow", \(event\) => \{[\s\S]*event\.persisted[\s\S]*openingEditor = false;[\s\S]*clearCurrentTabWebEditorSession\(\);[\s\S]*requestAutomaticLocalProjectLifecycleCleanup\(\)/u
   );
   assert.match(
     source,
@@ -223,7 +231,7 @@ test("raw close 뒤 살아 있는 시작 탭은 focus·pageshow·visible 복귀�
   );
   assert.match(
     source,
-    /async function requireSafeLocalProjectStateForEditorEntry\(\)[\s\S]*queueLocalProjectLifecycleCleanup\(\)[\s\S]*await localProjectLifecycleCleanupQueue\.waitForLatest\(\)[\s\S]*이전 편집 정리를 확인하지 못해 새 편집을 열지 않았습니다/u
+    /async function requireSafeLocalProjectStateForEditorEntry\(\)[\s\S]*await queueMandatoryLocalProjectLifecycleCleanup\(\)[\s\S]*이전 편집 정리를 확인하지 못해 새 편집을 열지 않았습니다/u
   );
   assert.match(
     source,
@@ -231,7 +239,11 @@ test("raw close 뒤 살아 있는 시작 탭은 focus·pageshow·visible 복귀�
   );
   assert.match(
     source,
-    /elements\.retryLocalProjects\.addEventListener\("click"[\s\S]*queueLocalProjectLifecycleCleanup\(\{ announce: true \}\)/u
+    /elements\.retryLocalProjects\.addEventListener\("click"[\s\S]*queueMandatoryLocalProjectLifecycleCleanup\(\{ announce: true \}\)/u
+  );
+  assert.match(
+    source,
+    /case "refresh-recovery-sessions":[\s\S]*if \(!openingEditor\)[\s\S]*refreshRecentProject\(\)/u
   );
 });
 
