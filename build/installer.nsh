@@ -1,3 +1,18 @@
+!ifdef BUILD_UNINSTALLER
+!macro customCheckAppRunning
+  # electron-builder's default silent-uninstall preflight terminates the
+  # application by image name before customUnInstall runs. Give the exact
+  # installed engine its owned cleanup command first so the gateway,
+  # autostart entry, and retained media processes shut down gracefully.
+  IfFileExists "$INSTDIR\${APP_EXECUTABLE_FILENAME}" 0 kirinuki_preflight_cleanup_complete
+  ExecWait '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --kirinuki-internal-owned-uninstall' $0
+  StrCmp $0 "0" kirinuki_preflight_cleanup_complete
+  Abort "Kirinuki Local Engine is still running. Close it and retry uninstall."
+
+kirinuki_preflight_cleanup_complete:
+!macroend
+!endif
+
 !macro customInit
   # Refuse an ambiguous pre-existing handler before any application files are
   # changed. An exact handler is an idempotent same-path reinstall; a wholly
@@ -63,16 +78,10 @@ kirinuki_protocol_install_complete:
 !macroend
 
 !macro customUnInstall
-  # Ask this exact installed executable to stop its own gateway and retained
-  # ffmpeg/yt-dlp process tree, then remove only its owned login/protocol state.
-  # The secondary process waits for Electron's single-instance lock readback;
-  # a non-zero result aborts before NSIS removes files under a live engine.
-  IfFileExists "$INSTDIR\${APP_EXECUTABLE_FILENAME}" 0 kirinuki_cleanup_complete
-  ExecWait '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --kirinuki-internal-owned-uninstall' $0
-  StrCmp $0 "0" kirinuki_cleanup_complete
-  Abort "Kirinuki Local Engine is still running. Close it and retry uninstall."
-
-kirinuki_cleanup_complete:
+  # The uninstaller-only customCheckAppRunning macro has already completed the
+  # exact executable handoff before electron-builder can remove application
+  # files. Keep this section
+  # idempotent and limited to product-owned registry/protocol fallback cleanup.
   # Electron's Windows login item is a per-user Run value with this exact
   # product-owned name. Remove both the command and Windows' approval record;
   # never enumerate or alter any other startup entry.

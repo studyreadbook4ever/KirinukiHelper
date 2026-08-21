@@ -134,6 +134,26 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
   assert.match(nsisInclude, /customInit/u);
   assert.match(nsisInclude, /customInstall/u);
   assert.match(nsisInclude, /customUnInstall/u);
+  const checkAppRunningMacro = /^!ifdef BUILD_UNINSTALLER\r?\n!macro customCheckAppRunning\r?\n([\s\S]*?)^!macroend\r?\n!endif$/mu.exec(
+    nsisInclude
+  );
+  assert.notEqual(checkAppRunningMacro, null);
+  const uninstallerPreflight = checkAppRunningMacro![1]!;
+  assert.equal(
+    uninstallerPreflight.includes(
+      "ExecWait '\"$INSTDIR\\${APP_EXECUTABLE_FILENAME}\" --kirinuki-internal-owned-uninstall'"
+    ),
+    true
+  );
+  assert.match(uninstallerPreflight, /StrCmp \$0 "0"/u);
+  assert.match(uninstallerPreflight, /Abort "Kirinuki Local Engine is still running\./u);
+  assert.doesNotMatch(uninstallerPreflight, /_CHECK_APP_RUNNING/u);
+  assert.doesNotMatch(uninstallerPreflight, /^\s*!else\s*$/mu);
+  assert.doesNotMatch(nsisInclude, /!insertmacro _CHECK_APP_RUNNING/u);
+  assert.equal(
+    nsisInclude.match(/--kirinuki-internal-owned-uninstall/gu)?.length,
+    1
+  );
   assert.match(nsisInclude, /Kirinuki Local Engine/u);
   assert.match(nsisInclude, /Software\\Classes\\kirinuki-engine\\shell\\open\\command/u);
   assert.match(nsisInclude, /WriteRegStr HKCU/u);
