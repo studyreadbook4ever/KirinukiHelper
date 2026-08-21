@@ -409,6 +409,10 @@ async function removeWindowsTestJunction(pathname: string): Promise<void> {
 
 interface WindowsEngineRegistrySnapshot {
   readonly approval: string | null;
+  readonly protocolCommand: string | null;
+  readonly protocolRootDefault: string | null;
+  readonly protocolRootExists: boolean;
+  readonly protocolUrlMarkerPresent: boolean;
   readonly run: string | null;
 }
 
@@ -421,23 +425,39 @@ async function windowsEngineRegistrySnapshot(): Promise<WindowsEngineRegistrySna
     [
       "$runKey='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'",
       "$approvalKey='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run'",
+      "$protocolRoot='Registry::HKEY_CURRENT_USER\\Software\\Classes\\kirinuki-engine'",
+      "$protocolKey='Registry::HKEY_CURRENT_USER\\Software\\Classes\\kirinuki-engine\\shell\\open\\command'",
       `$name='${WINDOWS_ENGINE_LOGIN_ITEM_NAME}'`,
       "$run=$null",
       "$approval=$null",
+      "$protocolCommand=$null",
+      "$protocolRootDefault=$null",
+      "$protocolRootExists=Test-Path -LiteralPath $protocolRoot",
+      "$protocolUrlMarkerPresent=$false",
       "if (Test-Path -LiteralPath $runKey) { $property=(Get-ItemProperty -LiteralPath $runKey).PSObject.Properties[$name]; if ($null -ne $property) { $run=[string]$property.Value } }",
       "if (Test-Path -LiteralPath $approvalKey) { $property=(Get-ItemProperty -LiteralPath $approvalKey).PSObject.Properties[$name]; if ($null -ne $property) { $approval=[Convert]::ToBase64String([byte[]]$property.Value) } }",
-      "[ordered]@{approval=$approval;run=$run}|ConvertTo-Json -Compress"
+      "if ($protocolRootExists) { $item=Get-Item -LiteralPath $protocolRoot; $valueNames=@($item.GetValueNames()); if ($valueNames -contains '') { $protocolRootDefault=[string]$item.GetValue('') }; $protocolUrlMarkerPresent=$valueNames -contains 'URL Protocol' }",
+      "if (Test-Path -LiteralPath $protocolKey) { $value=(Get-Item -LiteralPath $protocolKey).GetValue(''); if ($null -ne $value) { $protocolCommand=[string]$value } }",
+      "[ordered]@{approval=$approval;protocolCommand=$protocolCommand;protocolRootDefault=$protocolRootDefault;protocolRootExists=$protocolRootExists;protocolUrlMarkerPresent=$protocolUrlMarkerPresent;run=$run}|ConvertTo-Json -Compress"
     ].join("; ")
   ]);
   const value = JSON.parse(result.stdout) as Record<string, unknown>;
   invariant(
-    Object.keys(value).sort().join(",") === "approval,run"
+    Object.keys(value).sort().join(",") === "approval,protocolCommand,protocolRootDefault,protocolRootExists,protocolUrlMarkerPresent,run"
       && (value.approval === null || typeof value.approval === "string")
+      && (value.protocolCommand === null || typeof value.protocolCommand === "string")
+      && (value.protocolRootDefault === null || typeof value.protocolRootDefault === "string")
+      && typeof value.protocolRootExists === "boolean"
+      && typeof value.protocolUrlMarkerPresent === "boolean"
       && (value.run === null || typeof value.run === "string"),
     "Windows engine registry readback 구조가 올바르지 않습니다."
   );
   return Object.freeze({
     approval: value.approval as string | null,
+    protocolCommand: value.protocolCommand as string | null,
+    protocolRootDefault: value.protocolRootDefault as string | null,
+    protocolRootExists: value.protocolRootExists as boolean,
+    protocolUrlMarkerPresent: value.protocolUrlMarkerPresent as boolean,
     run: value.run as string | null
   });
 }
@@ -705,32 +725,39 @@ async function windowsNsisSmoke(
   try {
     invariant(
       JSON.stringify(await windowsEngineRegistrySnapshot())
-        === JSON.stringify({ approval: null, run: null }),
+        === JSON.stringify({
+          approval: null,
+          protocolCommand: null,
+          protocolRootDefault: null,
+          protocolRootExists: false,
+          protocolUrlMarkerPresent: false,
+          run: null
+        }),
       "Windows installer smoke 시작 전에 Kirinuki startup registry가 이미 있습니다."
     );
     await run(artifactPath, ["/S", `/D=${installRoot}`]);
     installed = true;
     const executable = path.join(installRoot, "Kirinuki.exe");
-    await verifyPackagedDesktopTools(
-      path.join(installRoot, "resources"),
-      target
-    );
-    const protocolCommand = (await run("powershell.exe", [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      "(Get-Item -LiteralPath 'Registry::HKEY_CURRENT_USER\\Software\\Classes\\kirinuki-engine\\shell\\open\\command' -ErrorAction Stop).GetValue('')"
-    ])).stdout.trim();
-    invariant(
-      protocolCommand.toLowerCase().includes(executable.toLowerCase())
-        && /%1/u.test(protocolCommand),
-      "Windows installer custom protocol command가 exact installed executable/URL argv에 묶이지 않았습니다."
-    );
     const uninstallers = (await readdir(installRoot))
       .filter((entry) => /^Uninstall.*\.exe$/iu.test(entry));
     invariant(uninstallers.length === 1, "NSIS uninstaller identity가 유일하지 않습니다.");
     uninstallerPath = path.join(installRoot, uninstallers[0]!);
+    await verifyPackagedDesktopTools(
+      path.join(installRoot, "resources"),
+      target
+    );
+    const installedRegistry = await windowsEngineRegistrySnapshot();
+    invariant(
+      installedRegistry.approval === null
+        && installedRegistry.protocolCommand !== null
+        && installedRegistry.protocolCommand.toLowerCase()
+        === `"${executable}" "%1"`.toLowerCase()
+        && installedRegistry.protocolRootDefault === "URL:kirinuki-engine"
+        && installedRegistry.protocolRootExists
+        && installedRegistry.protocolUrlMarkerPresent
+        && installedRegistry.run === null,
+      "Windows installer custom protocol command가 exact installed executable/URL argv에 묶이지 않았습니다."
+    );
     const shortcutMetadata = await lstat(recoveryShortcut);
     invariant(
       shortcutMetadata.isFile()
@@ -831,8 +858,15 @@ async function windowsNsisSmoke(
     await assertPathAbsent(recoveryShortcut);
     invariant(
       JSON.stringify(await windowsEngineRegistrySnapshot())
-        === JSON.stringify({ approval: null, run: null }),
-      "Windows uninstaller가 owned Run/StartupApproved 값을 제거하지 못했습니다."
+        === JSON.stringify({
+          approval: null,
+          protocolCommand: null,
+          protocolRootDefault: null,
+          protocolRootExists: false,
+          protocolUrlMarkerPresent: false,
+          run: null
+        }),
+      "Windows uninstaller가 owned protocol/Run/StartupApproved 값을 제거하지 못했습니다."
     );
     const retainedJunction = await lstat(junctionPath);
     invariant(

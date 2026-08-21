@@ -100,11 +100,6 @@ interface WebDriverSession {
   readonly sessionId?: unknown;
 }
 
-interface WebDriverWindowCreation {
-  readonly handle?: unknown;
-  readonly type?: unknown;
-}
-
 interface CdpPageNavigation {
   readonly errorText?: unknown;
   readonly frameId?: unknown;
@@ -677,62 +672,87 @@ export async function runInstalledEngineBrowserSmoke({
       }
     }
     invariant(grantedPermissions.length >= 1, "Chrome LNA/loopback permission을 자동 확인하지 못했습니다.");
-    // ChromeDriver 152 on macOS can acknowledge WebDriver navigation without
-    // dispatching it, while Target.createTarget only proves target creation.
-    // Select a fresh stable tab first, then use Page.navigate so the response
-    // proves a cross-document navigation was accepted without waiting on
-    // ChromeDriver's renderer NavigationTracker.
-    const probeWindow = await webdriver<WebDriverWindowCreation>(
-      "POST",
-      `/session/${sessionId}/window/new`,
-      { type: "tab" },
-      10_000
-    );
-    invariant(
-      typeof probeWindow.handle === "string"
-        && probeWindow.handle.length >= 1
-        && probeWindow.handle.length <= 512
-        && probeWindow.type === "tab",
-      "Chrome browser probe tab을 만들지 못했습니다."
-    );
-    await webdriver(
-      "POST",
-      `/session/${sessionId}/window`,
-      { handle: probeWindow.handle },
-      10_000
-    );
-    const selectedWindow = await webdriver<unknown>(
+    // Reuse ChromeDriver's already attached initial tab. Creating another tab
+    // starts a concurrent about:blank navigation on Chrome 152/macOS, which can
+    // abort the real Page.navigate before a network request is dispatched.
+    const probeWindow = await webdriver<unknown>(
       "GET",
       `/session/${sessionId}/window`,
       undefined,
       10_000
     );
     invariant(
-      selectedWindow === probeWindow.handle,
-      "Chrome browser probe tab 선택을 readback하지 못했습니다."
+      typeof probeWindow === "string"
+        && probeWindow.length >= 1
+        && probeWindow.length <= 512,
+      "ChromeDriver initial browser tab을 readback하지 못했습니다."
     );
-    const navigationOutcomePromise = webdriver<CdpPageNavigation>(
-      "POST",
-      `/session/${sessionId}/goog/cdp/execute`,
-      {
-        cmd: "Page.navigate",
-        params: { url: `${KIRINUKI_PUBLIC_STUDIO_ORIGIN}/` }
-      },
-      10_000
-    ).then((navigation) => {
-      invariant(
-        typeof navigation.frameId === "string"
+    const navigationOutcomePromise = (async () => {
+      for (let navigationAttempt = 0; navigationAttempt < 2; navigationAttempt += 1) {
+        const stopped = await webdriver<unknown>(
+          "POST",
+          `/session/${sessionId}/goog/cdp/execute`,
+          { cmd: "Page.stopLoading", params: {} },
+          10_000
+        );
+        invariant(
+          isRecord(stopped) && Object.keys(stopped).length === 0,
+          "Chrome browser probe의 이전 navigation을 정지하지 못했습니다."
+        );
+        const navigation = await webdriver<CdpPageNavigation>(
+          "POST",
+          `/session/${sessionId}/goog/cdp/execute`,
+          {
+            cmd: "Page.navigate",
+            params: { url: `${KIRINUKI_PUBLIC_STUDIO_ORIGIN}/` }
+          },
+          10_000
+        );
+        const validFrameId = typeof navigation.frameId === "string"
           && navigation.frameId.length >= 1
-          && navigation.frameId.length <= 256
-          && typeof navigation.loaderId === "string"
+          && navigation.frameId.length <= 256;
+        const validLoaderId = typeof navigation.loaderId === "string"
           && navigation.loaderId.length >= 1
-          && navigation.loaderId.length <= 256
+          && navigation.loaderId.length <= 256;
+        const successfulNavigation = validFrameId
+          && validLoaderId
           && navigation.errorText === undefined
-          && navigation.isDownload !== true,
-        `Chrome browser probe navigation이 거부되었습니다: ${JSON.stringify(navigation)}`
-      );
-      return { ok: true as const };
-    }).catch((error: unknown) => ({ ok: false as const, error }));
+          && navigation.isDownload !== true;
+        const retryablePreStartAbort = validFrameId
+          && (navigation.loaderId === undefined || validLoaderId)
+          && navigation.errorText === "net::ERR_ABORTED"
+          && navigation.isDownload !== true;
+        if (successfulNavigation) {
+          return { ok: true as const };
+        }
+        if (
+          navigationAttempt === 0
+          && retryablePreStartAbort
+        ) {
+          // Give a dispatched first request a bounded chance to reach the
+          // authoritative server before retrying the exact same attached tab.
+          await delay(250);
+          if (probeEvents.length > 0 || observedPaths.length > 0) {
+            return { ok: true as const };
+          }
+          const retryWindow = await webdriver<unknown>(
+            "GET",
+            `/session/${sessionId}/window`,
+            undefined,
+            10_000
+          );
+          invariant(
+            retryWindow === probeWindow,
+            "Chrome browser probe retry 전에 active tab identity가 바뀌었습니다."
+          );
+          continue;
+        }
+        throw new Error(
+          `Chrome browser probe navigation이 거부되었습니다: ${JSON.stringify(navigation)}`
+        );
+      }
+      throw new Error("Chrome browser probe navigation retry가 결과 없이 끝났습니다.");
+    })().catch((error: unknown) => ({ ok: false as const, error }));
     let requested: BrowserProbeEvent;
     try {
       requested = await waitForNextProbeEvent(
