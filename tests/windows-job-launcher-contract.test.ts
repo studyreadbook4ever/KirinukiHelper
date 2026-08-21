@@ -169,6 +169,12 @@ test("launcher manifest는 source/build/binary/security allowlist가 exact해야
 
 test("native source는 suspended→assign→resume 순서와 parent/job/exit 불변식을 가진다", async () => {
   const source = await readFile(path.join(root, WINDOWS_JOB_LAUNCHER_SOURCE_PATH), "utf8");
+  assert.match(source, /^#define UNICODE$/mu);
+  assert.match(source, /^#define _UNICODE$/mu);
+  assert.deepEqual(
+    WINDOWS_JOB_LAUNCHER_MSVC_FLAGS.filter((flag) => /^\/D_?UNICODE$/u.test(flag)),
+    []
+  );
   const create = source.indexOf("CreateProcessW(");
   const assign = source.indexOf("AssignProcessToJobObject(job, child.hProcess)");
   const resume = source.indexOf("ResumeThread(child.hThread)");

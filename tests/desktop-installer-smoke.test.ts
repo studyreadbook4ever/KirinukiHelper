@@ -13,7 +13,6 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  hdiutilAttachedDeviceFromPlist,
   verifyLinuxDesktopEntryProtocol,
   verifyMountedMacDiskImageApplication
 } from "../scripts/desktop-installer-smoke.js";
@@ -48,48 +47,18 @@ test("macOS electron-builder receives the exact .app bundle instead of its wrapp
   );
 });
 
-test("hdiutil plist resolves one exact mounted device and rejects ambiguous identity", () => {
-  const mountRoot = "/var/folders/Kirinuki & mount";
-  const entity = (device: string, mountPoint: string): string => `
-    <dict>
-      <key>dev-entry</key><string>${device}</string>
-      <key>mount-point</key><string>${mountPoint.replaceAll("&", "&amp;")}</string>
-    </dict>`;
-  const plist = `<?xml version="1.0"?><plist><dict><key>system-entities</key><array>
-    ${entity("/dev/disk9", "/Volumes/unmounted-container")}
-    ${entity("/dev/disk9s1", mountRoot)}
-  </array></dict></plist>`;
-  assert.equal(
-    hdiutilAttachedDeviceFromPlist(plist, [mountRoot]),
-    "/dev/disk9s1"
-  );
-  assert.equal(
-    hdiutilAttachedDeviceFromPlist(plist, ["/different/mount"]),
-    null
-  );
-  assert.throws(() => hdiutilAttachedDeviceFromPlist(
-    `${plist}${entity("/dev/disk10s1", mountRoot)}`,
-    [mountRoot]
-  ));
-  assert.throws(() => hdiutilAttachedDeviceFromPlist(
-    entity("not-a-device", mountRoot),
-    [mountRoot]
-  ));
-});
-
-test("macOS installer smoke always attempts identity-based detach and fails closed", async () => {
+test("macOS installer smoke always detaches its exact mount point and fails closed", async () => {
   const source = await readFile(path.join(
     root,
     "scripts/desktop-installer-smoke.ts"
   ), "utf8");
-  assert.match(source, /"attach",\s*"-plist"/u);
   assert.match(
     source,
-    /attachAttempted = true;[\s\S]*finally \{[\s\S]*if \(attachAttempted\)[\s\S]*\["detach", mountedDevice \?\? mountRoot, "-force"\]/u
+    /attachAttempted = true;[\s\S]*finally \{[\s\S]*if \(attachAttempted\)[\s\S]*\["detach", mountRoot, "-force"\]/u
   );
   assert.match(
     source,
-    /\(attachSucceeded \|\| mountedDevice !== null\) && !detachConfirmed/u
+    /attachSucceeded && !detachConfirmed/u
   );
 });
 

@@ -33,9 +33,7 @@ export const WINDOWS_JOB_LAUNCHER_MSVC_FLAGS = Object.freeze([
   "/WX",
   "/O2",
   "/guard:cf",
-  "/utf-8",
-  "/DUNICODE",
-  "/D_UNICODE"
+  "/utf-8"
 ] as const);
 export const WINDOWS_JOB_LAUNCHER_LINK_FLAGS = Object.freeze([
   "/SUBSYSTEM:CONSOLE",

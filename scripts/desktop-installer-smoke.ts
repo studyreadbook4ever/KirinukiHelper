@@ -248,70 +248,6 @@ export function verifyLinuxDesktopEntryProtocol(desktopEntry: string): void {
   );
 }
 
-function decodePlistString(value: string): string {
-  const entities: Readonly<Record<string, string>> = Object.freeze({
-    amp: "&",
-    apos: "'",
-    gt: ">",
-    lt: "<",
-    quot: "\""
-  });
-  return value.replace(/&(amp|apos|gt|lt|quot);/gu, (_match, entity: string) => (
-    entities[entity]!
-  ));
-}
-
-function plistEntityString(entity: string, key: string): string | null {
-  const match = new RegExp(
-    `<key>${key}</key>\\s*<string>([^<]*)</string>`,
-    "u"
-  ).exec(entity);
-  return match ? decodePlistString(match[1]!) : null;
-}
-
-export function hdiutilAttachedDeviceFromPlist(
-  plist: string,
-  expectedMountPoints: readonly string[]
-): string | null {
-  invariant(
-    expectedMountPoints.length > 0
-      && expectedMountPoints.every((mountPoint) => path.isAbsolute(mountPoint)),
-    "hdiutil expected mount-point가 absolute path가 아닙니다."
-  );
-  const expected = new Set(expectedMountPoints.map((mountPoint) => path.resolve(mountPoint)));
-  const devices: string[] = [];
-  const mountKey = "<key>mount-point</key>";
-  let offset = 0;
-  while (offset < plist.length) {
-    const mountKeyIndex = plist.indexOf(mountKey, offset);
-    if (mountKeyIndex < 0) {
-      break;
-    }
-    offset = mountKeyIndex + mountKey.length;
-    const entityStart = plist.lastIndexOf("<dict>", mountKeyIndex);
-    const entityEnd = plist.indexOf("</dict>", offset);
-    if (entityStart < 0 || entityEnd < 0) {
-      continue;
-    }
-    const entity = plist.slice(entityStart, entityEnd + "</dict>".length);
-    const mountPoint = plistEntityString(entity, "mount-point");
-    if (mountPoint === null || !expected.has(path.resolve(mountPoint))) {
-      continue;
-    }
-    const device = plistEntityString(entity, "dev-entry");
-    invariant(
-      device !== null && /^\/dev\/disk[0-9]+(?:s[0-9]+)*$/u.test(device),
-      "hdiutil attach plist의 mounted device identity가 올바르지 않습니다."
-    );
-    devices.push(device);
-  }
-  invariant(
-    devices.length <= 1,
-    "hdiutil attach plist에 exact mount-point device가 중복되었습니다."
-  );
-  return devices[0] ?? null;
-}
-
 async function assertMacBundleDirectory(
   directoryPath: string,
   label: string
@@ -589,15 +525,12 @@ async function macDiskImageSmoke(
   const failureQuarantine = path.join(temporaryRoot, "failed-Kirinuki.app");
   let attachAttempted = false;
   let attachSucceeded = false;
-  let mountedDevice: string | null = null;
   try {
     await assertPathAbsent(installedApp);
     await mkdir(mountRoot, { mode: 0o700 });
-    const canonicalMountRoot = await realpath(mountRoot);
     attachAttempted = true;
     const attachResult = await run("/usr/bin/hdiutil", [
       "attach",
-      "-plist",
       "-nobrowse",
       "-readonly",
       "-mountpoint",
@@ -605,17 +538,9 @@ async function macDiskImageSmoke(
       artifactPath
     ], { allowFailure: true });
     attachSucceeded = attachResult.code === 0;
-    mountedDevice = hdiutilAttachedDeviceFromPlist(
-      attachResult.stdout,
-      [mountRoot, canonicalMountRoot]
-    );
     invariant(
       attachSucceeded,
       `macOS DMG attach가 실패했습니다: code=${attachResult.code} stdout=${JSON.stringify(attachResult.stdout.trim())} stderr=${JSON.stringify(attachResult.stderr.trim())}`
-    );
-    invariant(
-      mountedDevice !== null,
-      "성공한 macOS DMG attach 결과에 exact mount-point device identity가 없습니다."
     );
     let mountedApplication;
     try {
@@ -690,13 +615,13 @@ async function macDiskImageSmoke(
       if (attachAttempted) {
         detachResult = await run(
           "/usr/bin/hdiutil",
-          ["detach", mountedDevice ?? mountRoot, "-force"],
+          ["detach", mountRoot, "-force"],
           { allowFailure: true }
         );
       }
       const detachConfirmed = detachResult?.code === 0;
       let safeToRemoveTemporaryRoot = !attachAttempted || detachConfirmed;
-      if (!safeToRemoveTemporaryRoot && !attachSucceeded && mountedDevice === null) {
+      if (!safeToRemoveTemporaryRoot && !attachSucceeded) {
         const [mountMetadata, mountEntries] = await Promise.all([
           lstat(mountRoot),
           readdir(mountRoot)
@@ -708,9 +633,9 @@ async function macDiskImageSmoke(
       if (safeToRemoveTemporaryRoot) {
         await rm(temporaryRoot, { recursive: true, force: true });
       }
-      if ((attachSucceeded || mountedDevice !== null) && !detachConfirmed) {
+      if (attachSucceeded && !detachConfirmed) {
         throw new Error(
-          `macOS DMG detach가 실패했습니다: target=${mountedDevice ?? mountRoot} code=${detachResult?.code ?? "unavailable"} stdout=${JSON.stringify(detachResult?.stdout.trim() ?? "")} stderr=${JSON.stringify(detachResult?.stderr.trim() ?? "")}`
+          `macOS DMG detach가 실패했습니다: target=${mountRoot} code=${detachResult?.code ?? "unavailable"} stdout=${JSON.stringify(detachResult?.stdout.trim() ?? "")} stderr=${JSON.stringify(detachResult?.stderr.trim() ?? "")}`
         );
       }
     }
