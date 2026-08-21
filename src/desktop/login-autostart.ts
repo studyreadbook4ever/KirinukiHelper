@@ -640,6 +640,26 @@ function loginItemDisabled(
     ));
 }
 
+function loginItemReadbackEvidence(state: Readonly<LoginItemState>): string {
+  const launchItems = Array.isArray(state.launchItems)
+    ? state.launchItems.slice(0, 16).map((item) => ({
+      name: item.name,
+      args: item.args,
+      scope: item.scope,
+      enabled: item.enabled
+    }))
+    : null;
+  return JSON.stringify({
+    openAtLogin: state.openAtLogin,
+    executableWillLaunchAtLogin:
+      state.executableWillLaunchAtLogin ?? null,
+    launchItemCount: Array.isArray(state.launchItems)
+      ? state.launchItems.length
+      : null,
+    launchItems
+  });
+}
+
 export async function ensureEngineAutostart({
   target: targetInput,
   executablePath: executablePathInput,
@@ -769,7 +789,12 @@ export async function ensureEngineAutostart({
   const approvalRequired = platform === "darwin"
     && state.status === "requires-approval";
   if (!approvalRequired && !loginItemEnabled(platform, state)) {
-    throw new Error(`${platform} 로그인 자동실행 readback이 등록 상태가 아닙니다.`);
+    const evidence = platform === "win32"
+      ? ` evidence=${loginItemReadbackEvidence(state)}`
+      : "";
+    throw new Error(
+      `${platform} 로그인 자동실행 readback이 등록 상태가 아닙니다.${evidence}`
+    );
   }
   if (managedStoragePath) {
     const body = `${JSON.stringify(

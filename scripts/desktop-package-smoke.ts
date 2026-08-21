@@ -1559,9 +1559,29 @@ export async function runNativePackageSmoke({
       reclaimedPorts: PORTS
     }, null, 2));
   } catch (error) {
+    let windowsAutostartEvidence = "";
+    if (windowsProductionRegistryWasClean) {
+      try {
+        const [runValue, approvalValueExists] = await Promise.all([
+          windowsLoginItemRunValue(smokeRoot),
+          windowsLoginItemApprovalValueExists(smokeRoot)
+        ]);
+        const expectedQuoted = `"${paths.executable}" ${ENGINE_BACKGROUND_ARGUMENT}`;
+        const expectedUnquoted = `${paths.executable} ${ENGINE_BACKGROUND_ARGUMENT}`;
+        windowsAutostartEvidence = `\nwindowsAutostartEvidence=${JSON.stringify({
+          runPresent: runValue !== null,
+          runMatchesExpected: runValue === expectedQuoted
+            || runValue === expectedUnquoted,
+          approvalValueExists
+        })}`;
+      } catch {
+        windowsAutostartEvidence =
+          "\nwindowsAutostartEvidence={\"probeFailed\":true}";
+      }
+    }
     const details = output
-      ? `\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`
-      : "";
+      ? `\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}${windowsAutostartEvidence}`
+      : windowsAutostartEvidence;
     smokeFailure = new Error(`native desktop package smoke 실패: ${safeError(error)}${details}`, {
       cause: error
     });

@@ -43,6 +43,32 @@ test("Windows login-item readback은 공백·Unicode 실행 경로를 하나의 
   );
 });
 
+test("Windows login-item 실패 증거는 상태를 보존하되 실행 경로를 노출하지 않는다", async () => {
+  const executablePath =
+    "C:\\Users\\홍길동\\키리누키 NSIS smoke\\installed\\Kirinuki.exe";
+  await assert.rejects(
+    ensureEngineAutostart({
+      target: "win32-x64",
+      executablePath,
+      loginItem: {
+        set: () => undefined,
+        get: () => ({
+          openAtLogin: false,
+          executableWillLaunchAtLogin: false,
+          launchItems: []
+        })
+      }
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /"executableWillLaunchAtLogin":false/u);
+      assert.match(error.message, /"launchItemCount":0/u);
+      assert.doesNotMatch(error.message, /홍길동|Kirinuki\.exe/u);
+      return true;
+    }
+  );
+});
+
 test("Linux XDG 자동실행은 정확한 background 명령을 원자적으로 기록하고 멱등 readback한다", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "키리누키 자동실행 test "));
   try {
