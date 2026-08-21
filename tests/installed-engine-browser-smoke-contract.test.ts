@@ -43,6 +43,9 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   assert.match(source, /launchPairingUrl\(exactPairingUrl/u);
   assert.match(source, /randomBytes\(32\)\.toString\("base64url"\)/u);
   assert.match(source, /ChromeDriver initial browser tab/u);
+  assert.match(source, /process\.platform === "darwin"/u);
+  assert.match(source, /cmd:\s*"Target\.createTarget"/u);
+  assert.match(source, /createdTarget\.targetId/u);
   assert.match(source, /cmd:\s*"Page\.navigate"/u);
   assert.match(source, /navigationAttempt < 2/u);
   assert.match(source, /navigation\.loaderId === undefined \|\| validLoaderId/u);
@@ -50,7 +53,7 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   assert.match(source, /probeEvents\.length > 0 \|\| observedPaths\.length > 0/u);
   assert.match(source, /retryWindow === probeWindow/u);
   assert.match(source, /navigationOutcomePromise/u);
-  assert.match(source, /Chrome navigation과 실제 browser pairing request가 모두 실패했습니다/u);
+  assert.match(source, /Chrome probe launch와 실제 browser pairing request가 모두 실패했습니다/u);
   assert.match(source, /nonce-bound HTTPS event is stronger proof/u);
   assert.match(source, /params:\s*\{ url: `\$\{KIRINUKI_PUBLIC_STUDIO_ORIGIN\}\/` \}/u);
   assert.match(source, /connect-src 'self' http:\/\/127\.0\.0\.1:4319/u);
@@ -60,7 +63,6 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   assert.match(source, /entry === "\/probe-event"\)\.length === 3/u);
   assert.doesNotMatch(source, /execute\/sync/u);
   assert.doesNotMatch(source, /cmd:\s*"Page\.stopLoading"/u);
-  assert.doesNotMatch(source, /cmd:\s*"Target\.createTarget"/u);
   assert.doesNotMatch(source, /\/window\/new/u);
   assert.doesNotMatch(source, /\/session\/\$\{sessionId\}\/url/u);
   assert.doesNotMatch(source, /\/session\/\$\{sessionId\}\/refresh/u);

@@ -139,7 +139,8 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
   assert.match(nsisInclude, /An incomplete kirinuki-engine protocol registration already exists/u);
   assert.match(nsisInclude, /URL:kirinuki-engine/u);
   assert.match(nsisInclude, /DeleteRegKey \/ifempty/u);
-  assert.match(installerSmoke, /protocolCommand\.toLowerCase\(\)[\s\S]*=== `[\s\S]*"%1"`\.toLowerCase\(\)/u);
+  assert.match(installerSmoke, /\^"\(\[\^"\\r\\n\]\+\)" "%1"\$/u);
+  assert.match(installerSmoke, /canonicalProtocolExecutable\.toLowerCase\(\)[\s\S]*canonicalInstalledExecutable\.toLowerCase\(\)/u);
   assert.match(installerSmoke, /protocolCommand: null/u);
   assert.match(installerSmoke, /protocolRootDefault: null/u);
   assert.match(installerSmoke, /protocolRootExists: false/u);

@@ -749,14 +749,34 @@ async function windowsNsisSmoke(
     const installedRegistry = await windowsEngineRegistrySnapshot();
     invariant(
       installedRegistry.approval === null
-        && installedRegistry.protocolCommand !== null
-        && installedRegistry.protocolCommand.toLowerCase()
-        === `"${executable}" "%1"`.toLowerCase()
-        && installedRegistry.protocolRootDefault === "URL:kirinuki-engine"
-        && installedRegistry.protocolRootExists
-        && installedRegistry.protocolUrlMarkerPresent
         && installedRegistry.run === null,
-      "Windows installer custom protocol command가 exact installed executable/URL argv에 묶이지 않았습니다."
+      "Windows silent installer가 앱을 실행하거나 startup 값을 만들었습니다."
+    );
+    invariant(
+      installedRegistry.protocolRootExists
+        && installedRegistry.protocolRootDefault === "URL:kirinuki-engine"
+        && installedRegistry.protocolUrlMarkerPresent,
+      "Windows installer custom protocol root/URL marker readback이 다릅니다."
+    );
+    invariant(
+      installedRegistry.protocolCommand !== null,
+      "Windows installer custom protocol command가 없습니다."
+    );
+    const protocolCommand = /^"([^"\r\n]+)" "%1"$/u.exec(
+      installedRegistry.protocolCommand
+    );
+    invariant(
+      protocolCommand !== null && path.win32.isAbsolute(protocolCommand[1]!),
+      "Windows installer custom protocol command 형식이 exact executable/URL argv가 아닙니다."
+    );
+    const [canonicalProtocolExecutable, canonicalInstalledExecutable] = await Promise.all([
+      realpath(protocolCommand[1]!),
+      realpath(executable)
+    ]);
+    invariant(
+      canonicalProtocolExecutable.toLowerCase()
+        === canonicalInstalledExecutable.toLowerCase(),
+      "Windows installer custom protocol command가 설치된 executable identity와 다릅니다."
     );
     const shortcutMetadata = await lstat(recoveryShortcut);
     invariant(

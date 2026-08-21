@@ -107,6 +107,10 @@ interface CdpPageNavigation {
   readonly loaderId?: unknown;
 }
 
+interface CdpTargetCreation {
+  readonly targetId?: unknown;
+}
+
 interface BrowserProbeResult {
   readonly origin?: unknown;
   readonly phase?: unknown;
@@ -687,7 +691,33 @@ export async function runInstalledEngineBrowserSmoke({
         && probeWindow.length <= 512,
       "ChromeDriver initial browser tab을 readback하지 못했습니다."
     );
-    const navigationOutcomePromise = (async () => {
+    const createMacProbeTarget = async () => {
+      // Chrome 152 on macOS repeatedly aborts navigation on ChromeDriver's
+      // renderer-swapping initial tab. Creating the target with its final URL
+      // makes target creation and first navigation one atomic browser action.
+      // The response is only structural evidence; the nonce-bound HTTPS event
+      // below remains the authoritative proof that the page actually loaded.
+      const createdTarget = await webdriver<CdpTargetCreation>(
+        "POST",
+        `/session/${sessionId}/goog/cdp/execute`,
+        {
+          cmd: "Target.createTarget",
+          params: {
+            background: false,
+            url: `${KIRINUKI_PUBLIC_STUDIO_ORIGIN}/`
+          }
+        },
+        10_000
+      );
+      invariant(
+        typeof createdTarget.targetId === "string"
+          && createdTarget.targetId.length >= 1
+          && createdTarget.targetId.length <= 256,
+        "macOS Chrome browser probe target을 만들지 못했습니다."
+      );
+      return { ok: true as const };
+    };
+    const navigateInitialProbeTab = async () => {
       for (let navigationAttempt = 0; navigationAttempt < 2; navigationAttempt += 1) {
         const navigation = await webdriver<CdpPageNavigation>(
           "POST",
@@ -742,7 +772,12 @@ export async function runInstalledEngineBrowserSmoke({
         );
       }
       throw new Error("Chrome browser probe navigation retry가 결과 없이 끝났습니다.");
-    })().catch((error: unknown) => ({ ok: false as const, error }));
+    };
+    const navigationOutcomePromise = (
+      process.platform === "darwin"
+        ? createMacProbeTarget()
+        : navigateInitialProbeTab()
+    ).catch((error: unknown) => ({ ok: false as const, error }));
     let requested: BrowserProbeEvent;
     try {
       requested = await waitForNextProbeEvent(
@@ -753,7 +788,7 @@ export async function runInstalledEngineBrowserSmoke({
       if (!navigationOutcome.ok) {
         throw new AggregateError(
           [navigationOutcome.error, eventError],
-          "Chrome navigation과 실제 browser pairing request가 모두 실패했습니다."
+          "Chrome probe launch와 실제 browser pairing request가 모두 실패했습니다."
         );
       }
       throw eventError;
