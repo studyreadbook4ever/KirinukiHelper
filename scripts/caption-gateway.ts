@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  webcrypto
+} from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
@@ -43,8 +49,54 @@ import type {
 import {
   KIRINUKI_GATEWAY_ORIGIN_BINDING,
   KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  isKirinukiLocalStudioOrigin
+  KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+  isKirinukiStudioOrigin
 } from "../src/lib/local-runtime-origin.js";
+import {
+  LOCAL_MEDIA_ENGINE_API_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_DEVELOPMENT_VERSION,
+  LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA,
+  LOCAL_MEDIA_ENGINE_PRODUCT,
+  isLocalMediaEngineVersion
+} from "../src/lib/local-media-engine-contract.js";
+import {
+  LOCAL_MEDIA_ENGINE_AUTHENTICATED_HEALTH_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_DEVICE_PROOF_SCHEMA,
+  LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_PAIRING_POLL_STATUS_SCHEMA,
+  LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
+  LOCAL_MEDIA_ENGINE_SESSION_ENCRYPTION_ALGORITHM,
+  LOCAL_MEDIA_ENGINE_SESSION_ENCRYPTION_SCHEMA,
+  LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+  LOCAL_MEDIA_ENGINE_SESSION_STATUS_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_SESSION_STATUS_SCHEMA,
+  LOCAL_MEDIA_ENGINE_SIGNATURE_ALGORITHM,
+  decryptLocalMediaEngineSessionRequest,
+  deriveLocalMediaEngineSharedKey,
+  encodeBase64Url,
+  encryptLocalMediaEngineSessionResponse,
+  localMediaEnginePublicKeyId,
+  localMediaEngineProofTranscript,
+  pairingResponseUnsignedPayload,
+  parseLocalMediaEngineEncryptedSessionRequest,
+  parseLocalMediaEnginePairingResponse,
+  verifyLocalMediaEngineSignature
+} from "../src/lib/local-media-engine-auth.js";
+import type {
+  LocalMediaEnginePairingResponse
+} from "../src/lib/local-media-engine-auth.js";
+import {
+  LOCAL_MEDIA_ENGINE_TRANSPORT_COUNTER_HEADER,
+  LOCAL_MEDIA_ENGINE_TRANSPORT_ID_HEADER,
+  LOCAL_MEDIA_ENGINE_TRANSPORT_RESPONSE_SCHEMA,
+  localMediaEngineTransportAad,
+  parseLocalMediaEngineTransportRequest
+} from "../src/lib/local-media-engine-transport.js";
+import {
+  canonicalSupportedVodSourceUrl
+} from "../src/lib/source-embed.js";
 import {
   SOURCE_PLATFORM_CHZZK,
   SOURCE_PLATFORM_SOOP,
@@ -70,6 +122,7 @@ import type {
   ChzzkVodArtifactIdentity,
   ChzzkVodArtifactVerification,
   ChzzkVodMaterializationRunner,
+  ChzzkVodObserverLeaseScheduler,
   ChzzkVodRunnerResult,
   ChzzkVodPublicStatus
 } from "./chzzk-vod-job-manager.js";
@@ -103,15 +156,23 @@ import type {
   ManagedVodHealthIdentity,
   VodRuntimeKind
 } from "./local-vod-runtime-core.js";
+import {
+  normalizeVodConsumerId
+} from "./vod-consumer-scope.js";
 
 export const CAPTION_AGENT_CAPABILITY_SCHEMA_ID =
   "chzzk-kirinuki-caption-agent/capability-v2";
+export const LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID =
+  "kirinuki-local-engine-session-request/v1";
 export const CAPTION_AGENT_SESSION_SCHEMA_ID =
-  "chzzk-kirinuki-caption-agent/session-v1";
+  "kirinuki-local-engine-session/v1";
 export const CAPTION_AGENT_HEALTH_SCHEMA_ID =
-  "chzzk-kirinuki-caption-agent/health-v1";
+  LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA;
+export { KIRINUKI_PUBLIC_STUDIO_ORIGIN };
 export const DEFAULT_CAPTION_GATEWAY_PORT = 4319;
 export const DEFAULT_PAIRING_LIMIT_PER_MINUTE = 12;
+export const LOCAL_MEDIA_ENGINE_PAIRING_RESPONSE_TTL_MS = 30_000;
+export const MAX_LOCAL_MEDIA_ENGINE_PAIRING_RESPONSES = 8;
 export const DEFAULT_MAX_CONCURRENT_CAPTION_PIPELINES = 1;
 export const MAX_CONCURRENT_CAPTION_PIPELINES = 2;
 export const CAPTION_PIPELINE_RETRY_AFTER_SECONDS = 1;
@@ -119,14 +180,20 @@ export const DEFAULT_CAPTION_REQUEST_BODY_TIMEOUT_MS = 15_000;
 export const MAX_CAPTION_REQUEST_BODY_TIMEOUT_MS = 60_000;
 export const MAX_CHZZK_VOD_REQUEST_BYTES = 256 * 1024;
 export const MAX_CHZZK_VOD_CACHE_PURGE_REQUEST_BYTES = 16 * 1024;
+export const MAX_LOCAL_ENGINE_SESSION_REQUEST_BYTES = 16 * 1024;
+export const LOCAL_ENGINE_CAPABILITY_ABSOLUTE_TTL_MS = 12 * 60 * 60 * 1_000;
+export const LOCAL_ENGINE_CAPABILITY_IDLE_TTL_MS = 30 * 60 * 1_000;
+export const MAX_LOCAL_ENGINE_CAPABILITIES = 256;
+export const LOCAL_ENGINE_SESSION_ENCRYPTION_TTL_MS = 30_000;
+export const MAX_LOCAL_ENGINE_SESSION_ENCRYPTION_GRANTS = 256;
 export const DEFAULT_GATEWAY_SHUTDOWN_GRACE_MS = 1_500;
 export const DEFAULT_GATEWAY_SHUTDOWN_DEADLINE_MS =
   EXTERNAL_PROCESS_KILL_GRACE_MS + 10_000;
 
 interface CaptionGatewayConfig {
-  agentToken: string;
-  autoPair: boolean;
   allowedOrigin: string;
+  backgroundStart: "ready" | "requires-approval";
+  engineVersion: string;
   port: number;
   maxBodyBytes: number;
   maxConcurrentCaptionPipelines: number;
@@ -139,6 +206,83 @@ interface CaptionGatewayConfig {
 interface PairingState {
   windowStartedAt: number;
   count: number;
+}
+
+const LOCAL_ENGINE_CAPABILITY_ACTIONS = Object.freeze([
+  "vod",
+  "captions",
+  "cache-delete"
+] as const);
+
+type LocalEngineCapabilityAction =
+  typeof LOCAL_ENGINE_CAPABILITY_ACTIONS[number];
+
+interface LocalEngineCapability {
+  token: string;
+  clientNonce: string;
+  projectId: string;
+  actions: ReadonlySet<LocalEngineCapabilityAction>;
+  sourceUrl?: string;
+  lastUsedAt: number;
+  expiresAt: number;
+  transportId?: string;
+}
+
+interface LocalEngineSessionEncryptionGrant {
+  readonly privateKey: CryptoKey;
+  readonly expiresAt: number;
+}
+
+interface LocalEngineEncryptedTransport {
+  readonly key: Uint8Array;
+  readonly clientNonce: string;
+  readonly expiresAt: number;
+  readonly seenCounters: Set<number>;
+  maximumCounter: number;
+}
+
+interface PendingLocalMediaEnginePairingResponse {
+  readonly response: Readonly<LocalMediaEnginePairingResponse>;
+  readonly expiresAt: number;
+}
+
+interface DecryptedControlRequest {
+  readonly token: string;
+  readonly mediaAccess: string | null;
+  readonly body: unknown;
+  readonly transportId: string;
+}
+
+interface TransportResponseContext {
+  readonly key: Uint8Array;
+  readonly transportId: string;
+  readonly counter: number;
+  readonly method: string;
+  readonly path: string;
+  readonly protocol: string;
+  readonly clientNonce: string;
+}
+
+const TRANSPORT_RESPONSE_CONTEXT = Symbol("kirinukiTransportResponse");
+
+interface LocalEngineSessionRequest {
+  schema:
+    | typeof LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+    | typeof LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL;
+  clientNonce: string;
+  projectId: string;
+  actions: readonly LocalEngineCapabilityAction[];
+  sourceUrl?: string;
+}
+
+export interface LocalMediaEngineDeviceProofSigner {
+  readonly algorithm: typeof LOCAL_MEDIA_ENGINE_SIGNATURE_ALGORITHM;
+  readonly keyId: string;
+  readonly sign: (transcript: Uint8Array) => Promise<string>;
+}
+
+interface MaterializationJobOwner {
+  projectId: string;
 }
 
 type PipelineRunner = (
@@ -258,11 +402,15 @@ export function createPlatformMaterializationRunner({
     onProgress
   }) => {
     const source = inferSourceIdentifiers(sourceUrl);
-    const strictSoopSourceClockIdentity = source.platform === SOURCE_PLATFORM_SOOP
+    const strictSoopSourceClockIdentity = (
+      source.platform === SOURCE_PLATFORM_SOOP
+      && sourceClockIdentity !== undefined
+    )
       ? normalizeSoopVodSourceClockIdentity(sourceClockIdentity)
       : null;
     if (
       (source.platform === SOURCE_PLATFORM_SOOP
+        && sourceClockIdentity !== undefined
         && (
           !strictSoopSourceClockIdentity
           || strictSoopSourceClockIdentity.contentId !== source.contentId
@@ -271,7 +419,7 @@ export function createPlatformMaterializationRunner({
         && sourceClockIdentity !== undefined)
     ) {
       throw new TypeError(
-        "SOOP 공식 VOD part 시계 증명이 없거나 현재 원본과 맞지 않습니다."
+        "제공된 SOOP 공식 VOD part 시계 증명이 현재 원본과 맞지 않습니다."
       );
     }
     let result: NativeVodMaterializationResult;
@@ -404,23 +552,6 @@ interface HttpByteRange {
   end: number;
 }
 
-function requiredServerValue(value: unknown, name: string): string {
-  const normalized = String(value || "").trim();
-  if (!normalized) {
-    throw new CaptionGatewayError(`${name} 환경 변수가 필요합니다.`, {
-      code: "MISSING_CONFIGURATION",
-      httpStatus: 500
-    });
-  }
-  return normalized;
-}
-
-function enabledEnvironmentFlag(value: unknown): boolean {
-  return ["1", "true", "yes", "on"].includes(
-    String(value || "").trim().toLowerCase()
-  );
-}
-
 const VOD_RUNTIME_ENVIRONMENT_KEYS = Object.freeze([
   "KIRINUKI_VOD_RUNTIME_SCHEMA",
   "KIRINUKI_VOD_RUNTIME_KIND",
@@ -481,16 +612,14 @@ export function resolveCaptionGatewayConfig(
     allowMissingProviderConfig: true
   });
   const configuredOriginValue = env.KIRINUKI_ALLOWED_ORIGIN;
-  const allowedOrigin = requiredServerValue(
-    configuredOriginValue,
-    "KIRINUKI_ALLOWED_ORIGIN"
-  );
+  const allowedOrigin = configuredOriginValue === undefined
+    ? KIRINUKI_LOCAL_STUDIO_ORIGIN
+    : configuredOriginValue;
   if (
-    configuredOriginValue !== allowedOrigin
-    || !isKirinukiLocalStudioOrigin(allowedOrigin)
+    !isKirinukiStudioOrigin(allowedOrigin)
   ) {
     throw new CaptionGatewayError(
-      `KIRINUKI_ALLOWED_ORIGIN은 설치된 Kirinuki 앱 Origin(${KIRINUKI_LOCAL_STUDIO_ORIGIN})이어야 합니다.`,
+      `KIRINUKI_ALLOWED_ORIGIN은 ${KIRINUKI_LOCAL_STUDIO_ORIGIN} 또는 ${KIRINUKI_PUBLIC_STUDIO_ORIGIN}이어야 합니다.`,
       {
         code: "INVALID_CONFIGURATION",
         httpStatus: 500
@@ -552,14 +681,29 @@ export function resolveCaptionGatewayConfig(
   const requestedBodyBytes = Number(env.KIRINUKI_MAX_BODY_BYTES);
   const minimumBodyBytes =
     Math.ceil(pipeline.maxAudioBytes * 4 / 3) + 1_048_576;
-  const autoPair = enabledEnvironmentFlag(env.KIRINUKI_AUTO_PAIR);
-  const configuredAgentToken = String(
-    env.KIRINUKI_AGENT_TOKEN || ""
-  ).trim();
-  if (!autoPair && !configuredAgentToken) {
-    requiredServerValue(configuredAgentToken, "KIRINUKI_AGENT_TOKEN");
-  }
   const vodRuntime = resolveManagedVodRuntimeIdentity(env);
+  const engineVersion = env.KIRINUKI_LOCAL_ENGINE_VERSION
+    ?? LOCAL_MEDIA_ENGINE_DEVELOPMENT_VERSION;
+  if (!isLocalMediaEngineVersion(engineVersion)) {
+    throw new CaptionGatewayError(
+      "KIRINUKI_LOCAL_ENGINE_VERSION이 올바른 release identity가 아닙니다.",
+      {
+        code: "INVALID_CONFIGURATION",
+        httpStatus: 500
+      }
+    );
+  }
+  const backgroundStart = env.KIRINUKI_LOCAL_ENGINE_BACKGROUND_START
+    ?? "ready";
+  if (!["ready", "requires-approval"].includes(backgroundStart)) {
+    throw new CaptionGatewayError(
+      "KIRINUKI_LOCAL_ENGINE_BACKGROUND_START 상태가 올바르지 않습니다.",
+      {
+        code: "INVALID_CONFIGURATION",
+        httpStatus: 500
+      }
+    );
+  }
   const configuredVodStateDir = String(
     env.KIRINUKI_VOD_STATE_DIR || ""
   ).trim();
@@ -582,9 +726,9 @@ export function resolveCaptionGatewayConfig(
     );
   }
   return {
-    agentToken: configuredAgentToken,
-    autoPair,
     allowedOrigin,
+    backgroundStart: backgroundStart as CaptionGatewayConfig["backgroundStart"],
+    engineVersion,
     port: portValue,
     maxBodyBytes: Number.isFinite(requestedBodyBytes)
       && requestedBodyBytes > 0
@@ -600,24 +744,237 @@ export function resolveCaptionGatewayConfig(
   };
 }
 
-function exactBearerToken(
-  authorization: unknown,
-  expectedToken: string
-): boolean {
-  const match = /^Bearer ([^\s]+)$/iu.exec(String(authorization || ""));
-  if (!match) {
+function rawHeaderValues(
+  request: Pick<IncomingMessage, "rawHeaders">,
+  headerName: string
+): string[] {
+  const normalizedName = headerName.toLowerCase();
+  const values: string[] = [];
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    if (request.rawHeaders[index]?.toLowerCase() === normalizedName) {
+      values.push(request.rawHeaders[index + 1] || "");
+    }
+  }
+  return values;
+}
+
+function singleRawHeaderValue(
+  request: Pick<IncomingMessage, "rawHeaders">,
+  headerName: string
+): string | null {
+  const values = rawHeaderValues(request, headerName);
+  return values.length === 1 ? values[0] || null : null;
+}
+
+function validGatewayAuthority(request: IncomingMessage): boolean {
+  const localPort = request.socket.localPort;
+  if (!Number.isInteger(localPort) || !localPort) {
     return false;
   }
-  const suppliedToken = match[1];
-  if (suppliedToken === undefined) {
+  const hosts = rawHeaderValues(request, "host");
+  if (
+    hosts.length !== 1
+    || hosts[0] !== `127.0.0.1:${localPort}`
+  ) {
     return false;
   }
-  const supplied = Buffer.from(suppliedToken);
-  const expected = Buffer.from(expectedToken);
-  return (
-    supplied.length === expected.length
-    && timingSafeEqual(supplied, expected)
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    const name = String(request.rawHeaders[index] || "").toLowerCase();
+    if (name === "forwarded" || name.startsWith("x-forwarded-")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function exactBase64UrlBytes(value: unknown, byteLength: number): string | null {
+  if (
+    typeof value !== "string"
+    || !/^[a-zA-Z0-9_-]+$/u.test(value)
+  ) {
+    return null;
+  }
+  try {
+    const decoded = Buffer.from(value, "base64url");
+    return decoded.byteLength === byteLength
+      && decoded.toString("base64url") === value
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function requestBearerToken(request: IncomingMessage): string | null {
+  const authorization = singleRawHeaderValue(request, "authorization");
+  const match = authorization
+    ? /^Bearer ([^\s]+)$/u.exec(authorization)
+    : null;
+  return exactBase64UrlBytes(match?.[1], 32);
+}
+
+function requestClientNonce(request: IncomingMessage): string | null {
+  return exactBase64UrlBytes(
+    singleRawHeaderValue(request, "x-kirinuki-client-nonce"),
+    32
   );
+}
+
+function requestServerChallenge(request: IncomingMessage): string | null {
+  return exactBase64UrlBytes(
+    singleRawHeaderValue(
+      request,
+      LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER.toLowerCase()
+    ),
+    32
+  );
+}
+
+function normalizeCapabilityProjectId(value: unknown): string {
+  const projectId = normalizeVodConsumerId(value);
+  if (projectId !== value) {
+    throw new TypeError("로컬 엔진 세션 프로젝트 ID가 올바르지 않습니다.");
+  }
+  return projectId;
+}
+
+function normalizeCapabilitySourceUrl(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    typeof value !== "string"
+    || !value
+    || value.trim() !== value
+    || value.length > 8_192
+    || /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new TypeError("로컬 엔진 세션 원본 주소가 올바르지 않습니다.");
+  }
+  const canonicalUrl = canonicalSupportedVodSourceUrl(value);
+  if (!canonicalUrl || canonicalUrl !== value) {
+    throw new TypeError(
+      "로컬 엔진 세션 원본 주소는 지원하는 VOD의 정규 URL이어야 합니다."
+    );
+  }
+  return canonicalUrl;
+}
+
+function normalizeLocalEngineSessionRequest(
+  value: unknown,
+  expectedSchema:
+    | typeof LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+    | typeof LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL
+): LocalEngineSessionRequest {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+  ) {
+    throw new TypeError("로컬 엔진 세션 요청이 올바르지 않습니다.");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.schema !== expectedSchema
+    || Object.keys(record).some((key) => ![
+      "schema",
+      "clientNonce",
+      "projectId",
+      "actions",
+      "sourceUrl"
+    ].includes(key))
+  ) {
+    throw new TypeError("로컬 엔진 세션 요청 버전이 맞지 않습니다.");
+  }
+  const clientNonce = exactBase64UrlBytes(record.clientNonce, 32);
+  if (!clientNonce) {
+    throw new TypeError("로컬 엔진 문서 nonce가 올바르지 않습니다.");
+  }
+  if (
+    !Array.isArray(record.actions)
+    || record.actions.length === 0
+    || record.actions.length > LOCAL_ENGINE_CAPABILITY_ACTIONS.length
+    || record.actions.some((action) => (
+      typeof action !== "string"
+      || !LOCAL_ENGINE_CAPABILITY_ACTIONS.includes(
+        action as LocalEngineCapabilityAction
+      )
+    ))
+    || new Set(record.actions).size !== record.actions.length
+  ) {
+    throw new TypeError("로컬 엔진 세션 작업 범위가 올바르지 않습니다.");
+  }
+  const sourceUrl = record.sourceUrl === undefined
+    ? undefined
+    : normalizeCapabilitySourceUrl(record.sourceUrl);
+  if (record.actions.includes("vod") && sourceUrl === undefined) {
+    throw new TypeError(
+      "VOD 작업 capability에는 지원하는 VOD의 정규 원본 주소가 필요합니다."
+    );
+  }
+  if (expectedSchema === LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL) {
+    const expectedActions: readonly LocalEngineCapabilityAction[] =
+      sourceUrl === undefined
+        ? ["captions"]
+        : ["vod", "cache-delete"];
+    if (JSON.stringify(record.actions) !== JSON.stringify(expectedActions)) {
+      throw new TypeError(
+        sourceUrl === undefined
+          ? "자막 session은 captions 최소 권한만 요청해야 합니다."
+          : "VOD session은 vod/cache-delete 최소 권한만 요청해야 합니다."
+      );
+    }
+  }
+  return {
+    schema: expectedSchema,
+    clientNonce,
+    projectId: normalizeCapabilityProjectId(record.projectId),
+    actions: record.actions as LocalEngineCapabilityAction[],
+    ...(sourceUrl === undefined ? {} : { sourceUrl })
+  };
+}
+
+const CORS_REQUEST_HEADERS = Object.freeze([
+  "authorization",
+  "content-type",
+  "x-kirinuki-client-nonce",
+  "x-kirinuki-media-access",
+  "x-kirinuki-protocol",
+  LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER.toLowerCase(),
+  LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER.toLowerCase(),
+  LOCAL_MEDIA_ENGINE_TRANSPORT_ID_HEADER.toLowerCase(),
+  LOCAL_MEDIA_ENGINE_TRANSPORT_COUNTER_HEADER.toLowerCase()
+] as const);
+
+function validCorsPreflight(
+  request: IncomingMessage,
+  allowedMethods: readonly string[]
+): boolean {
+  const requestedMethod = String(
+    request.headers["access-control-request-method"] || ""
+  ).toUpperCase();
+  if (!allowedMethods.includes(requestedMethod)) {
+    return false;
+  }
+  const requestedHeadersValue = String(
+    request.headers["access-control-request-headers"] || ""
+  );
+  const requestedHeaders = requestedHeadersValue
+    ? requestedHeadersValue.split(",").map((value) => value.trim().toLowerCase())
+    : [];
+  if (
+    requestedHeaders.some((value) => !value)
+    || new Set(requestedHeaders).size !== requestedHeaders.length
+    || requestedHeaders.some((value) => !CORS_REQUEST_HEADERS.includes(
+      value as typeof CORS_REQUEST_HEADERS[number]
+    ))
+  ) {
+    return false;
+  }
+  const privateNetwork = request.headers[
+    "access-control-request-private-network"
+  ];
+  return privateNetwork === undefined || privateNetwork === "true";
 }
 
 function setCorsHeaders(
@@ -639,8 +996,13 @@ function setCorsHeaders(
     [
       "Authorization",
       "Content-Type",
+      "X-Kirinuki-Client-Nonce",
       "X-Kirinuki-Media-Access",
-      "X-Kirinuki-Protocol"
+      "X-Kirinuki-Protocol",
+      LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
+      LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+      LOCAL_MEDIA_ENGINE_TRANSPORT_ID_HEADER,
+      LOCAL_MEDIA_ENGINE_TRANSPORT_COUNTER_HEADER
     ].join(", ")
   );
   response.setHeader("access-control-max-age", "600");
@@ -680,7 +1042,47 @@ function sendJson(
   statusCode: number,
   value: unknown
 ): void {
-  const body = JSON.stringify(value);
+  const plaintext = JSON.stringify(value);
+  const transportContext = (
+    response as ServerResponse & {
+      [TRANSPORT_RESPONSE_CONTEXT]?: Readonly<TransportResponseContext>;
+    }
+  )[TRANSPORT_RESPONSE_CONTEXT];
+  let body = plaintext;
+  if (transportContext) {
+    const ivBytes = randomBytes(12);
+    const iv = ivBytes.toString("base64url");
+    const aad = localMediaEngineTransportAad({
+      direction: "response",
+      transportId: transportContext.transportId,
+      counter: transportContext.counter,
+      method: transportContext.method,
+      path: transportContext.path,
+      protocol: transportContext.protocol,
+      clientNonce: transportContext.clientNonce,
+      iv,
+      status: statusCode
+    });
+    const cipher = createCipheriv(
+      "aes-256-gcm",
+      Buffer.from(transportContext.key),
+      ivBytes,
+      { authTagLength: 16 }
+    );
+    cipher.setAAD(Buffer.from(aad));
+    const ciphertext = Buffer.concat([
+      cipher.update(plaintext, "utf8"),
+      cipher.final(),
+      cipher.getAuthTag()
+    ]);
+    body = JSON.stringify({
+      schema: LOCAL_MEDIA_ENGINE_TRANSPORT_RESPONSE_SCHEMA,
+      transportId: transportContext.transportId,
+      counter: transportContext.counter,
+      iv,
+      ciphertext: ciphertext.toString("base64url")
+    });
+  }
   response.statusCode = statusCode;
   response.setHeader("content-type", "application/json; charset=utf-8");
   response.setHeader("cache-control", "no-store");
@@ -733,7 +1135,7 @@ function sendGatewayClosing(
   setCorsHeaders(
     request,
     response,
-    String(request.headers.origin || ""),
+    singleRawHeaderValue(request, "origin") || "",
     allowedOrigin
   );
   sendJson(response, 503, {
@@ -1285,31 +1687,48 @@ function capabilityResponse(config: CaptionGatewayConfig) {
 
 export function createCaptionGatewayServer({
   env = process.env,
+  deviceProofSigner,
   fetchImpl = globalThis.fetch,
   pipelineRunner = runCaptionPipeline,
   materializationRunner,
   chzzkMaterializer = materializeChzzkVod,
   externalMaterializer = materializeExternalVod,
+  vodObserverLeaseTtlMs,
+  vodObserverLeaseScheduler,
   randomBytesImpl = randomBytes,
   now = Date.now
 }: {
   env?: NodeJS.ProcessEnv;
+  deviceProofSigner?: Readonly<LocalMediaEngineDeviceProofSigner>;
   fetchImpl?: typeof globalThis.fetch;
   pipelineRunner?: PipelineRunner;
   materializationRunner?: ChzzkVodMaterializationRunner;
   chzzkMaterializer?: ChzzkVodMaterializerImplementation;
   externalMaterializer?: ExternalVodMaterializerImplementation;
+  vodObserverLeaseTtlMs?: number;
+  vodObserverLeaseScheduler?: ChzzkVodObserverLeaseScheduler;
   randomBytesImpl?: typeof randomBytes;
   now?: () => number;
 } = {}) {
-  const resolvedConfig = resolveCaptionGatewayConfig(env);
-  const generatedToken = resolvedConfig.agentToken
-    ? ""
-    : randomBytesImpl(32).toString("base64url");
-  const config = {
-    ...resolvedConfig,
-    agentToken: resolvedConfig.agentToken || generatedToken
-  };
+  const config = resolveCaptionGatewayConfig(env);
+  if (
+    deviceProofSigner !== undefined
+    && (
+      deviceProofSigner.algorithm !== LOCAL_MEDIA_ENGINE_SIGNATURE_ALGORITHM
+      || exactBase64UrlBytes(deviceProofSigner.keyId, 32) === null
+      || typeof deviceProofSigner.sign !== "function"
+    )
+  ) {
+    throw new CaptionGatewayError(
+      "로컬 엔진 device proof signer가 올바르지 않습니다.",
+      {
+        code: "INVALID_CONFIGURATION",
+        httpStatus: 500
+      }
+    );
+  }
+  const authenticatedPublicMode =
+    config.allowedOrigin === KIRINUKI_PUBLIC_STUDIO_ORIGIN;
   const pairingState = {
     windowStartedAt: now(),
     count: 0
@@ -1322,6 +1741,12 @@ export function createCaptionGatewayServer({
   const chzzkVodJobs = createChzzkVodJobManager({
     runner: selectedMaterializationRunner,
     ...(config.vodStateDir ? { artifactRoot: config.vodStateDir } : {}),
+    ...(vodObserverLeaseTtlMs === undefined
+      ? {}
+      : { observerLeaseTtlMs: vodObserverLeaseTtlMs }),
+    ...(vodObserverLeaseScheduler === undefined
+      ? {}
+      : { observerLeaseScheduler: vodObserverLeaseScheduler }),
     randomBytesImpl,
     now
   });
@@ -1332,12 +1757,621 @@ export function createCaptionGatewayServer({
   const activeHandlers = new Set<Promise<void>>();
   const sockets = new Set<Socket>();
   const gatewayShutdownController = new AbortController();
+  const capabilitiesByToken = new Map<string, LocalEngineCapability>();
+  const tokenByClientNonce = new Map<string, string>();
+  const materializationJobOwners = new Map<string, MaterializationJobOwner>();
+  const sessionEncryptionGrants = new Map<
+    string,
+    LocalEngineSessionEncryptionGrant
+  >();
+  const pendingPairingResponses = new Map<
+    string,
+    PendingLocalMediaEnginePairingResponse
+  >();
+  const encryptedTransports = new Map<string, LocalEngineEncryptedTransport>();
+  const decryptedControlRequests = new WeakMap<
+    IncomingMessage,
+    DecryptedControlRequest
+  >();
+
+  const pruneEncryptedState = (timestamp: number): void => {
+    for (const [state, pending] of pendingPairingResponses) {
+      if (timestamp >= pending.expiresAt) {
+        pendingPairingResponses.delete(state);
+      }
+    }
+    for (const [grantId, grant] of sessionEncryptionGrants) {
+      if (timestamp >= grant.expiresAt) {
+        sessionEncryptionGrants.delete(grantId);
+      }
+    }
+    for (const [transportId, transport] of encryptedTransports) {
+      if (timestamp >= transport.expiresAt) {
+        transport.key.fill(0);
+        encryptedTransports.delete(transportId);
+      }
+    }
+  };
+
+  const publishPairingResponse = async (
+    value: Readonly<LocalMediaEnginePairingResponse>
+  ): Promise<void> => {
+    const response = parseLocalMediaEnginePairingResponse(value);
+    const timestamp = now();
+    pruneEncryptedState(timestamp);
+    const issuedAt = response ? Date.parse(response.issuedAt) : Number.NaN;
+    if (
+      !response
+      || !deviceProofSigner
+      || response.keyId !== deviceProofSigner.keyId
+      || response.engineVersion !== config.engineVersion
+      || !Number.isFinite(timestamp)
+      || issuedAt > timestamp + 5_000
+      || timestamp - issuedAt > LOCAL_MEDIA_ENGINE_PAIRING_RESPONSE_TTL_MS
+      || pendingPairingResponses.has(response.state)
+      || pendingPairingResponses.size >= MAX_LOCAL_MEDIA_ENGINE_PAIRING_RESPONSES
+      || await localMediaEnginePublicKeyId(response.publicKeySpki)
+        !== response.keyId
+      || !await verifyLocalMediaEngineSignature({
+        publicKeySpki: response.publicKeySpki,
+        signature: response.signature,
+        transcript: localMediaEngineProofTranscript({
+          kind: "pairing",
+          challenge: response.challenge,
+          instanceNonce: "",
+          requestBinding: response.state,
+          payload: pairingResponseUnsignedPayload(response)
+        })
+      })
+    ) {
+      throw new TypeError("게시할 로컬 엔진 pairing response가 올바르지 않습니다.");
+    }
+    pendingPairingResponses.set(response.state, Object.freeze({
+      response,
+      expiresAt: issuedAt + LOCAL_MEDIA_ENGINE_PAIRING_RESPONSE_TTL_MS
+    }));
+  };
+
+  const createSessionEncryptionOffer = async () => {
+    const timestamp = now();
+    pruneEncryptedState(timestamp);
+    if (
+      sessionEncryptionGrants.size
+      >= MAX_LOCAL_ENGINE_SESSION_ENCRYPTION_GRANTS
+    ) {
+      throw new CaptionGatewayError(
+        "활성 session encryption grant가 너무 많습니다.",
+        { code: "SESSION_ENCRYPTION_LIMIT_REACHED", httpStatus: 429 }
+      );
+    }
+    let grantId = "";
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = randomBytesImpl(32).toString("base64url");
+      if (!sessionEncryptionGrants.has(candidate)) {
+        grantId = candidate;
+        break;
+      }
+    }
+    if (!grantId) {
+      throw new CaptionGatewayError(
+        "session encryption grant identity를 만들지 못했습니다.",
+        { code: "SESSION_ENCRYPTION_FAILED", httpStatus: 500 }
+      );
+    }
+    const keys = await webcrypto.subtle.generateKey(
+      { name: "ECDH", namedCurve: "P-256" },
+      true,
+      ["deriveBits"]
+    );
+    const serverPublicKey = encodeBase64Url(new Uint8Array(
+      await webcrypto.subtle.exportKey("raw", keys.publicKey)
+    ));
+    const expiresAt = timestamp + LOCAL_ENGINE_SESSION_ENCRYPTION_TTL_MS;
+    sessionEncryptionGrants.set(grantId, {
+      privateKey: keys.privateKey,
+      expiresAt
+    });
+    return Object.freeze({
+      schema: LOCAL_MEDIA_ENGINE_SESSION_ENCRYPTION_SCHEMA,
+      algorithm: LOCAL_MEDIA_ENGINE_SESSION_ENCRYPTION_ALGORITHM,
+      grantId,
+      serverPublicKey,
+      expiresAt: new Date(expiresAt).toISOString()
+    });
+  };
+
+  const signedDeviceProof = async ({
+    kind,
+    challenge,
+    payload,
+    requestBinding = ""
+  }: {
+    readonly kind: "health" | "session";
+    readonly challenge: string;
+    readonly payload: unknown;
+    readonly requestBinding?: string;
+  }) => {
+    const instanceNonce = config.vodRuntime?.instanceNonce;
+    if (!deviceProofSigner || !instanceNonce) {
+      throw new CaptionGatewayError(
+        "설치 identity와 관리형 runtime nonce가 준비되지 않았습니다.",
+        {
+          code: "DEVICE_PROOF_UNAVAILABLE",
+          httpStatus: 503
+        }
+      );
+    }
+    const signature = await deviceProofSigner.sign(
+      localMediaEngineProofTranscript({
+        kind,
+        challenge,
+        instanceNonce,
+        requestBinding,
+        payload
+      })
+    );
+    if (exactBase64UrlBytes(signature, 64) === null) {
+      throw new CaptionGatewayError(
+        "설치 identity가 올바른 device proof를 만들지 못했습니다.",
+        {
+          code: "DEVICE_PROOF_FAILED",
+          httpStatus: 500
+        }
+      );
+    }
+    return Object.freeze({
+      schema: LOCAL_MEDIA_ENGINE_DEVICE_PROOF_SCHEMA,
+      algorithm: LOCAL_MEDIA_ENGINE_SIGNATURE_ALGORITHM,
+      keyId: deviceProofSigner.keyId,
+      challenge,
+      instanceNonce,
+      signature
+    });
+  };
+
+  const removeCapability = (capability: LocalEngineCapability): void => {
+    capabilitiesByToken.delete(capability.token);
+    if (tokenByClientNonce.get(capability.clientNonce) === capability.token) {
+      tokenByClientNonce.delete(capability.clientNonce);
+    }
+    if (capability.transportId) {
+      const transport = encryptedTransports.get(capability.transportId);
+      transport?.key.fill(0);
+      encryptedTransports.delete(capability.transportId);
+    }
+  };
+  const pruneCapabilities = (timestamp: number): void => {
+    for (const capability of capabilitiesByToken.values()) {
+      if (
+        timestamp >= capability.expiresAt
+        || timestamp - capability.lastUsedAt
+          >= LOCAL_ENGINE_CAPABILITY_IDLE_TTL_MS
+      ) {
+        removeCapability(capability);
+      }
+    }
+  };
+  const freshCapabilityToken = (): string => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const token = exactBase64UrlBytes(
+        randomBytesImpl(32).toString("base64url"),
+        32
+      );
+      if (token && !capabilitiesByToken.has(token)) {
+        return token;
+      }
+    }
+    throw new CaptionGatewayError(
+      "로컬 엔진 문서 capability를 안전하게 만들지 못했습니다.",
+      {
+        code: "CAPABILITY_GENERATION_FAILED",
+        httpStatus: 500
+      }
+    );
+  };
+  const issueCapability = (
+    sessionRequest: LocalEngineSessionRequest,
+    timestamp: number,
+    transportId?: string
+  ): LocalEngineCapability => {
+    pruneCapabilities(timestamp);
+    if (tokenByClientNonce.has(sessionRequest.clientNonce)) {
+      throw new CaptionGatewayError(
+        "이미 사용한 로컬 엔진 문서 nonce입니다.",
+        {
+          code: "CLIENT_NONCE_REPLAYED",
+          httpStatus: 409
+        }
+      );
+    }
+    if (capabilitiesByToken.size >= MAX_LOCAL_ENGINE_CAPABILITIES) {
+      throw new CaptionGatewayError(
+        "활성 로컬 엔진 문서가 너무 많습니다.",
+        {
+          code: "CAPABILITY_LIMIT_REACHED",
+          httpStatus: 429
+        }
+      );
+    }
+    const token = freshCapabilityToken();
+    const capability: LocalEngineCapability = {
+      token,
+      clientNonce: sessionRequest.clientNonce,
+      projectId: sessionRequest.projectId,
+      actions: new Set(sessionRequest.actions),
+      ...(sessionRequest.sourceUrl === undefined
+        ? {}
+        : { sourceUrl: sessionRequest.sourceUrl }),
+      lastUsedAt: timestamp,
+      expiresAt: timestamp + LOCAL_ENGINE_CAPABILITY_ABSOLUTE_TTL_MS,
+      ...(transportId === undefined ? {} : { transportId })
+    };
+    capabilitiesByToken.set(token, capability);
+    tokenByClientNonce.set(capability.clientNonce, token);
+    return capability;
+  };
+  const authenticateCapabilityIdentity = (
+    request: IncomingMessage,
+    response: ServerResponse
+  ): LocalEngineCapability | null => {
+    const timestamp = now();
+    pruneCapabilities(timestamp);
+    const decryptedControl = decryptedControlRequests.get(request);
+    const token = decryptedControl?.token ?? requestBearerToken(request);
+    const clientNonce = requestClientNonce(request);
+    const capability = token ? capabilitiesByToken.get(token) : undefined;
+    if (
+      !capability
+      || !clientNonce
+      || capability.clientNonce !== clientNonce
+      || (
+        capability.transportId !== undefined
+        && capability.transportId !== decryptedControl?.transportId
+      )
+      || (
+        authenticatedPublicMode
+        && capability.transportId === undefined
+      )
+    ) {
+      response.setHeader("www-authenticate", "Bearer");
+      rejectJson(request, response, 401, {
+        error: {
+          code: "UNAUTHORIZED",
+          message: "현재 문서의 메모리 capability 인증이 필요합니다."
+        }
+      });
+      return null;
+    }
+    return capability;
+  };
+  const authenticateCapability = (
+    request: IncomingMessage,
+    response: ServerResponse,
+    action: LocalEngineCapabilityAction
+  ): LocalEngineCapability | null => {
+    const capability = authenticateCapabilityIdentity(request, response);
+    if (!capability) {
+      return null;
+    }
+    if (!capability.actions.has(action)) {
+      rejectJson(request, response, 403, {
+        error: {
+          code: "CAPABILITY_ACTION_NOT_ALLOWED",
+          message: "현재 문서에 이 로컬 엔진 작업 권한이 없습니다."
+        }
+      });
+      return null;
+    }
+    return capability;
+  };
+  const touchCapability = (capability: LocalEngineCapability): void => {
+    capability.lastUsedAt = now();
+  };
+  const readControlJsonRequest = async (
+    request: IncomingMessage,
+    maximumBytes: number,
+    options?: Parameters<typeof readJsonRequest>[2]
+  ): Promise<unknown> => {
+    const decrypted = decryptedControlRequests.get(request);
+    return decrypted
+      ? decrypted.body
+      : readJsonRequest(request, maximumBytes, options);
+  };
+  const requestMediaAccess = (request: IncomingMessage): string | null => (
+    decryptedControlRequests.get(request)?.mediaAccess
+      ?? exactBase64UrlBytes(
+        request.headers["x-kirinuki-media-access"],
+        32
+      )
+  );
+  const authorizeCapabilityProject = (
+    request: IncomingMessage,
+    response: ServerResponse,
+    capability: LocalEngineCapability,
+    projectId: unknown,
+    sourceUrl?: unknown,
+    enforceSource: boolean = false
+  ): boolean => {
+    let normalizedProjectId: string;
+    try {
+      normalizedProjectId = normalizeCapabilityProjectId(projectId);
+    } catch {
+      rejectJson(request, response, 403, {
+        error: {
+          code: "CAPABILITY_SCOPE_MISMATCH",
+          message: "현재 문서와 요청 프로젝트가 일치하지 않습니다."
+        }
+      });
+      return false;
+    }
+    if (
+      capability.projectId !== normalizedProjectId
+      || (
+        enforceSource
+        && (
+          capability.sourceUrl === undefined
+          || capability.sourceUrl !== sourceUrl
+        )
+      )
+    ) {
+      rejectJson(request, response, 403, {
+        error: {
+          code: "CAPABILITY_SCOPE_MISMATCH",
+          message: "현재 문서의 프로젝트 또는 원본 범위를 벗어난 요청입니다."
+        }
+      });
+      return false;
+    }
+    const timestamp = now();
+    if (
+      timestamp >= capability.expiresAt
+      || timestamp - capability.lastUsedAt
+        >= LOCAL_ENGINE_CAPABILITY_IDLE_TTL_MS
+    ) {
+      removeCapability(capability);
+      response.setHeader("www-authenticate", "Bearer");
+      rejectJson(request, response, 401, {
+        error: {
+          code: "CAPABILITY_EXPIRED",
+          message: "현재 문서의 로컬 엔진 연결이 만료되었습니다."
+        }
+      });
+      return false;
+    }
+    capability.lastUsedAt = timestamp;
+    return true;
+  };
+  const rememberMaterializationOwner = (
+    jobId: string,
+    capability: LocalEngineCapability
+  ): void => {
+    const current = materializationJobOwners.get(jobId);
+    if (current && current.projectId !== capability.projectId) {
+      throw new CaptionGatewayError(
+        "VOD 작업의 문서 소유권이 일치하지 않습니다.",
+        {
+          code: "CAPABILITY_SCOPE_MISMATCH",
+          httpStatus: 403
+        }
+      );
+    }
+    if (!current) {
+      materializationJobOwners.set(jobId, {
+        projectId: capability.projectId
+      });
+    }
+    while (materializationJobOwners.size > 256) {
+      const oldestJobId = materializationJobOwners.keys().next().value;
+      if (typeof oldestJobId !== "string") {
+        break;
+      }
+      materializationJobOwners.delete(oldestJobId);
+    }
+  };
+  const materializationOwnerProject = (
+    jobId: string
+  ): string | null => {
+    const remembered = materializationJobOwners.get(jobId);
+    if (remembered) {
+      return remembered.projectId;
+    }
+    const job = chzzkVodJobs.get(jobId);
+    return job?.request.consumerId || null;
+  };
+  const decryptControlRequest = async ({
+    request,
+    response,
+    requestUrl,
+    protocol,
+    maximumPlaintextBytes
+  }: {
+    readonly request: IncomingMessage;
+    readonly response: ServerResponse;
+    readonly requestUrl: URL;
+    readonly protocol: string;
+    readonly maximumPlaintextBytes: number;
+  }): Promise<boolean> => {
+    const clientNonce = requestClientNonce(request);
+    const transportId = singleRawHeaderValue(
+      request,
+      LOCAL_MEDIA_ENGINE_TRANSPORT_ID_HEADER.toLowerCase()
+    );
+    const counterText = singleRawHeaderValue(
+      request,
+      LOCAL_MEDIA_ENGINE_TRANSPORT_COUNTER_HEADER.toLowerCase()
+    );
+    const counter = counterText && /^[1-9][0-9]{0,15}$/u.test(counterText)
+      ? Number(counterText)
+      : Number.NaN;
+    if (
+      !clientNonce
+      || exactBase64UrlBytes(transportId, 32) === null
+      || !Number.isSafeInteger(counter)
+    ) {
+      rejectJson(request, response, 401, {
+        error: {
+          code: "ENCRYPTED_TRANSPORT_REQUIRED",
+          message: "현재 문서의 encrypted transport가 필요합니다."
+        }
+      });
+      return false;
+    }
+    const timestamp = now();
+    pruneEncryptedState(timestamp);
+    const transport = encryptedTransports.get(transportId!);
+    if (
+      !transport
+      || transport.clientNonce !== clientNonce
+      || counter > transport.maximumCounter + 1_024
+      || counter <= transport.maximumCounter - 2_048
+      || transport.seenCounters.has(counter)
+    ) {
+      rejectJson(request, response, 401, {
+        error: {
+          code: "ENCRYPTED_TRANSPORT_REPLAYED",
+          message: "encrypted transport identity 또는 counter가 올바르지 않습니다."
+        }
+      });
+      return false;
+    }
+    // Reserve before the first body-read await. Concurrent copies of one
+    // authenticated envelope must never both pass the replay boundary.
+    // A malformed request may consume its counter, but cannot be accepted.
+    transport.seenCounters.add(counter);
+    transport.maximumCounter = Math.max(transport.maximumCounter, counter);
+    for (const seen of transport.seenCounters) {
+      if (seen < transport.maximumCounter - 2_048) {
+        transport.seenCounters.delete(seen);
+      }
+    }
+    const outerLimit = Math.ceil(maximumPlaintextBytes * 4 / 3) + 8 * 1024;
+    let encryptedValue: unknown;
+    try {
+      encryptedValue = await readJsonRequest(request, outerLimit);
+    } catch (error) {
+      const safe = error instanceof TypeError
+        ? { status: 400, code: "INVALID_ENCRYPTED_REQUEST", message: error.message }
+        : safeError(error);
+      rejectJson(request, response, safe.status, {
+        error: { code: safe.code, message: safe.message }
+      });
+      return false;
+    }
+    const encrypted = parseLocalMediaEngineTransportRequest(
+      encryptedValue,
+      outerLimit
+    );
+    if (
+      !encrypted
+      || encrypted.transportId !== transportId
+      || encrypted.counter !== counter
+    ) {
+      rejectJson(request, response, 400, {
+        error: {
+          code: "INVALID_ENCRYPTED_REQUEST",
+          message: "encrypted transport envelope가 header와 다릅니다."
+        }
+      });
+      return false;
+    }
+    try {
+      const ivBytes = Buffer.from(encrypted.iv, "base64url");
+      const ciphertextWithTag = Buffer.from(encrypted.ciphertext, "base64url");
+      if (
+        ivBytes.toString("base64url") !== encrypted.iv
+        || ciphertextWithTag.toString("base64url") !== encrypted.ciphertext
+        || ciphertextWithTag.byteLength < 17
+      ) {
+        throw new Error("non-canonical-encryption");
+      }
+      const authenticationTag = ciphertextWithTag.subarray(-16);
+      const ciphertext = ciphertextWithTag.subarray(0, -16);
+      const pathWithQuery = `${requestUrl.pathname}${requestUrl.search}`;
+      const aad = localMediaEngineTransportAad({
+        direction: "request",
+        transportId,
+        counter,
+        method: request.method || "",
+        path: pathWithQuery,
+        protocol,
+        clientNonce,
+        iv: encrypted.iv
+      });
+      const decipher = createDecipheriv(
+        "aes-256-gcm",
+        Buffer.from(transport.key),
+        ivBytes,
+        { authTagLength: 16 }
+      );
+      decipher.setAAD(Buffer.from(aad));
+      decipher.setAuthTag(authenticationTag);
+      const plaintext = Buffer.concat([
+        decipher.update(ciphertext),
+        decipher.final()
+      ]).toString("utf8");
+      if (Buffer.byteLength(plaintext, "utf8") > maximumPlaintextBytes) {
+        throw new Error("plaintext-too-large");
+      }
+      const container = JSON.parse(plaintext) as unknown;
+      if (!container || typeof container !== "object" || Array.isArray(container)) {
+        throw new Error("invalid-container");
+      }
+      const record = container as Record<string, unknown>;
+      const token = exactBase64UrlBytes(record.token, 32);
+      const mediaAccess = record.mediaAccess;
+      const bodyText = record.bodyText;
+      if (
+        Object.keys(record).sort().join(",") !== "bodyText,mediaAccess,token"
+        || !token
+        || (
+          mediaAccess !== null
+          && exactBase64UrlBytes(mediaAccess, 32) === null
+        )
+        || (bodyText !== null && typeof bodyText !== "string")
+      ) {
+        throw new Error("invalid-container-fields");
+      }
+      const body = bodyText === null ? null : JSON.parse(bodyText);
+      decryptedControlRequests.set(request, {
+        token,
+        mediaAccess: mediaAccess as string | null,
+        body,
+        transportId
+      });
+      (
+        response as ServerResponse & {
+          [TRANSPORT_RESPONSE_CONTEXT]?: Readonly<TransportResponseContext>;
+        }
+      )[TRANSPORT_RESPONSE_CONTEXT] = Object.freeze({
+        key: transport.key,
+        transportId,
+        counter,
+        method: request.method || "",
+        path: pathWithQuery,
+        protocol,
+        clientNonce
+      });
+      return true;
+    } catch {
+      rejectJson(request, response, 400, {
+        error: {
+          code: "ENCRYPTED_TRANSPORT_AUTH_FAILED",
+          message: "encrypted transport request 인증에 실패했습니다."
+        }
+      });
+      return false;
+    }
+  };
   let closing = false;
   const handleRequest = async (
     request: IncomingMessage,
     response: ServerResponse
   ): Promise<void> => {
-    const origin = String(request.headers.origin || "");
+    const origin = singleRawHeaderValue(request, "origin") || "";
+    const protocol = singleRawHeaderValue(
+      request,
+      "x-kirinuki-protocol"
+    ) || "";
     if (origin !== config.allowedOrigin) {
       rejectJson(request, response, 403, {
         error: {
@@ -1347,14 +2381,19 @@ export function createCaptionGatewayServer({
       });
       return;
     }
-    setCorsHeaders(request, response, origin, config.allowedOrigin);
+    if (request.method !== "OPTIONS") {
+      setCorsHeaders(request, response, origin, config.allowedOrigin);
+    }
 
     const requestUrl = new URL(
       request.url || "/",
       "http://127.0.0.1"
     );
     const isHealthRequest = requestUrl.pathname === "/v1/health";
+    const isPairingPollRequest = requestUrl.pathname === "/v1/pairing";
     const isPairingRequest = requestUrl.pathname === "/v1/session";
+    const isSessionStatusRequest =
+      requestUrl.pathname === "/v1/session/status";
     const isCaptionRequest = requestUrl.pathname === "/v1/captions";
     const materializationCollectionMatch =
       /^\/v1\/(chzzk-vod|vod)\/materializations$/u
@@ -1384,7 +2423,9 @@ export function createCaptionGatewayServer({
     ) as MaterializationRouteNamespace;
     if (
       !isHealthRequest
+      && !isPairingPollRequest
       && !isPairingRequest
+      && !isSessionStatusRequest
       && !isCaptionRequest
       && !isMaterializationCollection
       && !materializationJobMatch
@@ -1401,6 +2442,38 @@ export function createCaptionGatewayServer({
       return;
     }
     if (request.method === "OPTIONS") {
+      const preflightMethods = isHealthRequest
+        ? ["GET"]
+        : isPairingPollRequest
+          ? ["GET"]
+        : isPairingRequest
+            ? ["POST"]
+          : isSessionStatusRequest
+            ? ["POST"]
+            : isCaptionRequest
+              ? authenticatedPublicMode
+                ? ["POST"]
+                : ["GET", "POST"]
+              : materializationMediaMatch
+                ? ["GET", "HEAD"]
+                : materializationPurgeMatch
+                  || materializationSessionPurgeMatch
+                  ? ["DELETE"]
+                  : isMaterializationCollection
+                    ? ["POST"]
+                    : authenticatedPublicMode
+                      ? ["POST", "DELETE"]
+                      : ["GET", "POST", "DELETE"];
+      if (!validCorsPreflight(request, preflightMethods)) {
+        rejectJson(request, response, 400, {
+          error: {
+            code: "INVALID_CORS_PREFLIGHT",
+            message: "지원하지 않는 CORS 사전 요청입니다."
+          }
+        });
+        return;
+      }
+      setCorsHeaders(request, response, origin, config.allowedOrigin);
       discardUnreadRequestBody(request, response);
       response.statusCode = 204;
       response.setHeader("cache-control", "no-store");
@@ -1426,16 +2499,88 @@ export function createCaptionGatewayServer({
         return;
       }
     }
+    if (
+      authenticatedPublicMode
+      && !isHealthRequest
+      && !isPairingPollRequest
+      && !(isPairingRequest && request.method === "POST")
+      && !materializationMediaMatch
+    ) {
+      const maximumPlaintextBytes = isCaptionRequest
+        ? config.maxBodyBytes
+        : isMaterializationCollection
+          ? MAX_CHZZK_VOD_REQUEST_BYTES
+          : materializationPurgeMatch || materializationSessionPurgeMatch
+            ? MAX_CHZZK_VOD_CACHE_PURGE_REQUEST_BYTES
+            : 64 * 1024;
+      if (!await decryptControlRequest({
+        request,
+        response,
+        requestUrl,
+        protocol,
+        maximumPlaintextBytes
+      })) {
+        return;
+      }
+    }
+    if (isPairingPollRequest) {
+      const state = exactBase64UrlBytes(
+        singleRawHeaderValue(
+          request,
+          LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER.toLowerCase()
+        ),
+        32
+      );
+      const challenge = requestServerChallenge(request);
+      if (
+        request.method !== "GET"
+        || requestUrl.search !== ""
+        || protocol !== LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL
+        || !state
+        || !challenge
+      ) {
+        rejectJson(request, response, 400, {
+          error: {
+            code: "INVALID_PAIRING_POLL",
+            message: "state/challenge에 묶인 로컬 엔진 pairing poll이 필요합니다."
+          }
+        });
+        return;
+      }
+      discardUnreadRequestBody(request, response);
+      pruneEncryptedState(now());
+      const pending = pendingPairingResponses.get(state);
+      if (!pending || pending.response.challenge !== challenge) {
+        sendJson(response, 202, {
+          schema: LOCAL_MEDIA_ENGINE_PAIRING_POLL_STATUS_SCHEMA,
+          status: "pending"
+        });
+        return;
+      }
+      // Claim before writing so two racing polls cannot both enroll from one
+      // custom-scheme activation.
+      pendingPairingResponses.delete(state);
+      sendJson(response, 200, pending.response);
+      return;
+    }
     if (isHealthRequest) {
+      const authenticatedHealth =
+        protocol === LOCAL_MEDIA_ENGINE_AUTHENTICATED_HEALTH_PROTOCOL;
       if (
         origin !== config.allowedOrigin
-        || String(request.headers["x-kirinuki-protocol"] || "")
-          !== CAPTION_AGENT_REQUEST_SCHEMA_ID
+        || (
+          protocol !== LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL
+          && !authenticatedHealth
+        )
+        || (
+          authenticatedPublicMode
+          && !authenticatedHealth
+        )
       ) {
         rejectJson(request, response, 403, {
           error: {
             code: "HEALTH_PROBE_NOT_ALLOWED",
-            message: "정확한 Origin과 자막 프로토콜이 필요합니다."
+            message: "정확한 Origin과 인증된 영상 준비 도구 확인 프로토콜이 필요합니다."
           }
         });
         return;
@@ -1450,36 +2595,101 @@ export function createCaptionGatewayServer({
         });
         return;
       }
+      const challenge = authenticatedHealth
+        ? requestServerChallenge(request)
+        : null;
+      if (authenticatedHealth && challenge === null) {
+        rejectJson(request, response, 400, {
+          error: {
+            code: "SERVER_CHALLENGE_REQUIRED",
+            message: "인증된 health 요청에는 새 server challenge가 필요합니다."
+          }
+        });
+        return;
+      }
       discardUnreadRequestBody(request, response);
-      sendJson(response, 200, {
+      const baseHealthPayload = {
         schema: CAPTION_AGENT_HEALTH_SCHEMA_ID,
         status: "ok",
-        managed: config.autoPair,
-        originBinding: KIRINUKI_GATEWAY_ORIGIN_BINDING,
+        managed: true,
+        engine: {
+          backgroundStart: config.backgroundStart,
+          product: LOCAL_MEDIA_ENGINE_PRODUCT,
+          protocol: LOCAL_MEDIA_ENGINE_API_PROTOCOL,
+          version: config.engineVersion
+        },
+        originBinding: config.allowedOrigin === KIRINUKI_LOCAL_STUDIO_ORIGIN
+          ? KIRINUKI_GATEWAY_ORIGIN_BINDING
+          : "exact-public-studio",
+        authentication: "bearer-memory-capability",
         transcriptionMode: LOCAL_WHISPERCPP_TRANSCRIPTION_MODE,
         vodRuntime: config.vodRuntime
+      };
+      if (!authenticatedHealth) {
+        sendJson(response, 200, baseHealthPayload);
+        return;
+      }
+      let sessionEncryption: Awaited<
+        ReturnType<typeof createSessionEncryptionOffer>
+      > | null = null;
+      try {
+        sessionEncryption = await createSessionEncryptionOffer();
+        const healthPayload = {
+          ...baseHealthPayload,
+          sessionEncryption
+        };
+        const deviceProof = await signedDeviceProof({
+          kind: "health",
+          challenge: challenge!,
+          payload: healthPayload
+        });
+        sendJson(response, 200, {
+          ...healthPayload,
+          deviceProof
+        });
+      } catch (error) {
+        if (sessionEncryption) {
+          sessionEncryptionGrants.delete(sessionEncryption.grantId);
+        }
+        const safe = safeError(error);
+        rejectJson(request, response, safe.status, {
+          error: {
+            code: safe.code,
+            message: safe.message
+          }
+        });
+      }
+      return;
+    }
+    if (isSessionStatusRequest) {
+      if (
+        request.method !== "POST"
+        || protocol !== LOCAL_MEDIA_ENGINE_SESSION_STATUS_PROTOCOL
+        || decryptedControlRequests.get(request)?.body !== null
+      ) {
+        rejectJson(request, response, 400, {
+          error: {
+            code: "INVALID_SESSION_STATUS_REQUEST",
+            message: "암호화된 memory session status 요청이 올바르지 않습니다."
+          }
+        });
+        return;
+      }
+      const capability = authenticateCapabilityIdentity(request, response);
+      if (!capability) {
+        return;
+      }
+      touchCapability(capability);
+      sendJson(response, 200, {
+        schema: LOCAL_MEDIA_ENGINE_SESSION_STATUS_SCHEMA,
+        status: "active",
+        actions: [...capability.actions],
+        sourceBound: capability.sourceUrl !== undefined,
+        expiresAt: new Date(capability.expiresAt).toISOString()
       });
       return;
     }
     if (isPairingRequest) {
-      if (!config.autoPair) {
-        rejectJson(request, response, 404, {
-          error: {
-            code: "PAIRING_DISABLED",
-            message: "자동 로컬 연결이 비활성화되어 있습니다."
-          }
-        });
-        return;
-      }
-      if (origin !== config.allowedOrigin) {
-        rejectJson(request, response, 403, {
-          error: {
-            code: "ORIGIN_NOT_ALLOWED",
-            message: "정확한 Kirinuki 로컬 Studio Origin에서만 연결할 수 있습니다."
-          }
-        });
-        return;
-      }
       if (request.method !== "POST") {
         response.setHeader("allow", "POST, OPTIONS");
         rejectJson(request, response, 405, {
@@ -1490,14 +2700,34 @@ export function createCaptionGatewayServer({
         });
         return;
       }
+      const authenticatedSession =
+        protocol === LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL;
       if (
-        String(request.headers["x-kirinuki-protocol"] || "")
-        !== CAPTION_AGENT_REQUEST_SCHEMA_ID
+        (
+          protocol !== LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+          && !authenticatedSession
+        )
+        || (
+          authenticatedPublicMode
+          && !authenticatedSession
+        )
       ) {
         rejectJson(request, response, 400, {
           error: {
             code: "PROTOCOL_REQUIRED",
-            message: "지원하는 자막 프로토콜 헤더가 필요합니다."
+            message: "지원하는 인증된 로컬 엔진 세션 프로토콜 헤더가 필요합니다."
+          }
+        });
+        return;
+      }
+      const challenge = authenticatedSession
+        ? requestServerChallenge(request)
+        : null;
+      if (authenticatedSession && challenge === null) {
+        rejectJson(request, response, 400, {
+          error: {
+            code: "SERVER_CHALLENGE_REQUIRED",
+            message: "인증된 세션 요청에는 새 server challenge가 필요합니다."
           }
         });
         return;
@@ -1512,14 +2742,147 @@ export function createCaptionGatewayServer({
         });
         return;
       }
-      discardUnreadRequestBody(request, response);
-      sendJson(response, 200, {
-        schema: CAPTION_AGENT_SESSION_SCHEMA_ID,
-        status: "ok",
-        authentication: "bearer-process-memory",
-        expires: "companion-restart",
-        token: config.agentToken
-      });
+      let pendingTransportKey: Uint8Array | undefined;
+      let pendingTransportOwned = false;
+      let authenticatedSessionInputAccepted = false;
+      try {
+        let sessionRequestValue: unknown;
+        let transportId: string | undefined;
+        let transportKey: Uint8Array | undefined;
+        let encryptedSessionRequest: ReturnType<
+          typeof parseLocalMediaEngineEncryptedSessionRequest
+        > = null;
+        if (authenticatedSession) {
+          const encrypted = parseLocalMediaEngineEncryptedSessionRequest(
+            await readJsonRequest(
+              request,
+              MAX_LOCAL_ENGINE_SESSION_REQUEST_BYTES * 2
+            )
+          );
+          if (!encrypted) {
+            throw new TypeError("암호화된 로컬 엔진 세션 요청이 올바르지 않습니다.");
+          }
+          encryptedSessionRequest = encrypted;
+          const grant = sessionEncryptionGrants.get(encrypted.grantId);
+          // One shot even when ECDH import, GCM authentication, or JSON parsing
+          // fails. An attacker cannot use this endpoint as a grant oracle.
+          sessionEncryptionGrants.delete(encrypted.grantId);
+          if (!grant || now() >= grant.expiresAt) {
+            throw new TypeError("로컬 엔진 session encryption grant가 만료됐습니다.");
+          }
+          const [plaintext, sharedKey] = await Promise.all([
+            decryptLocalMediaEngineSessionRequest({
+              privateKey: grant.privateKey,
+              request: encrypted,
+              responseChallenge: challenge!
+            }),
+            deriveLocalMediaEngineSharedKey({
+              privateKey: grant.privateKey,
+              peerPublicKey: encrypted.clientPublicKey
+            })
+          ]);
+          try {
+            sessionRequestValue = JSON.parse(plaintext);
+          } catch {
+            throw new TypeError("복호화한 로컬 엔진 세션 요청 JSON이 올바르지 않습니다.");
+          }
+          transportId = encrypted.grantId;
+          transportKey = sharedKey;
+          pendingTransportKey = sharedKey;
+        } else {
+          sessionRequestValue = await readJsonRequest(
+            request,
+            MAX_LOCAL_ENGINE_SESSION_REQUEST_BYTES
+          );
+        }
+        const body = normalizeLocalEngineSessionRequest(
+          sessionRequestValue,
+          authenticatedSession
+            ? LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL
+            : LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+        );
+        if (requestClientNonce(request) !== body.clientNonce) {
+          rejectJson(request, response, 400, {
+            error: {
+              code: "CLIENT_NONCE_REQUIRED",
+              message: "요청 본문과 일치하는 문서 nonce 헤더가 필요합니다."
+            }
+          });
+          return;
+        }
+        authenticatedSessionInputAccepted = true;
+        const capability = issueCapability(body, now(), transportId);
+        if (transportId && transportKey) {
+          encryptedTransports.set(transportId, {
+            key: transportKey,
+            clientNonce: body.clientNonce,
+            expiresAt: capability.expiresAt,
+            seenCounters: new Set(),
+            maximumCounter: 0
+          });
+          pendingTransportOwned = true;
+        }
+        const sessionPayload = {
+          schema: CAPTION_AGENT_SESSION_SCHEMA_ID,
+          authentication: "bearer-memory-capability",
+          expiresAt: new Date(capability.expiresAt).toISOString(),
+          token: capability.token
+        };
+        if (!authenticatedSession) {
+          sendJson(response, 200, sessionPayload);
+          return;
+        }
+        try {
+          const deviceProof = await signedDeviceProof({
+            kind: "session",
+            challenge: challenge!,
+            requestBinding: JSON.stringify(body),
+            payload: sessionPayload
+          });
+          if (!transportKey || !encryptedSessionRequest) {
+            throw new Error("인증된 session response encryption context가 없습니다.");
+          }
+          const encryptedSessionResponse = await encryptLocalMediaEngineSessionResponse({
+            sharedKey: transportKey,
+            request: encryptedSessionRequest,
+            responseChallenge: challenge!,
+            plaintext: JSON.stringify({
+              ...sessionPayload,
+              deviceProof
+            })
+          });
+          sendJson(response, 200, encryptedSessionResponse);
+        } catch (error) {
+          removeCapability(capability);
+          if (transportId) {
+            const transport = encryptedTransports.get(transportId);
+            transport?.key.fill(0);
+            encryptedTransports.delete(transportId);
+          }
+          throw error;
+        }
+      } catch (error) {
+        const safe = error instanceof TypeError
+          || (authenticatedSession && !authenticatedSessionInputAccepted)
+          ? {
+            status: 400,
+            code: "INVALID_SESSION_REQUEST",
+            message: error instanceof Error
+              ? error.message
+              : "암호화된 로컬 엔진 session 요청이 올바르지 않습니다."
+          }
+          : safeError(error);
+        rejectJson(request, response, safe.status, {
+          error: {
+            code: safe.code,
+            message: safe.message
+          }
+        });
+      } finally {
+        if (!pendingTransportOwned) {
+          pendingTransportKey?.fill(0);
+        }
+      }
       return;
     }
     if (materializationMediaMatch) {
@@ -1646,8 +3009,7 @@ export function createCaptionGatewayServer({
         return;
       }
       if (
-        String(request.headers["x-kirinuki-protocol"] || "")
-          !== CHZZK_VOD_CONSUMER_CACHE_PURGE_REQUEST_SCHEMA
+        protocol !== CHZZK_VOD_CONSUMER_CACHE_PURGE_REQUEST_SCHEMA
       ) {
         rejectJson(request, response, 400, {
           error: {
@@ -1657,17 +3019,12 @@ export function createCaptionGatewayServer({
         });
         return;
       }
-      if (!exactBearerToken(
-        request.headers.authorization,
-        config.agentToken
-      )) {
-        response.setHeader("www-authenticate", "Bearer");
-        rejectJson(request, response, 401, {
-          error: {
-            code: "UNAUTHORIZED",
-            message: "Bearer 인증이 필요합니다."
-          }
-        });
+      const capability = authenticateCapability(
+        request,
+        response,
+        "cache-delete"
+      );
+      if (!capability) {
         return;
       }
       if (!config.vodRuntime || !config.vodStateDir) {
@@ -1680,17 +3037,50 @@ export function createCaptionGatewayServer({
         return;
       }
       try {
-        const body = await readJsonRequest(
+        const body = await readControlJsonRequest(
           request,
           MAX_CHZZK_VOD_CACHE_PURGE_REQUEST_BYTES
         );
+        const bodyRecord = typeof body === "object"
+          && body !== null
+          && !Array.isArray(body)
+          ? body as Record<string, unknown>
+          : null;
+        const ownerProject = materializationOwnerProject(
+          materializationSessionPurgeMatch[2] || ""
+        );
+        if (!ownerProject) {
+          rejectJson(request, response, 404, {
+            error: {
+              code: "SESSION_CACHE_NOT_FOUND",
+              message: "정확히 일치하는 완료 VOD 편집 세션을 찾지 못했습니다."
+            }
+          });
+          return;
+        }
+        if (
+          !authorizeCapabilityProject(
+            request,
+            response,
+            capability,
+            ownerProject
+          )
+          || !authorizeCapabilityProject(
+            request,
+            response,
+            capability,
+            bodyRecord?.consumerId
+          )
+        ) {
+          return;
+        }
         if (closing) {
           sendGatewayClosing(request, response, config.allowedOrigin);
           return;
         }
         const result = await chzzkVodJobs.purgeConsumerCache(
           materializationSessionPurgeMatch[2] || "",
-          request.headers["x-kirinuki-media-access"],
+          requestMediaAccess(request),
           body
         );
         if (closing) {
@@ -1741,8 +3131,7 @@ export function createCaptionGatewayServer({
         return;
       }
       if (
-        String(request.headers["x-kirinuki-protocol"] || "")
-          !== CHZZK_VOD_CACHE_PURGE_REQUEST_SCHEMA
+        protocol !== CHZZK_VOD_CACHE_PURGE_REQUEST_SCHEMA
       ) {
         rejectJson(request, response, 400, {
           error: {
@@ -1752,17 +3141,12 @@ export function createCaptionGatewayServer({
         });
         return;
       }
-      if (!exactBearerToken(
-        request.headers.authorization,
-        config.agentToken
-      )) {
-        response.setHeader("www-authenticate", "Bearer");
-        rejectJson(request, response, 401, {
-          error: {
-            code: "UNAUTHORIZED",
-            message: "Bearer 인증이 필요합니다."
-          }
-        });
+      const capability = authenticateCapability(
+        request,
+        response,
+        "cache-delete"
+      );
+      if (!capability) {
         return;
       }
       if (!config.vodRuntime || !config.vodStateDir) {
@@ -1775,17 +3159,39 @@ export function createCaptionGatewayServer({
         return;
       }
       try {
-        const body = await readJsonRequest(
+        const body = await readControlJsonRequest(
           request,
           MAX_CHZZK_VOD_CACHE_PURGE_REQUEST_BYTES
         );
+        const ownerProject = materializationOwnerProject(
+          materializationPurgeMatch[2] || ""
+        );
+        if (!ownerProject) {
+          rejectJson(request, response, 404, {
+            error: {
+              code: "CACHE_NOT_FOUND",
+              message: "정확히 일치하는 완료 VOD 캐시 세션을 찾지 못했습니다."
+            }
+          });
+          return;
+        }
+        if (
+          !authorizeCapabilityProject(
+            request,
+            response,
+            capability,
+            ownerProject
+          )
+        ) {
+          return;
+        }
         if (closing) {
           sendGatewayClosing(request, response, config.allowedOrigin);
           return;
         }
         const result = await chzzkVodJobs.purge(
           materializationPurgeMatch[2] || "",
-          request.headers["x-kirinuki-media-access"],
+          requestMediaAccess(request),
           body
         );
         if (closing) {
@@ -1844,8 +3250,7 @@ export function createCaptionGatewayServer({
     }
     if (
       (isMaterializationCollection || materializationJobMatch)
-      && String(request.headers["x-kirinuki-protocol"] || "")
-        !== CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+      && protocol !== CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
     ) {
       rejectJson(request, response, 400, {
         error: {
@@ -1855,20 +3260,11 @@ export function createCaptionGatewayServer({
       });
       return;
     }
-    if (!exactBearerToken(
-      request.headers.authorization,
-      config.agentToken
-    )) {
-      response.setHeader("www-authenticate", "Bearer");
-      rejectJson(request, response, 401, {
-        error: {
-          code: "UNAUTHORIZED",
-          message: "Bearer 인증이 필요합니다."
-        }
-      });
-      return;
-    }
     if (isMaterializationCollection || materializationJobMatch) {
+      const capability = authenticateCapability(request, response, "vod");
+      if (!capability) {
+        return;
+      }
       if (!config.vodRuntime) {
         rejectJson(request, response, 503, {
           error: {
@@ -1892,15 +3288,32 @@ export function createCaptionGatewayServer({
             });
             return;
           }
-          const body = await readJsonRequest(
+          const body = await readControlJsonRequest(
             request,
             MAX_CHZZK_VOD_REQUEST_BYTES
           );
+          const bodyRecord = typeof body === "object"
+            && body !== null
+            && !Array.isArray(body)
+            ? body as Record<string, unknown>
+            : null;
+          if (!authorizeCapabilityProject(
+            request,
+            response,
+            capability,
+            bodyRecord?.consumerId,
+            bodyRecord?.sourceUrl,
+            true
+          )) {
+            return;
+          }
           if (closing) {
             sendGatewayClosing(request, response, config.allowedOrigin);
             return;
           }
           const job = chzzkVodJobs.create(body);
+          chzzkVodJobs.observe(job.id, capability.clientNonce);
+          rememberMaterializationOwner(job.id, capability);
           const status = await chzzkVodJobs.publicStatus(job, baseUrl);
           if (closing) {
             sendGatewayClosing(request, response, config.allowedOrigin);
@@ -1924,19 +3337,50 @@ export function createCaptionGatewayServer({
           });
           return;
         }
+        if (!authorizeCapabilityProject(
+          request,
+          response,
+          capability,
+          materializationOwnerProject(jobId) || job.request.consumerId
+        )) {
+          return;
+        }
         discardUnreadRequestBody(request, response);
         if (request.method === "DELETE") {
           chzzkVodJobs.cancel(jobId);
-        } else if (request.method !== "GET") {
-          response.setHeader("allow", "GET, DELETE, OPTIONS");
+        } else if (
+          request.method !== "POST"
+          && (authenticatedPublicMode || request.method !== "GET")
+        ) {
+          const allowed = authenticatedPublicMode
+            ? "POST, DELETE, OPTIONS"
+            : "GET, POST, DELETE, OPTIONS";
+          response.setHeader("allow", allowed);
           rejectJson(request, response, 405, {
             error: {
               code: "METHOD_NOT_ALLOWED",
-              message: "GET 또는 DELETE 요청만 지원합니다."
+              message: authenticatedPublicMode
+                ? "POST 또는 DELETE 요청만 지원합니다."
+                : "GET, POST 또는 DELETE 요청만 지원합니다."
+            }
+          });
+          return;
+        } else if (
+          authenticatedPublicMode
+          && decryptedControlRequests.get(request)?.body !== null
+        ) {
+          rejectJson(request, response, 400, {
+            error: {
+              code: "INVALID_MATERIALIZATION_STATUS_REQUEST",
+              message: "암호화된 VOD 준비 상태 요청 본문이 올바르지 않습니다."
             }
           });
           return;
         }
+        // A status request keeps only the observer that originally submitted
+        // this exact job alive. Same-project recovery capabilities may inspect
+        // or explicitly cancel it, but cannot accidentally resurrect its lease.
+        chzzkVodJobs.renewObserver(jobId, capability.clientNonce);
         const status = await chzzkVodJobs.publicStatus(job, baseUrl);
         if (closing) {
           sendGatewayClosing(request, response, config.allowedOrigin);
@@ -1969,9 +3413,39 @@ export function createCaptionGatewayServer({
       }
       return;
     }
-    if (request.method === "GET") {
+    const captionCapability = authenticateCapability(
+      request,
+      response,
+      "captions"
+    );
+    if (!captionCapability) {
+      return;
+    }
+    const encryptedCaptionProbe = authenticatedPublicMode
+      && request.method === "POST"
+      && decryptedControlRequests.get(request)?.body === null;
+    if (
+      encryptedCaptionProbe
+      || (!authenticatedPublicMode && request.method === "GET")
+    ) {
+      touchCapability(captionCapability);
       discardUnreadRequestBody(request, response);
       sendJson(response, 200, capabilityResponse(config));
+      return;
+    }
+    if (request.method !== "POST") {
+      const allowed = authenticatedPublicMode
+        ? "POST, OPTIONS"
+        : "GET, POST, OPTIONS";
+      response.setHeader("allow", allowed);
+      rejectJson(request, response, 405, {
+        error: {
+          code: "METHOD_NOT_ALLOWED",
+          message: authenticatedPublicMode
+            ? "POST 요청만 지원합니다."
+            : "GET 또는 POST 요청만 지원합니다."
+        }
+      });
       return;
     }
 
@@ -2023,7 +3497,7 @@ export function createCaptionGatewayServer({
       const pipelineConfig = resolveCaptionPipelineRequestConfig(
         config.pipeline
       );
-      const body = await readJsonRequest(
+      const body = await readControlJsonRequest(
         request,
         config.maxBodyBytes,
         {
@@ -2031,6 +3505,25 @@ export function createCaptionGatewayServer({
           timeoutMs: config.captionRequestBodyTimeoutMs
         }
       );
+      const bodyRecord = typeof body === "object"
+        && body !== null
+        && !Array.isArray(body)
+        ? body as Record<string, unknown>
+        : null;
+      const sourceRecord = bodyRecord?.source;
+      const sourceProjectId = typeof sourceRecord === "object"
+        && sourceRecord !== null
+        && !Array.isArray(sourceRecord)
+        ? (sourceRecord as Record<string, unknown>).projectId
+        : undefined;
+      if (!authorizeCapabilityProject(
+        request,
+        response,
+        captionCapability,
+        sourceProjectId
+      )) {
+        return;
+      }
       if (closing) {
         sendGatewayClosing(request, response, config.allowedOrigin);
         return;
@@ -2072,7 +3565,14 @@ export function createCaptionGatewayServer({
   const server = createServer((request, response) => {
     const execution = (async () => {
       try {
-        if (closing) {
+        if (!validGatewayAuthority(request)) {
+          rejectJson(request, response, 421, {
+            error: {
+              code: "MISDIRECTED_REQUEST",
+              message: "요청 대상이 Kirinuki loopback 엔진과 일치하지 않습니다."
+            }
+          });
+        } else if (closing) {
           sendGatewayClosing(request, response, config.allowedOrigin);
         } else {
           await handleRequest(request, response);
@@ -2143,6 +3643,15 @@ export function createCaptionGatewayServer({
           "AbortError"
         ));
       }
+      for (const capability of [...capabilitiesByToken.values()]) {
+        removeCapability(capability);
+      }
+      for (const transport of encryptedTransports.values()) {
+        transport.key.fill(0);
+      }
+      encryptedTransports.clear();
+      sessionEncryptionGrants.clear();
+      pendingPairingResponses.clear();
       // Job cancellation starts before HTTP draining so yt-dlp/ffmpeg process
       // groups get their TERM -> KILL cleanup window in full.
       const jobsSettled = chzzkVodJobs.close();
@@ -2246,6 +3755,7 @@ export function createCaptionGatewayServer({
     config,
     chzzkVodJobs,
     ready: vodCacheRecovery,
+    publishPairingResponse,
     shutdown,
     get activeHandlerCount() {
       return activeHandlers.size;

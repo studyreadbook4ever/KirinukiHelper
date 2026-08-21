@@ -25,6 +25,7 @@ import test, { type TestContext } from "node:test";
 
 import {
   DEFAULT_GATEWAY_SHUTDOWN_DEADLINE_MS,
+  LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
   MAX_CHZZK_VOD_REQUEST_BYTES,
   createPlatformMaterializationRunner,
   createCaptionGatewayServer,
@@ -108,6 +109,46 @@ interface HttpResult {
   bytes: Buffer;
 }
 
+interface TestCapability {
+  clientNonce: string;
+  projectId: string;
+  token: string;
+}
+
+let capabilityCounter = 0;
+const capabilitiesByPort = new Map<number, Map<string, TestCapability>>();
+const capabilityByJob = new Map<string, TestCapability>();
+
+function deterministicGatewayLeaseClock(start = 10_000) {
+  let timestamp = start;
+  let nextId = 1;
+  const scheduled = new Map<number, { at: number; callback: () => void }>();
+  return {
+    now: () => timestamp,
+    scheduler: {
+      schedule(callback: () => void, delayMs: number): unknown {
+        const id = nextId++;
+        scheduled.set(id, { at: timestamp + delayMs, callback });
+        return id;
+      },
+      cancel(handle: unknown): void {
+        if (typeof handle === "number") scheduled.delete(handle);
+      }
+    },
+    advance(milliseconds: number): void {
+      timestamp += milliseconds;
+      for (;;) {
+        const due = [...scheduled.entries()]
+          .filter(([, task]) => task.at <= timestamp)
+          .sort((left, right) => left[1].at - right[1].at)[0];
+        if (!due) return;
+        scheduled.delete(due[0]);
+        due[1].callback();
+      }
+    }
+  };
+}
+
 const SOOP_SOURCE_CLOCK_IDENTITY = Object.freeze({
   schema: SOOP_VOD_SOURCE_CLOCK_IDENTITY_SCHEMA,
   platform: "SOOP" as const,
@@ -139,7 +180,7 @@ function requestBody(
     sourceUrl,
     ...(soop ? { sourceClockIdentity: SOOP_SOURCE_CLOCK_IDENTITY } : {}),
     clips: [{ id: "clip-a", startMs: 70_000, endMs: 80_000 }],
-    handleMs: 10_000,
+    handleMs: 10_000 as const,
     permission: {
       confirmed: true,
       scope: "owned-or-authorized-public-vod"
@@ -147,7 +188,7 @@ function requestBody(
   };
 }
 
-function localRequest({
+function rawLocalRequest({
   port,
   requestPath,
   method = "GET",
@@ -190,6 +231,134 @@ function localRequest({
     request.once("error", reject);
     request.end(requestBody);
   });
+}
+
+function bodyRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    if (typeof value !== "string") {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return value as Record<string, unknown>;
+}
+
+async function issueCapability(
+  port: number,
+  projectId: string = "gateway-project-1",
+  actions: readonly string[] = ["vod", "captions", "cache-delete"],
+  sourceUrl: string = "https://chzzk.naver.com/video/14252987"
+): Promise<TestCapability> {
+  let byProject = capabilitiesByPort.get(port);
+  if (!byProject) {
+    byProject = new Map();
+    capabilitiesByPort.set(port, byProject);
+  }
+  const key = `${projectId}\0${actions.join(",")}\0${sourceUrl}`;
+  const existing = byProject.get(key);
+  if (existing) {
+    return existing;
+  }
+  capabilityCounter += 1;
+  const clientNonce = createHash("sha256")
+    .update(`${port}:${projectId}:${capabilityCounter}`, "utf8")
+    .digest("base64url");
+  const response = await rawLocalRequest({
+    port,
+    requestPath: "/v1/session",
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-kirinuki-client-nonce": clientNonce,
+      "x-kirinuki-protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+    },
+    body: {
+      schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
+      clientNonce,
+      projectId,
+      actions,
+      ...(actions.includes("vod") ? { sourceUrl } : {})
+    }
+  });
+  assert.equal(response.status, 200, response.bytes.toString("utf8"));
+  const capability = {
+    clientNonce,
+    projectId,
+    token: String(json(response).token || "")
+  };
+  byProject.set(key, capability);
+  return capability;
+}
+
+async function localRequest(
+  options: {
+    port: number;
+    requestPath: string;
+    method?: string;
+    headers?: OutgoingHttpHeaders;
+    body?: unknown;
+  }
+): Promise<HttpResult> {
+  const headers = { ...(options.headers || {}) };
+  const authorization = String(
+    headers.authorization ?? headers.Authorization ?? ""
+  );
+  let selectedCapability: TestCapability | null = null;
+  if (authorization === `Bearer ${TOKEN}`) {
+    const jobMatch = /^\/v1\/(?:chzzk-vod|vod)\/materializations\/([a-zA-Z0-9_-]{16,128})/u
+      .exec(options.requestPath);
+    const record = bodyRecord(options.body);
+    const source = record?.source;
+    const bodyProject = typeof record?.consumerId === "string"
+      ? record.consumerId
+      : typeof source === "object"
+        && source !== null
+        && !Array.isArray(source)
+        && typeof (source as Record<string, unknown>).projectId === "string"
+        ? String((source as Record<string, unknown>).projectId)
+          : null;
+    const bodySourceUrl = typeof record?.sourceUrl === "string"
+      ? record.sourceUrl
+      : null;
+    selectedCapability = jobMatch
+      ? capabilityByJob.get(`${options.port}:${jobMatch[1]}`) || null
+      : null;
+    selectedCapability ??= await issueCapability(
+      options.port,
+      bodyProject || "gateway-project-1",
+      ["vod", "captions", "cache-delete"],
+      bodySourceUrl || "https://chzzk.naver.com/video/14252987"
+    );
+    if (Object.hasOwn(headers, "Authorization")) {
+      headers.Authorization = `Bearer ${selectedCapability.token}`;
+    } else {
+      headers.authorization = `Bearer ${selectedCapability.token}`;
+    }
+    headers["x-kirinuki-client-nonce"] = selectedCapability.clientNonce;
+  }
+  const response = await rawLocalRequest({ ...options, headers });
+  if (
+    selectedCapability
+    && options.method === "POST"
+    && /^\/v1\/(?:chzzk-vod|vod)\/materializations$/u.test(
+      options.requestPath
+    )
+    && response.status === 202
+  ) {
+    const jobId = json(response).jobId;
+    if (typeof jobId === "string") {
+      capabilityByJob.set(`${options.port}:${jobId}`, selectedCapability);
+    }
+  }
+  return response;
 }
 
 function json(result: HttpResult): Record<string, unknown> {
@@ -380,7 +549,16 @@ async function listenWithOptions(
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
-  return (address as AddressInfo).port;
+  const port = (address as AddressInfo).port;
+  t.after(() => {
+    capabilitiesByPort.delete(port);
+    for (const key of capabilityByJob.keys()) {
+      if (key.startsWith(`${port}:`)) {
+        capabilityByJob.delete(key);
+      }
+    }
+  });
+  return port;
 }
 
 async function waitForCompleted(
@@ -689,6 +867,175 @@ test("VOD 작업 API는 bearer·프로토콜을 요구하고 로컬 MP4를 Range
   assert.equal(wrongOrigin.status, 403);
 });
 
+test("VOD 상태와 취소는 생성 문서 또는 같은 프로젝트의 새 capability에만 열린다", async (t) => {
+  const port = await listen(t, async ({ signal }) => await new Promise<never>(
+    (_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), {
+        once: true
+      });
+    }
+  ));
+  const created = await localRequest({
+    port,
+    requestPath: "/v1/vod/materializations",
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    },
+    body: requestBody()
+  });
+  assert.equal(created.status, 202, created.bytes.toString("utf8"));
+  const jobId = String(json(created).jobId || "");
+  assert.ok(jobId);
+
+  const sameProject = await issueCapability(
+    port,
+    "gateway-project-1",
+    ["vod"]
+  );
+  const otherProject = await issueCapability(port, "gateway-project-2", ["vod"]);
+  const requestAs = (
+    capability: TestCapability,
+    method: "GET" | "POST" | "DELETE"
+  ) => rawLocalRequest({
+    port,
+    requestPath: `/v1/vod/materializations/${jobId}`,
+    method,
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${capability.token}`,
+      "x-kirinuki-client-nonce": capability.clientNonce,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    }
+  });
+
+  for (const method of ["GET", "POST", "DELETE"] as const) {
+    const rejected = await requestAs(otherProject, method);
+    assert.equal(rejected.status, 403, rejected.bytes.toString("utf8"));
+    assert.equal(
+      (json(rejected).error as Record<string, unknown>).code,
+      "CAPABILITY_SCOPE_MISMATCH"
+    );
+  }
+  assert.equal((await requestAs(sameProject, "GET")).status, 200);
+  assert.equal((await requestAs(sameProject, "POST")).status, 200);
+  assert.equal((await requestAs(sameProject, "DELETE")).status, 200);
+});
+
+test("authenticated status는 자기 observer lease만 갱신하고 닫힌 A를 회수한 뒤 B를 실행한다", async (t) => {
+  const clock = deterministicGatewayLeaseClock();
+  const directory = await mkdtemp(path.join(tmpdir(), "kirinuki-vod-observer-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const aArtifactPath = path.join(directory, "late-a.mp4");
+  const bArtifactPath = path.join(directory, "b.mp4");
+  await writeFile(aArtifactPath, "late-a");
+  await writeFile(bArtifactPath, "b");
+  const calls: string[] = [];
+  let aAborted = false;
+  const runner: ChzzkVodMaterializationRunner = async ({ clips, signal }) => {
+    const clip = clips[0];
+    assert.ok(clip);
+    calls.push(clip.id);
+    if (clip.id === "clip-a") {
+      return await new Promise((resolve) => {
+        signal.addEventListener("abort", () => {
+          aAborted = true;
+          resolve({
+            manifest: validMaterialization({ clips }),
+            artifactPath: aArtifactPath,
+            artifact: integrity("late-a"),
+            reused: false
+          });
+        }, { once: true });
+      });
+    }
+    return {
+      manifest: validMaterialization({ clips }),
+      artifactPath: bArtifactPath,
+      artifact: integrity("b"),
+      reused: false
+    };
+  };
+  const port = await listenWithOptions(t, {
+    materializationRunner: runner,
+    vodObserverLeaseTtlMs: 100,
+    vodObserverLeaseScheduler: clock.scheduler,
+    now: clock.now
+  });
+  const createJob = async (clip: { id: string; startMs: number; endMs: number }) => {
+    const created = await localRequest({
+      port,
+      requestPath: "/v1/vod/materializations",
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "application/json",
+        "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+      },
+      body: { ...requestBody(), clips: [clip] }
+    });
+    assert.equal(created.status, 202, created.bytes.toString("utf8"));
+    return String(json(created).jobId || "");
+  };
+  const aJobId = await createJob({
+    id: "clip-a",
+    startMs: 70_000,
+    endMs: 80_000
+  });
+  const bJobId = await createJob({
+    id: "clip-b",
+    startMs: 90_000,
+    endMs: 100_000
+  });
+  assert.deepEqual(calls, ["clip-a"]);
+
+  clock.advance(60);
+  const bHeartbeat = await localRequest({
+    port,
+    requestPath: `/v1/vod/materializations/${bJobId}`,
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${TOKEN}`,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    }
+  });
+  assert.equal(bHeartbeat.status, 200, bHeartbeat.bytes.toString("utf8"));
+  clock.advance(40);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(aAborted, true);
+  assert.deepEqual(calls, ["clip-a", "clip-b"]);
+  const aStatus = await localRequest({
+    port,
+    requestPath: `/v1/vod/materializations/${aJobId}`,
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${TOKEN}`,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    }
+  });
+  assert.equal(json(aStatus).state, "cancelled");
+  const bStatus = await localRequest({
+    port,
+    requestPath: `/v1/vod/materializations/${bJobId}`,
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${TOKEN}`,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    }
+  });
+  assert.equal(json(bStatus).state, "completed");
+  assert.equal(JSON.stringify(json(aStatus)).includes("late-a.mp4"), false);
+});
+
 test("별도 cache DELETE는 완료된 exact job만 지우며 취소 DELETE와 수동 파일은 건드리지 않는다", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "kirinuki-vod-gateway-purge-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -970,10 +1317,10 @@ test("별도 session-cache DELETE는 인증된 consumer scope 전체만 지우�
     },
     body: mismatchBody
   });
-  assert.equal(mismatch.status, 409, mismatch.bytes.toString("utf8"));
+  assert.equal(mismatch.status, 403, mismatch.bytes.toString("utf8"));
   assert.equal(
     (json(mismatch).error as Record<string, unknown>).code,
-    "PURGE_IDENTITY_MISMATCH"
+    "CAPABILITY_SCOPE_MISMATCH"
   );
   await access(scopeA);
 
@@ -1180,11 +1527,11 @@ test("플랫폼 중립 VOD 경로가 CHZZK와 YouTube·SOOP materializer를 자�
       platform: "CHZZK"
     },
     {
-      sourceUrl: "https://youtu.be/abcdefghijk?t=30",
+      sourceUrl: "https://www.youtube.com/watch?v=abcdefghijk",
       platform: "YOUTUBE"
     },
     {
-      sourceUrl: "https://vod.sooplive.com/PLAYER/STATION/123456789",
+      sourceUrl: "https://vod.sooplive.com/player/123456789",
       platform: "SOOP"
     }
   ] as const;
@@ -1355,6 +1702,67 @@ test("CHZZK native 성공과 VOD_UNAVAILABLE 이외 오류는 external fallback�
   assert.equal(externalCallCount, 0);
 });
 
+test("SOOP source clock은 미제공 시 로컬 유도로 넘기고 제공된 값만 엄격히 검증한다", async () => {
+  const artifact = integrity("soop-optional-source-clock");
+  const externalCalls: ExternalVodMaterializationRequest[] = [];
+  const runner = createPlatformMaterializationRunner({
+    externalMaterializer: async (input) => {
+      externalCalls.push(input);
+      return {
+        manifest: validMaterialization({
+          platform: "SOOP",
+          contentId: "123456789",
+          clips: input.clips
+        }),
+        receipt: { artifact },
+        artifactPath: "/safe/local/soop-optional-clock.mp4",
+        reused: false
+      };
+    }
+  });
+  const request = {
+    consumerId: "soop-optional-clock-project",
+    sourceUrl: "https://vod.sooplive.com/player/123456789",
+    clips: [{ id: "clip-a", startMs: 1_000, endMs: 2_000 }],
+    handleMs: 10_000 as const,
+    signal: new AbortController().signal,
+    onProgress: () => undefined
+  };
+
+  await runner(request);
+  assert.equal(externalCalls.length, 1);
+  assert.equal(externalCalls[0]?.sourceClockIdentity, undefined);
+
+  await runner({
+    ...request,
+    sourceClockIdentity: SOOP_SOURCE_CLOCK_IDENTITY
+  });
+  assert.equal(externalCalls.length, 2);
+  assert.deepEqual(
+    externalCalls[1]?.sourceClockIdentity,
+    SOOP_SOURCE_CLOCK_IDENTITY
+  );
+
+  await assert.rejects(
+    runner({
+      ...request,
+      sourceClockIdentity: {
+        ...SOOP_SOURCE_CLOCK_IDENTITY,
+        contentId: "987654321"
+      }
+    }),
+    /현재 원본과 맞지 않습니다/u
+  );
+  await assert.rejects(
+    runner({
+      ...request,
+      sourceClockIdentity: {} as unknown as typeof SOOP_SOURCE_CLOCK_IDENTITY
+    }),
+    /현재 원본과 맞지 않습니다/u
+  );
+  assert.equal(externalCalls.length, 2);
+});
+
 test("외부 VOD 도구 누락은 비밀 경로 없이 안전한 code와 설치 안내를 상태로 돌려준다", async (t) => {
   const port = await listenWithOptions(t, {
     externalMaterializer: async () => {
@@ -1374,7 +1782,7 @@ test("외부 VOD 도구 누락은 비밀 경로 없이 안전한 code와 설치 
       "content-type": "application/json",
       "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
     },
-    body: requestBody(`https://youtu.be/${"abcdefghijk"}`)
+    body: requestBody("https://www.youtube.com/watch?v=abcdefghijk")
   });
   assert.equal(created.status, 202);
   const jobId = String(json(created).jobId || "");
@@ -1792,9 +2200,11 @@ test("shutdown 시작 뒤 기존 socket에서 완성된 pipelined 요청은 새 
   });
   const address = runtime.server.address();
   assert.ok(address && typeof address !== "string");
+  const port = (address as AddressInfo).port;
+  const capability = await issueCapability(port);
   const socket = net.createConnection({
     host: "127.0.0.1",
-    port: (address as AddressInfo).port
+    port
   });
   let released = false;
   t.after(async () => {
@@ -1816,24 +2226,29 @@ test("shutdown 시작 뒤 기존 socket에서 완성된 pipelined 요청은 새 
     });
     socket.once("close", () => resolve());
   });
+  const captionBody = JSON.stringify({
+    source: { projectId: capability.projectId }
+  });
   const firstRequest = [
     "POST /v1/captions HTTP/1.1",
-    "Host: 127.0.0.1",
+    `Host: 127.0.0.1:${port}`,
     `Origin: ${ORIGIN}`,
-    `Authorization: Bearer ${TOKEN}`,
+    `Authorization: Bearer ${capability.token}`,
+    `X-Kirinuki-Client-Nonce: ${capability.clientNonce}`,
     "Content-Type: application/json",
-    "Content-Length: 2",
+    `Content-Length: ${Buffer.byteLength(captionBody)}`,
     "Connection: keep-alive",
     "",
-    "{}"
+    captionBody
   ].join("\r\n");
   const partialSecondRequest = [
     "POST /v1/captions HTTP/1.1",
-    "Host: 127.0.0.1",
+    `Host: 127.0.0.1:${port}`,
     `Origin: ${ORIGIN}`,
-    `Authorization: Bearer ${TOKEN}`,
+    `Authorization: Bearer ${capability.token}`,
+    `X-Kirinuki-Client-Nonce: ${capability.clientNonce}`,
     "Content-Type: application/json",
-    "Content-Length: 2",
+    `Content-Length: ${Buffer.byteLength(captionBody)}`,
     "Connection: close"
   ].join("\r\n");
   socket.write(`${firstRequest}${partialSecondRequest}`);
@@ -1847,7 +2262,7 @@ test("shutdown 시작 뒤 기존 socket에서 완성된 pipelined 요청은 새 
     // callbacks before the fail-closed deadline wins the race.
     deadlineMs: 10_000
   });
-  socket.write("\r\n\r\n{}");
+  socket.write(`\r\n\r\n${captionBody}`);
   for (
     let attempt = 0;
     attempt < 50 && runtime.activeHandlerCount < 2;
@@ -1930,7 +2345,7 @@ test("shutdown은 job abort를 먼저 전달하고 열린 소켓이 있어도 de
       authorization: `Bearer ${TOKEN}`,
       "content-type": "application/json"
     },
-    body: {}
+    body: { source: { projectId: "gateway-project-1" } }
   }).catch(() => null);
   await captionStarted;
   const idleSocket = net.createConnection({ host: "127.0.0.1", port });

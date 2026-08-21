@@ -27,7 +27,7 @@ export const COMMERCIAL_USE_APPROVED_LICENSE_IDS = Object.freeze([
 export type CommercialUseApprovedLicenseId =
   (typeof COMMERCIAL_USE_APPROVED_LICENSE_IDS)[number];
 
-/** These values describe a non-product boundary; they are not license grants. */
+/** These values describe inventory/release boundaries; they are not license grants. */
 export const THIRD_PARTY_BOUNDARY_LICENSE_IDS = Object.freeze([
   "build-dependent",
   "external-terms",
@@ -220,9 +220,9 @@ export interface DevelopmentOnlyAttribution
   readonly lockfile: "package-lock.json";
 }
 
-export interface DesktopPreviewBundleAttribution
+export interface DesktopLocalEngineBundleAttribution
   extends AttributionBase<"mixed-see-packages"> {
-  readonly kind: "desktop-preview-bundle";
+  readonly kind: "desktop-local-engine-bundle";
   readonly redistributed: true;
   readonly publicReleaseBlocked: true;
   readonly packages: readonly [string, ...string[]];
@@ -230,9 +230,9 @@ export interface DesktopPreviewBundleAttribution
   readonly releaseGate: "legal/DESKTOP_BINARY_RELEASE_GATE.md";
 }
 
-export interface LocalCompanionRuntimeAttribution
+export interface LocalEngineRepositoryRuntimeAttribution
   extends AttributionBase<CommercialUseApprovedLicenseId> {
-  readonly kind: "local-companion-runtime";
+  readonly kind: "local-engine-repository-runtime";
   readonly redistributed: false;
   readonly packages: readonly [string, ...string[]];
   readonly lockfile: "package-lock.json";
@@ -272,10 +272,10 @@ export interface ExternalReferenceAttribution
 export type ThirdPartyAttribution =
   | CiOnlyAttribution
   | DevelopmentOnlyAttribution
-  | DesktopPreviewBundleAttribution
+  | DesktopLocalEngineBundleAttribution
   | WebBundledAttribution
   | ExternalReferenceAttribution
-  | LocalCompanionRuntimeAttribution
+  | LocalEngineRepositoryRuntimeAttribution
   | RuntimeDownloadedAttribution
   | SeparatelyLicensedSourceAttribution
   | SystemProvidedAttribution;
@@ -594,8 +594,8 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
   },
   {
     id: "tsx-runtime",
-    kind: "local-companion-runtime",
-    name: "tsx and esbuild Kirinuki internal runtime",
+    kind: "local-engine-repository-runtime",
+    name: "tsx and esbuild repository-local engine runtime",
     version: "package-lock.json exact pins",
     license: "MIT",
     upstream: "https://github.com/privatenumber/tsx",
@@ -610,21 +610,26 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
     executionScope: "repository-local-node-modules"
   },
   {
-    id: "desktop-preview-runtime",
-    kind: "desktop-preview-bundle",
-    name: "Electron desktop development preview runtime",
-    version: "Electron 43.4.0 / asar 4.2.1 / packager 20.3.0 / fuses 2.1.3",
+    id: "desktop-local-engine-runtime",
+    kind: "desktop-local-engine-bundle",
+    name: "Electron background local media engine installer runtime",
+    version:
+      "Electron 43.4.1 / electron-builder 26.15.3 / asar 4.2.1 / packager 20.3.0 / fuses 2.1.3",
     license: "mixed-see-packages",
-    upstream: "https://github.com/electron/electron/tree/v43.4.0",
-    purpose: "Linux·Windows·macOS 네이티브 개발 프리뷰를 패키징하고 실행합니다.",
+    upstream: "https://github.com/electron/electron/tree/v43.4.1",
+    purpose:
+      "창 없는 로컬 구간 준비 엔진을 Windows x64·macOS arm64·Linux x64 설치기로 패키징합니다.",
     redistributed: true,
     publicReleaseBlocked: true,
     packages: [
-      "electron@43.4.0 (MIT plus bundled Chromium/Node notices)",
+      "electron@43.4.1 (MIT plus bundled Chromium/Node notices)",
       "@electron/asar@4.2.1 (MIT)",
       "@electron/packager@20.3.0 (BSD-2-Clause)",
       "@electron/fuses@2.1.3 (MIT)",
-      "package-lock.json에 고정된 Electron packaging transitive dependencies"
+      "electron-builder@26.15.3 (MIT; build-only transitive licenses separately gated)",
+      "Electron 43.4.1 bundled Chromium/Node notices",
+      "FFmpeg/ffprobe n8.1.2 and yt-dlp 2026.07.04 target sidecars",
+      "package-lock.json에 고정된 installer build transitive dependencies"
     ],
     lockfile: "package-lock.json",
     releaseGate: "legal/DESKTOP_BINARY_RELEASE_GATE.md"
@@ -706,7 +711,7 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
     version: "external service",
     license: "external-terms",
     upstream: "https://www.youtube.com/",
-    purpose: "공식 No-Cookie embed와 앱에 포함된 격리 Player Bridge를 통한 client-side 원본 확인에 사용합니다.",
+    purpose: "공식 No-Cookie embed를 통한 client-side 원본 확인에 사용합니다.",
     redistributed: false,
     trademarkOwner: "Google LLC and/or its licensors",
     affiliationClaimed: false

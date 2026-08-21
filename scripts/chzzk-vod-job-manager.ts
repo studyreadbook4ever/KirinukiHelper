@@ -63,6 +63,15 @@ export const DEFAULT_MAX_VOD_JOB_RECORDS = 128;
 export const DEFAULT_MAX_QUEUED_VOD_JOBS = 32;
 export const DEFAULT_COMPLETED_VOD_JOB_TTL_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_FAILED_VOD_JOB_TTL_MS = 5 * 60 * 1_000;
+/**
+ * Active browser documents poll every 500ms. Fifteen seconds tolerates short
+ * scheduler stalls while still reclaiming a closed document promptly. A
+ * browser that throttles background timers beyond this bound intentionally
+ * loses only the in-progress job; its durable project/cache can start the same
+ * request again. Keeping an abandoned downloader alive indefinitely would be
+ * the worse liveness and resource-safety failure.
+ */
+export const DEFAULT_ACTIVE_VOD_JOB_OBSERVER_LEASE_TTL_MS = 15_000;
 export const VOD_ARTIFACT_CHUNK_BYTES = 1024 * 1024;
 export const VOD_CONSUMER_PURGE_QUARANTINE_DIRECTORY =
   process.platform === "win32" ? ".q" : ".purge-quarantine";
@@ -152,6 +161,9 @@ interface ChzzkVodJob {
   lastAccessAt: number;
   accessToken: string;
   controller: AbortController;
+  observerLeaseEnforced: boolean;
+  observerLeaseExpiries: Map<string, number>;
+  observerLeaseTimer?: unknown;
   result?: ChzzkVodRunnerResult;
   artifactIntegrity?: Readonly<ChzzkVodRunnerResult["artifact"]>;
   artifactVerificationDigest?: Readonly<ChzzkVodArtifactVerification>;
@@ -166,6 +178,11 @@ interface ChzzkVodJob {
     code: string;
     message: string;
   };
+}
+
+export interface ChzzkVodObserverLeaseScheduler {
+  schedule(callback: () => void, delayMs: number): unknown;
+  cancel(handle: unknown): void;
 }
 
 export interface ChzzkVodCachePurgeIdentity {
@@ -293,6 +310,8 @@ interface ChzzkVodJobManagerOptions {
   maximumQueuedJobs?: number;
   completedTtlMs?: number;
   failedTtlMs?: number;
+  observerLeaseTtlMs?: number;
+  observerLeaseScheduler?: ChzzkVodObserverLeaseScheduler;
   randomBytesImpl?: typeof randomBytes;
   now?: () => number;
 }
@@ -734,6 +753,7 @@ export function normalizeChzzkVodMaterializationRequest(
     : null;
   if (
     (source.platform === SOURCE_PLATFORM_SOOP
+      && value.sourceClockIdentity !== undefined
       && (
         !sourceClockIdentity
         || sourceClockIdentity.contentId !== source.contentId
@@ -742,7 +762,7 @@ export function normalizeChzzkVodMaterializationRequest(
       && value.sourceClockIdentity !== undefined)
   ) {
     throw new TypeError(
-      "SOOP 공식 VOD part 시계 증명이 없거나 현재 원본과 맞지 않습니다."
+      "SOOP 공식 VOD part 시계 증명이 현재 원본과 맞지 않습니다."
     );
   }
   const consumerId = normalizeCacheConsumerId(value.consumerId);
@@ -1919,6 +1939,17 @@ export function createChzzkVodJobManager({
   maximumQueuedJobs = DEFAULT_MAX_QUEUED_VOD_JOBS,
   completedTtlMs = DEFAULT_COMPLETED_VOD_JOB_TTL_MS,
   failedTtlMs = DEFAULT_FAILED_VOD_JOB_TTL_MS,
+  observerLeaseTtlMs = DEFAULT_ACTIVE_VOD_JOB_OBSERVER_LEASE_TTL_MS,
+  observerLeaseScheduler = {
+    schedule(callback, delayMs) {
+      const timer = setTimeout(callback, delayMs);
+      timer.unref();
+      return timer;
+    },
+    cancel(handle) {
+      clearTimeout(handle as NodeJS.Timeout);
+    }
+  },
   randomBytesImpl = randomBytes,
   now = Date.now
 }: ChzzkVodJobManagerOptions) {
@@ -1952,6 +1983,10 @@ export function createChzzkVodJobManager({
   );
   const completedLifetime = Math.max(1_000, Math.round(completedTtlMs));
   const failedLifetime = Math.max(1_000, Math.round(failedTtlMs));
+  const observerLeaseLifetime = Math.max(
+    100,
+    Math.min(5 * 60 * 1_000, Math.round(observerLeaseTtlMs))
+  );
   const managedArtifactRoot = artifactRoot === undefined
     ? null
     : path.resolve(artifactRoot);
@@ -2005,8 +2040,82 @@ export function createChzzkVodJobManager({
     queue.length = nextIndex;
   };
 
+  const clearObserverLeaseTimer = (job: ChzzkVodJob): void => {
+    if (job.observerLeaseTimer !== undefined) {
+      observerLeaseScheduler.cancel(job.observerLeaseTimer);
+      delete job.observerLeaseTimer;
+    }
+  };
+
+  const finishObserverLeases = (job: ChzzkVodJob): void => {
+    clearObserverLeaseTimer(job);
+    job.observerLeaseExpiries.clear();
+  };
+
+  const cancelAbandonedJob = (job: ChzzkVodJob): void => {
+    if (terminalJob(job) || jobs.get(job.id) !== job) {
+      finishObserverLeases(job);
+      return;
+    }
+    job.controller.abort(new DOMException(
+      "편집 문서의 VOD 작업 관찰 lease가 만료되었습니다.",
+      "AbortError"
+    ));
+    job.state = "cancelled";
+    job.progress = 0;
+    job.message = "편집 문서가 닫혀 VOD 구간 준비를 정리했습니다.";
+    job.updatedAt = now();
+    finishObserverLeases(job);
+    compactQueue();
+  };
+
+  const expireObserverLeases = (
+    job: ChzzkVodJob,
+    timestamp: number
+  ): void => {
+    if (!job.observerLeaseEnforced || terminalJob(job)) {
+      if (terminalJob(job)) {
+        finishObserverLeases(job);
+      }
+      return;
+    }
+    for (const [observerId, expiresAt] of job.observerLeaseExpiries) {
+      if (timestamp >= expiresAt) {
+        job.observerLeaseExpiries.delete(observerId);
+      }
+    }
+    if (job.observerLeaseExpiries.size === 0) {
+      cancelAbandonedJob(job);
+    }
+  };
+
+  const scheduleObserverLeaseExpiry = (job: ChzzkVodJob): void => {
+    clearObserverLeaseTimer(job);
+    if (
+      !job.observerLeaseEnforced
+      || terminalJob(job)
+      || job.observerLeaseExpiries.size === 0
+    ) {
+      return;
+    }
+    const expiresAt = Math.min(...job.observerLeaseExpiries.values());
+    job.observerLeaseTimer = observerLeaseScheduler.schedule(() => {
+      delete job.observerLeaseTimer;
+      expireObserverLeases(job, now());
+      scheduleObserverLeaseExpiry(job);
+    }, Math.max(0, expiresAt - now()));
+  };
+
+  const reapObserverLeases = (timestamp: number): void => {
+    for (const job of jobs.values()) {
+      expireObserverLeases(job, timestamp);
+      scheduleObserverLeaseExpiry(job);
+    }
+  };
+
   const evictExpired = () => {
     const timestamp = now();
+    reapObserverLeases(timestamp);
     for (const [id, job] of jobs) {
       const lifetime = job.state === "completed"
         ? completedLifetime
@@ -2022,6 +2131,7 @@ export function createChzzkVodJobManager({
         && evictableTerminalJob(job)
         && jobs.get(id) === job
       ) {
+        finishObserverLeases(job);
         jobs.delete(id);
       }
     }
@@ -2052,6 +2162,7 @@ export function createChzzkVodJobManager({
     if (jobs.get(candidate.id) !== candidate) {
       return false;
     }
+    finishObserverLeases(candidate);
     jobs.delete(candidate.id);
     compactQueue();
     return true;
@@ -2249,6 +2360,9 @@ export function createChzzkVodJobManager({
           };
         } finally {
           job.updatedAt = now();
+          if (terminalJob(job)) {
+            finishObserverLeases(job);
+          }
           runningJobs -= 1;
           startNext();
         }
@@ -2315,6 +2429,8 @@ export function createChzzkVodJobManager({
       lastAccessAt: timestamp,
       accessToken: randomBytesImpl(32).toString("base64url"),
       controller: new AbortController(),
+      observerLeaseEnforced: false,
+      observerLeaseExpiries: new Map(),
       activeMediaReads: 0,
       purging: false,
       consumerPurging: false
@@ -2323,6 +2439,63 @@ export function createChzzkVodJobManager({
     queue.push(job);
     startNext();
     return job;
+  };
+
+  const assertObserverId = (observerId: unknown): string => {
+    if (
+      typeof observerId !== "string"
+      || observerId.length < 16
+      || observerId.length > 256
+      || /[\u0000-\u001f\u007f-\u009f]/u.test(observerId)
+    ) {
+      throw new TypeError("VOD 작업 observer identity가 올바르지 않습니다.");
+    }
+    return observerId;
+  };
+
+  /**
+   * Adds one authenticated browser document as an observer of an active job.
+   * Multiple documents may observe the same deduplicated job independently.
+   */
+  const observe = (jobId: string, rawObserverId: unknown): boolean => {
+    evictExpired();
+    const observerId = assertObserverId(rawObserverId);
+    const job = jobs.get(jobId);
+    if (!job || terminalJob(job)) {
+      return false;
+    }
+    job.observerLeaseEnforced = true;
+    job.observerLeaseExpiries.set(
+      observerId,
+      now() + observerLeaseLifetime
+    );
+    scheduleObserverLeaseExpiry(job);
+    return true;
+  };
+
+  /** Renews only a lease previously attached by the create request. */
+  const renewObserver = (
+    jobId: string,
+    rawObserverId: unknown
+  ): boolean => {
+    const observerId = assertObserverId(rawObserverId);
+    const job = jobs.get(jobId);
+    if (!job || terminalJob(job)) {
+      return false;
+    }
+    expireObserverLeases(job, now());
+    if (
+      terminalJob(job)
+      || !job.observerLeaseExpiries.has(observerId)
+    ) {
+      return false;
+    }
+    job.observerLeaseExpiries.set(
+      observerId,
+      now() + observerLeaseLifetime
+    );
+    scheduleObserverLeaseExpiry(job);
+    return true;
   };
 
   const get = (jobId: string): ChzzkVodJob | null => {
@@ -2350,6 +2523,7 @@ export function createChzzkVodJobManager({
       job.progress = 0;
       job.message = "VOD 구간 준비를 취소했습니다.";
       job.updatedAt = now();
+      finishObserverLeases(job);
       compactQueue();
     }
     return job;
@@ -2901,6 +3075,7 @@ export function createChzzkVodJobManager({
         job.message = "Kirinuki 내부 미디어 엔진 종료로 VOD 구간 준비를 취소했습니다.";
         job.updatedAt = now();
       }
+      finishObserverLeases(job);
     }
     if (!verificationController.signal.aborted) {
       verificationController.abort(new DOMException(
@@ -2926,6 +3101,8 @@ export function createChzzkVodJobManager({
   return {
     initialize,
     create,
+    observe,
+    renewObserver,
     get,
     cancel,
     publicStatus,

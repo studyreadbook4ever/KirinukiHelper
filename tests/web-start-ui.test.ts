@@ -31,10 +31,7 @@ test("PC 시작 화면은 넓은 원본 영역 오른쪽에 스크롤 가능한 
     css,
     /\.clip-list \{[^}]*overflow-y: auto[^}]*scrollbar-gutter: stable[^}]*overscroll-behavior: contain/u
   );
-  assert.match(
-    css,
-    /\.stream-cut-buttons button \{[^}]*min-height: 38px[^}]*inline-flex/u
-  );
+  assert.doesNotMatch(css, /\.stream-cut-console|\.stream-cut-buttons/u);
   assert.match(
     css,
     /\.clip-row \.clip-start input, \.clip-row \.clip-end input \{[^}]*ui-monospace[^}]*tabular-nums[^}]*text-overflow: clip/u
@@ -79,25 +76,23 @@ test("매 사용 정책은 근거 입력·문구 타이핑 없이 여섯 확인�
   assert.doesNotMatch(source, /selectedBasis|updatePolicyEvidenceFields|confirmationText\.value/u);
 });
 
-test("컷 단계는 client-only 스트리밍 제어만 쓰고 편집 미디어 준비는 editor 진입 뒤로 미룬다", async () => {
+test("컷 단계는 원본 iframe과 수동 시각 입력만 쓰고 편집 미디어 준비는 editor 진입 뒤로 미룬다", async () => {
   const { html, source } = await studioSources();
   assert.match(
     html,
     /VOD에서 편집할 구간을 선택하세요[\s\S]*편집기를 열 때 선택한 구간만 이 PC에 준비합니다/u
   );
   assert.match(html, /id="stream-preview-frame"/u);
-  assert.match(html, /이 화면에서는 영상을 내려받지 않습니다/u);
+  assert.match(html, /원본을 보며 가져올 시작과 끝 시각을 직접 입력하세요/u);
   assert.doesNotMatch(
     html,
     /local-preview-video|local-preview-anchor|prepare-local-preview/u
   );
-  assert.match(source, /new StreamingBridgeClient\(\{/u);
-  assert.match(
+  assert.doesNotMatch(
     source,
-    /runTransientSafeStreamingAction[\s\S]*client\.snapshot\(\)/u
+    /streaming-bridge|StreamingBridge|streamingBridge|captureCurrentPlayerTime|seekPlayerBy|setPlayerRate/u
   );
-  assert.match(source, /client\.seekAbsolute\(/u);
-  assert.match(source, /client\.setPlaybackRate\(/u);
+  assert.match(source, /elements\.addClip\.addEventListener\("click", \(\) => addClipRow\(\)\)/u);
   assert.doesNotMatch(
     source,
     /LOCAL_VOD_COMPANION_ENDPOINT|KIRINUKI_MEDIA_ENGINE_ENDPOINT|startChzzkVodMaterialization|waitForChzzkVodMaterialization|localPreviewVideo/u
@@ -148,7 +143,7 @@ test("시작 화면은 writer가 없는 미확정 작업만 rollback하고 열�
   const { html, source } = await studioSources();
   assert.match(html, /class="local-project-active-session"[^>]*hidden>다른 탭에서 편집 중/u);
   const refreshStart = source.indexOf("async function refreshLocalProjectManager(");
-  const refreshEnd = source.indexOf("function migratedLatestProjectId(", refreshStart);
+  const refreshEnd = source.indexOf("function prefillSourceFromLocation(", refreshStart);
   assert.ok(refreshStart >= 0 && refreshEnd > refreshStart);
   const refresh = source.slice(refreshStart, refreshEnd);
   const inventoryIndex = refresh.indexOf("listEditingSessionCheckpointProjectIds()");
@@ -243,11 +238,11 @@ test("raw close 뒤 살아 있는 시작 탭은 focus·pageshow·visible 복귀�
   );
   assert.match(
     source,
-    /case "refresh-recovery-sessions":[\s\S]*if \(!openingEditor\)[\s\S]*refreshRecentProject\(\)/u
+    /binding\.action === "refresh-recovery-sessions"[\s\S]*if \(!openingEditor\)[\s\S]*refreshRecentProject\(\)/u
   );
 });
 
-test("앱 내부 정적 HTML은 loopback 서버가 CSP를 교체하기 전에도 안전하게 닫혀 있다", async () => {
+test("공개 웹 편집기 정적 HTML은 고정 HTTPS 원본과 loopback 영상 엔진만 허용한다", async () => {
   const [{ html }, editorHtml, licensesHtml] = await Promise.all([
     studioSources(),
     readFile(new URL("../web/editor.html", import.meta.url), "utf8"),
@@ -259,18 +254,18 @@ test("앱 내부 정적 HTML은 loopback 서버가 CSP를 교체하기 전에도
   );
   assert.match(
     html,
-    /http-equiv="Content-Security-Policy"[^>]*default-src 'self'[^>]*frame-src 'none'[^>]*form-action 'none'[^>]*script-src 'self'[^>]*media-src 'self' blob:;[^>]*connect-src 'self'/u
+    /http-equiv="Content-Security-Policy"[^>]*default-src 'self'[^>]*frame-src https:\/\/chzzk\.naver\.com https:\/\/www\.youtube-nocookie\.com https:\/\/vod\.sooplive\.com[^>]*script-src 'self'[^>]*media-src 'self' blob: http:\/\/127\.0\.0\.1:4319[^>]*connect-src 'self' http:\/\/127\.0\.0\.1:4319/u
   );
-  assert.doesNotMatch(html, /127\.0\.0\.1|:4319/u);
+  assert.doesNotMatch(html, /localhost|127\.0\.0\.1:(?!4319\b)|:4320/u);
   assert.match(
     editorHtml,
     /<meta name="referrer" content="strict-origin-when-cross-origin">/u
   );
   assert.match(
     editorHtml,
-    /http-equiv="Content-Security-Policy"[^>]*default-src 'self'[^>]*object-src 'none'[^>]*media-src 'self' blob:;[^>]*connect-src 'self'/u
+    /http-equiv="Content-Security-Policy"[^>]*default-src 'self'[^>]*object-src 'none'[^>]*media-src 'self' blob: http:\/\/127\.0\.0\.1:4319[^>]*connect-src 'self' http:\/\/127\.0\.0\.1:4319/u
   );
-  assert.doesNotMatch(editorHtml, /127\.0\.0\.1|:4319/u);
+  assert.doesNotMatch(editorHtml, /localhost|127\.0\.0\.1:(?!4319\b)|:4320/u);
   assert.match(licensesHtml, /<meta name="referrer" content="no-referrer">/u);
   assert.match(
     licensesHtml,
@@ -278,22 +273,23 @@ test("앱 내부 정적 HTML은 loopback 서버가 CSP를 교체하기 전에도
   );
 });
 
-test("실제 공개 배포 트리는 무스크립트 shell과 강제 보안 헤더만 포함한다", async () => {
-  const [html, css, headers, hosts, notices] = await Promise.all([
-    readFile(new URL("../public-shell/index.html", import.meta.url), "utf8"),
-    readFile(new URL("../public-shell/public.css", import.meta.url), "utf8"),
-    readFile(new URL("../public-shell/_headers", import.meta.url), "utf8"),
-    readFile(new URL("../public-shell/.popovic-hosts", import.meta.url), "utf8"),
-    readFile(new URL("../public-shell/THIRD_PARTY_NOTICES.md", import.meta.url), "utf8")
+test("실제 공개 배포 트리는 완전한 브라우저 편집기와 강제 보안 헤더를 포함한다", async () => {
+  const [html, editorHtml, headers, hosts, notices] = await Promise.all([
+    readFile(new URL("../web/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../web/editor.html", import.meta.url), "utf8"),
+    readFile(new URL("../web/_headers", import.meta.url), "utf8"),
+    readFile(new URL("../web/.popovic-hosts", import.meta.url), "utf8"),
+    readFile(new URL("../web/THIRD_PARTY_NOTICES.md", import.meta.url), "utf8")
   ]);
   assert.equal(hosts, "kirinuki.eff0rtchung.kr\n");
-  assert.match(html, /href="kirinuki:\/\/open"/u);
-  assert.match(html, /Node\.js 22\.17\.0 이상과 npm[\s\S]*Chromium 120 이상[\s\S]*Python 3\.11 이상[\s\S]*FFmpeg와 ffprobe/u);
-  assert.match(html, /Whisper[\s\S]*CMake[\s\S]*tar[\s\S]*C\+\+ 컴파일러/u);
-  assert.doesNotMatch(html, /<script\b|editor\.html|local-app-surface|127\.0\.0\.1|localhost|:4319/iu);
-  assert.doesNotMatch(`${css}\n${notices}`, /studio\.js|audseg-worker|\/v1\//iu);
+  assert.match(html, /id="local-app-surface"[^>]*hidden[^>]*inert/u);
+  assert.match(html, /id="start-form"[\s\S]*id="start-editor"/u);
+  assert.match(html, /<script type="module" src="\/studio\.js\?v=3\.0\.0"><\/script>/u);
+  assert.match(editorHtml, /id="local-media-engine-dialog"/u);
+  assert.doesNotMatch(`${html}\n${editorHtml}\n${notices}`, /kirinuki:\/\/|chrome-extension:\/\//iu);
   for (const requiredHeader of [
     "frame-ancestors 'none'",
+    "connect-src 'self' http://127.0.0.1:4319",
     "X-Content-Type-Options: nosniff",
     "X-Frame-Options: DENY",
     "Permissions-Policy:",
@@ -304,47 +300,24 @@ test("실제 공개 배포 트리는 무스크립트 shell과 강제 보안 헤�
   }
 });
 
-test("앱 HTML의 public-origin 폴백도 편집 UI를 초기화하지 않는다", async () => {
-  const { html, css, source } = await studioSources();
+test("공개 HTTPS와 로컬 개발 origin은 같은 웹 편집기를 초기화한다", async () => {
+  const { html, source } = await studioSources();
   const publicStart = html.indexOf('id="public-launch-shell"');
   const localStart = html.indexOf('id="local-app-surface"');
   assert.ok(publicStart >= 0 && localStart > publicStart);
   const publicShell = html.slice(publicStart, localStart);
-  assert.match(
-    publicShell,
-    /id="public-launch-shell"[^>]*>[\s\S]*id="launch-kirinuki-app"[^>]*href="kirinuki:\/\/open"[^>]*>[\s\S]*Kirinuki 앱에서 열기/u
-  );
-  assert.doesNotMatch(publicShell.split(">")[0] || "", /\bhidden\b|\binert\b/u);
-  assert.doesNotMatch(publicShell, /kirinuki:\/\/open(?:[/?#]|:[0-9])/u);
-  assert.doesNotMatch(publicShell, /kirinuki:\/\/open[^"\s>]*(?:source|session|project)=/u);
-  assert.match(
-    publicShell,
-    /href="https:\/\/github\.com\/studyreadbook4ever\/KirinukiHelper#설치"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/u
-  );
-  assert.match(publicShell, /GitHub에서 소스 보기/u);
-  assert.doesNotMatch(
-    publicShell,
-    /<form|recent-section|source-url|editor\.html|localhost|companion|127\.0\.0\.1|:4319/iu
-  );
+  assert.match(publicShell, /id="public-launch-shell"[^>]*hidden[^>]*inert/u);
+  assert.match(publicShell, /Kirinuki를 불러오는 중입니다/u);
+  assert.doesNotMatch(publicShell, /kirinuki:\/\/|설치|companion/iu);
   assert.match(html, /id="local-app-surface"[^>]*hidden[^>]*inert/u);
   assert.match(
     source,
-    /const activeStudioOrigin = assertKirinukiStudioDocumentOrigin\([\s\S]*if \(isKirinukiLocalStudioOrigin\(activeStudioOrigin\)\) \{[\s\S]*startLocalApplication\(\);[\s\S]*\} else if \(isKirinukiPublicStudioOrigin\(activeStudioOrigin\)\) \{[\s\S]*startPublicLaunchShell\(\);/u
+    /const activeStudioOrigin = assertKirinukiStudioDocumentOrigin\([\s\S]*void activeStudioOrigin;[\s\S]*startLocalApplication\(\);/u
   );
   assert.match(
     source,
-    /function startLocalApplication\(\): void \{[\s\S]*setDocumentSurface\("local"\);[\s\S]*new StreamingBridgeClient/u
+    /function startLocalApplication\(\): void \{[\s\S]*setDocumentSurface\("local"\);[\s\S]*installStudioShortcuts\(\);/u
   );
-  assert.match(
-    source,
-    /function startPublicLaunchShell\(\): void \{[\s\S]*setDocumentSurface\("public"\);/u
-  );
-  assert.match(
-    source,
-    /launchLink\.addEventListener\("click", \(\) => \{[\s\S]*guide\.hidden = false;/u
-  );
-  assert.match(
-    css,
-    /\.public-launch-actions \.button:focus-visible, \.public-launch-guide a:focus-visible, \.public-source-link:focus-visible/u
-  );
+  assert.doesNotMatch(source, /streaming-bridge|StreamingBridge|chrome-extension:\/\//u);
+  assert.doesNotMatch(source, /startPublicLaunchShell|kirinuki:\/\//u);
 });

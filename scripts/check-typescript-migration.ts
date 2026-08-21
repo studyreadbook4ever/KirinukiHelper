@@ -7,16 +7,6 @@ import ts from "typescript";
 
 import { GENERATED_JAVASCRIPT_BANNER } from "./generated-javascript.js";
 import {
-  SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
-  SOOP_STREAMING_COMPANION_SOURCE_PATH,
-  STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
-  STUDIO_STREAMING_RELAY_SOURCE_PATH,
-  STREAMING_COMPANION_JAVASCRIPT_PATH,
-  STREAMING_COMPANION_JAVASCRIPT_PATHS,
-  STREAMING_COMPANION_SOURCE_PATH,
-  buildStreamingCompanion
-} from "./build-streaming-companion.js";
-import {
   WEB_JAVASCRIPT_PATHS,
   WEB_JAVASCRIPT_TARGETS,
   buildWebJavaScript
@@ -71,12 +61,7 @@ export function findAuthoredJavaScriptFiles(
   repositoryFiles: readonly string[]
 ): string[] {
   const approvedGeneratedJavaScript = new Set(
-    [
-      ...WEB_JAVASCRIPT_PATHS.map((relativePath) => `web/${relativePath}`),
-      ...STREAMING_COMPANION_JAVASCRIPT_PATHS.map((relativePath) => (
-        `streaming-companion/${relativePath}`
-      ))
-    ]
+    WEB_JAVASCRIPT_PATHS.map((relativePath) => `web/${relativePath}`)
   );
   return repositoryFiles.filter((relativePath) => (
     javaScriptFamilyPattern.test(relativePath)
@@ -249,8 +234,9 @@ export function assertRootTypeSafetyScripts(manifest: unknown): void {
     validate: "node --import tsx scripts/validate-local-studio.ts",
     typecheck: "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.web.source.json",
     "migration:check": "node --import tsx scripts/check-typescript-migration.ts",
+    "desktop:icons:check": "node --import tsx scripts/generate-desktop-icons.ts check",
     test: "node --import tsx scripts/run-tests.ts",
-    check: "npm run typecheck && npm run migration:check && npm run build && npm run build:desktop && npm run validate && npm run license:check && npm test && npm run audit"
+    check: "npm run typecheck && npm run migration:check && npm run desktop:icons:check && npm run build && npm run build:desktop && npm run validate && npm run license:check && npm test && npm run audit"
   } as const;
   for (const [name, expected] of Object.entries(requiredScripts)) {
     assert(
@@ -556,54 +542,16 @@ async function assertGeneratedJavaScript(
       `actual=${JSON.stringify(actualWebJavaScript)}`
   );
 
-  const actualCompanionJavaScript = repositoryFiles.filter((relativePath) => (
-    relativePath.startsWith("streaming-companion/")
-    && javaScriptFamilyPattern.test(relativePath)
-  ));
-  assert(
-    sameStrings(actualCompanionJavaScript, (
-      STREAMING_COMPANION_JAVASCRIPT_PATHS.map((relativePath) => (
-        `streaming-companion/${relativePath}`
-      ))
-    )),
-    "최소 스트리밍 companion JavaScript 생성물 목록이 typed manifest와 다릅니다."
-  );
-
-  const builds = [
-    {
-      rootName: "web",
-      paths: WEB_JAVASCRIPT_PATHS,
-      targets: WEB_JAVASCRIPT_TARGETS,
-      result: await buildWebJavaScript({
-        rootDirectory,
-        write: false,
-        logLevel: "silent"
-      })
-    },
-    {
-      rootName: "streaming-companion",
-      paths: STREAMING_COMPANION_JAVASCRIPT_PATHS,
-      targets: [
-        {
-          sourcePath: STREAMING_COMPANION_SOURCE_PATH,
-          outputPath: STREAMING_COMPANION_JAVASCRIPT_PATH
-        },
-        {
-          sourcePath: SOOP_STREAMING_COMPANION_SOURCE_PATH,
-          outputPath: SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH
-        },
-        {
-          sourcePath: STUDIO_STREAMING_RELAY_SOURCE_PATH,
-          outputPath: STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH
-        }
-      ],
-      result: await buildStreamingCompanion({
-        rootDirectory,
-        write: false,
-        logLevel: "silent"
-      })
-    }
-  ];
+  const builds = [{
+    rootName: "web",
+    paths: WEB_JAVASCRIPT_PATHS,
+    targets: WEB_JAVASCRIPT_TARGETS,
+    result: await buildWebJavaScript({
+      rootDirectory,
+      write: false,
+      logLevel: "silent"
+    })
+  }];
   for (const built of builds) {
     assertGeneratedBuildInputs(built.result.inputs);
     const inputSet = new Set(built.result.inputs);
@@ -769,10 +717,6 @@ export async function runTypeScriptMigrationCheck(
     /^web\/\*\*\/\*\.js\s+linguist-generated=true$/mu.test(attributes),
     "GitHub 언어 통계에서 localhost web 생성 JavaScript를 명시해야 합니다."
   );
-  assert(
-    /^streaming-companion\/\*\*\/\*\.js\s+linguist-generated=true$/mu.test(attributes),
-    "GitHub 언어 통계에서 최소 companion 생성 JavaScript를 명시해야 합니다."
-  );
   await assertGeneratedJavaScript(
     rootDirectory,
     repositoryFiles
@@ -784,8 +728,7 @@ export async function runTypeScriptMigrationCheck(
     authoredJavaScriptFiles: 0,
     explicitAnyTypes: 0,
     typeSuppressionDirectives: 0,
-    generatedJavaScriptFiles: WEB_JAVASCRIPT_PATHS.length
-      + STREAMING_COMPANION_JAVASCRIPT_PATHS.length,
+    generatedJavaScriptFiles: WEB_JAVASCRIPT_PATHS.length,
     generatedJavaScriptMatchesTypeScript: true,
     generatedFirstPartyInputsAreTypeScript: true,
     browserDistributionShipsTypeScript: false

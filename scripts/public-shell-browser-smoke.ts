@@ -14,11 +14,14 @@ import {
   writeFile
 } from "node:fs/promises";
 import {
-  createServer as createHttpServer,
   request as httpRequest,
   type IncomingHttpHeaders,
   type Server as HttpServer
 } from "node:http";
+import {
+  createServer as createHttpsServer,
+  type Server as HttpsServer
+} from "node:https";
 import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -34,10 +37,41 @@ import {
   createPublicShellHttpServer
 } from "./public-shell-server-core.js";
 import { PUBLIC_WEB_PACKAGE_FILES } from "./web-package-files.js";
+import {
+  CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+} from "./chzzk-vod-job-manager.js";
+import {
+  LOCAL_MEDIA_ENGINE_API_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA,
+  LOCAL_MEDIA_ENGINE_PRODUCT,
+  LOCAL_MEDIA_ENGINE_VOD_RUNTIME_SCHEMA
+} from "../src/lib/local-media-engine-contract.js";
+import {
+  LOCAL_MEDIA_ENGINE_AUTHENTICATED_HEALTH_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
+  LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+  freshLocalMediaEngineChallenge,
+  localMediaEngineProofTranscript,
+  pairingResponseUnsignedPayload,
+  parseLocalMediaEngineDeviceProof,
+  parseLocalMediaEnginePairingResponse,
+  verifyLocalMediaEngineSignature
+} from "../src/lib/local-media-engine-auth.js";
+import {
+  LOCAL_MEDIA_ENGINE_TRUST_DATABASE,
+  LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
+  LOCAL_MEDIA_ENGINE_TRUST_STORE
+} from "../src/editor/local-media-engine-trust.js";
+import {
+  createLocalMediaEngineV2Fixture,
+  type LocalMediaEngineV2Fixture,
+  type LocalMediaEngineV2FixtureRecord
+} from "./local-media-engine-v2-fixture.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const maximumArchiveBytes = 16 * 1024 * 1024;
-const maximumEntryBytes = 2 * 1024 * 1024;
+const maximumArchiveBytes = 32 * 1024 * 1024;
+const maximumEntryBytes = 16 * 1024 * 1024;
 const forbiddenResponseHeaders = Object.freeze([
   "nel",
   "report-to",
@@ -75,6 +109,14 @@ interface ProxyRequestRecord {
   responseStatus?: number;
 }
 
+type LocalEngineProbeRecord = LocalMediaEngineV2FixtureRecord;
+
+interface LocalEngineSemanticFixtureState {
+  materializationRequests: number;
+  mediaRequests: number;
+  sessionRequests: number;
+}
+
 interface ZipEntry {
   readonly compressedSize: number;
   readonly compressionMethod: number;
@@ -96,8 +138,9 @@ interface HttpResult {
 let chromedriver: ManagedChild | null = null;
 let chromedriverOutput = "";
 let chromedriverPort = 0;
+let localEngineProbeServer: Readonly<LocalMediaEngineV2Fixture> | null = null;
 let originServer: HttpServer | null = null;
-let proxyServer: HttpServer | null = null;
+let proxyServer: HttpsServer | null = null;
 let sessionId = "";
 let temporaryRoot = "";
 let cleanupPromise: Promise<void> | null = null;
@@ -396,7 +439,7 @@ async function resolveExecutable(
   );
 }
 
-async function listenLoopback(server: HttpServer): Promise<number> {
+async function listenLoopback(server: HttpServer | HttpsServer): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => {
       server.removeListener("listening", onListening);
@@ -420,6 +463,324 @@ async function listenLoopback(server: HttpServer): Promise<number> {
     "공개 shell smoke 서버가 정확한 loopback 임시 포트에 바인딩되지 않았습니다."
   );
   return address.port;
+}
+
+async function listenLocalEngineProbe(
+  fixture: Readonly<LocalMediaEngineV2Fixture>
+): Promise<void> {
+  await fixture.listen();
+}
+
+async function createLocalEngineV2ProbeFixture(
+  records: LocalEngineProbeRecord[],
+  mediaBytes: Buffer,
+  fixtureState: LocalEngineSemanticFixtureState
+): Promise<Readonly<LocalMediaEngineV2Fixture>> {
+  const mediaAccess = "M".repeat(43);
+  const jobId = "semantic_browser_job_0001";
+  const publicOrigin = `https://${PUBLIC_SHELL_CANONICAL_HOST}`;
+  let fixture: Readonly<LocalMediaEngineV2Fixture> | null = null;
+  fixture = await createLocalMediaEngineV2Fixture({
+    allowedOrigin: publicOrigin,
+    originBinding: "exact-public-studio",
+    records,
+    onControlRequest: (control) => {
+      const requestUrl = new URL(control.path, "http://127.0.0.1:4319");
+      if (
+        requestUrl.pathname !== "/v1/vod/materializations"
+        || control.method !== "POST"
+        || !isRecord(control.body)
+      ) {
+        return {
+          status: 404,
+          statusText: "Not Found",
+          payload: {
+            error: {
+              code: "SEMANTIC_FIXTURE_NOT_FOUND",
+              message: "semantic v2 fixture가 허용하지 않은 요청입니다."
+            }
+          }
+        };
+      }
+      const body = control.body;
+      const clips = Array.isArray(body.clips) ? body.clips : [];
+      const clip = isRecord(clips[0]) ? clips[0] : null;
+      const clipId = String(clip?.id || "");
+      const sourceStartMs = Number(clip?.startMs);
+      const sourceEndMs = Number(clip?.endMs);
+      fixtureState.sessionRequests = fixture?.sessions.length || 0;
+      assert(
+        control.protocol === CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+          && control.mediaAccess === null
+          && body.schema === CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+          && control.session.projectId === body.consumerId
+          && control.session.sourceUrl === "https://chzzk.naver.com/video/14252987"
+          && JSON.stringify(control.session.actions)
+            === JSON.stringify(["vod", "cache-delete"])
+          && body.sourceUrl === control.session.sourceUrl
+          && body.handleMs === 10_000
+          && clips.length === 1
+          && clipId.length > 0
+          && Number.isSafeInteger(sourceStartMs)
+          && Number.isSafeInteger(sourceEndMs)
+          && sourceStartMs === 10_000
+          && sourceEndMs === 11_000,
+        "공개 편집기의 v2 encrypted VOD prepare 범위·session scope가 다릅니다."
+      );
+      const editableSourceStartMs = 0;
+      const editableSourceEndMs = 21_000;
+      const planFingerprint = "b".repeat(64);
+      fixtureState.materializationRequests += 1;
+      return {
+        status: 202,
+        payload: {
+          schema: "chzzk-kirinuki-vod-materialization-status/v1",
+          jobId,
+          state: "completed",
+          progress: 1,
+          message: "공개 HTTPS semantic v2 fixture 준비 완료",
+          reused: false,
+          materialization: {
+            schema: "chzzk-kirinuki-chzzk-vod-materialization/v2",
+            materializationId: planFingerprint.slice(0, 32),
+            planFingerprint,
+            source: {
+              platform: "CHZZK",
+              contentType: "vod",
+              contentId: "14252987",
+              sourceVersionId: "c".repeat(64)
+            },
+            sourceDurationMs: 600_000,
+            handleMs: 10_000,
+            mediaDurationMs: 21_000,
+            windows: [{
+              id: "semantic-browser-window-1",
+              editableSourceStartMs,
+              editableSourceEndMs,
+              fetchedSourceStartMs: editableSourceStartMs,
+              fetchedSourceEndMs: editableSourceEndMs,
+              mediaStartMs: 0,
+              mediaEndMs: 21_000,
+              clipIds: [clipId]
+            }],
+            clipRanges: [{
+              clipId,
+              sourceStartMs,
+              sourceEndMs,
+              editableSourceStartMs,
+              editableSourceEndMs
+            }],
+            preparedAt: "2026-08-21T00:00:00.000Z",
+            localOnly: true
+          },
+          media: {
+            url: `http://127.0.0.1:4319/v1/vod/media/${jobId}?access=${mediaAccess}`,
+            name: "semantic-browser-materialized.mp4",
+            size: mediaBytes.byteLength,
+            type: "video/mp4",
+            lastModified: 1_787_270_400_000
+          }
+        }
+      };
+    },
+    onMediaRequest: ({ method, path: mediaPath, request, response }) => {
+      const requestUrl = new URL(mediaPath, "http://127.0.0.1:4319");
+      if (
+        requestUrl.pathname !== `/v1/vod/media/${jobId}`
+        || requestUrl.searchParams.get("access") !== mediaAccess
+      ) {
+        return false;
+      }
+      fixtureState.mediaRequests += 1;
+      const range = /^bytes=(\d+)-(\d*)$/u.exec(
+        String(request.headers.range || "")
+      );
+      const start = range ? Number(range[1]) : 0;
+      const requestedEnd = range?.[2]
+        ? Number(range[2])
+        : mediaBytes.length - 1;
+      const end = Math.min(requestedEnd, mediaBytes.length - 1);
+      assert(
+        Number.isSafeInteger(start)
+          && Number.isSafeInteger(end)
+          && start >= 0
+          && end >= start
+          && end < mediaBytes.length,
+        "브라우저 media Range가 v2 fixture 범위를 벗어났습니다."
+      );
+      const selected = mediaBytes.subarray(start, end + 1);
+      const partial = Boolean(range);
+      response.writeHead(partial ? 206 : 200, {
+        "Access-Control-Allow-Origin": publicOrigin,
+        "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range, ETag",
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+        "Content-Type": "video/mp4",
+        "Content-Length": String(selected.byteLength),
+        ...(partial
+          ? { "Content-Range": `bytes ${start}-${end}/${mediaBytes.byteLength}` }
+          : {}),
+        ETag: `"semantic-${mediaBytes.byteLength}"`,
+        "X-Content-Type-Options": "nosniff"
+      });
+      response.end(method === "HEAD" ? undefined : selected);
+      request.resume();
+      return true;
+    }
+  });
+  return fixture;
+}
+
+async function createSemanticFixtureMedia(directory: string): Promise<Buffer> {
+  const ffmpeg = await resolveExecutable(
+    "FFMPEG_BINARY",
+    process.platform === "win32" ? ["ffmpeg.exe", "ffmpeg"] : ["ffmpeg"]
+  );
+  const outputPath = path.join(directory, "semantic-browser-materialized.mp4");
+  await new Promise<void>((resolve, reject) => {
+    let output = "";
+    const child = spawn(ffmpeg, [
+      "-hide_banner",
+      "-loglevel", "error",
+      "-nostdin",
+      "-f", "lavfi",
+      "-i", "color=c=black:s=160x90:r=30:d=21",
+      "-f", "lavfi",
+      "-i", "anullsrc=r=48000:cl=stereo:d=21",
+      "-map", "0:v:0",
+      "-map", "1:a:0",
+      "-c:v", "libx264",
+      "-preset", "ultrafast",
+      "-profile:v", "baseline",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "64k",
+      "-shortest",
+      "-movflags", "+faststart",
+      "-n",
+      outputPath
+    ], {
+      cwd: directory,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const collect = (chunk: Buffer | string) => {
+      output = appendOutput(output, chunk);
+    };
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("semantic browser MP4 생성 시간이 초과되었습니다."));
+    }, 30_000);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      if (code === 0 && signal === null) {
+        resolve();
+        return;
+      }
+      reject(new Error(
+        `semantic browser MP4 생성 실패 (code=${String(code)}, signal=${String(signal)}): ${output.trim()}`
+      ));
+    });
+  });
+  const bytes = await readStableRegularFile(outputPath, 4 * 1024 * 1024);
+  assert(bytes.byteLength > 1_024, "semantic browser MP4가 너무 짧습니다.");
+  return bytes;
+}
+
+async function createEphemeralHttpsCertificate(
+  directory: string
+): Promise<{ readonly certificate: Buffer; readonly privateKey: Buffer }> {
+  // Keep the browser URL on the production origin without contacting the
+  // deployed site. This certificate exists only inside the disposable smoke
+  // directory and Chromium accepts it only in this isolated test profile.
+  const opensslPath = await resolveExecutable(
+    "OPENSSL_BINARY",
+    process.platform === "win32" ? ["openssl.exe", "openssl"] : ["openssl"]
+  );
+  const configPath = path.join(directory, "openssl-smoke.cnf");
+  const certificatePath = path.join(directory, "public-smoke.crt");
+  const privateKeyPath = path.join(directory, "public-smoke.key");
+  await writeFile(configPath, [
+    "[req]",
+    "distinguished_name = subject",
+    "x509_extensions = extensions",
+    "prompt = no",
+    "[subject]",
+    `CN = ${PUBLIC_SHELL_CANONICAL_HOST}`,
+    "[extensions]",
+    `subjectAltName = DNS:${PUBLIC_SHELL_CANONICAL_HOST}`,
+    "basicConstraints = critical,CA:FALSE",
+    "keyUsage = critical,digitalSignature,keyEncipherment",
+    "extendedKeyUsage = serverAuth",
+    ""
+  ].join("\n"), { flag: "wx", mode: 0o600 });
+
+  await new Promise<void>((resolve, reject) => {
+    let output = "";
+    const child = spawn(opensslPath, [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-sha256",
+      "-nodes",
+      "-days",
+      "1",
+      "-config",
+      configPath,
+      "-keyout",
+      privateKeyPath,
+      "-out",
+      certificatePath
+    ], {
+      cwd: directory,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("OpenSSL smoke 인증서 생성 시간이 초과되었습니다."));
+    }, 15_000);
+    const collect = (chunk: Buffer | string) => {
+      output = appendOutput(output, chunk);
+    };
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      if (code === 0 && signal === null) {
+        resolve();
+        return;
+      }
+      reject(new Error(
+        `OpenSSL smoke 인증서 생성에 실패했습니다 (code=${String(code)}, signal=${String(signal)}): ${output.trim()}`
+      ));
+    });
+  });
+
+  const [certificate, privateKey] = await Promise.all([
+    readStableRegularFile(certificatePath, 64 * 1024),
+    readStableRegularFile(privateKeyPath, 64 * 1024)
+  ]);
+  assert(
+    certificate.includes(Buffer.from("BEGIN CERTIFICATE"))
+      && (
+        privateKey.includes(Buffer.from("BEGIN PRIVATE KEY"))
+        || privateKey.includes(Buffer.from("BEGIN RSA PRIVATE KEY"))
+      ),
+    "생성한 HTTPS smoke 인증서 또는 개인 키가 PEM 형식이 아닙니다."
+  );
+  return { certificate, privateKey };
 }
 
 async function reservePort(): Promise<number> {
@@ -500,10 +861,14 @@ function assertPublicSecurityHeaders(headers: IncomingHttpHeaders): void {
 
 function createBrowserFacingProxy(
   originPort: number,
-  records: ProxyRequestRecord[]
-): HttpServer {
-  let publicPort = 0;
-  const server = createHttpServer({
+  records: ProxyRequestRecord[],
+  certificate: Buffer,
+  privateKey: Buffer
+): HttpsServer {
+  const server = createHttpsServer({
+    cert: certificate,
+    key: privateKey,
+    minVersion: "TLSv1.2",
     insecureHTTPParser: false,
     maxHeaderSize: 16 * 1024
   }, (request, response) => {
@@ -514,8 +879,10 @@ function createBrowserFacingProxy(
       requestCookie: String(request.headers.cookie || "")
     };
     records.push(record);
-    const expectedHost = `${PUBLIC_SHELL_CANONICAL_HOST}:${publicPort}`;
-    if (record.host !== expectedHost || (record.method !== "GET" && record.method !== "HEAD")) {
+    if (
+      record.host !== PUBLIC_SHELL_CANONICAL_HOST
+      || (record.method !== "GET" && record.method !== "HEAD")
+    ) {
       response.writeHead(421, {
         "Content-Type": "text/plain; charset=utf-8",
         "Content-Length": "20",
@@ -553,12 +920,6 @@ function createBrowserFacingProxy(
     request.once("aborted", () => upstream.destroy());
     request.resume();
     upstream.end();
-  });
-  server.on("listening", () => {
-    const address = server.address();
-    if (typeof address === "object" && address) {
-      publicPort = address.port;
-    }
   });
   server.on("clientError", (_error, socket) => socket.destroy());
   server.on("connect", (_request, socket) => socket.destroy());
@@ -654,6 +1015,121 @@ async function executeAsync<T>(script: string, args: readonly unknown[] = []): P
   return webdriver<T>("POST", `/session/${sessionId}/execute/async`, { script, args });
 }
 
+async function enrollPublicLocalMediaEngineFixture(
+  fixture: Readonly<LocalMediaEngineV2Fixture>
+): Promise<void> {
+  const state = freshLocalMediaEngineChallenge();
+  const challenge = freshLocalMediaEngineChallenge();
+  const pairingResult = await executeAsync<{
+    readonly error: string;
+    readonly ok: boolean;
+    readonly status: number;
+    readonly value: unknown;
+  }>(`
+    const done = arguments[arguments.length - 1];
+    fetch("http://127.0.0.1:4319/v1/pairing", {
+      method: "GET",
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      targetAddressSpace: "loopback",
+      headers: {
+        "X-Kirinuki-Protocol": arguments[0],
+        [arguments[1]]: arguments[2],
+        [arguments[3]]: arguments[4]
+      }
+    }).then(async (response) => done({
+      error: "",
+      ok: response.ok,
+      status: response.status,
+      value: await response.json()
+    }), (error) => done({
+      error: String(error),
+      ok: false,
+      status: 0,
+      value: null
+    }));
+  `, [
+    LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
+    LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
+    state,
+    LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+    challenge
+  ]);
+  const pairing = parseLocalMediaEnginePairingResponse(pairingResult.value);
+  assert(
+    pairingResult.ok
+      && pairingResult.status === 200
+      && !pairingResult.error
+      && pairing
+      && pairing.state === state
+      && pairing.challenge === challenge
+      && pairing.keyId === fixture.keyId
+      && pairing.publicKeySpki === fixture.publicKeySpki
+      && await verifyLocalMediaEngineSignature({
+        publicKeySpki: pairing.publicKeySpki,
+        signature: pairing.signature,
+        transcript: localMediaEngineProofTranscript({
+          kind: "pairing",
+          challenge,
+          instanceNonce: "",
+          requestBinding: state,
+          payload: pairingResponseUnsignedPayload(pairing)
+        })
+      }),
+    `공개 HTTPS smoke의 v2 pairing identity 서명이 올바르지 않습니다: ${JSON.stringify(pairingResult)}`
+  );
+  const pin = {
+    schema: LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
+    algorithm: pairing.algorithm,
+    keyId: pairing.keyId,
+    publicKeySpki: pairing.publicKeySpki,
+    enrolledAt: new Date().toISOString(),
+    maxSeenVersion: pairing.engineVersion
+  };
+  const stored = await executeAsync<{
+    readonly error: string;
+    readonly ready: boolean;
+  }>(`
+    const done = arguments[arguments.length - 1];
+    const open = indexedDB.open(arguments[0], 1);
+    open.onupgradeneeded = () => {
+      if (!open.result.objectStoreNames.contains(arguments[1])) {
+        open.result.createObjectStore(arguments[1]);
+      }
+    };
+    open.onerror = () => done({
+      ready: false,
+      error: String(open.error || "open failed")
+    });
+    open.onsuccess = () => {
+      const database = open.result;
+      const transaction = database.transaction(arguments[1], "readwrite");
+      transaction.objectStore(arguments[1]).put(arguments[2], "active");
+      transaction.oncomplete = () => {
+        database.close();
+        done({ ready: true, error: "" });
+      };
+      transaction.onerror = () => {
+        database.close();
+        done({
+          ready: false,
+          error: String(transaction.error || "pin write failed")
+        });
+      };
+    };
+  `, [
+    LOCAL_MEDIA_ENGINE_TRUST_DATABASE,
+    LOCAL_MEDIA_ENGINE_TRUST_STORE,
+    pin
+  ]);
+  assert(
+    stored.ready && !stored.error,
+    `공개 HTTPS smoke의 검증된 v2 pin 저장 실패: ${stored.error}`
+  );
+}
+
 async function waitForDocument(): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
@@ -667,6 +1143,28 @@ async function waitForDocument(): Promise<void> {
     await delay(100);
   }
   throw new Error("공개 shell 문서가 10초 안에 complete 상태가 되지 않았습니다.");
+}
+
+async function waitFor<T>(
+  sample: () => Promise<T>,
+  predicate: (value: T) => boolean,
+  label: string | (() => string),
+  timeoutMs = 20_000
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let lastValue: T | undefined;
+  while (Date.now() < deadline) {
+    try {
+      lastValue = await sample();
+      if (predicate(lastValue)) {
+        return lastValue;
+      }
+    } catch {
+      // Navigation can replace the execution context between two polls.
+    }
+    await delay(100);
+  }
+  throw new Error(`${typeof label === "function" ? label() : label}: ${JSON.stringify(lastValue)}`);
 }
 
 function performanceRequests(
@@ -701,7 +1199,7 @@ function performanceRequests(
   return requests;
 }
 
-async function closeHttpServer(server: HttpServer | null): Promise<void> {
+async function closeHttpServer(server: HttpServer | HttpsServer | null): Promise<void> {
   if (!server) {
     return;
   }
@@ -763,9 +1261,11 @@ async function cleanup(): Promise<void> {
       sessionId = "";
     }
     await Promise.all([
+      localEngineProbeServer?.close(),
       closeHttpServer(proxyServer),
       closeHttpServer(originServer)
     ]);
+    localEngineProbeServer = null;
     proxyServer = null;
     originServer = null;
     await stopChildProcess(chromedriver);
@@ -806,27 +1306,74 @@ async function main(): Promise<void> {
   await mkdir(extractedRoot, { mode: 0o700 });
   const expectedFiles = PUBLIC_WEB_PACKAGE_FILES.map(({ archivePath }) => archivePath).sort();
   assert(
-    expectedFiles.length === 6 && new Set(expectedFiles).size === 6,
-    "공개 shell allowlist는 정확한 6개 파일이어야 합니다."
+    new Set(expectedFiles).size === expectedFiles.length
+      && expectedFiles.includes("index.html")
+      && expectedFiles.includes("studio.css")
+      && expectedFiles.includes("studio.js")
+      && expectedFiles.includes("editor.html")
+      && expectedFiles.includes("editor/editor.css")
+      && expectedFiles.includes("editor/editor.js")
+      && expectedFiles.includes("editor/audseg-worker.js")
+      && expectedFiles.includes("_headers")
+      && expectedFiles.includes(".popovic-hosts"),
+    "공개 웹 allowlist에 전체 시작 화면·편집기·배포 identity 파일이 없습니다."
   );
   await extractVerifiedZip(archive, extractedRoot, expectedFiles);
 
   originServer = await createPublicShellHttpServer({ publicShellRoot: extractedRoot });
   const originPort = await listenLoopback(originServer);
-  const directDocument = await requestOrigin(originPort, "/");
-  assert(directDocument.statusCode === 200, "추출한 공개 shell의 문서 응답이 200이 아닙니다.");
+  const [directDocument, directEditorDocument] = await Promise.all([
+    requestOrigin(originPort, "/"),
+    requestOrigin(originPort, "/editor.html")
+  ]);
+  assert(directDocument.statusCode === 200, "추출한 공개 웹 시작 문서 응답이 200이 아닙니다.");
+  assert(directEditorDocument.statusCode === 200, "추출한 공개 웹 편집기 문서 응답이 200이 아닙니다.");
   assertPublicSecurityHeaders(directDocument.headers);
+  assertPublicSecurityHeaders(directEditorDocument.headers);
   assert(
-    directDocument.body.includes(Buffer.from('class="public-launch-shell"'))
-      && !directDocument.body.includes(Buffer.from("<script")),
-    "추출한 공개 shell 문서가 무스크립트 launch 화면이 아닙니다."
+    directDocument.body.includes(Buffer.from('id="local-app-surface"'))
+      && directDocument.body.includes(Buffer.from('src="/studio.js?v='))
+      && directDocument.body.includes(Buffer.from('href="/studio.css?v='))
+      && directEditorDocument.body.includes(Buffer.from('id="editor-app-gate"'))
+      && directEditorDocument.body.includes(Buffer.from('src="editor/editor.js?v='))
+      && directEditorDocument.body.includes(Buffer.from('href="editor/editor.css?v='))
+      && !directDocument.body.includes(Buffer.from("kirinuki://open"))
+      && !directEditorDocument.body.includes(Buffer.from("kirinuki://open")),
+    "추출한 공개 웹 문서가 전체 브라우저 시작 화면·편집기 진입점과 다릅니다."
   );
 
   const proxyRecords: ProxyRequestRecord[] = [];
-  proxyServer = createBrowserFacingProxy(originPort, proxyRecords);
+  const localEngineProbeRecords: LocalEngineProbeRecord[] = [];
+  const semanticFixtureState: LocalEngineSemanticFixtureState = {
+    materializationRequests: 0,
+    mediaRequests: 0,
+    sessionRequests: 0
+  };
+  const semanticFixtureMedia = await createSemanticFixtureMedia(temporaryRoot);
+  localEngineProbeServer = await createLocalEngineV2ProbeFixture(
+    localEngineProbeRecords,
+    semanticFixtureMedia,
+    semanticFixtureState
+  );
+  try {
+    await listenLocalEngineProbe(localEngineProbeServer);
+  } catch (error) {
+    throw new Error(
+      "LNA browser smoke를 위해 127.0.0.1:4319가 비어 있어야 합니다. "
+      + `실행 중인 Kirinuki engine을 먼저 종료해 주세요: ${errorMessage(error)}`
+    );
+  }
+  const { certificate, privateKey } = await createEphemeralHttpsCertificate(temporaryRoot);
+  proxyServer = createBrowserFacingProxy(
+    originPort,
+    proxyRecords,
+    certificate,
+    privateKey
+  );
   const publicPort = await listenLoopback(proxyServer);
-  const documentUrl = `http://${PUBLIC_SHELL_CANONICAL_HOST}:${publicPort}/`;
-  const stylesheetUrl = `${documentUrl}public.css?v=${packageMetadata.version}`;
+  const documentUrl = `https://${PUBLIC_SHELL_CANONICAL_HOST}/`;
+  const stylesheetUrl = `${documentUrl}studio.css?v=${packageMetadata.version}`;
+  const scriptUrl = `${documentUrl}studio.js?v=${packageMetadata.version}`;
 
   const [chromedriverPath, chromiumPath, driverPort] = await Promise.all([
     resolveExecutable("CHROMEDRIVER_BINARY", ["chromedriver"]),
@@ -873,13 +1420,15 @@ async function main(): Promise<void> {
             "--disable-domain-reliability",
             "--disable-extensions",
             "--disable-sync",
+            "--enable-features=LocalNetworkAccessChecks",
+            "--ignore-certificate-errors",
             "--metrics-recording-only",
             "--no-first-run",
             "--no-default-browser-check",
             "--no-proxy-server",
             "--password-store=basic",
             "--use-mock-keychain",
-            `--host-resolver-rules=MAP ${PUBLIC_SHELL_CANONICAL_HOST} ${PUBLIC_SHELL_BIND_HOST},EXCLUDE localhost`,
+            `--host-resolver-rules=MAP ${PUBLIC_SHELL_CANONICAL_HOST}:443 ${PUBLIC_SHELL_BIND_HOST}:${publicPort},EXCLUDE localhost`,
             `--user-data-dir=${profileRoot}`
           ]
         }
@@ -900,26 +1449,38 @@ async function main(): Promise<void> {
   );
   await webdriver("POST", `/session/${sessionId}/url`, { url: documentUrl });
   await waitForDocument();
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await execute<string>("return document.body.dataset.kirinukiSurface || '';" ) === "local") {
+      break;
+    }
+    await delay(100);
+  }
   await delay(500);
 
   const page = await execute<{
-    readonly appHref: string;
-    readonly computedDisplay: string;
+    readonly bodySurface: string;
     readonly cookie: string;
-    readonly fallback: string;
-    readonly forbiddenHtml: boolean;
-    readonly forbiddenSelectors: number;
+    readonly editorButtonText: string;
+    readonly externalEmbedsWithSource: number;
+    readonly formPresent: boolean;
     readonly hostname: string;
     readonly inlineHandlers: number;
-    readonly installHref: string;
-    readonly launchTitle: string;
+    readonly legacyAppLinks: number;
+    readonly localHidden: boolean;
+    readonly localInert: boolean;
     readonly localStorageLength: number;
+    readonly origin: string;
+    readonly privacyText: string;
     readonly protocol: string;
-    readonly requirements: string;
+    readonly publicHidden: boolean;
+    readonly publicInert: boolean;
     readonly resourceEntries: readonly { readonly initiatorType: string; readonly name: string }[];
-    readonly scriptCount: number;
+    readonly scriptSources: readonly string[];
     readonly sessionStorageLength: number;
-    readonly stylesheetCount: number;
+    readonly sourceInputLabel: string;
+    readonly startTitle: string;
+    readonly stylesheetHrefs: readonly string[];
+    readonly title: string;
   }>(`
     const html = document.documentElement.outerHTML;
     const inlineHandlers = Array.from(document.querySelectorAll("*")).reduce(
@@ -928,68 +1489,84 @@ async function main(): Promise<void> {
       ).length,
       0
     );
+    const publicSurface = document.querySelector("#public-launch-shell");
+    const localSurface = document.querySelector("#local-app-surface");
     return {
-      appHref: document.querySelector('a[href^="kirinuki:"]')?.getAttribute("href") || "",
-      computedDisplay: getComputedStyle(document.querySelector(".public-launch-card")).display,
+      bodySurface: document.body.dataset.kirinukiSurface || "",
       cookie: document.cookie,
-      fallback: document.querySelector("#public-launch-guide")?.textContent || "",
-      forbiddenHtml: /127\\.0\\.0\\.1|localhost|:4319|:4320|\\/v1\\/|editor\\.html|studio\\.js|audseg-worker/i.test(html),
-      forbiddenSelectors: document.querySelectorAll(
-        "script, iframe, form, video, audio, canvas, #start-editor, #mobile-editor-notice, .local-app-surface"
+      editorButtonText: document.querySelector("#start-editor")?.textContent?.trim() || "",
+      externalEmbedsWithSource: Array.from(document.querySelectorAll("iframe")).filter(
+        (frame) => Boolean(frame.getAttribute("src"))
       ).length,
+      formPresent: document.querySelector("#start-form") instanceof HTMLFormElement,
       hostname: location.hostname,
       inlineHandlers,
-      installHref: document.querySelector('a[href*="github.com"][href*="#"]')?.href || "",
-      launchTitle: document.querySelector("#public-launch-title")?.textContent || "",
+      legacyAppLinks: document.querySelectorAll('a[href^="kirinuki:"]').length + (/kirinuki:\\/\\/open/i.test(html) ? 1 : 0),
+      localHidden: Boolean(localSurface?.hidden),
+      localInert: Boolean(localSurface?.inert),
       localStorageLength: localStorage.length,
+      origin: location.origin,
+      privacyText: document.querySelector(".site-trust-notice")?.textContent || "",
       protocol: location.protocol,
-      requirements: document.querySelector(".requirements")?.textContent || "",
+      publicHidden: Boolean(publicSurface?.hidden),
+      publicInert: Boolean(publicSurface?.inert),
       resourceEntries: performance.getEntriesByType("resource").map((entry) => ({
         initiatorType: entry.initiatorType,
         name: entry.name
       })),
-      scriptCount: document.scripts.length,
+      scriptSources: Array.from(document.scripts).map((script) => script.src),
       sessionStorageLength: sessionStorage.length,
-      stylesheetCount: document.styleSheets.length
+      sourceInputLabel: document.querySelector('label[for="source-url"], label:has(#source-url) > span')?.textContent || "",
+      startTitle: document.querySelector("#start-title")?.textContent || "",
+      stylesheetHrefs: Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map((link) => link.href),
+      title: document.title
     };
   `);
   assert(page.hostname === PUBLIC_SHELL_CANONICAL_HOST, "브라우저 문서 origin이 공개 canonical Host가 아닙니다.");
-  assert(page.protocol === "http:", "smoke 문서가 예기치 않은 scheme으로 바뀌었습니다.");
-  assert(page.appHref === "kirinuki://open", "앱 실행 링크가 canonical kirinuki://open이 아닙니다.");
+  assert(page.origin === `https://${PUBLIC_SHELL_CANONICAL_HOST}`, "브라우저 문서 origin이 정확한 공개 HTTPS Origin이 아닙니다.");
+  assert(page.protocol === "https:", "공개 웹 smoke 문서가 HTTPS로 열리지 않았습니다.");
   assert(
-    page.installHref.startsWith("https://github.com/studyreadbook4ever/KirinukiHelper#"),
-    "설치 방법 링크가 렌더링되지 않았습니다."
+    page.bodySurface === "local"
+      && page.localHidden === false
+      && page.localInert === false
+      && page.publicHidden === true
+      && page.publicInert === true,
+    "공개 HTTPS에서 launch shell이 아니라 전체 브라우저 시작 화면이 활성화되지 않았습니다."
   );
   assert(
-    /Kirinuki 앱에서 이어집니다/u.test(page.launchTitle)
-      && /앱이 열리지 않았다면/u.test(page.fallback)
-      && /모바일에서는 편집기를\s*열 수 없습니다/u.test(page.fallback)
-      && /Node\.js 22/u.test(page.requirements)
-      && /Python 3\.11/u.test(page.requirements)
-      && /FFmpeg/u.test(page.requirements)
-      && /Whisper/u.test(page.requirements)
-      && page.computedDisplay !== "none"
-      && page.stylesheetCount === 1,
-    "앱 실행·설치 fallback·요구사항 또는 CSS가 화면에 완전하게 렌더링되지 않았습니다."
+    page.title === "Kirinuki"
+      && /VOD에서 편집할 구간을 선택하세요/u.test(page.startTitle)
+      && page.formPresent
+      && page.editorButtonText === "편집기 열기"
+      && /CHZZK·YouTube·SOOP 공개 VOD 주소/u.test(page.sourceInputLabel)
+      && /사용기록과 개인정보를 일절 수집하지 않/u.test(page.privacyText)
+      && /오픈소스/u.test(page.privacyText),
+    "공개 HTTPS에서 전체 VOD 구간 선택·편집기 진입·개인정보 안내 UI가 렌더링되지 않았습니다."
   );
   assert(
-    page.scriptCount === 0
+    page.scriptSources.length === 1
+      && page.scriptSources[0] === scriptUrl
+      && page.stylesheetHrefs.length === 1
+      && page.stylesheetHrefs[0] === stylesheetUrl
       && page.inlineHandlers === 0
-      && page.forbiddenSelectors === 0
-      && !page.forbiddenHtml,
-    "공개 shell DOM에 script 실행점 또는 로컬 편집기/runtime 표면이 있습니다."
+      && page.legacyAppLinks === 0
+      && page.externalEmbedsWithSource === 0,
+    "공개 시작 화면의 self-host module/CSS 또는 무인라인·무legacy-app 초기 상태 계약이 다릅니다."
   );
   assert(
     page.localStorageLength === 0
       && page.sessionStorageLength === 0
       && page.cookie === "",
-    "공개 shell이 브라우저 문자열 저장소 또는 쿠키를 만들었습니다."
+    "새 공개 웹 시작 화면이 사용자 동작 전에 문자열 저장소 또는 쿠키를 만들었습니다."
   );
   assert(
-    page.resourceEntries.length === 1
-      && page.resourceEntries[0]?.name === stylesheetUrl
-      && page.resourceEntries[0]?.initiatorType === "link",
-    `공개 shell resource 집합이 CSS 하나가 아닙니다: ${JSON.stringify(page.resourceEntries)}`
+    page.resourceEntries.some(({ name, initiatorType }) => (
+      name === stylesheetUrl && initiatorType === "link"
+    ))
+      && page.resourceEntries.some(({ name, initiatorType }) => (
+        name === scriptUrl && initiatorType === "script"
+      )),
+    `공개 웹 필수 self-host CSS·module resource가 로드되지 않았습니다: ${JSON.stringify(page.resourceEntries)}`
   );
 
   const persistentState = await executeAsync<{
@@ -1012,14 +1589,14 @@ async function main(): Promise<void> {
   `);
   assert(
     Array.isArray(persistentState.databases)
-      && persistentState.databases.length === 0
+      && persistentState.databases.every(({ name }) => name === "chzzk-kirinuki-studio")
       && persistentState.serviceWorkers === 0
       && persistentState.controlled === false
       && persistentState.cacheKeys.length === 0,
-    `공개 shell이 IndexedDB·Service Worker·Cache Storage 상태를 만들었습니다: ${JSON.stringify(persistentState)}`
+    `공개 웹이 승인되지 않은 IndexedDB 또는 Service Worker·Cache Storage 상태를 만들었습니다: ${JSON.stringify(persistentState)}`
   );
   const cookies = await webdriver<unknown[]>("GET", `/session/${sessionId}/cookie`);
-  assert(Array.isArray(cookies) && cookies.length === 0, "공개 shell browser cookie jar가 비어 있지 않습니다.");
+  assert(Array.isArray(cookies) && cookies.length === 0, "공개 웹 browser cookie jar가 비어 있지 않습니다.");
 
   const performanceLogs = await webdriver<WebDriverLogEntry[]>(
     "POST",
@@ -1028,49 +1605,298 @@ async function main(): Promise<void> {
   );
   const networkRequests = performanceRequests(performanceLogs);
   const networkUrls = networkRequests.map(({ url }) => url);
-  const externalNetworkUrls = networkUrls.filter((url) => /^https?:/u.test(url));
+  const httpNetworkUrls = networkUrls.filter((url) => /^https?:/u.test(url));
   const publicOrigin = new URL(documentUrl).origin;
   const publicPageRequests = networkRequests.filter((request) => (
     request.documentUrl.startsWith(publicOrigin)
       || request.url.startsWith(publicOrigin)
   ));
-  assert(networkUrls.includes(documentUrl), "브라우저 network log에 공개 shell 문서 요청이 없습니다.");
-  assert(networkUrls.includes(stylesheetUrl), "브라우저 network log에 공개 shell CSS 요청이 없습니다.");
+  const unexpectedNetworkUrls = networkUrls.filter((url) => (
+    !url.startsWith(`${publicOrigin}/`)
+    && !url.startsWith("data:image/svg+xml,")
+  ));
+  const browserServedPaths = new Set([
+    "/",
+    ...expectedFiles
+      .filter((file) => file !== "_headers" && file !== ".popovic-hosts")
+      .map((file) => `/${file}`)
+  ]);
+  assert(networkUrls.includes(documentUrl), "브라우저 network log에 공개 웹 문서 요청이 없습니다.");
+  assert(networkUrls.includes(stylesheetUrl), "브라우저 network log에 공개 웹 CSS 요청이 없습니다.");
+  assert(networkUrls.includes(scriptUrl), "브라우저 network log에 공개 웹 module 요청이 없습니다.");
   assert(
-    externalNetworkUrls.every((url) => url === documentUrl || url === stylesheetUrl),
-    `브라우저가 문서·CSS 외 외부 network 요청을 만들었습니다: ${JSON.stringify(externalNetworkUrls)}`
+    httpNetworkUrls.every((url) => new URL(url).origin === publicOrigin),
+    `공개 웹이 self-host origin 밖으로 분석·추적·외부 asset 요청을 만들었습니다: ${JSON.stringify(httpNetworkUrls)}`
+  );
+  assert(
+    unexpectedNetworkUrls.length === 0,
+    `공개 웹이 HTTPS self-host asset·data favicon 외 network scheme을 사용했습니다: ${JSON.stringify(unexpectedNetworkUrls)}`
   );
   assert(
     publicPageRequests.every(({ url }) => (
-      url === documentUrl
-      || url === stylesheetUrl
+      (
+        new URL(url).origin === publicOrigin
+        && browserServedPaths.has(new URL(url).pathname)
+      )
       || url.startsWith("data:image/svg+xml,")
     )),
-    `공개 shell 문서가 문서·CSS·data favicon 외 요청을 만들었습니다: ${JSON.stringify(publicPageRequests)}`
+    `공개 웹 문서가 package allowlist 밖의 asset을 요청했습니다: ${JSON.stringify(publicPageRequests)}`
   );
   assert(
     networkUrls.every((url) => !/127\.0\.0\.1|localhost|:4319|:4320|\/v1\//iu.test(url)),
-    "브라우저가 loopback 편집기 또는 내부 API를 요청했습니다."
+    "시작 화면이 사용자 동작 전에 loopback engine·legacy 편집기·내부 API를 요청했습니다."
   );
+  for (const rawUrl of httpNetworkUrls) {
+    const parsed = new URL(rawUrl);
+    const isVersionedAsset = /\.(?:css|js)$/u.test(parsed.pathname);
+    assert(
+      isVersionedAsset
+        ? parsed.search === `?v=${packageMetadata.version}`
+        : parsed.search === "",
+      `공개 웹 asset query가 고정 release version 계약과 다릅니다: ${rawUrl}`
+    );
+  }
 
-  const expectedRequestPaths = ["/", `/public.css?v=${packageMetadata.version}`].sort();
+  const requiredRequestPaths = [
+    "/",
+    `/studio.css?v=${packageMetadata.version}`,
+    `/studio.js?v=${packageMetadata.version}`
+  ].sort();
+  const actualRequestPaths = proxyRecords.map(({ path: requestPath }) => requestPath).sort();
   assert(
-    proxyRecords.length === 2
-      && JSON.stringify(proxyRecords.map(({ path: requestPath }) => requestPath).sort())
-        === JSON.stringify(expectedRequestPaths),
-    `공개 hostname proxy가 문서·CSS 외 요청을 받았습니다: ${JSON.stringify(proxyRecords)}`
+    requiredRequestPaths.every((requestPath) => actualRequestPaths.includes(requestPath))
+      && proxyRecords.length >= requiredRequestPaths.length,
+    `공개 HTTPS endpoint가 전체 시작 화면의 필수 문서·CSS·module 요청을 받지 못했습니다: ${JSON.stringify(proxyRecords)}`
   );
   for (const record of proxyRecords) {
+    const parsed = new URL(record.path, documentUrl);
     assert(
-      record.host === `${PUBLIC_SHELL_CANONICAL_HOST}:${publicPort}`
+      record.host === PUBLIC_SHELL_CANONICAL_HOST
         && record.method === "GET"
         && record.requestCookie === ""
         && record.responseStatus === 200
-        && record.responseHeaders,
-      `공개 hostname 실제 요청 계약이 다릅니다: ${JSON.stringify(record)}`
+        && record.responseHeaders
+        && parsed.origin === publicOrigin
+        && browserServedPaths.has(parsed.pathname),
+      `공개 HTTPS 실제 요청의 Host·cookie·allowlist 계약이 다릅니다: ${JSON.stringify(record)}`
     );
     assertPublicSecurityHeaders(record.responseHeaders);
   }
+
+  // Automation stands in for the one Chrome permission confirmation the user
+  // accepts during onboarding. Chrome 142-145 uses the compatibility name;
+  // newer split-permission builds use the loopback-specific name.
+  const grantedLnaPermissions: string[] = [];
+  const rejectedLnaPermissions: string[] = [];
+  for (const permissionName of ["local-network-access", "loopback-network"] as const) {
+    try {
+      await webdriver(
+        "POST",
+        `/session/${sessionId}/goog/cdp/execute`,
+        {
+          cmd: "Browser.setPermission",
+          params: {
+            permission: { name: permissionName },
+            setting: "granted",
+            origin: publicOrigin
+          }
+        }
+      );
+      grantedLnaPermissions.push(permissionName);
+    } catch (error) {
+      rejectedLnaPermissions.push(`${permissionName}: ${errorMessage(error)}`);
+    }
+  }
+  assert(
+    grantedLnaPermissions.length >= 1,
+    `Chrome가 legacy 또는 split LNA permission automation을 지원하지 않습니다: ${JSON.stringify(rejectedLnaPermissions)}`
+  );
+
+  const localEngineUrl = "http://127.0.0.1:4319/v1/health";
+  const localEngineChallenge = freshLocalMediaEngineChallenge();
+  const localEngineProbe = await executeAsync<{
+    readonly isSecureContext?: boolean;
+    readonly ok?: boolean;
+    readonly permissionStates?: Readonly<Record<string, string>>;
+    readonly response?: unknown;
+    readonly status?: number;
+    readonly type?: string;
+    readonly url?: string;
+    readonly error?: string;
+  }>(`
+    const done = arguments[arguments.length - 1];
+    const permissionStates = {};
+    Promise.all([
+      "local-network-access",
+      "loopback-network"
+    ].map(async (name) => {
+      try {
+        permissionStates[name] = (await navigator.permissions.query({ name })).state;
+      } catch (error) {
+        permissionStates[name] = "unsupported:" + String(error);
+      }
+    })).then(async () => {
+      try {
+        const response = await fetch(${JSON.stringify(localEngineUrl)}, {
+          cache: "no-store",
+          credentials: "omit",
+          method: "GET",
+          headers: {
+            "X-Kirinuki-Protocol": ${JSON.stringify(LOCAL_MEDIA_ENGINE_AUTHENTICATED_HEALTH_PROTOCOL)},
+            ${JSON.stringify(LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER)}: ${JSON.stringify(localEngineChallenge)}
+          },
+          mode: "cors",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+          signal: AbortSignal.timeout(10000)
+        });
+        done({
+          isSecureContext,
+          ok: response.ok,
+          permissionStates,
+          response: await response.json(),
+          status: response.status,
+          type: response.type,
+          url: response.url
+        });
+      } catch (error) {
+        done({ error: String(error), isSecureContext, permissionStates });
+      }
+    }, (error) => done({ error: String(error), isSecureContext, permissionStates }));
+  `);
+  const signedHealthResponse = isRecord(localEngineProbe.response)
+    ? localEngineProbe.response
+    : null;
+  const signedHealthProof = parseLocalMediaEngineDeviceProof(
+    signedHealthResponse?.deviceProof
+  );
+  const signedEngine = isRecord(signedHealthResponse?.engine)
+    ? signedHealthResponse.engine
+    : null;
+  const signedVodRuntime = isRecord(signedHealthResponse?.vodRuntime)
+    ? signedHealthResponse.vodRuntime
+    : null;
+  const signedYtDlp = isRecord(signedVodRuntime?.ytDlp)
+    ? signedVodRuntime.ytDlp
+    : null;
+  const signedEjs = isRecord(signedVodRuntime?.ejs)
+    ? signedVodRuntime.ejs
+    : null;
+  const signedSessionEncryption = isRecord(
+    signedHealthResponse?.sessionEncryption
+  )
+    ? signedHealthResponse.sessionEncryption
+    : null;
+  const signedHealthPayload = signedHealthResponse
+    ? {
+      schema: signedHealthResponse.schema,
+      status: signedHealthResponse.status,
+      managed: signedHealthResponse.managed,
+      engine: signedEngine && {
+        backgroundStart: signedEngine.backgroundStart,
+        product: signedEngine.product,
+        protocol: signedEngine.protocol,
+        version: signedEngine.version
+      },
+      originBinding: signedHealthResponse.originBinding,
+      authentication: signedHealthResponse.authentication,
+      transcriptionMode: signedHealthResponse.transcriptionMode,
+      vodRuntime: signedVodRuntime && {
+        schema: signedVodRuntime.schema,
+        kind: signedVodRuntime.kind,
+        ready: signedVodRuntime.ready,
+        ytDlp: signedYtDlp && { version: signedYtDlp.version },
+        ejs: signedEjs && { version: signedEjs.version },
+        instanceNonce: signedVodRuntime.instanceNonce
+      },
+      sessionEncryption: signedSessionEncryption && {
+        schema: signedSessionEncryption.schema,
+        algorithm: signedSessionEncryption.algorithm,
+        grantId: signedSessionEncryption.grantId,
+        serverPublicKey: signedSessionEncryption.serverPublicKey,
+        expiresAt: signedSessionEncryption.expiresAt
+      }
+    }
+    : null;
+  const standaloneHealthSignatureValid = Boolean(
+    signedHealthProof
+    && signedHealthPayload
+    && localEngineProbeServer
+    && signedHealthProof.keyId === localEngineProbeServer.keyId
+    && signedHealthProof.challenge === localEngineChallenge
+    && await verifyLocalMediaEngineSignature({
+      publicKeySpki: localEngineProbeServer.publicKeySpki,
+      signature: signedHealthProof.signature,
+      transcript: localMediaEngineProofTranscript({
+        kind: "health",
+        challenge: localEngineChallenge,
+        instanceNonce: signedHealthProof.instanceNonce,
+        payload: signedHealthPayload
+      })
+    })
+  );
+  assert(
+    localEngineProbe.error === undefined
+      && localEngineProbe.isSecureContext === true
+      && localEngineProbe.ok === true
+      && localEngineProbe.status === 200
+      && localEngineProbe.type === "cors"
+      && localEngineProbe.url === localEngineUrl
+      && isRecord(localEngineProbe.response)
+      && localEngineProbe.response.schema === LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA
+      && localEngineProbe.response.status === "ok"
+      && isRecord(localEngineProbe.response.engine)
+      && localEngineProbe.response.engine.backgroundStart === "ready"
+      && localEngineProbe.response.engine.product === LOCAL_MEDIA_ENGINE_PRODUCT
+      && localEngineProbe.response.engine.protocol === LOCAL_MEDIA_ENGINE_API_PROTOCOL
+      && isRecord(localEngineProbe.response.vodRuntime)
+      && localEngineProbe.response.vodRuntime.schema === LOCAL_MEDIA_ENGINE_VOD_RUNTIME_SCHEMA
+      && localEngineProbe.response.vodRuntime.kind === "vod-only"
+      && localEngineProbe.response.vodRuntime.ready === true
+      && standaloneHealthSignatureValid,
+    `공개 HTTPS→loopback engine LNA fetch가 성공하지 않았습니다: ${JSON.stringify(localEngineProbe)}`
+  );
+  assert(
+    localEngineProbe.permissionStates
+      && grantedLnaPermissions.some((name) => (
+        localEngineProbe.permissionStates?.[name] === "granted"
+      )),
+    `Chrome permission state에서 LNA grant를 확인하지 못했습니다: ${JSON.stringify(localEngineProbe.permissionStates)}`
+  );
+  assert(
+    localEngineProbeRecords.some(({ method }) => method === "GET")
+      && localEngineProbeRecords.every((record) => (
+        (record.method === "GET" || record.method === "OPTIONS")
+        && record.origin === publicOrigin
+        && record.path === "/v1/health"
+        && record.cookie === ""
+        && (
+          record.method !== "GET"
+          || record.protocol === LOCAL_MEDIA_ENGINE_AUTHENTICATED_HEALTH_PROTOCOL
+        )
+        && (
+          record.method !== "OPTIONS"
+          || record.requestedPrivateNetwork === ""
+          || record.requestedPrivateNetwork === "true"
+        )
+      )),
+    `loopback engine probe의 Origin·cookie·PNA 요청 계약이 다릅니다: ${JSON.stringify(localEngineProbeRecords)}`
+  );
+  const lnaPerformanceLogs = await webdriver<WebDriverLogEntry[]>(
+    "POST",
+    `/session/${sessionId}/log`,
+    { type: "performance" }
+  );
+  const lnaNetworkUrls = performanceRequests(lnaPerformanceLogs)
+    .map(({ url }) => url)
+    .filter((url) => /^https?:/u.test(url));
+  assert(
+    lnaNetworkUrls.length >= 1
+      && lnaNetworkUrls.every((url) => url === localEngineUrl),
+    `permission grant 뒤 브라우저가 정확한 loopback health 외 요청을 만들었습니다: ${JSON.stringify(lnaNetworkUrls)}`
+  );
+  assert(localEngineProbeServer, "공개 HTTPS v2 engine fixture가 시작되지 않았습니다.");
+  await enrollPublicLocalMediaEngineFixture(localEngineProbeServer);
 
   const browserLogs = await webdriver<WebDriverLogEntry[]>(
     "POST",
@@ -1087,17 +1913,234 @@ async function main(): Promise<void> {
   ));
   assert(
     unexpectedBrowserErrors.length === 0,
-    `공개 shell browser console에 오류가 있습니다: ${JSON.stringify(unexpectedBrowserErrors)}`
+    `공개 웹 browser console에 오류가 있습니다: ${JSON.stringify(unexpectedBrowserErrors)}`
+  );
+
+  // Continue from the untouched public start page through the product's real
+  // UI. This proves that the website does not merely advertise an installer:
+  // it must recognize the exact compatible engine, mint a document-scoped
+  // capability, prepare the selected range, and attach playable loopback
+  // media without exposing a port/endpoint workflow to the user.
+  await webdriver(
+    "POST",
+    `/session/${sessionId}/goog/cdp/execute`,
+    {
+      cmd: "Network.enable",
+      params: {}
+    }
+  );
+  await webdriver(
+    "POST",
+    `/session/${sessionId}/goog/cdp/execute`,
+    {
+      cmd: "Network.setBlockedURLs",
+      params: {
+        urls: [
+          "https://chzzk.naver.com/*",
+          "https://www.youtube.com/*",
+          "https://vod.sooplive.com/*"
+        ]
+      }
+    }
+  );
+  await execute(`
+    const source = document.querySelector("#source-url");
+    const projectName = document.querySelector("#project-name");
+    const row = document.querySelector(".clip-row");
+    const start = row?.querySelector('[data-field="start"]');
+    const end = row?.querySelector('[data-field="end"]');
+    if (!(source instanceof HTMLInputElement)
+      || !(projectName instanceof HTMLInputElement)
+      || !(start instanceof HTMLInputElement)
+      || !(end instanceof HTMLInputElement)) {
+      throw new Error("공개 시작 화면의 semantic 입력 요소가 없습니다.");
+    }
+    source.value = "https://chzzk.naver.com/video/14252987";
+    projectName.value = "공개 HTTPS semantic 자동 연결 smoke";
+    start.value = "00:00:10.000";
+    end.value = "00:00:11.000";
+    for (const input of [source, projectName, start, end]) {
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    for (const checkbox of document.querySelectorAll("[data-ack]")) {
+      if (!(checkbox instanceof HTMLInputElement)) {
+        throw new Error("공개 시작 화면의 확인 항목 형식이 올바르지 않습니다.");
+      }
+      checkbox.checked = true;
+      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return true;
+  `);
+  await waitFor(
+    () => execute<{
+      readonly disabled: boolean;
+      readonly label: string;
+      readonly sourcePlatform: string;
+    }>(`
+      const button = document.querySelector("#start-editor");
+      return {
+        disabled: !(button instanceof HTMLButtonElement) || button.disabled,
+        label: button?.textContent?.trim() || "",
+        sourcePlatform: document.querySelector("#source-platform")?.textContent?.trim() || ""
+      };
+    `),
+    (value) => (
+      !value.disabled
+        && value.label === "편집기 열기"
+        && value.sourcePlatform === "치지직 VOD"
+    ),
+    "공개 시작 화면이 생각 없이 누를 수 있는 편집기 열기 상태가 되지 않았습니다."
+  );
+  await execute(`
+    const button = document.querySelector("#start-editor");
+    if (!(button instanceof HTMLButtonElement) || button.disabled) {
+      throw new Error("공개 편집기 열기 버튼을 누를 수 없습니다.");
+    }
+    button.click();
+    return true;
+  `);
+  const semanticEditor = await waitFor(
+    () => execute<{
+      readonly dialogOpen: boolean;
+      readonly duration: number;
+      readonly href: string;
+      readonly jobHidden: boolean;
+      readonly mediaName: string;
+      readonly previewReadyState: number;
+      readonly previewUrl: string;
+      readonly shellHidden: boolean;
+      readonly toast: string;
+    }>(`
+      const preview = document.querySelector("#preview-video");
+      const dialog = document.querySelector("#local-media-engine-dialog");
+      const job = document.querySelector("#job-dialog");
+      return {
+        dialogOpen: dialog instanceof HTMLDialogElement && dialog.open,
+        duration: preview instanceof HTMLVideoElement ? preview.duration : NaN,
+        href: location.href,
+        jobHidden: job instanceof HTMLDialogElement && job.hidden && !job.open,
+        mediaName: document.querySelector("#media-name")?.textContent?.trim() || "",
+        previewReadyState: preview instanceof HTMLVideoElement ? preview.readyState : 0,
+        previewUrl: preview instanceof HTMLVideoElement ? preview.currentSrc : "",
+        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        toast: document.querySelector("#toast")?.textContent?.trim() || ""
+      };
+    `),
+    (value) => (
+      value.href.startsWith(`https://${PUBLIC_SHELL_CANONICAL_HOST}/editor.html?project=`)
+        && !value.shellHidden
+        && !value.dialogOpen
+        && value.jobHidden
+        && value.mediaName === "치지직 편집 영상 준비됨"
+        && value.previewReadyState >= 1
+        && value.previewUrl.startsWith(
+          "http://127.0.0.1:4319/v1/vod/media/semantic_browser_job_0001?access="
+        )
+        && Math.abs(value.duration - 21) < 0.1
+        && value.toast.includes("필요한 편집 범위를 이 기기의 로컬 영상에 준비했습니다")
+    ),
+    () => "공개 HTTPS 웹 편집기가 exact engine을 자동 감지해 선택 구간 영상을 연결하지 못했습니다. "
+      + `fixture=${JSON.stringify(semanticFixtureState)} requests=${JSON.stringify(localEngineProbeRecords)}`,
+    30_000
+  ).catch(async (error) => {
+    const debugLogs = await webdriver<WebDriverLogEntry[]>(
+      "POST",
+      `/session/${sessionId}/log`,
+      { type: "browser" }
+    ).catch(() => []);
+    throw new Error(
+      `${errorMessage(error)} browserLogs=${JSON.stringify(debugLogs)}`,
+      { cause: error }
+    );
+  });
+  assert(
+    semanticFixtureState.sessionRequests === 1
+      && semanticFixtureState.materializationRequests === 1
+      && semanticFixtureState.mediaRequests >= 1,
+    `공개 웹 semantic chain의 session·prepare·media 호출 수가 다릅니다: ${JSON.stringify(semanticFixtureState)}`
+  );
+  assert(
+    localEngineProbeRecords.every((record) => (
+      record.origin === publicOrigin
+        && record.cookie === ""
+        && new URL(record.path, localEngineUrl).pathname.startsWith("/v1/")
+    )),
+    `공개 웹 semantic chain에 잘못된 Origin·cookie·경로 요청이 있습니다: ${JSON.stringify(localEngineProbeRecords)}`
+  );
+
+  await execute(`
+    const button = document.querySelector("#open-short-form");
+    if (!(button instanceof HTMLButtonElement) || button.disabled) {
+      throw new Error("쇼츠 작업공간을 열 수 없습니다.");
+    }
+    button.click();
+    return true;
+  `);
+  const shortBookmark = await waitFor(
+    () => execute<{
+      readonly href: string;
+      readonly shortWorkspaceId: string;
+      readonly workspace: string;
+    }>(`
+      const url = new URL(location.href);
+      return {
+        href: url.href,
+        shortWorkspaceId: url.searchParams.get("short") || "",
+        workspace: document.querySelector("#editor-shell")?.getAttribute("data-workspace") || ""
+      };
+    `),
+    (value) => (
+      value.workspace === "short-form"
+        && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value.shortWorkspaceId)
+        && new URL(value.href).searchParams.get("workspace") === "short-form"
+    ),
+    "공개 편집기가 새로고침 가능한 쇼츠 작업공간 URL을 만들지 못했습니다."
+  );
+  await webdriver("POST", `/session/${sessionId}/refresh`, {});
+  await waitForDocument();
+  await waitFor(
+    () => execute<{
+      readonly editorPresent: boolean;
+      readonly href: string;
+    }>(`
+      return {
+        editorPresent: document.querySelector("#editor-shell") instanceof HTMLElement,
+        href: location.href
+      };
+    `),
+    (value) => value.editorPresent && value.href === shortBookmark.href,
+    "쇼츠 작업공간 URL을 공개 HTTPS에서 새로고침하지 못했습니다."
+  );
+  assert(
+    proxyRecords.some((record) => (
+      record.path === new URL(shortBookmark.href).pathname
+        + new URL(shortBookmark.href).search
+        && record.responseStatus === 200
+    )),
+    `쇼츠 작업공간 공개 reload가 HTTP 200으로 제공되지 않았습니다: ${shortBookmark.href}`
   );
 
   process.stdout.write(`${JSON.stringify({
     archive: path.relative(root, archivePath),
     browserOrigin: new URL(documentUrl).origin,
     files: expectedFiles.length,
-    requests: expectedRequestPaths,
+    requests: actualRequestPaths,
+    localNetworkAccess: {
+      grantedPermissions: grantedLnaPermissions,
+      probeMethods: localEngineProbeRecords.map(({ method }) => method),
+      status: "granted-and-loopback-probed",
+      semanticEditor: {
+        fixture: semanticFixtureState,
+        mediaDurationSeconds: semanticEditor.duration,
+        result: "health-session-prepare-materialize-media-attached",
+        shortWorkspaceReload: "http-200"
+      }
+    },
     securityHeaders: Object.keys(PUBLIC_SHELL_SECURITY_HEADERS).length,
     sha256: digest,
-    storage: "empty"
+    storage: "browser-local-only",
+    telemetry: "none-observed"
   }, null, 2)}\n`);
 }
 
@@ -1110,7 +2153,7 @@ process.once("SIGTERM", () => terminate(143));
 try {
   await main();
 } catch (error) {
-  process.stderr.write(`공개 shell browser smoke 실패: ${errorMessage(error)}\n`);
+  process.stderr.write(`공개 웹 browser smoke 실패: ${errorMessage(error)}\n`);
   if (chromedriverOutput.trim()) {
     process.stderr.write(`ChromeDriver 최근 출력:\n${chromedriverOutput.trim()}\n`);
   }

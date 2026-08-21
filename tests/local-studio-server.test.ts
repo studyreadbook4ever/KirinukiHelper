@@ -54,19 +54,8 @@ import {
   KIRINUKI_LOCAL_STUDIO_ORIGIN,
   KIRINUKI_PUBLIC_STUDIO_ORIGIN
 } from "../src/lib/local-runtime-origin.js";
-import {
-  LOCAL_STUDIO_MIGRATION_CAPABILITY_ROUTE,
-  LOCAL_STUDIO_MIGRATION_CAPABILITY_SCHEMA,
-  LOCAL_STUDIO_MIGRATION_ROUTE_PREFIX,
-  legacyExtensionOriginForRepo
-} from "../scripts/local-studio-migration-stage.js";
-import {
-  buildOriginStorageMigration,
-  serializeOriginStorageMigration
-} from "../src/lib/origin-storage-migration.js";
 
 const TEST_NONCE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ";
-const TEST_MIGRATION_NONCE = "Zyxwvutsrqponmlkjihgfedcba9876543210_-ABCDE";
 
 test("Windows Studio static path/fd identity는 low32 dev만 정규화한다", () => {
   const low32 = 0x89abcdefn;
@@ -274,7 +263,6 @@ test("CLI는 start/status/stop과 command별 옵션만 받는다", () => {
   assert.deepEqual(parseLocalStudioServerArgs([]), {
     command: "help",
     options: {
-      enableLegacyMigration: false,
       foreground: false,
       json: false,
       studioOrigin: KIRINUKI_LOCAL_STUDIO_ORIGIN
@@ -284,13 +272,11 @@ test("CLI는 start/status/stop과 command별 옵션만 받는다", () => {
     parseLocalStudioServerArgs([
       "start",
       "--foreground",
-      "--json",
-      "--enable-legacy-migration"
+      "--json"
     ]),
     {
       command: "start",
       options: {
-        enableLegacyMigration: true,
         foreground: true,
         json: true,
         studioOrigin: KIRINUKI_LOCAL_STUDIO_ORIGIN
@@ -300,7 +286,6 @@ test("CLI는 start/status/stop과 command별 옵션만 받는다", () => {
   assert.deepEqual(parseLocalStudioServerArgs(["status", "--json"]), {
     command: "status",
     options: {
-      enableLegacyMigration: false,
       foreground: false,
       json: true,
       studioOrigin: KIRINUKI_LOCAL_STUDIO_ORIGIN
@@ -317,10 +302,6 @@ test("CLI는 start/status/stop과 command별 옵션만 받는다", () => {
   assert.throws(
     () => parseLocalStudioServerArgs(["start", "--cookie=value"]),
     /인증 정보나 쿠키/u
-  );
-  assert.throws(
-    () => parseLocalStudioServerArgs(["status", "--enable-legacy-migration"]),
-    /start에서만/u
   );
   assert.throws(
     () => parseLocalStudioServerArgs(["doctor"]),
@@ -409,26 +390,6 @@ test("health와 PID는 예측 불가능한 nonce 및 정확한 process identity�
     "987654"
   );
   assert.equal(parseProcStartTime("invalid"), null);
-});
-
-test("legacy migration opt-in은 관리 nonce 재사용과 암묵적 nonce 주입을 거절한다", () => {
-  assert.throws(
-    () => createLocalStudioHttpServer({
-      repoRoot: "/tmp/kirinuki-migration-contract",
-      instanceNonce: TEST_NONCE,
-      migrationNonce: TEST_MIGRATION_NONCE
-    }),
-    /명시적으로 켠 경우/u
-  );
-  assert.throws(
-    () => createLocalStudioHttpServer({
-      repoRoot: "/tmp/kirinuki-migration-contract",
-      instanceNonce: TEST_NONCE,
-      enableLegacyMigration: true,
-      migrationNonce: TEST_NONCE
-    }),
-    /관리 nonce와 분리/u
-  );
 });
 
 test("foreign port는 compatible health만으로 소유했다고 간주하지 않는다", () => {
@@ -765,21 +726,6 @@ test("HTTP server는 health와 allowlist 파일만 정확한 MIME/보안 헤더�
     assert.equal(isManagedStudioHealthPayload(health, {
       instanceNonce: TEST_NONCE
     }), true);
-    assert.equal(
-      (await requestServer(
-        port,
-        LOCAL_STUDIO_MIGRATION_CAPABILITY_ROUTE
-      )).status,
-      404
-    );
-    assert.equal(
-      (await requestServer(
-        port,
-        `${LOCAL_STUDIO_MIGRATION_ROUTE_PREFIX}${TEST_NONCE}`
-      )).status,
-      404
-    );
-
     const head = await requestServer(port, "/editor.html", {
       method: "HEAD"
     });
@@ -923,81 +869,6 @@ test("Studio static fd는 path ABA와 same-inode tamper를 모두 응답 전에 
       await rename(backupPath, assetPath);
     }
   } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("통합 서버 migration bridge는 현재 extension origin에서 한 번만 받고 localhost에 한 번만 준다", async () => {
-  const root = await createStaticFixture();
-  const sourceOrigin = legacyExtensionOriginForRepo(root);
-  const server = createLocalStudioHttpServer({
-    repoRoot: root,
-    instanceNonce: TEST_NONCE,
-    enableLegacyMigration: true,
-    migrationNonce: TEST_MIGRATION_NONCE
-  });
-  try {
-    const port = await listenEphemeral(server);
-    const envelope = await buildOriginStorageMigration({
-      sourceOrigin,
-      databaseName: "chzzk-kirinuki-studio",
-      databaseVersion: 4,
-      projects: [{ id: "project-bridge", name: "옮길 편집" }],
-      localDrafts: [],
-      imageAssets: [],
-      transferId: "M".repeat(43),
-      createdAt: "2026-08-12T01:02:03.000Z"
-    });
-    const body = serializeOriginStorageMigration(envelope);
-    const healthResponse = await requestServer(port, "/v1/studio/health");
-    assert.equal(healthResponse.body.includes(TEST_MIGRATION_NONCE), false);
-
-    assert.equal(
-      (await requestServer(port, LOCAL_STUDIO_MIGRATION_CAPABILITY_ROUTE)).status,
-      403
-    );
-    const capabilityResponse = await requestServer(
-      port,
-      LOCAL_STUDIO_MIGRATION_CAPABILITY_ROUTE,
-      { headers: { Origin: sourceOrigin } }
-    );
-    assert.equal(capabilityResponse.status, 200);
-    const capability = JSON.parse(capabilityResponse.body.toString("utf8"));
-    assert.deepEqual(capability, {
-      schema: LOCAL_STUDIO_MIGRATION_CAPABILITY_SCHEMA,
-      migrationNonce: TEST_MIGRATION_NONCE,
-      stagePath: `${LOCAL_STUDIO_MIGRATION_ROUTE_PREFIX}${TEST_MIGRATION_NONCE}`
-    });
-    const route = capability.stagePath;
-    const staged = await requestServer(port, route, {
-      method: "POST",
-      headers: {
-        Origin: sourceOrigin,
-        "Content-Type": "application/json",
-        "Content-Length": String(Buffer.byteLength(body))
-      },
-      body
-    });
-    assert.equal(staged.status, 201);
-    assert.equal(staged.headers["access-control-allow-origin"], sourceOrigin);
-
-    const missingOrigin = await requestServer(port, route);
-    assert.equal(missingOrigin.status, 403);
-
-    const consumed = await requestServer(port, route, {
-      headers: { Origin: "http://127.0.0.1:4320" }
-    });
-    assert.equal(consumed.status, 200);
-    assert.equal(JSON.parse(consumed.body.toString("utf8")).transferId, "M".repeat(43));
-
-    const replay = await requestServer(port, route, {
-      headers: { Origin: "http://127.0.0.1:4320" }
-    });
-    assert.equal(replay.status, 410);
-  } finally {
-    if (server.listening) {
-      await closeServer(server);
-    }
     await rm(root, { recursive: true, force: true });
   }
 });

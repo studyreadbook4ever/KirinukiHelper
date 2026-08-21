@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { webcrypto } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
+import test, { type TestContext } from "node:test";
 
 import {
   CAPTION_HARNESS_FINGERPRINT,
@@ -16,11 +21,11 @@ import {
   CAPTION_AGENT_CAPABILITY_SCHEMA,
   CAPTION_AGENT_REQUEST_SCHEMA,
   CAPTION_AGENT_RESPONSE_SCHEMA,
-  CAPTION_AGENT_SESSION_SCHEMA,
   CAPTION_AGENT_SETTINGS_KEY,
   DEFAULT_CAPTION_AGENT_SETTINGS,
   LEGACY_CAPTION_AGENT_SETTINGS_KEY,
   LOCAL_AUDSEG_CAPTION_MODEL,
+  LOCAL_ENGINE_SESSION_REQUEST_SCHEMA,
   LOCAL_WHISPER_CAPTION_MODEL,
   REQUIRED_WHISPER_CUE_DURATION_POLICY,
   captionAgentAudioFootprint,
@@ -30,17 +35,20 @@ import {
   captionAgentRunEstimate,
   captionAgentRuntimeIdentity,
   captionAgentSessionEndpoint,
+  clearLocalMediaEngineSessionState,
   createCaptionAgentCheckpoint,
   createCaptionAgentRequest,
   discardCaptionAgentCheckpointsForClips,
   encodePcm16WavBase64,
   ensureCaptionAgentSession,
   isAudSegCaptionModel,
+  localEngineDocumentClientNonce,
   loadCaptionAgentSettings,
   normalizeCaptionAgentCues,
   normalizeCaptionAgentEndpoint,
   normalizeCaptionAgentSettings,
   pairCaptionAgent,
+  probeCaptionAgent,
   requestCaptionAgent,
   requestCaptionAgentWithSessionRetry,
   sameCaptionMediaIdentity,
@@ -49,19 +57,57 @@ import {
   type CaptionAgentSettings,
   type CaptionCheckpoint
 } from "../src/editor/caption-agent.js";
+import {
+  LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
+  type LocalMediaEngineDevicePin,
+  type LocalMediaEngineTrustStore
+} from "../src/editor/local-media-engine-trust.js";
+import {
+  LOCAL_MEDIA_ENGINE_ENCRYPTED_SESSION_RESPONSE_SCHEMA,
+  LOCAL_MEDIA_ENGINE_SIGNATURE_ALGORITHM,
+  encodeBase64Url,
+  localMediaEnginePublicKeyId
+} from "../src/lib/local-media-engine-auth.js";
+import {
+  LOCAL_MEDIA_ENGINE_TRANSPORT_COUNTER_HEADER,
+  LOCAL_MEDIA_ENGINE_TRANSPORT_ID_HEADER,
+  LOCAL_MEDIA_ENGINE_TRANSPORT_REQUEST_SCHEMA,
+  LOCAL_MEDIA_ENGINE_TRANSPORT_RESPONSE_SCHEMA
+} from "../src/lib/local-media-engine-transport.js";
+import {
+  KIRINUKI_PUBLIC_STUDIO_ORIGIN
+} from "../src/lib/local-runtime-origin.js";
+import {
+  createCaptionGatewayServer
+} from "../scripts/caption-gateway.js";
+import {
+  LOCAL_WHISPERCPP_TRANSCRIPTION_MODE
+} from "../src/caption-agent/caption-gateway-core.js";
+import {
+  LOCAL_VOD_RUNTIME_SCHEMA,
+  PINNED_YT_DLP
+} from "../scripts/local-vod-runtime-core.js";
+
+const EXPIRED_SESSION_TOKEN = encodeBase64Url(
+  new Uint8Array(32).fill(0x42)
+);
+const SESSION_SOURCE_URL = "https://chzzk.naver.com/video/14252987";
 
 type CaptionRequest = ReturnType<typeof createCaptionAgentRequest>;
 
-interface FetchCall {
-  url: URL | RequestInfo;
-  options: RequestInit;
+interface V2WireRecord {
+  readonly method: string;
+  readonly path: string;
+  readonly requestBody: string;
+  readonly responseBody: string;
+  readonly status: number;
+  readonly headers: Headers;
 }
 
-function jsonResponse(payload: unknown, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "Content-Type": "application/json" }
-  });
+interface V2GatewayFixture {
+  readonly fetchImpl: typeof fetch;
+  readonly records: V2WireRecord[];
+  readonly trustStore: Readonly<LocalMediaEngineTrustStore>;
 }
 
 function localCapability(overrides: Record<string, unknown> = {}) {
@@ -153,6 +199,113 @@ function completedResponse(
     },
     ...overrides
   };
+}
+
+async function startV2CaptionGateway(
+  t: TestContext
+): Promise<V2GatewayFixture> {
+  clearLocalMediaEngineSessionState();
+  const keys = await webcrypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"]
+  );
+  const publicKeySpki = encodeBase64Url(new Uint8Array(
+    await webcrypto.subtle.exportKey("spki", keys.publicKey)
+  ));
+  const keyId = await localMediaEnginePublicKeyId(publicKeySpki);
+  assert.ok(keyId);
+  const pin: Readonly<LocalMediaEngineDevicePin> = Object.freeze({
+    schema: LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
+    algorithm: LOCAL_MEDIA_ENGINE_SIGNATURE_ALGORITHM,
+    keyId,
+    publicKeySpki,
+    enrolledAt: new Date().toISOString(),
+    maxSeenVersion: "3.0.0"
+  });
+  const trustStore: Readonly<LocalMediaEngineTrustStore> = Object.freeze({
+    read: async () => pin,
+    pin: async () => pin,
+    observeVersion: async (expectedKeyId: string, engineVersion: string) => {
+      assert.equal(expectedKeyId, keyId);
+      return Object.freeze({ ...pin, maxSeenVersion: engineVersion });
+    },
+    reset: async () => undefined
+  });
+  const stateRoot = await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-caption-client-v2-"
+  ));
+  const runtime = createCaptionGatewayServer({
+    deviceProofSigner: {
+      algorithm: LOCAL_MEDIA_ENGINE_SIGNATURE_ALGORITHM,
+      keyId,
+      sign: async (transcript: Uint8Array) => encodeBase64Url(new Uint8Array(
+        await webcrypto.subtle.sign(
+          { name: "ECDSA", hash: "SHA-256" },
+          keys.privateKey,
+          Uint8Array.from(transcript).buffer
+        )
+      ))
+    },
+    pipelineRunner: async (body) => completedResponse(body as CaptionRequest),
+    env: {
+      KIRINUKI_STT_MODE: LOCAL_WHISPERCPP_TRANSCRIPTION_MODE,
+      KIRINUKI_STT_ENDPOINT: "http://127.0.0.1:4318/test/inference",
+      KIRINUKI_STT_MODEL: "tiny-q5_1",
+      KIRINUKI_AGENT_TOKEN: encodeBase64Url(
+        new Uint8Array(32).fill(0x61)
+      ),
+      KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+      KIRINUKI_LOCAL_ENGINE_VERSION: "3.0.0",
+      KIRINUKI_MAX_AUDIO_BYTES: "1048576",
+      KIRINUKI_VOD_RUNTIME_SCHEMA: LOCAL_VOD_RUNTIME_SCHEMA,
+      KIRINUKI_VOD_RUNTIME_KIND: "vod-only",
+      KIRINUKI_VOD_RUNTIME_READY: "1",
+      KIRINUKI_VOD_YT_DLP_VERSION: PINNED_YT_DLP.version,
+      KIRINUKI_VOD_EJS_VERSION: PINNED_YT_DLP.bundledJavascript.version,
+      KIRINUKI_VOD_INSTANCE_NONCE: encodeBase64Url(
+        new Uint8Array(32).fill(0x62)
+      ),
+      KIRINUKI_VOD_STATE_DIR: stateRoot
+    }
+  });
+  await runtime.ready;
+  await new Promise<void>((resolve, reject) => {
+    runtime.server.once("error", reject);
+    runtime.server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = runtime.server.address();
+  assert.ok(address && typeof address !== "string");
+  const port = (address as AddressInfo).port;
+  const records: V2WireRecord[] = [];
+  const fetchImpl = (async (
+    input: URL | RequestInfo,
+    options: RequestInit = {}
+  ) => {
+    const originalUrl = new URL(String(input));
+    assert.equal(originalUrl.origin, "http://127.0.0.1:4319");
+    const mappedUrl = new URL(originalUrl);
+    mappedUrl.port = String(port);
+    const headers = new Headers(options.headers);
+    headers.set("Origin", KIRINUKI_PUBLIC_STUDIO_ORIGIN);
+    const response = await fetch(mappedUrl, { ...options, headers });
+    records.push(Object.freeze({
+      method: String(options.method || "GET").toUpperCase(),
+      path: `${originalUrl.pathname}${originalUrl.search}`,
+      requestBody: typeof options.body === "string" ? options.body : "",
+      responseBody: await response.clone().text(),
+      status: response.status,
+      headers: new Headers(options.headers)
+    }));
+    return response;
+  }) as typeof fetch;
+  t.after(async () => {
+    clearLocalMediaEngineSessionState();
+    await runtime.shutdown({ graceMs: 0, deadlineMs: 2_000 });
+    await rm(stateRoot, { recursive: true, force: true });
+  });
+  return { fetchImpl, records, trustStore };
 }
 
 test("자막 설정은 Whisper와 AudSeg 두 방식 및 loopback 주소만 허용한다", () => {
@@ -688,110 +841,191 @@ test("수신 cue는 원본 표시 시간·하단 위치·마침표 계약을 적
   );
 });
 
-test("pairing은 process-memory session 응답만 받는다", async () => {
-  const calls: FetchCall[] = [];
+test("pairing은 현재 문서·프로젝트·원본에 묶인 memory capability만 받는다", async (t) => {
+  const fixture = await startV2CaptionGateway(t);
   const token = await pairCaptionAgent({
     endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
-    fetchImpl: async (url, options) => {
-      assert.ok(options);
-      calls.push({ url, options });
-      return jsonResponse({
-        schema: CAPTION_AGENT_SESSION_SCHEMA,
-        status: "ok",
-        authentication: "bearer-process-memory",
-        expires: "companion-restart",
-        token: "local-session-token"
-      });
-    }
+    purpose: "vod",
+    projectId: "project-1",
+    sourceUrl: SESSION_SOURCE_URL,
+    fetchImpl: fixture.fetchImpl,
+    trustStore: fixture.trustStore
   });
-  assert.equal(token, "local-session-token");
-  const [pairCall] = calls;
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/u);
+  const pairCall = fixture.records.find((record) => (
+    record.path === "/v1/session" && record.method === "POST"
+  ));
   assert.ok(pairCall);
-  assert.equal(pairCall.url, "http://127.0.0.1:4319/v1/session");
-  assert.equal(pairCall.options.method, "POST");
+  const headers = pairCall.headers;
+  assert.equal(headers.get("content-type"), "application/json");
+  assert.equal(
+    headers.get("x-kirinuki-protocol"),
+    LOCAL_ENGINE_SESSION_REQUEST_SCHEMA
+  );
+  assert.equal(
+    headers.get("x-kirinuki-client-nonce"),
+    localEngineDocumentClientNonce()
+  );
+  assert.deepEqual(
+    Object.keys(JSON.parse(pairCall.requestBody) as object).sort(),
+    ["ciphertext", "clientPublicKey", "grantId", "iv", "schema"]
+  );
+  assert.doesNotMatch(
+    pairCall.requestBody,
+    /project-1|chzzk|vod|cache-delete/u
+  );
+  assert.equal(
+    (JSON.parse(pairCall.responseBody) as Record<string, unknown>).schema,
+    LOCAL_MEDIA_ENGINE_ENCRYPTED_SESSION_RESPONSE_SCHEMA
+  );
+  assert.doesNotMatch(pairCall.responseBody, new RegExp(token, "u"));
 });
 
-test("Whisper 요청은 session bearer만 보내고 완료 응답을 검증한다", async () => {
+test("Whisper 요청은 session bearer를 암호화해 보내고 완료 응답을 검증한다", async (t) => {
+  const fixture = await startV2CaptionGateway(t);
+  const token = await pairCaptionAgent({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    purpose: "captions",
+    projectId: "project-1",
+    fetchImpl: fixture.fetchImpl,
+    trustStore: fixture.trustStore
+  });
+  fixture.records.length = 0;
   const request = captionRequest();
-  const calls: FetchCall[] = [];
   const payload = await requestCaptionAgent({
     endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
-    token: "local-session-token",
+    token,
     request,
-    fetchImpl: async (url, options) => {
-      assert.ok(options);
-      calls.push({ url, options });
-      return jsonResponse(completedResponse(request));
-    }
+    fetchImpl: fixture.fetchImpl
   });
   assert.equal(payload.provider, "local-whispercpp");
-  const [captionCall] = calls;
+  const captionCall = fixture.records.find((record) => (
+    record.path === "/v1/captions" && record.method === "POST"
+  ));
   assert.ok(captionCall);
+  assert.equal(captionCall.headers.get("Authorization"), null);
   assert.equal(
-    new Headers(captionCall.options.headers).get("Authorization"),
-    "Bearer local-session-token"
+    captionCall.headers.get("X-Kirinuki-Client-Nonce"),
+    localEngineDocumentClientNonce()
+  );
+  assert.match(
+    String(captionCall.headers.get(LOCAL_MEDIA_ENGINE_TRANSPORT_ID_HEADER)),
+    /^[A-Za-z0-9_-]{43}$/u
   );
   assert.equal(
-    [...new Headers(captionCall.options.headers).keys()].some(
-      (name) => /key|credential/iu.test(name)
-    ),
-    false
+    captionCall.headers.get(LOCAL_MEDIA_ENGINE_TRANSPORT_COUNTER_HEADER),
+    "1"
   );
+  assert.equal(
+    (JSON.parse(captionCall.requestBody) as Record<string, unknown>).schema,
+    LOCAL_MEDIA_ENGINE_TRANSPORT_REQUEST_SCHEMA
+  );
+  assert.equal(
+    (JSON.parse(captionCall.responseBody) as Record<string, unknown>).schema,
+    LOCAL_MEDIA_ENGINE_TRANSPORT_RESPONSE_SCHEMA
+  );
+  assert.doesNotMatch(captionCall.requestBody, new RegExp(token, "u"));
+  assert.doesNotMatch(captionCall.requestBody, /project-1|wavBase64/u);
+  assert.doesNotMatch(captionCall.responseBody, /local-whispercpp/u);
 });
 
-test("만료 session은 한 번 다시 pair한 뒤 같은 Whisper 요청을 재시도한다", async () => {
+test("Whisper capability probe는 body가 가능한 encrypted POST만 사용한다", async (t) => {
+  const fixture = await startV2CaptionGateway(t);
+  const token = await pairCaptionAgent({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    purpose: "captions",
+    projectId: "project-probe",
+    fetchImpl: fixture.fetchImpl,
+    trustStore: fixture.trustStore
+  });
+  fixture.records.length = 0;
+
+  const payload = await probeCaptionAgent({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    token,
+    fetchImpl: fixture.fetchImpl
+  });
+
+  assert.equal(payload.provider, "local-whispercpp");
+  assert.equal(fixture.records.length, 1);
+  const [probeCall] = fixture.records;
+  assert.ok(probeCall);
+  assert.equal(probeCall.path, "/v1/captions");
+  assert.equal(probeCall.method, "POST");
+  assert.equal(
+    (JSON.parse(probeCall.requestBody) as Record<string, unknown>).schema,
+    LOCAL_MEDIA_ENGINE_TRANSPORT_REQUEST_SCHEMA
+  );
+  assert.doesNotMatch(probeCall.requestBody, new RegExp(token, "u"));
+});
+
+test("만료 session은 한 번 다시 pair한 뒤 같은 Whisper 요청을 재시도한다", async (t) => {
+  const fixture = await startV2CaptionGateway(t);
+  await pairCaptionAgent({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    purpose: "captions",
+    projectId: "project-1",
+    fetchImpl: fixture.fetchImpl,
+    trustStore: fixture.trustStore
+  });
+  fixture.records.length = 0;
   const request = captionRequest();
-  let captionCalls = 0;
-  let sessionCalls = 0;
   let refreshedToken = "";
   const payload = await requestCaptionAgentWithSessionRetry({
     endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
-    token: "expired-token",
+    token: EXPIRED_SESSION_TOKEN,
+    projectId: "project-1",
     request,
     onSessionToken(value: string) {
       refreshedToken = value;
     },
-    fetchImpl: async (url, options) => {
-      if (String(url).endsWith("/v1/session")) {
-        sessionCalls += 1;
-        return jsonResponse({
-          schema: CAPTION_AGENT_SESSION_SCHEMA,
-          status: "ok",
-          authentication: "bearer-process-memory",
-          expires: "companion-restart",
-          token: "fresh-token"
-        });
-      }
-      captionCalls += 1;
-      if (captionCalls === 1) {
-        return jsonResponse({
-          error: { code: "SESSION_EXPIRED" }
-        }, 401);
-      }
-      assert.equal(
-        new Headers(options?.headers).get("Authorization"),
-        "Bearer fresh-token"
-      );
-      return jsonResponse(completedResponse(request));
-    }
+    fetchImpl: fixture.fetchImpl,
+    trustStore: fixture.trustStore
   });
   assert.equal(payload.status, "completed");
-  assert.equal(sessionCalls, 1);
-  assert.equal(captionCalls, 2);
-  assert.equal(refreshedToken, "fresh-token");
+  assert.equal(
+    fixture.records.filter((record) => (
+      record.path === "/v1/session" && record.method === "POST"
+    )).length,
+    1
+  );
+  const captionCalls = fixture.records.filter((record) => (
+    record.path === "/v1/captions" && record.method === "POST"
+  ));
+  assert.equal(captionCalls.length, 2);
+  assert.deepEqual(captionCalls.map((record) => record.status), [401, 200]);
+  assert.match(refreshedToken, /^[A-Za-z0-9_-]{43}$/u);
+  assert.notEqual(refreshedToken, EXPIRED_SESSION_TOKEN);
 });
 
-test("유효한 session이면 probe 성공 후 그대로 재사용한다", async () => {
+test("유효한 session이면 encrypted status 성공 후 그대로 재사용한다", async (t) => {
+  const fixture = await startV2CaptionGateway(t);
+  const currentToken = await pairCaptionAgent({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    purpose: "captions",
+    projectId: "project-1",
+    fetchImpl: fixture.fetchImpl,
+    trustStore: fixture.trustStore
+  });
+  fixture.records.length = 0;
   const token = await ensureCaptionAgentSession({
     endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
-    token: "current-token",
-    fetchImpl: async (_url, options) => {
-      assert.equal(
-        new Headers(options?.headers).get("Authorization"),
-        "Bearer current-token"
-      );
-      return jsonResponse(localCapability());
-    }
+    token: currentToken,
+    purpose: "captions",
+    projectId: "project-1",
+    fetchImpl: fixture.fetchImpl,
+    trustStore: fixture.trustStore
   });
-  assert.equal(token, "current-token");
+  assert.equal(token, currentToken);
+  assert.equal(fixture.records.length, 1);
+  const [statusCall] = fixture.records;
+  assert.ok(statusCall);
+  assert.equal(statusCall.path, "/v1/session/status");
+  assert.equal(statusCall.method, "POST");
+  assert.equal(statusCall.status, 200);
+  assert.equal(statusCall.headers.get("Authorization"), null);
+  assert.equal(
+    (JSON.parse(statusCall.requestBody) as Record<string, unknown>).schema,
+    LOCAL_MEDIA_ENGINE_TRANSPORT_REQUEST_SCHEMA
+  );
 });

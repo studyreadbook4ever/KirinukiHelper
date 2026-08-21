@@ -1,0 +1,86 @@
+appId: kr.eff0rtchung.kirinuki
+productName: Kirinuki
+executableName: Kirinuki
+copyright: Unlicense
+electronVersion: 43.4.1
+npmRebuild: false
+buildDependenciesFromSource: false
+forceCodeSigning: true
+publish: null
+protocols:
+  - name: Kirinuki Local Engine Pairing
+    role: Viewer
+    schemes:
+      - kirinuki-engine
+extraMetadata:
+  description: Windowless loopback VOD acquisition engine for the Kirinuki web editor
+  homepage: https://kirinuki.eff0rtchung.kr
+  author:
+    name: Kirinuki contributors
+    email: lostfragment@naver.com
+directories:
+  output: dist/installers
+mac:
+  icon: build/icon.icns
+  target:
+    - dmg
+  category: public.app-category.video
+  minimumSystemVersion: "15.0"
+  type: distribution
+  identity: "${env.CSC_NAME}"
+  hardenedRuntime: true
+  gatekeeperAssess: true
+  strictVerify: true
+  notarize: false
+  extendInfo:
+    LSUIElement: true
+  artifactName: QUARANTINED-NOT-FOR-PUBLISH-Kirinuki-Engine-macos-arm64.dmg
+dmg:
+  sign: true
+  # Replacement is an explicit signed installer, never an update feed.
+  # Keep the signed release output set free of updater blockmaps as well.
+  writeUpdateInfo: false
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+  requestedExecutionLevel: asInvoker
+  signAndEditExecutable: true
+  signExecutable: true
+  verifyUpdateCodeSignature: true
+  signtoolOptions:
+    signingHashAlgorithms:
+      - sha256
+    rfc3161TimeStampServer: https://timestamp.digicert.com
+  artifactName: QUARANTINED-NOT-FOR-PUBLISH-Kirinuki-Engine-windows-x64-setup.exe
+nsis:
+  include: build/installer.nsh
+  oneClick: true
+  # Signed replacement is explicit and manual, never differential update.
+  differentialPackage: false
+  perMachine: false
+  allowElevation: false
+  runAfterFinish: true
+  createDesktopShortcut: false
+  createStartMenuShortcut: true
+  # User data is intentionally retained until a marker-aware, reparse-safe
+  # cleanup implementation exists. Generic recursive deletion is unsafe.
+  deleteAppDataOnUninstall: false
+linux:
+  icon: build/icon.svg
+  syncDesktopName: true
+  target:
+    - deb
+  category: AudioVideo
+  synopsis: Kirinuki local VOD engine
+  description: Windowless loopback VOD acquisition engine for the Kirinuki web editor
+  maintainer: Kirinuki contributors <lostfragment@naver.com>
+  executableArgs:
+    - "%U"
+  desktop:
+    entry:
+      MimeType: x-scheme-handler/kirinuki-engine;
+  artifactName: QUARANTINED-NOT-FOR-PUBLISH-Kirinuki-Engine-linux-x64.deb
+deb:
+  priority: optional
+  compression: xz

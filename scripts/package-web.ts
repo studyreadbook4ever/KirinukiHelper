@@ -222,7 +222,7 @@ try {
   )).stdout.split(/\r?\n/u).filter(Boolean).filter((entry) => !entry.endsWith("/")).sort();
   assert(
     JSON.stringify(archiveEntries) === JSON.stringify(expectedFiles),
-    "생성된 공개 launch shell ZIP의 파일 목록이 allowlist와 다릅니다."
+    "생성된 공개 웹 편집기 ZIP의 파일 목록이 allowlist와 다릅니다."
   );
 
   const extractRoot = await mkdtemp(path.join(os.tmpdir(), "kirinuki-web-package-"));
@@ -236,27 +236,41 @@ try {
       )),
       "압축을 푼 기본 web 패키지에 extension 디렉터리가 있습니다."
     );
-    const [indexHtml, publicCss, publicNotices, responseHeaders, hosts] = await Promise.all([
+    const [
+      indexHtml,
+      editorHtml,
+      studioCss,
+      studioJavaScript,
+      publicNotices,
+      responseHeaders,
+      hosts
+    ] = await Promise.all([
       readFile(path.join(extractRoot, "index.html"), "utf8"),
-      readFile(path.join(extractRoot, "public.css"), "utf8"),
+      readFile(path.join(extractRoot, "editor.html"), "utf8"),
+      readFile(path.join(extractRoot, "studio.css"), "utf8"),
+      readFile(path.join(extractRoot, "studio.js"), "utf8"),
       readFile(path.join(extractRoot, "THIRD_PARTY_NOTICES.md"), "utf8"),
       readFile(path.join(extractRoot, "_headers"), "utf8"),
       readFile(path.join(extractRoot, ".popovic-hosts"), "utf8")
     ]);
     assert(
-      indexHtml.includes(`href="/public.css?v=${metadata.version}"`)
-        && !/<script\b/iu.test(indexHtml)
+      indexHtml.includes(`href="/studio.css?v=${metadata.version}"`)
+        && indexHtml.includes(`src="/studio.js?v=${metadata.version}"`)
+        && indexHtml.includes('id="local-app-surface"')
+        && editorHtml.includes(`src="editor/editor.js?v=${metadata.version}"`)
+        && studioJavaScript.length > 0
         && !indexHtml.includes("chrome-extension://"),
-      "압축된 공개 HTML 진입점이 무스크립트 앱 실행 shell을 가리키지 않습니다."
+      "압축된 공개 HTML 진입점이 전체 웹 편집기 앱을 가리키지 않습니다."
     );
     assert(
-      indexHtml.includes('class="public-launch-shell"')
-        && indexHtml.includes('href="kirinuki://open"')
-        && !indexHtml.includes("local-app-surface")
-        && /script-src 'none'/u.test(
+      indexHtml.includes('id="public-launch-shell"')
+        && !indexHtml.includes('href="kirinuki://open"')
+        && /script-src 'self'/u.test(
           /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/u
             .exec(indexHtml)?.[1] || ""
         )
+        && /connect-src 'self' http:\/\/127\.0\.0\.1:4319/u.test(responseHeaders)
+        && /media-src 'self' blob: http:\/\/127\.0\.0\.1:4319/u.test(responseHeaders)
         && responseHeaders.includes("frame-ancestors 'none'")
         && responseHeaders.includes("X-Content-Type-Options: nosniff")
         && responseHeaders.includes("X-Frame-Options: DENY")
@@ -264,11 +278,12 @@ try {
         && responseHeaders.includes("Cross-Origin-Opener-Policy: same-origin")
         && responseHeaders.includes("Cross-Origin-Resource-Policy: same-origin")
         && hosts === "kirinuki.eff0rtchung.kr\n"
-        && /제3자 JavaScript, 글꼴,\s*분석/u.test(publicNotices)
-        && !/127\.0\.0\.1|localhost|:4319|\/v1\/|editor\.html|studio\.js|audseg-worker/iu.test(
-          `${indexHtml}\n${publicCss}\n${publicNotices}\n${responseHeaders}`
+        && /사용자 세션·프로젝트·편집\s*이력/u.test(publicNotices)
+        && !/@import\b|expression\s*\(|javascript\s*:/iu.test(studioCss)
+        && !/chrome-extension:\/\//iu.test(
+          `${indexHtml}\n${editorHtml}\n${studioCss}\n${publicNotices}\n${responseHeaders}`
         ),
-      "공개 web 패키지가 shell-only 또는 public-safe CSP 계약과 맞지 않습니다."
+      "공개 web 패키지가 전체 앱 또는 public-to-loopback CSP 계약과 맞지 않습니다."
     );
   } finally {
     await rm(extractRoot, { recursive: true, force: true });
@@ -287,7 +302,7 @@ try {
     sha256: digest,
     checksum: path.relative(root, checksumPath),
     sourceRevision: releaseSourceRevision ?? null,
-    runtime: "public-launch-shell",
+    runtime: "public-web-editor-with-local-media-engine",
     chromeExtensionIncluded: false
   }, null, 2));
 } finally {

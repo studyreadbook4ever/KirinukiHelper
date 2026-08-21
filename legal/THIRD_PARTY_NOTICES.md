@@ -1,25 +1,24 @@
-# Third-party notices — source, app browser assets and Kirinuki runtime
+# Third-party notices — public web editor and local media engine
 
-이 문서는 Kirinuki 앱 소스 저장소, 앱에 포함되는 browser assets, 앱 setup
-과정에서 선택적으로 설치되는 내부 runtime과 Electron 개발 프리뷰까지 포함하는
-전체 고지입니다. 제3자 코드가 없는 공개 launch shell ZIP의 더 좁은 범위는
-`public-shell/THIRD_PARTY_NOTICES.md`를 기준으로 합니다. 앱 browser assets의
-배포 고지는 `web/THIRD_PARTY_NOTICES.md`에 따로 둡니다.
-기술 경로 `streaming-companion/`에는 앱이 관리하는 first-party Player Bridge
-코드만 있으며 제3자 runtime을 번들하지 않습니다.
+이 문서는 Kirinuki 소스 저장소, 공개 full web editor, 저장소 전용 검증 다운로드,
+Windows x64·macOS arm64·Linux x64의 화면 없는 로컬 엔진 installer에 관계된 전체
+고지입니다. 웹 ZIP의 더 좁은 고지는 `web/THIRD_PARTY_NOTICES.md`를 기준으로
+합니다. 브라우저 확장 프로그램과 Electron 편집기 창은 현재 제품 산출물이
+아닙니다.
 
 Kirinuki 프로젝트가 직접 작성한 코드는 루트 `UNLICENSE`에 따라 퍼블릭 도메인에
-헌정됩니다. 공개 launch shell에는 같은 원문을
-`public-shell/licenses/UNLICENSE.txt`로 싣습니다. 아래 구성요소는 그 헌정 대상이 아니며
+헌정됩니다. 공개 웹 ZIP에는 같은 원문을 `web/licenses/UNLICENSE.txt`로
+싣습니다. 아래 구성요소는 그 헌정 대상이 아니며
 각각의 라이선스와 저작권 고지를 유지합니다. 인벤토리와 자동 검사는 법률 자문이나 법적 무위험 보증이
-아닙니다. 실제 web·Kirinuki 앱·container 배포 산출물은 출시 때 다시 감사해야
+아닙니다. 실제 web·local engine·container 배포 산출물은 출시 때 다시 감사해야
 합니다.
 
-Electron 프리뷰 관련 절은 아직 공개 바이너리용 완결 고지가 아닙니다. 최종
+로컬 엔진 installer 관련 절은 아직 공개 바이너리용 완결 고지가 아닙니다. 최종
 Electron/Chromium/Node SBOM, FFmpeg build별 조건과 yt-dlp standalone embedded
-component 검토가 끝나지 않았으므로 프리뷰 패키지는 외부에 배포하지 않습니다.
+component 검토와 OS signing이 끝나지 않았으므로 installer를 외부에 배포하지
+않습니다.
 
-## Linux 소스 앱과 Electron 프리뷰의 browser assets
+## 공개 웹 편집기에 포함되는 browser assets
 
 <!-- attribution-id: mediabunny -->
 ### Mediabunny 1.51.0
@@ -93,11 +92,11 @@ npm source package에서 받을 수 있습니다.
 
 두 WOFF2 모두 표시한 upstream revision의 파일을 수정 없이 포함합니다.
 
-## 앱 setup이 사용자별 XDG 디렉터리에 내려받는 runtime
+## 저장소 전용 source-run 경로가 검증해 내려받는 runtime
 
-아래 파일은 공개 shell ZIP과 Linux source-app archive에 포함되지 않습니다.
-Kirinuki 앱의 setup 단계는 HTTPS URL, 바이트 수와 SHA-256을 모두 고정하고,
-검증에 실패하면 설치하지 않습니다.
+아래 파일은 공개 웹 ZIP이나 세 OS 로컬 엔진 installer의 구성요소라고 주장하지
+않습니다. 저장소 전용 source-run·선택적 로컬 자막 setup은 HTTPS URL, 바이트
+수와 SHA-256을 모두 고정하고, 검증에 실패하면 설치하지 않습니다.
 설치 위치와 운영 방식은 `legal/RUNTIME_DEPENDENCIES.md`를 확인하세요.
 
 <!-- attribution-id: whisper-cpp -->
@@ -204,21 +203,21 @@ Astring의 MIT 조건은 저작권·허가 고지를 소프트웨어의 모든 �
 원문이 들어 있지만, 재패키징하거나 분리 배포할 때 해당 header를 제거하면
 안 됩니다.
 
-## Electron 개발 프리뷰에 추가로 들어가는 구성요소
+## 화면 없는 로컬 엔진 installer에 들어가는 구성요소
 
 이 절은 현재 개발 package의 차이를 드러내기 위한 inventory이며 공개 배포
 승인이 아닙니다. 대상별 정확한 도구 URL·바이트·SHA-256은
 `src/desktop/tool-manifest.ts`, 공개 차단 조건은
 `legal/DESKTOP_BINARY_RELEASE_GATE.md`를 기준으로 합니다.
 
-<!-- attribution-id: desktop-preview-runtime -->
-### Electron 43.4.0
+<!-- attribution-id: desktop-local-engine-runtime -->
+### Electron 43.4.1 background runtime
 
 - Electron source license: MIT
-- Source and license: https://github.com/electron/electron/tree/v43.4.0
-- npm package: `electron@43.4.0`
+- Source and license: https://github.com/electron/electron/tree/v43.4.1
+- npm package: `electron@43.4.1`
 - npm source artifact:
-  https://registry.npmjs.org/electron/-/electron-43.4.0.tgz
+  https://registry.npmjs.org/electron/-/electron-43.4.1.tgz
 
 Electron runtime에는 Chromium, Node.js와 다수의 제3자 구성요소가 포함됩니다.
 최종 패키지의 Electron `LICENSE`와 `LICENSES.chromium.html`을 보존하고 실제
@@ -227,6 +226,8 @@ Electron runtime에는 Chromium, Node.js와 다수의 제3자 구성요소가 �
 
 ### Electron packaging toolchain
 
+- `electron-builder@26.15.3` — MIT, build-only transitive licenses 별도 gate —
+  https://github.com/electron-userland/electron-builder
 - `@electron/asar@4.2.1` — MIT —
   https://github.com/electron/asar
 - `@electron/packager@20.3.0` — BSD-2-Clause —
@@ -234,7 +235,7 @@ Electron runtime에는 Chromium, Node.js와 다수의 제3자 구성요소가 �
 - `@electron/fuses@2.1.3` — MIT —
   https://github.com/electron/fuses
 
-이 패키지들은 build dependency이며 최종 app runtime에 npm package 그대로 넣지
+이 패키지들은 build dependency이며 최종 engine runtime에 npm package 그대로 넣지
 않습니다. 전체 transitive lockfile inventory와 canonical positive allowlist
 검토는 아직 완료되지 않았습니다.
 
@@ -245,7 +246,7 @@ Electron runtime에는 Chromium, Node.js와 다수의 제3자 구성요소가 �
 - FFmpeg upstream: https://ffmpeg.org/
 - Legal guidance: https://ffmpeg.org/legal.html
 
-개발 패키지는 대상별 executable과 canonical GPLv3 원문인
+현재 installer stage는 대상별 executable과 canonical GPLv3 원문인
 `FFMPEG-LICENSE.txt`를 포함합니다. 최종 `-version`, `-buildconf`와 link evidence를 수집하고
 `--enable-nonfree`가 없음을 확인하며 적용 조건에 맞는 라이선스 원문·대응 소스
 또는 source offer를 제공하기 전에는 공개 배포하지 않습니다.
@@ -257,7 +258,7 @@ Electron runtime에는 Chromium, Node.js와 다수의 제3자 구성요소가 �
   https://github.com/yt-dlp/yt-dlp/tree/2026.07.04
 - Release: https://github.com/yt-dlp/yt-dlp/releases/tag/2026.07.04
 
-Linux의 Unix zipimport artifact와 달리 Electron 프리뷰는 대상별 official
+저장소 전용 Unix zipimport artifact와 달리 로컬 엔진 installer는 대상별 official
 standalone executable을 포함합니다. standalone에 포함된 Python runtime,
 yt-dlp-ejs와 그 밖의 embedded component를 대상별로 다시 조사해 고지를
 완성하기 전에는 이 절을 최종 배포 notice로 사용하지 않습니다.
@@ -287,30 +288,31 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Linux 소스 설치판에서 운영체제가 제공하는 도구
+## 개발/source-run에서 운영체제가 제공하는 도구
 
 <!-- attribution-id: ffmpeg -->
 ### FFmpeg
 
-`ffmpeg -version`과 `ffmpeg -buildconf`로 감지합니다. Linux 소스 archive와
-현재 공개 shell ZIP은 FFmpeg를 재배포하지 않습니다. Electron 개발 프리뷰는
-위 별도 절의 sidecar를 포함합니다. FFmpeg의 정확한 LGPL/GPL 및 외부 라이브러리
+`ffmpeg -version`과 `ffmpeg -buildconf`로 감지합니다. 공개 웹 ZIP은 FFmpeg를
+재배포하지 않습니다. 로컬 엔진 installer는 위 별도 절의 target sidecar를
+포함하므로 이 system-provided 분류를 재사용하지 않습니다. FFmpeg의 정확한
+LGPL/GPL 및 외부 라이브러리
 의무는 사용한 build configuration에 따라 달라집니다.
 Upstream: https://ffmpeg.org/
 
 <!-- attribution-id: ffprobe -->
 ### ffprobe
 
-`ffprobe -version`과 같은 FFmpeg build 정보를 확인합니다. Linux 소스 archive는
-재배포하지 않고 Electron 개발 프리뷰는 위 별도 절의 sidecar를 포함합니다.
+`ffprobe -version`과 같은 FFmpeg build 정보를 확인합니다. 공개 웹 ZIP은
+재배포하지 않고 로컬 엔진 installer는 위 별도 절의 sidecar를 포함합니다.
 라이선스 범위는 실제 FFmpeg build에 따라 달라집니다.
 Upstream: https://ffmpeg.org/ffprobe.html
 
 <!-- attribution-id: nodejs -->
 ### Node.js
 
-`node --version`과 `node -p process.versions`로 감지합니다. Kirinuki 앱 내부
-엔진과 빌드 도구의 host runtime일 뿐 공개 shell ZIP에는 포함되지 않습니다. Node.js
+`node --version`과 `node -p process.versions`로 감지합니다. 저장소 CLI와 빌드
+도구의 host runtime일 뿐 공개 웹 ZIP에는 포함되지 않습니다. Node.js
 배포본에는 여러 제3자 라이선스가 있으므로 향후 컨테이너에 넣을 때 해당
 배포본의 `LICENSE`를 함께 감사합니다. Upstream: https://github.com/nodejs/node
 
@@ -318,24 +320,24 @@ Upstream: https://ffmpeg.org/ffprobe.html
 ### Python
 
 `python3 --version`으로 감지하며 managed yt-dlp zipimport를 실행합니다.
-현재 공개 shell ZIP에는 포함되지 않습니다. Upstream: https://www.python.org/
+현재 공개 웹 ZIP에는 포함되지 않습니다. Upstream: https://www.python.org/
 
 <!-- attribution-id: chromium -->
 ### Chromium / Google Chrome / ChromeDriver
 
-Linux 소스 앱 화면 실행과 E2E 검증에 사용하는 외부 브라우저 도구입니다. Linux
-소스 archive는 재배포하지 않지만 Electron 개발 프리뷰에는 Electron이 제공하는
+사용자의 공개 웹 편집기와 E2E 검증에 사용하는 외부 브라우저 도구입니다. 공개
+웹 ZIP은 재배포하지 않지만 로컬 엔진 installer에는 Electron이 제공하는 별도
 Chromium runtime이 포함됩니다. 브라우저 배포본의 정확한 구성과 라이선스는
 제공자·build에 따라 달라집니다. Upstream:
 https://www.chromium.org/chromium-projects/
 
-## Kirinuki 앱 내부 npm runtime
+## 저장소 전용 엔진 npm runtime
 
 <!-- attribution-id: tsx-runtime -->
-현재 Kirinuki setup·자막 엔진·VOD 미디어 엔진은 저장소의 TypeScript CLI를
-직접 실행하므로 다음 패키지는 단순 build tool이 아니라 **앱 내부 runtime**
+저장소의 setup·자막 엔진·VOD 미디어 엔진은 TypeScript CLI를 직접 실행하므로
+다음 패키지는 단순 build tool이 아니라 **repository-local runtime**
 입니다. `package-lock.json`을 이용해 repository-local `node_modules`에
-설치되며 공개 shell ZIP과 Linux source-app archive에는 패키지 내용이 포함되지
+설치되며 공개 웹 ZIP과 세 OS installer에는 이 npm package 내용이 포함되지
 않습니다.
 Upstream: https://github.com/privatenumber/tsx
 
@@ -348,7 +350,7 @@ Upstream: https://github.com/privatenumber/tsx
 <!-- attribution-id: typescript-toolchain -->
 정확한 artifact URL·integrity는 `package-lock.json`에 고정하며
 `npm run license:check`가 승인 목록 밖의 패키지를 거부합니다. 이 패키지는
-공개 shell ZIP에 들어가지 않습니다.
+공개 웹 ZIP이나 로컬 엔진 runtime에 들어가지 않습니다.
 TypeScript upstream: https://github.com/microsoft/TypeScript
 
 - TypeScript 5.9.3 — Apache-2.0
@@ -358,7 +360,7 @@ TypeScript upstream: https://github.com/microsoft/TypeScript
 
 <!-- attribution-id: github-actions-ci -->
 아래 구성요소는 `.github/workflows/typescript-quality.yml`에서만 실행되며
-공개 web·Kirinuki 앱 산출물에 재배포하지 않습니다. workflow는 mutable
+공개 web·로컬 엔진 산출물에 재배포하지 않습니다. workflow는 mutable
 major tag 대신 full commit SHA를 사용합니다. Upstream:
 https://docs.github.com/actions
 
@@ -388,7 +390,7 @@ https://docs.github.com/actions
 
 ## Corresponding source
 
-공개 web·앱 내부 Player Bridge 소스, TypeScript build scripts, runtime installers,
+공개 web·로컬 엔진 소스, TypeScript build scripts, installer 구성,
 exact lockfile와
 이 인벤토리의 canonical typed registry는 다음 위치에 있습니다.
 

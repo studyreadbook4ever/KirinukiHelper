@@ -17,14 +17,6 @@ import {
   statFile
 } from "@electron/asar";
 
-import {
-  SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
-  STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
-  STREAMING_COMPANION_JAVASCRIPT_PATH,
-  STREAMING_COMPANION_MANIFEST_PATH
-} from "./build-streaming-companion.js";
-import { WEB_PACKAGE_FILES } from "./web-package-files.js";
-
 export const DESKTOP_LEGAL_PACKAGE_FILES = Object.freeze([
   "COMMERCIAL_USE_POLICY.md",
   "DESKTOP_BINARY_RELEASE_GATE.md",
@@ -36,19 +28,11 @@ export const DESKTOP_LEGAL_PACKAGE_FILES = Object.freeze([
   "WEB_THIRD_PARTY_NOTICES.md"
 ].sort());
 
-export const DESKTOP_STREAMING_COMPANION_FILES = Object.freeze([
-  SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
-  STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
-  STREAMING_COMPANION_JAVASCRIPT_PATH,
-  STREAMING_COMPANION_MANIFEST_PATH
-].sort());
-
 export const DESKTOP_ASAR_PACKAGE_FILES = Object.freeze([
   "UNLICENSE",
   "main.mjs",
   "package.json",
-  ...DESKTOP_LEGAL_PACKAGE_FILES.map((relativePath) => `legal/${relativePath}`),
-  ...WEB_PACKAGE_FILES.map((relativePath) => `web/${relativePath}`)
+  ...DESKTOP_LEGAL_PACKAGE_FILES.map((relativePath) => `legal/${relativePath}`)
 ].sort());
 
 export interface DesktopPackageFileIdentity {

@@ -106,43 +106,6 @@ input:focus { border-color: #1aa781; box-shadow: 0 0 0 3px rgb(0 230 163 / .1); 
 .stream-stage iframe { display: block; width: 100%; height: 100%; border: 0; background: #000; }
 .stream-placeholder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 9px; padding: 24px; color: var(--muted); text-align: center; }
 .stream-placeholder strong { color: #d7dddf; font-size: 17px; }
-.stream-cut-console { margin-top: 8px; padding: 10px; border: 1px solid #2f373b; border-radius: 12px; background: #111416; }
-.stream-cut-console-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-.stream-cut-console-heading > div { display: flex; align-items: baseline; gap: 12px; min-width: max-content; }
-.stream-cut-console-heading strong { font-family: Pretendard, sans-serif; font-size: 16px; }
-.stream-cut-console-heading span { color: var(--muted); font-size: 12px; }
-.stream-cut-console-heading output { margin-left: 4px; color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 800; }
-.stream-cut-console-heading p { margin: 0; color: #aeb8bd; font-size: 12px; line-height: 1.45; text-align: right; }
-.stream-cut-buttons {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-template-areas:
-    "refresh refresh quarter double"
-    "back back forward forward"
-    "capture-start capture-start capture-end capture-end"
-    "save save save save";
-  gap: 5px;
-}
-#refresh-source { grid-area: refresh; }
-#capture-start { grid-area: capture-start; }
-#capture-end { grid-area: capture-end; }
-#save-segment { grid-area: save; }
-#seek-backward-five { grid-area: back; }
-#seek-forward-five { grid-area: forward; }
-#playback-rate-quarter { grid-area: quarter; }
-#playback-rate-double { grid-area: double; }
-.stream-cut-buttons button { min-width: 0; min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 4px 7px; border: 1px solid #343c40; border-radius: 8px; background: #191e21; color: #dce2e5; cursor: pointer; }
-.stream-cut-buttons button:hover:not(:disabled) { border-color: #298c70; background: #132a24; }
-.stream-cut-buttons button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.stream-cut-buttons button:disabled { color: #657077; cursor: not-allowed; opacity: .62; }
-.stream-cut-buttons kbd { min-width: 20px; padding: 1px 4px; border: 1px solid #566168; border-bottom-width: 2px; border-radius: 5px; background: #090b0c; color: var(--accent); font: 800 10px/1.25 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.stream-cut-buttons button:disabled kbd { color: #747e83; }
-.stream-cut-buttons span { overflow: hidden; max-width: 100%; font-size: 11px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-#playback-rate-quarter, #playback-rate-double { min-height: 30px; }
-#seek-backward-five, #seek-forward-five { min-height: 34px; }
-#playback-rate-quarter[aria-pressed="true"], #playback-rate-double[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-dark); color: var(--accent); }
-#save-segment { border-color: #25775f; background: #102a22; }
-.stream-cut-console-guide { margin: 7px 0 0; color: #7f8b91; font-size: 12px; line-height: 1.45; }
 .stream-preview-footer { margin-top: 9px; }
 .stream-preview-footer p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .button { min-height: 44px; border: 1px solid #3b4449; border-radius: 10px; padding: 0 17px; background: #1b2023; cursor: pointer; font-weight: 800; }
@@ -227,17 +190,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .source-input-row { grid-template-columns: 1fr; }
   .source-input-row input { grid-column: auto; }
   .stream-stage { min-height: 200px; }
-  .stream-cut-console-heading { align-items: flex-start; flex-direction: column; gap: 7px; }
-  .stream-cut-console-heading p { text-align: left; }
-  .stream-cut-buttons {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-areas:
-      "refresh refresh"
-      "quarter double"
-      "back forward"
-      "capture-start capture-end"
-      "save save";
-  }
   .stream-preview-footer { align-items: stretch; flex-direction: column; }
   .selection-rail { height: min(580px, 72vh); padding: 12px; }
   .clip-row { grid-template-columns: 28px minmax(0, 1fr) 42px; }

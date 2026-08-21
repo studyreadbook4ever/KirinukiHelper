@@ -1,7 +1,8 @@
 * text=auto eol=lf
 *.sh text eol=lf
 web/**/*.js linguist-generated=true
-streaming-companion/**/*.js linguist-generated=true
+build/*.ico -text
+build/*.icns -text
 vendor/pretendard/LICENSE -whitespace
 vendor/paperlogy/OFL-license.txt -whitespace
 web/licenses/PRETENDARD-OFL-1.1.txt -whitespace

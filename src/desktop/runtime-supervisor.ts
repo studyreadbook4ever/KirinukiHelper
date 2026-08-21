@@ -1,25 +1,28 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, readFile } from "node:fs/promises";
-import type { Server } from "node:http";
 import path from "node:path";
 
 import {
-  KIRINUKI_LOCAL_STUDIO_ORIGIN
+  KIRINUKI_PUBLIC_STUDIO_ORIGIN
 } from "../lib/local-runtime-origin.js";
 import {
-  DEFAULT_STUDIO_PORT,
-  createLocalStudioHttpServer,
-  createStudioInstanceNonce
-} from "../../scripts/local-studio-server-core.js";
+  isLocalMediaEngineVersion
+} from "../lib/local-media-engine-contract.js";
+import type {
+  LocalMediaEnginePairingResponse
+} from "../lib/local-media-engine-auth.js";
 import {
-  startCaptionGateway
+  DEFAULT_CAPTION_GATEWAY_PORT,
+  createCaptionGatewayServer
 } from "../../scripts/caption-gateway.js";
 import {
-  materializeChzzkVod
+  materializeChzzkVod,
+  runMaterializerProcess
 } from "../../scripts/chzzk-vod-materializer.js";
 import {
-  materializeExternalVod
+  materializeExternalVod,
+  runExternalProcess
 } from "../../scripts/external-vod-materializer.js";
 import {
   LOCAL_VOD_RUNTIME_SCHEMA,
@@ -30,21 +33,47 @@ import { preparePrivateDirectories } from "./private-directory.js";
 import type {
   DesktopRuntimePaths
 } from "./runtime-spec.js";
+import type { DesktopDeviceIdentity } from "./device-identity.js";
 import {
   DESKTOP_TOOL_MANIFEST_SCHEMA,
   DESKTOP_YT_DLP_RELEASE,
   desktopToolTargetManifest
 } from "./tool-manifest.js";
+import {
+  createWindowsJobObjectSpawn,
+  verifyPackagedWindowsJobLauncher
+} from "./windows-job-object.js";
+import {
+  verifyMacosSealedDesktopTools
+} from "./macos-sealed-tools.js";
+import { DESKTOP_BUILD_CHANNEL } from "./build-channel.js";
 
 export interface DesktopRuntimeSupervisorOptions {
   readonly appRoot: string;
+  readonly backgroundStart: "ready" | "requires-approval";
+  readonly engineVersion: string;
+  readonly deviceIdentity: Readonly<DesktopDeviceIdentity>;
   readonly paths: Readonly<DesktopRuntimePaths>;
   readonly nodeBinary: string;
 }
 
 export interface DesktopRuntimeSupervisor {
-  readonly studioUrl: string;
+  readonly allowedOrigin: typeof KIRINUKI_PUBLIC_STUDIO_ORIGIN;
+  readonly port: typeof DEFAULT_CAPTION_GATEWAY_PORT;
+  /** Evidence-only readback: foreign port owners are never adopted. */
+  readonly reusedExisting: false;
+  readonly publishPairingResponse: (
+    response: Readonly<LocalMediaEnginePairingResponse>
+  ) => Promise<void>;
   readonly stop: () => Promise<void>;
+  readonly terminalFailure: Promise<Error | null>;
+}
+
+export class DesktopGatewayPortConflictError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "DesktopGatewayPortConflictError";
+  }
 }
 
 function safeAbsolutePath(value: string, label: string): string {
@@ -77,37 +106,219 @@ function managedParent(
   return Object.freeze({ containedBy: parent });
 }
 
-async function listen(server: Server, port: number): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => {
-      server.removeListener("listening", onListening);
-      reject(error);
-    };
-    const onListening = () => {
-      server.removeListener("error", onError);
-      resolve();
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(port, "127.0.0.1");
-  });
+export const DESKTOP_RUNTIME_RESTART_DELAYS_MS = Object.freeze([
+  250,
+  1_000,
+  4_000
+] as const);
+export const DESKTOP_RUNTIME_STABLE_RESET_MS = 30_000;
+
+export interface DesktopRuntimeRecoverySnapshot {
+  readonly circuitOpen: boolean;
+  readonly consecutiveFailures: number;
+  readonly recovering: boolean;
+  readonly stopped: boolean;
 }
 
-async function closeServer(server: Server): Promise<void> {
-  if (!server.listening) {
-    return;
+export interface DesktopRuntimeRecoveryController {
+  readonly reportFailure: (error: unknown) => void;
+  readonly snapshot: () => Readonly<DesktopRuntimeRecoverySnapshot>;
+  readonly stop: () => Promise<void>;
+  readonly terminalFailure: Promise<Error | null>;
+}
+
+function runtimeFailure(error: unknown, label: string): Error {
+  if (error instanceof Error) {
+    return error;
   }
-  server.closeIdleConnections?.();
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      server.closeAllConnections?.();
-      resolve();
-    }, 2_000);
-    timer.unref?.();
-    server.close(() => {
-      clearTimeout(timer);
-      resolve();
+  return new Error(`${label}: ${String(error)}`);
+}
+
+/**
+ * Keeps one in-process runtime alive without turning a persistent failure into
+ * an unbounded restart loop. The caller owns the runtime instance; `quiesce`
+ * must be idempotent and `restart` must publish at most one new instance.
+ */
+export function createDesktopRuntimeRecoveryController({
+  quiesce,
+  restart,
+  restartDelaysMs = DESKTOP_RUNTIME_RESTART_DELAYS_MS,
+  stableResetMs = DESKTOP_RUNTIME_STABLE_RESET_MS,
+  now = Date.now
+}: {
+  readonly quiesce: () => Promise<void>;
+  readonly restart: () => Promise<void>;
+  readonly restartDelaysMs?: readonly number[];
+  readonly stableResetMs?: number;
+  readonly now?: () => number;
+}): DesktopRuntimeRecoveryController {
+  if (
+    typeof quiesce !== "function"
+    || typeof restart !== "function"
+    || !Array.isArray(restartDelaysMs)
+    || restartDelaysMs.length < 1
+    || restartDelaysMs.length > 8
+    || restartDelaysMs.some((delay, index) => (
+      !Number.isSafeInteger(delay)
+      || delay < 1
+      || delay > 60_000
+      || (index > 0 && delay < restartDelaysMs[index - 1]!)
+    ))
+    || !Number.isSafeInteger(stableResetMs)
+    || stableResetMs < 1
+    || stableResetMs > 10 * 60_000
+    || typeof now !== "function"
+  ) {
+    throw new TypeError("내부 런타임 복구 정책이 안전한 bounded 값이 아닙니다.");
+  }
+
+  const delays = Object.freeze([...restartDelaysMs]);
+  let circuitOpen = false;
+  let consecutiveFailures = 0;
+  let healthySince = now();
+  let recoveryTask: Promise<void> | null = null;
+  let stopPromise: Promise<void> | null = null;
+  let stopped = false;
+  let cancelDelay: (() => void) | null = null;
+  let terminalSettled = false;
+  let settleTerminal!: (failure: Error | null) => void;
+  const terminalFailure = new Promise<Error | null>((resolve) => {
+    settleTerminal = resolve;
+  });
+
+  const settleTerminalOnce = (failure: Error | null): void => {
+    if (terminalSettled) {
+      return;
+    }
+    terminalSettled = true;
+    settleTerminal(failure);
+  };
+
+  const waitForDelay = (delayMs: number): Promise<void> => (
+    new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        if (cancelDelay === finish) {
+          cancelDelay = null;
+        }
+        resolve();
+      };
+      const timer = setTimeout(finish, delayMs);
+      cancelDelay = finish;
+    })
+  );
+
+  const openCircuit = (failure: Error): void => {
+    if (circuitOpen || stopped) {
+      return;
+    }
+    circuitOpen = true;
+    recoveryTask = (async () => {
+      let terminal = failure;
+      try {
+        await quiesce();
+      } catch (error) {
+        terminal = new AggregateError(
+          [failure, runtimeFailure(error, "내부 런타임 최종 정리 실패")],
+          "Kirinuki 내부 런타임 복구 회로가 열렸고 정리도 실패했습니다."
+        );
+      }
+      settleTerminalOnce(terminal);
+    })().finally(() => {
+      recoveryTask = null;
     });
+    void recoveryTask.catch(() => undefined);
+  };
+
+  const reportFailure = (error: unknown): void => {
+    if (stopped || circuitOpen || recoveryTask) {
+      return;
+    }
+    const timestamp = now();
+    if (
+      Number.isFinite(timestamp)
+      && Number.isFinite(healthySince)
+      && timestamp - healthySince >= stableResetMs
+    ) {
+      consecutiveFailures = 0;
+    }
+    consecutiveFailures += 1;
+    const failure = runtimeFailure(error, "내부 런타임 실패");
+    if (consecutiveFailures > delays.length) {
+      openCircuit(new Error(
+        `Kirinuki 내부 런타임이 ${delays.length}회 bounded 재시도 뒤에도 안정화되지 않았습니다.`,
+        { cause: failure }
+      ));
+      return;
+    }
+    const delayMs = delays[consecutiveFailures - 1]!;
+    let nextFailure: Error | null = null;
+    recoveryTask = (async () => {
+      try {
+        await quiesce();
+      } catch (quiesceError) {
+        nextFailure = new AggregateError(
+          [failure, runtimeFailure(quiesceError, "내부 런타임 정리 실패")],
+          "Kirinuki 내부 런타임을 안전하게 정리하지 못했습니다."
+        );
+        return;
+      }
+      if (stopped || circuitOpen) {
+        return;
+      }
+      await waitForDelay(delayMs);
+      if (stopped || circuitOpen) {
+        return;
+      }
+      try {
+        await restart();
+        healthySince = now();
+      } catch (restartError) {
+        nextFailure = new AggregateError(
+          [failure, runtimeFailure(restartError, "내부 런타임 재시작 실패")],
+          "Kirinuki 내부 런타임 재시작에 실패했습니다."
+        );
+      }
+    })().catch((unexpected) => {
+      nextFailure = runtimeFailure(unexpected, "내부 런타임 복구 실패");
+    }).finally(() => {
+      recoveryTask = null;
+      if (nextFailure && !stopped && !circuitOpen) {
+        reportFailure(nextFailure);
+      }
+    });
+    void recoveryTask.catch(() => undefined);
+  };
+
+  const stop = (): Promise<void> => {
+    stopPromise ??= (async () => {
+      stopped = true;
+      cancelDelay?.();
+      await recoveryTask?.catch(() => undefined);
+      try {
+        await quiesce();
+      } finally {
+        settleTerminalOnce(null);
+      }
+    })();
+    return stopPromise;
+  };
+
+  return Object.freeze({
+    reportFailure,
+    snapshot: () => Object.freeze({
+      circuitOpen,
+      consecutiveFailures,
+      recovering: recoveryTask !== null,
+      stopped
+    }),
+    stop,
+    terminalFailure
   });
 }
 
@@ -166,6 +377,7 @@ async function verifyDesktopTools(paths: Readonly<DesktopRuntimePaths>): Promise
   readonly ffmpeg: string;
   readonly ffprobe: string;
   readonly ytDlp: string;
+  readonly windowsJobLauncher?: string;
 }> {
   const expected = desktopToolTargetManifest(paths.bundleTarget);
   const toolsRoot = path.join(
@@ -173,6 +385,19 @@ async function verifyDesktopTools(paths: Readonly<DesktopRuntimePaths>): Promise
     "desktop-tools",
     paths.bundleTarget
   );
+  if (
+    paths.bundleTarget === "darwin-arm64"
+    && DESKTOP_BUILD_CHANNEL === "public-release"
+  ) {
+    const sealed = await verifyMacosSealedDesktopTools({
+      resourcesRoot: paths.resourcesRoot
+    });
+    return Object.freeze({
+      ffmpeg: sealed.ffmpeg,
+      ffprobe: sealed.ffprobe,
+      ytDlp: sealed.ytDlp
+    });
+  }
   const recordedPath = path.join(toolsRoot, "manifest.json");
   let recorded: unknown;
   try {
@@ -205,11 +430,24 @@ async function verifyDesktopTools(paths: Readonly<DesktopRuntimePaths>): Promise
     verify(expected.ffprobe),
     verify(expected.ytDlp)
   ]);
-  return Object.freeze({ ffmpeg, ffprobe, ytDlp });
+  const windowsJobLauncher = paths.bundleTarget === "win32-x64"
+    ? (await verifyPackagedWindowsJobLauncher(
+      paths.resourcesRoot,
+      paths.bundleTarget
+    )).executable
+    : undefined;
+  return Object.freeze({
+    ffmpeg,
+    ffprobe,
+    ytDlp,
+    ...(windowsJobLauncher ? { windowsJobLauncher } : {})
+  });
 }
 
 function gatewayEnvironment({
   appRoot,
+  backgroundStart,
+  engineVersion,
   paths,
   nodeBinary,
   tools
@@ -233,8 +471,9 @@ function gatewayEnvironment({
     WINDIR: process.env.WINDIR,
     no_proxy: "127.0.0.1,localhost",
     KIRINUKI_AGENT_PORT: "4319",
-    KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_LOCAL_STUDIO_ORIGIN,
-    KIRINUKI_AUTO_PAIR: "1",
+    KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+    KIRINUKI_LOCAL_ENGINE_BACKGROUND_START: backgroundStart,
+    KIRINUKI_LOCAL_ENGINE_VERSION: engineVersion,
     KIRINUKI_FFMPEG_BINARY: tools.ffmpeg,
     KIRINUKI_FFPROBE_BINARY: tools.ffprobe,
     KIRINUKI_PACKAGE_ROOT: appRoot,
@@ -256,6 +495,9 @@ export async function startDesktopRuntimeSupervisor(
 ): Promise<DesktopRuntimeSupervisor> {
   const appRoot = safeAbsolutePath(options.appRoot, "앱 리소스");
   const nodeBinary = safeAbsolutePath(options.nodeBinary, "내장 Node");
+  if (!isLocalMediaEngineVersion(options.engineVersion)) {
+    throw new TypeError("로컬 엔진 release version identity가 올바르지 않습니다.");
+  }
   preparePrivateDirectories([
     {
       path: options.paths.appDataRoot,
@@ -300,66 +542,183 @@ export async function startDesktopRuntimeSupervisor(
     }
   ], { platform: options.paths.platform });
   const tools = await verifyDesktopTools(options.paths);
+  if (
+    (options.paths.platform === "win32")
+      !== (tools.windowsJobLauncher !== undefined)
+  ) {
+    throw new Error("Windows Job Object launcher와 runtime target이 일치하지 않습니다.");
+  }
+  const windowsSpawn = tools.windowsJobLauncher
+    ? createWindowsJobObjectSpawn({ launcherPath: tools.windowsJobLauncher })
+    : undefined;
   const environment = gatewayEnvironment({
     ...options,
     appRoot,
     nodeBinary,
     tools
   });
-  const studioServer = createLocalStudioHttpServer({
-    repoRoot: appRoot,
-    instanceNonce: createStudioInstanceNonce()
+  const createGateway = () => createCaptionGatewayServer({
+    env: environment,
+    deviceProofSigner: options.deviceIdentity,
+    chzzkMaterializer: (request) => materializeChzzkVod(
+      { ...request, stateDir: options.paths.vodCacheRoot },
+      {
+        ffmpegBinary: tools.ffmpeg,
+        ffprobeBinary: tools.ffprobe,
+        ...(windowsSpawn
+          ? {
+            runProcess: (command, args, processOptions) => (
+              runMaterializerProcess(command, args, processOptions, {
+                spawnImpl: windowsSpawn,
+                platform: "win32"
+              })
+            )
+          }
+          : {})
+      }
+    ),
+    externalMaterializer: (request) => materializeExternalVod(
+      { ...request, stateDir: options.paths.vodCacheRoot },
+      {
+        processEnv: environment,
+        ytDlpBinary: tools.ytDlp,
+        ytDlpMode: "standalone",
+        nodeBinary,
+        ffmpegBinary: tools.ffmpeg,
+        ffprobeBinary: tools.ffprobe,
+        ...(windowsSpawn
+          ? {
+            runProcess: (command, args, processOptions) => (
+              runExternalProcess(command, args, processOptions, {
+                spawnImpl: windowsSpawn,
+                platform: "win32"
+              })
+            )
+          }
+          : {})
+      }
+    )
   });
-  let gateway: Awaited<ReturnType<typeof startCaptionGateway>> | null = null;
+  type Gateway = ReturnType<typeof createGateway>;
+  const startGateway = async (): Promise<Gateway> => {
+    const candidate = createGateway();
+    try {
+      await candidate.ready;
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+          candidate.server.removeListener("listening", onListening);
+          reject(error);
+        };
+        const onListening = () => {
+          candidate.server.removeListener("error", onError);
+          resolve();
+        };
+        candidate.server.once("error", onError);
+        candidate.server.once("listening", onListening);
+        candidate.server.listen({
+          host: "127.0.0.1",
+          port: DEFAULT_CAPTION_GATEWAY_PORT,
+          exclusive: true
+        });
+      });
+      return candidate;
+    } catch (error) {
+      await candidate.shutdown().catch(() => undefined);
+      throw error;
+    }
+  };
+  let gateway: Gateway;
   try {
-    await listen(studioServer, DEFAULT_STUDIO_PORT);
-    gateway = await startCaptionGateway({
-      env: environment,
-      chzzkMaterializer: (request) => materializeChzzkVod(
-        { ...request, stateDir: options.paths.vodCacheRoot },
-        {
-          ffmpegBinary: tools.ffmpeg,
-          ffprobeBinary: tools.ffprobe
-        }
-      ),
-      externalMaterializer: (request) => materializeExternalVod(
-        { ...request, stateDir: options.paths.vodCacheRoot },
-        {
-          processEnv: environment,
-          ytDlpBinary: tools.ytDlp,
-          ytDlpMode: "standalone",
-          nodeBinary,
-          ffmpegBinary: tools.ffmpeg,
-          ffprobeBinary: tools.ffprobe
-        }
-      )
-    });
+    gateway = await startGateway();
   } catch (error) {
-    await Promise.allSettled([
-      gateway?.shutdown(),
-      closeServer(studioServer)
-    ]);
+    if ((error as NodeJS.ErrnoException)?.code === "EADDRINUSE") {
+      throw new DesktopGatewayPortConflictError(
+        `127.0.0.1:${DEFAULT_CAPTION_GATEWAY_PORT} 포트를 다른 프로세스가 선점했습니다.`,
+        { cause: error }
+      );
+    }
     throw error;
   }
-  let stopPromise: Promise<void> | null = null;
-  const stop = (): Promise<void> => {
-    stopPromise ??= (async () => {
-      await Promise.allSettled([
-        gateway?.shutdown(),
-        closeServer(studioServer)
-      ]).then((results) => {
-        const errors = results
-          .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-          .map((result) => result.reason);
-        if (errors.length > 0) {
-          throw new AggregateError(errors, "Kirinuki 내부 런타임 종료에 실패했습니다.");
-        }
-      });
-    })();
-    return stopPromise;
+
+  let currentGateway: Gateway | null = gateway;
+  let retiringGateway: Promise<void> | null = null;
+  let detachGatewayFailureMonitor: () => void = () => undefined;
+  let recovery: DesktopRuntimeRecoveryController | null = null;
+
+  const monitorGateway = (candidate: Gateway): void => {
+    const onError = (error: Error) => {
+      recovery?.reportFailure(error);
+    };
+    const onClose = () => {
+      recovery?.reportFailure(new Error(
+        "Kirinuki 내부 런타임의 loopback 서버가 예기치 않게 닫혔습니다."
+      ));
+    };
+    candidate.server.once("error", onError);
+    candidate.server.once("close", onClose);
+    detachGatewayFailureMonitor = () => {
+      candidate.server.removeListener("error", onError);
+      candidate.server.removeListener("close", onClose);
+      detachGatewayFailureMonitor = () => undefined;
+    };
   };
+
+  const quiesceGateway = (): Promise<void> => {
+    if (retiringGateway) {
+      return retiringGateway;
+    }
+    const candidate = currentGateway;
+    if (!candidate) {
+      return Promise.resolve();
+    }
+    detachGatewayFailureMonitor();
+    currentGateway = null;
+    const shutdown = candidate.shutdown();
+    const retirement = shutdown.then(
+      () => {
+        if (retiringGateway === retirement) {
+          retiringGateway = null;
+        }
+      },
+      (error) => {
+        // Keep the rejected quiesce identity. Starting another gateway while
+        // old handlers ignored abort could race the same cache and port.
+        throw error;
+      }
+    );
+    retiringGateway = retirement;
+    return retiringGateway;
+  };
+
+  const restartGateway = async (): Promise<void> => {
+    if (currentGateway || retiringGateway) {
+      throw new Error("내부 런타임이 완전히 정리되기 전에 재시작할 수 없습니다.");
+    }
+    const next = await startGateway();
+    currentGateway = next;
+    monitorGateway(next);
+  };
+
+  recovery = createDesktopRuntimeRecoveryController({
+    quiesce: quiesceGateway,
+    restart: restartGateway
+  });
+  monitorGateway(gateway);
+
   return Object.freeze({
-    studioUrl: `${KIRINUKI_LOCAL_STUDIO_ORIGIN}/`,
-    stop
+    allowedOrigin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+    port: DEFAULT_CAPTION_GATEWAY_PORT,
+    reusedExisting: false,
+    publishPairingResponse: async (
+      response: Readonly<LocalMediaEnginePairingResponse>
+    ) => {
+      const candidate = currentGateway;
+      if (!candidate || recovery.snapshot().stopped) {
+        throw new Error("로컬 엔진 pairing response를 받을 runtime이 없습니다.");
+      }
+      await candidate.publishPairingResponse(response);
+    },
+    stop: recovery.stop,
+    terminalFailure: recovery.terminalFailure
   });
 }

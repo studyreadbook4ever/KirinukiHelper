@@ -81,7 +81,7 @@ import {
 import {
   KIRINUKI_STUDIO_ORIGIN_META_NAME,
   assertKirinukiStudioDocumentOrigin,
-  isKirinukiLocalStudioOrigin
+  isKirinukiStudioOrigin
 } from "../lib/local-runtime-origin.js";
 
 import type {
@@ -112,6 +112,12 @@ import {
 import {
   currentClientCannotUseEditor
 } from "../lib/editor-mobile-access.js";
+import {
+  LocalMediaEngineConnectionError,
+  ensureLocalMediaEngineReady,
+  invalidatePrimedLocalMediaEngineTrust,
+  primeLocalMediaEngineTrust
+} from "./local-media-engine-onboarding.js";
 import {
   isSafeSessionCleanupMediaUrl,
   sessionCleanupMarkerMatchesMaterializedBinding
@@ -187,6 +193,7 @@ import {
   captionAgentRunClipLimit,
   captionAgentRuntimeIdentity,
   captionAgentRunEstimate,
+  clearLocalMediaEngineSessionState,
   createCaptionAgentCheckpoint,
   createCaptionAgentRequest,
   discardCaptionAgentCheckpointsForClips,
@@ -207,12 +214,16 @@ import type {
   CaptionModel
 } from "./caption-agent.js";
 import {
+  ChzzkVodMaterializationClientError,
   KIRINUKI_MEDIA_ENGINE_ENDPOINT,
   cancelChzzkVodMaterialization,
   purgeChzzkVodConsumerSessionCache,
   startChzzkVodMaterialization,
   waitForChzzkVodMaterialization
 } from "./chzzk-vod-client.js";
+import {
+  LocalMediaEngineTransportError
+} from "./local-media-engine-transport.js";
 import type {
   ChzzkVodEditableRangeRequest,
   ChzzkVodLocalMedia,
@@ -331,6 +342,7 @@ import {
   completeStudioEditorSession,
   countStudioProjectEditors,
   leaveCompletedStudioEditor,
+  resolveStudioEditorEntry,
   runStudioSourceAction,
   studioAssetUrl,
   studioEditorReady,
@@ -647,8 +659,8 @@ function internalMediaEngineErrorMessage(
 ): string {
   const message = errorMessage(error);
   const recovery = feature === "Whisper"
-    ? "현재 작업을 ‘지금 저장’한 뒤 설치 안내의 ‘Whisper로 설치’를 완료하고 Kirinuki를 다시 열어 같은 버튼을 눌러 주세요."
-    : "현재 작업을 저장한 뒤 Kirinuki 앱을 완전히 종료하고 다시 열어 같은 버튼을 눌러 주세요.";
+    ? "현재 공개 설치판은 Whisper를 제공하지 않습니다. AudSeg 또는 자막 작업 프롬프트를 사용해 주세요."
+    : "설치 안내가 보이면 이 PC용 영상 준비 도구를 한 번 설치한 뒤 같은 버튼을 다시 눌러 주세요.";
   if (
     /failed to fetch|networkerror|load failed|시간.*초과|timed?\s*out|econnrefused/iu.test(message)
   ) {
@@ -1156,7 +1168,10 @@ function syncEditorUrlToUsagePolicySession(
   const url = new URL(location.href);
   url.searchParams.set("project", session.projectId);
   url.searchParams.delete("usageGate");
-  if (session.purpose === "editor-new") {
+  if (
+    session.purpose === "editor-new"
+    && url.searchParams.get("session") !== RECOVERY_SESSION_MODE
+  ) {
     url.searchParams.delete("session");
     url.searchParams.delete("recovery");
   } else {
@@ -1167,6 +1182,21 @@ function syncEditorUrlToUsagePolicySession(
       url.searchParams.delete("recovery");
     }
   }
+  history.replaceState(null, "", url.href);
+}
+
+/**
+ * Once the one-shot capture seed has become a durable browser-local project,
+ * make the current URL reloadable.  A normal F5 must reopen that exact
+ * project instead of trying to consume the already-deleted navigation seed a
+ * second time.
+ */
+function markEditorUrlReloadable(): void {
+  const url = new URL(location.href);
+  url.searchParams.set("project", project.id);
+  url.searchParams.set("session", RECOVERY_SESSION_MODE);
+  url.searchParams.delete("recovery");
+  url.searchParams.delete("usageGate");
   history.replaceState(null, "", url.href);
 }
 
@@ -1192,6 +1222,91 @@ function sameUsagePolicyLease(
   );
 }
 
+class ReplacedUsagePolicyLeaseError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ReplacedUsagePolicyLeaseError";
+  }
+}
+
+async function refreshUsagePolicyLease(
+  expected: ActiveUsagePolicySession
+): Promise<boolean> {
+  const response: unknown = await verifyStudioUsagePolicyGate({
+    projectId: expected.projectId,
+    gateToken: ""
+  });
+  if (!isRecord(response) || response.ok !== true) {
+    throw new ReplacedUsagePolicyLeaseError(
+      isRecord(response) && typeof response.error === "string"
+        ? response.error
+        : "편집 세션 활성 상태를 확인하지 못했습니다."
+    );
+  }
+  let refreshed: ActiveUsagePolicySession;
+  try {
+    refreshed = normalizeActiveUsagePolicySession(
+      response.usagePolicy,
+      expected.projectId
+    );
+  } catch (error) {
+    throw new ReplacedUsagePolicyLeaseError(
+      "편집 세션 활성 상태가 올바르지 않습니다.",
+      { cause: error }
+    );
+  }
+  if (usagePolicySession !== expected) {
+    return false;
+  }
+  if (!sameUsagePolicyLease(refreshed, expected)) {
+    throw new ReplacedUsagePolicyLeaseError(
+      "다른 편집 작업으로 전환되어 이전 화면을 종료합니다."
+    );
+  }
+  usagePolicySession = refreshed;
+  return true;
+}
+
+function leaveReplacedUsagePolicySession(message: string): void {
+  clearUsagePolicyExpiryTimer();
+  usagePolicySession = null;
+  stopLocalDraftAutosave();
+  stopDevReloadObserver();
+  if (project) {
+    discardPendingProjectSave();
+    advanceProjectSessionGeneration();
+    if (workspaceMode === "short-form") {
+      stopShortCanvasPlayback();
+    }
+    elements.preview_video.pause();
+    stopPreviewAudioClock({ sync: false });
+    cancelActiveJob();
+  }
+  showEditorPolicyGateError(
+    `${message} 시작 화면에서 계속할 작업을 다시 선택해 주세요.`
+  );
+  window.setTimeout(() => {
+    location.replace(new URL("/", location.origin).href);
+  }, 0);
+}
+
+function handleUsagePolicyLeaseRefreshFailure(
+  error: unknown,
+  expected: ActiveUsagePolicySession
+): void {
+  if (usagePolicySession !== expected) {
+    return;
+  }
+  if (error instanceof ReplacedUsagePolicyLeaseError) {
+    leaveReplacedUsagePolicySession(error.message);
+    return;
+  }
+  // Storage may be briefly unavailable while a page is frozen or restored.
+  // Keep the in-memory lease and writer lock in that transient case only.
+  console.warn("편집 세션 활성 상태를 이번 주기에 갱신하지 못했습니다.", error);
+  scheduleUsagePolicyLeaseHeartbeat();
+}
+
 function scheduleUsagePolicyLeaseHeartbeat(): void {
   clearUsagePolicyExpiryTimer();
   const expected = usagePolicySession;
@@ -1203,59 +1318,19 @@ function scheduleUsagePolicyLeaseHeartbeat(): void {
     if (usagePolicySession !== expected) {
       return;
     }
-    void verifyStudioUsagePolicyGate({
-      projectId: expected.projectId,
-      gateToken: ""
-    }).then((response: unknown) => {
-      if (!isRecord(response) || response.ok !== true) {
-        throw new Error(
-          isRecord(response) && typeof response.error === "string"
-            ? response.error
-            : "편집 세션 활성 상태를 갱신하지 못했습니다."
-        );
-      }
-      const refreshed = normalizeActiveUsagePolicySession(
-        response.usagePolicy,
-        expected.projectId
-      );
-      if (usagePolicySession !== expected || !sameUsagePolicyLease(refreshed, expected)) {
-        throw new Error("편집 세션 활성 상태가 현재 프로젝트와 달라졌습니다.");
-      }
-      usagePolicySession = refreshed;
-      scheduleUsagePolicyLeaseHeartbeat();
-    }).catch((error: unknown) => {
-      if (usagePolicySession !== expected) {
-        return;
-      }
-      lockEditorForUsagePolicy(
-        `편집 세션 활성 상태를 확인하지 못해 편집기를 잠갔습니다: ${errorMessage(error)}`
-      );
-    });
+    void refreshUsagePolicyLease(expected)
+      .then((current) => {
+        if (current) {
+          scheduleUsagePolicyLeaseHeartbeat();
+        }
+      })
+      .catch((error: unknown) => {
+        handleUsagePolicyLeaseRefreshFailure(error, expected);
+      });
   }, USAGE_POLICY_LEASE_HEARTBEAT_MS);
 }
 
-function lockEditorForUsagePolicy(message: string): void {
-  clearUsagePolicyExpiryTimer();
-  usagePolicyRevalidationPending = false;
-  usagePolicySession = null;
-  stopLocalDraftAutosave();
-  stopDevReloadObserver();
-  if (project) {
-    if (workspaceMode === "short-form") {
-      stopShortCanvasPlayback();
-    }
-    elements.preview_video.pause();
-    stopPreviewAudioClock({ sync: false });
-    cancelActiveJob();
-    void flushSave().catch((error) => {
-      console.warn("정책 잠금 직전 프로젝트 보존에 실패했습니다.", error);
-    });
-  }
-  showEditorPolicyGateError(message);
-}
-
 function showVerifiedEditorShell(session: ActiveUsagePolicySession): void {
-  usagePolicyRevalidationPending = false;
   usagePolicySession = session;
   syncEditorUrlToUsagePolicySession(session);
   elements.usage_policy_status.textContent =
@@ -1325,7 +1400,7 @@ async function verifyEditorUsagePolicyGate(): Promise<string> {
     throw new Error(
       isRecord(response) && typeof response.error === "string"
         ? response.error
-        : "Kirinuki 앱이 이번 사용 확인에 응답하지 않습니다. 저장 구간은 유지됩니다. 앱을 완전히 종료한 뒤 다시 열어 주세요."
+        : "이 탭에서 이번 사용 확인을 찾지 못했습니다. 저장 구간은 유지됩니다. 시작 화면에서 편집기를 다시 열어 주세요."
     );
   }
   const session = normalizeActiveUsagePolicySession(
@@ -1336,61 +1411,25 @@ async function verifyEditorUsagePolicyGate(): Promise<string> {
   return projectId;
 }
 
-async function reverifyUsagePolicyLeaseAfterPageRestore(
-  previousSession: ActiveUsagePolicySession
-): Promise<void> {
-  const response: unknown = await verifyStudioUsagePolicyGate({
-    projectId: previousSession.projectId,
-    gateToken: ""
-  });
-  if (!isRecord(response) || response.ok !== true) {
-    throw new Error(
-      isRecord(response) && typeof response.error === "string"
-        ? response.error
-        : "복원된 페이지의 이번 사용 정책 세션을 다시 확인하지 못했습니다."
-    );
-  }
-  const verifiedSession = normalizeActiveUsagePolicySession(
-    response.usagePolicy,
-    previousSession.projectId
-  );
-  if (
-    !usagePolicyRevalidationPending
-    || usagePolicySession !== previousSession
-    || verifiedSession.sourceSessionId !== previousSession.sourceSessionId
-    || verifiedSession.sessionLeaseId !== previousSession.sessionLeaseId
-    || verifiedSession.transitionGeneration
-      !== previousSession.transitionGeneration
-    || verifiedSession.purpose !== previousSession.purpose
-    || verifiedSession.basis !== previousSession.basis
-    || verifiedSession.confirmedAt !== previousSession.confirmedAt
-  ) {
-    throw new Error(
-      "복원된 페이지의 정책 세션이 원래 사용자 진술과 일치하지 않습니다."
-    );
-  }
-  showVerifiedEditorShell(verifiedSession);
-}
-
 function requireActiveUsagePolicySession(): ActiveUsagePolicySession {
-  if (usagePolicyRevalidationPending) {
-    throw new Error(
-      "페이지 복원 뒤 이번 사용 정책 세션을 다시 확인하는 중입니다."
-    );
-  }
   const session = usagePolicySession;
-  const wrongPurpose = session
-    && session.purpose !== usagePolicyPurposeFromLocation();
+  const locationPurpose = usagePolicyPurposeFromLocation();
+  // After the first seed has been committed, `session=resume` is a reload
+  // transport marker. It does not change the user's already verified
+  // editor-new attestation into a different editing action.
+  const wrongPurpose = session && !(
+    session.purpose === locationPurpose
+    || (
+      session.purpose === "editor-new"
+      && locationPurpose === "editor-resume"
+      && new URLSearchParams(location.search).get("recovery") === null
+    )
+  );
   if (
     !session
     || wrongPurpose
     || (project?.id && session.projectId !== project.id)
   ) {
-    if (session) {
-      lockEditorForUsagePolicy(
-        "편집기 열기 목적이나 프로젝트가 바뀌어 사용자 진술을 재사용할 수 없습니다. 시작 화면에서 다시 입력해 주세요."
-      );
-    }
     throw new Error(
       "편집기 정책 세션이 현재 프로젝트 또는 열기 목적과 일치하지 않습니다. 시작 화면에서 다시 입력해 주세요."
     );
@@ -1529,7 +1568,6 @@ let shortCanvasPlaybackPreparedSignature = "";
 let shortCanvasPlaybackReprimeScheduled = false;
 let usagePolicySession: ActiveUsagePolicySession | null = null;
 let usagePolicyExpiryTimer: number | null = null;
-let usagePolicyRevalidationPending = false;
 let mediaFile: EditorMediaSource = null!;
 let mediaHandle: FileSystemFileHandle | null = null;
 let mediaUrl: string | null = null;
@@ -2886,7 +2924,7 @@ async function notifyRuntimeOfEditingSessionCompletion(
       || response.projectId !== activePolicy.projectId
     ) {
       throw new Error(String(
-        response?.error || "Kirinuki 앱이 세션 완료를 확인하지 않았습니다."
+        response?.error || "브라우저가 이번 편집의 완료 상태를 확인하지 못했습니다."
       ));
     }
   } catch (error: unknown) {
@@ -4082,6 +4120,9 @@ function renderHeader() {
     || !project.clips.some((clip) => clip.enabled !== false)
     || Boolean(clipOutsideMedia(project))
     || Boolean(shortSourcePickerReturnState)
+    || Boolean(activeJobController)
+    || projectMutationLockCount > 0
+    || exportRequestPending
   );
   elements.open_short_form.disabled = (
     Boolean(activeJobController)
@@ -15530,18 +15571,28 @@ async function prepareChzzkVodMedia({
     0.01,
     { cancelable: true }
   );
+  let manualFileRequested = false;
   try {
     await cancelAndWaitForShortPreviewCacheOperation();
+    const engineReady = await ensureLocalMediaEngineReady(controller.signal);
+    if (engineReady === "manual-file") {
+      manualFileRequested = true;
+      return false;
+    }
     const endpoint = KIRINUKI_MEDIA_ENGINE_ENDPOINT;
     const token = await ensureCaptionAgentSession({
       endpoint,
       token: vodMediaEngineToken,
+      purpose: "vod",
+      projectId: sourceClockRootProject.id,
+      sourceUrl,
       signal: controller.signal
     });
     vodMediaEngineToken = token;
-    let status = await startChzzkVodMaterialization({
+    const startWithSession = (sessionToken: string) => (
+      startChzzkVodMaterialization({
       endpoint,
-      token,
+      token: sessionToken,
       consumerId: sourceClockRootProject.id,
       sourceUrl,
       ...(String(sourceClockProject.source?.platform || "").toUpperCase()
@@ -15577,7 +15628,9 @@ async function prepareChzzkVodMedia({
         }
         : {}),
       signal: controller.signal
-    });
+      })
+    );
+    let status = await startWithSession(token);
     activeChzzkVodJob = {
       jobId: status.jobId,
       endpoint,
@@ -15585,10 +15638,13 @@ async function prepareChzzkVodMedia({
     };
     updateJob(status.progress, materializationStatusMessage(status));
     if (status.state !== "completed") {
-      status = await waitForChzzkVodMaterialization({
+      const waitForStatus = (
+        sessionToken: string,
+        jobId: string
+      ) => waitForChzzkVodMaterialization({
         endpoint,
-        token,
-        jobId: status.jobId,
+        token: sessionToken,
+        jobId,
         signal: controller.signal,
         onProgress: (nextStatus) => {
           updateJob(
@@ -15597,6 +15653,64 @@ async function prepareChzzkVodMedia({
           );
         }
       });
+      try {
+        status = await waitForStatus(token, status.jobId);
+      } catch (error) {
+        const recoverableSessionLoss =
+          error instanceof LocalMediaEngineTransportError
+          || (
+            error instanceof ChzzkVodMaterializationClientError
+            && error.status === 401
+          );
+        if (!recoverableSessionLoss) {
+          throw error;
+        }
+        // A supervisor restart erases memory-only capability/AEAD state and
+        // in-memory job records. Re-authenticate once, then submit the exact
+        // same project/source/range request so the managed cache can safely
+        // resume or deduplicate it. The second poll is deliberately terminal:
+        // no unbounded recovery loop and no retry for 403/semantic failures.
+        let recoveredToken = "";
+        for (const [attempt, delayMs] of [0, 250, 750].entries()) {
+          if (delayMs > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+            controller.signal.throwIfAborted();
+          }
+          try {
+            recoveredToken = await ensureCaptionAgentSession({
+              endpoint,
+              token,
+              purpose: "vod",
+              projectId: sourceClockRootProject.id,
+              sourceUrl,
+              signal: controller.signal
+            });
+            break;
+          } catch (recoveryError) {
+            if (
+              !(recoveryError instanceof LocalMediaEngineConnectionError)
+              || recoveryError.code !== "ENGINE_UNAVAILABLE"
+              || attempt === 2
+            ) {
+              throw recoveryError;
+            }
+          }
+        }
+        if (!recoveredToken) {
+          throw new Error("로컬 엔진 session을 bounded retry 뒤에도 복구하지 못했습니다.");
+        }
+        vodMediaEngineToken = recoveredToken;
+        status = await startWithSession(recoveredToken);
+        activeChzzkVodJob = {
+          jobId: status.jobId,
+          endpoint,
+          token: recoveredToken
+        };
+        updateJob(status.progress, materializationStatusMessage(status));
+        if (status.state !== "completed") {
+          status = await waitForStatus(recoveredToken, status.jobId);
+        }
+      }
     }
     controller.signal.throwIfAborted();
     const materialization = normalizeChzzkVodMaterialization(
@@ -15679,7 +15793,10 @@ async function prepareChzzkVodMedia({
   } catch (error: unknown) {
     hideJob();
     const cancelled = errorName(error) === "AbortError";
-    if (!restore || !cancelled) {
+    // Restoring a saved materialization is opportunistic. Keep the durable
+    // project healthy and leave the visible re-prepare action available;
+    // explicit user-triggered preparation still reports the exact failure.
+    if (!restore) {
       showToast(
         cancelled
           ? "VOD 편집 영상 준비를 취소했습니다."
@@ -15696,6 +15813,11 @@ async function prepareChzzkVodMedia({
     hideJob();
     unlockProjectMutations();
     renderAll({ keepScroll: true });
+    if (manualFileRequested) {
+      // Invoke before this click task loses transient user activation. The
+      // picker function starts synchronously, after the mutation lock is gone.
+      void chooseMediaFile();
+    }
     if (workspaceMode === "short-form") {
       scheduleShortPreviewCacheRepair();
     }
@@ -16139,6 +16261,8 @@ async function ensureLocalCaptionSession(
   const token = await ensureCaptionAgentSession({
     endpoint: config.endpoint,
     token: config.token,
+    purpose: "captions",
+    projectId: project.id,
     ...(signal === undefined ? {} : { signal })
   });
   const capability = await probeCaptionAgent({
@@ -16160,7 +16284,7 @@ async function ensureLocalCaptionSession(
   }
   if (expectedModelId && runtime.sttModel !== expectedModelId) {
     throw new Error(
-      `요청한 모델(${expectedModelId})과 실행 중인 모델(${runtime.sttModel})이 다릅니다. Kirinuki 앱을 완전히 종료한 뒤 다시 열고 자동 연결을 눌러 주세요.`
+      `요청한 모델(${expectedModelId})과 실행 중인 모델(${runtime.sttModel})이 다릅니다.`
     );
   }
   if (!captionAgentSelectionStillCurrent(config)) {
@@ -16219,7 +16343,7 @@ async function prepareCaptionAgentConfig(): Promise<PreparedCaptionUiConfig> {
   }
   if (!isLoopbackCaptionAgentEndpoint(config.endpoint)) {
     throw new Error(
-      "Kirinuki 앱의 내장 Whisper 연결 정보가 올바르지 않습니다. 앱을 완전히 종료한 뒤 다시 열어 주세요."
+      "이 PC의 Whisper 연결 정보가 올바르지 않습니다. AudSeg를 사용해 주세요."
     );
   }
   const sessionConfig = await ensureLocalCaptionSession(
@@ -16661,6 +16785,8 @@ async function generateCaptions() {
         result = await requestCaptionAgentWithSessionRetry({
           endpoint,
           token: activeCaptionSessionToken,
+          purpose: "captions",
+          projectId: project.id,
           request,
           signal: controller.signal,
           onSessionToken: (nextToken) => {
@@ -17675,7 +17801,7 @@ async function cleanupCompletedExportSessionCaches(
   let runtimeCleanupWarning = "";
   const activePolicy = usagePolicySession;
   if (!activePolicy || activePolicy.projectId !== exportedRootProject.id) {
-    runtimeCleanupWarning = "Kirinuki 앱의 원본 연결 세션을 확인하지 못했습니다.";
+    runtimeCleanupWarning = "브라우저의 원본 연결 세션을 확인하지 못했습니다.";
   } else {
     try {
       const response = await completeStudioEditorSession({
@@ -17693,7 +17819,7 @@ async function cleanupCompletedExportSessionCaches(
         || response.projectId !== exportedRootProject.id
       ) {
         throw new Error(
-          String(response?.error || "Kirinuki 앱이 세션 완료를 확인하지 않았습니다.")
+          String(response?.error || "브라우저가 이번 편집의 완료 상태를 확인하지 못했습니다.")
         );
       }
     } catch (error: unknown) {
@@ -20785,16 +20911,9 @@ type CaptureSeed = NonNullable<
 
 type LoadedSeed = {
   projectId: string;
-  captureState: null;
-  resumeSavedSession: true;
+  captureState: CaptureSeed | null;
   openRecoveryDrafts: boolean;
-  seedStorageKey: null;
-} | {
-  projectId: string;
-  captureState: CaptureSeed;
-  resumeSavedSession: false;
-  openRecoveryDrafts: false;
-  seedStorageKey: string;
+  seedStorageKey: string | null;
 };
 
 function captureSeedFromUnknown(value: unknown): CaptureSeed {
@@ -20997,7 +21116,6 @@ async function loadSeed(): Promise<LoadedSeed> {
     return {
       projectId: requestedProjectId,
       captureState: null,
-      resumeSavedSession: true,
       openRecoveryDrafts,
       seedStorageKey: null
     };
@@ -21006,7 +21124,7 @@ async function loadSeed(): Promise<LoadedSeed> {
     const key = `${EDITOR_SEED_PREFIX}${requestedProjectId}`;
     const stored = await studioStorageArea().get(key);
     const seed = stored[key];
-    if (isRecord(seed) && seed.captureState) {
+    if (isRecord(seed) && Object.hasOwn(seed, "captureState")) {
       const activePolicy = requireActiveUsagePolicySession();
       if (
         seed.projectId !== requestedProjectId
@@ -21021,14 +21139,16 @@ async function loadSeed(): Promise<LoadedSeed> {
       return {
         projectId: requestedProjectId,
         captureState: captureSeedFromUnknown(seed.captureState),
-        resumeSavedSession: false,
         openRecoveryDrafts: false,
         seedStorageKey: key
       };
     }
-    throw new Error(
-      "이번 편집기 열기에 연결된 캡처 데이터를 찾지 못했습니다. 시작 화면에서 정책을 다시 입력해 열어 주세요."
-    );
+    return {
+      projectId: requestedProjectId,
+      captureState: null,
+      openRecoveryDrafts: false,
+      seedStorageKey: Object.hasOwn(stored, key) ? key : null
+    };
   }
   throw new Error(
     "직접 편집기 URL로는 시작할 수 없습니다. 시작 화면에서 이번 사용 정책을 입력해 주세요."
@@ -21045,14 +21165,7 @@ async function restoreMedia() {
       );
       return;
     }
-    const restored = await prepareChzzkVodMedia({ restore: true });
-    if (!restored) {
-      showToast(
-        "이 기기의 VOD 편집 영상을 자동으로 다시 연결하지 못했습니다. 현재 작업을 저장한 뒤 Kirinuki 앱을 완전히 종료하고 다시 열어 ‘편집 영상 다시 준비’를 눌러 주세요.",
-        "error",
-        0
-      );
-    }
+    await prepareChzzkVodMedia({ restore: true });
     return;
   }
   if (shouldAutoPrepareInitialVod(project)) {
@@ -21124,7 +21237,7 @@ async function initializeSourceBinding() {
 }
 
 async function initialize() {
-  if (!isKirinukiLocalStudioOrigin(location.origin)) {
+  if (!isKirinukiStudioOrigin(location.origin)) {
     showEditorAppGate();
     return;
   }
@@ -21133,29 +21246,10 @@ async function initialize() {
     return;
   }
   const verifiedProjectId = await verifyEditorUsagePolicyGate();
-  bindActions();
-  elements.finish_editing_session.hidden = false;
-  try {
-    captionAgentSettings = {
-      ...await loadCaptionAgentSettings(),
-      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint
-    };
-  } catch (error) {
-    console.warn("자막 에이전트 설정을 불러오지 못했습니다.", error);
-    captionAgentSettings = { ...DEFAULT_CAPTION_AGENT_SETTINGS };
-  }
-  elements.caption_model.value = captionAgentSettings.model;
-  renderCaptionModeControls();
-  const {
-    projectId,
-    captureState,
-    resumeSavedSession,
-    openRecoveryDrafts,
-    seedStorageKey
-  } = await loadSeed();
-  if (projectId !== verifiedProjectId) {
-    throw new Error("정책 확인 대상과 편집 프로젝트가 다릅니다.");
-  }
+  await primeLocalMediaEngineTrust().catch((error) => {
+    console.warn("로컬 엔진 identity 사전 확인에 실패했습니다.", error);
+  });
+  const projectId = verifiedProjectId;
   if (!await acquireStudioProjectWriter(projectId)) {
     throw new Error(
       "이 프로젝트가 이미 다른 탭에서 편집 중입니다. 기존 탭을 사용하거나 닫은 뒤 다시 열어 주세요."
@@ -21187,24 +21281,69 @@ async function initialize() {
     );
   }
   editingSessionCheckpointActive = true;
-  const storedProject = normalizeEditorProject(await loadProject(projectId));
+  const [storedProject, loadedSeed] = await Promise.all([
+    loadProject(projectId).then(normalizeEditorProject),
+    loadSeed()
+  ]);
+  const {
+    captureState,
+    openRecoveryDrafts,
+    seedStorageKey
+  } = loadedSeed;
+  if (loadedSeed.projectId !== verifiedProjectId) {
+    throw new Error("정책 확인 대상과 편집 프로젝트가 다릅니다.");
+  }
+  const entry = resolveStudioEditorEntry({
+    purpose: checkpointPolicy.purpose,
+    hasCaptureSeed: captureState !== null,
+    hasCurrentProject: storedProject !== null,
+    checkpointBaselineHasProject: checkpoint.baseline.project !== null
+  });
+  if (entry.kind === "error") {
+    const messages = {
+      "new-project-collision":
+        "새 편집 ID가 이 기기의 저장 프로젝트와 충돌했습니다. 기존 편집은 변경하지 않았습니다. 시작 화면에서 새 프로젝트를 다시 열어 주세요.",
+      "missing-capture-seed":
+        "이번 편집기 열기에 연결된 캡처 데이터를 찾지 못했습니다. 시작 화면에서 정책을 다시 입력해 열어 주세요.",
+      "missing-saved-project":
+        "이 기기에서 다시 열 편집 프로젝트를 찾지 못했습니다."
+    } as const;
+    throw new Error(messages[entry.reason]);
+  }
+  bindActions();
+  elements.finish_editing_session.hidden = false;
+  try {
+    captionAgentSettings = {
+      ...await loadCaptionAgentSettings(),
+      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+      // The public one-time installer is deliberately a VOD-only background
+      // engine. Never restore an old source-app Whisper selection into the
+      // public editor where that provider cannot become ready.
+      model: AUDSEG_DRAFT_MODEL
+    };
+  } catch (error) {
+    console.warn("자막 에이전트 설정을 불러오지 못했습니다.", error);
+    captionAgentSettings = { ...DEFAULT_CAPTION_AGENT_SETTINGS };
+  }
+  elements.caption_model.value = captionAgentSettings.model;
+  renderCaptionModeControls();
   let devReloadRestored = false;
-  if (storedProject) {
-    if (resumeSavedSession) {
-      // A dev reload fingerprint proves the exact durable CURRENT written by
-      // the previous build. Verify that byte-semantic state before applying a
-      // deterministic compatibility migration in the new build.
-      devReloadRestored = verifyExpectedDevReloadProject(storedProject);
-      project = normalizeMaterializedProjectSourceClock(storedProject);
-    } else {
-      throw new Error(
-        "새 편집 ID가 이 기기의 저장 프로젝트와 충돌했습니다. 기존 편집은 변경하지 않았습니다. 시작 화면에서 새 프로젝트를 다시 열어 주세요."
-      );
+  if (entry.kind === "fresh-capture") {
+    if (!captureState) {
+      throw new Error("새 편집의 캡처 데이터를 확인하지 못했습니다.");
     }
-  } else if (resumeSavedSession) {
-    throw new Error("이 기기에서 다시 열 편집 프로젝트를 찾지 못했습니다.");
-  } else {
     project = createEditorProjectFromCapture(captureState, { id: projectId });
+  } else {
+    if (!storedProject) {
+      throw new Error("다시 열 편집 프로젝트를 확인하지 못했습니다.");
+    }
+    // A dev reload fingerprint proves the exact durable CURRENT written by
+    // the previous build. Verify that byte-semantic state before applying a
+    // deterministic compatibility migration in the new build. Ordinary
+    // browser reloads have no fingerprint and simply reuse the exact CURRENT
+    // owned by this editing-session checkpoint.
+    devReloadRestored = verifyExpectedDevReloadProject(storedProject);
+    project = normalizeMaterializedProjectSourceClock(storedProject);
   }
   // Only a fresh editor-new entry can prove that a detached public VOD is
   // about to use automatic materialization. Put that project on the platform
@@ -21212,7 +21351,7 @@ async function initialize() {
   // alignment cannot shift a 03:40 selection to 03:50. Resume, recovery and
   // hot seed updates keep their intentional detached/manual alignment.
   if (
-    !resumeSavedSession
+    entry.kind === "fresh-capture"
     && shouldAutoPrepareInitialVod(project)
   ) {
     project = applyMediaAlignmentOffset(project, 0);
@@ -21269,7 +21408,7 @@ async function initialize() {
       });
       if (response?.ok !== true || response.projectId !== project.id) {
         throw new Error(
-          String(response?.error || "Kirinuki 앱이 복구된 세션 완료를 확인하지 않았습니다.")
+          String(response?.error || "브라우저가 복구된 편집의 완료 상태를 확인하지 못했습니다.")
         );
       }
     } catch (error: unknown) {
@@ -21293,7 +21432,7 @@ async function initialize() {
         : "")
       + "을 삭제했습니다."
       + (runtimeCleanupWarning
-        ? ` Kirinuki 앱의 내부 연결 정리는 다음 앱 종료 때 다시 정리됩니다: ${runtimeCleanupWarning}`
+        ? ` 로컬 연결 정리는 다음 영상 준비 도구 시작 때 다시 시도됩니다: ${runtimeCleanupWarning}`
         : "")
     );
     startupCleanupRecoveryNotice = "";
@@ -21334,6 +21473,7 @@ async function initialize() {
   }
   rootProject = cloneProject(project);
   await saveActiveWorkspaceImmediately();
+  markEditorUrlReloadable();
   lastLocalDraftMutationRevision = projectMutationRevision;
   lastCurrentProjectSavedAtMs = Date.now();
   renderLocalPersistenceStatus();
@@ -21603,6 +21743,7 @@ window.addEventListener("kirinuki:apply-local-caption-first-pass", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
+  clearLocalMediaEngineSessionState();
   invalidateShortPreviewCacheOperation();
   clearUsagePolicyExpiryTimer();
   stopDevReloadObserver();
@@ -21627,6 +21768,8 @@ window.addEventListener("beforeunload", () => {
 });
 
 window.addEventListener("pagehide", () => {
+  clearLocalMediaEngineSessionState();
+  invalidatePrimedLocalMediaEngineTrust();
   invalidateShortPreviewCacheOperation();
   stopDevReloadObserver();
   stopLocalDraftAutosave();
@@ -21686,33 +21829,34 @@ function resumeEditorAfterPageShow(): void {
 
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) {
-    if (usagePolicyRevalidationPending) {
+    const expected = usagePolicySession;
+    if (!expected) {
       return;
     }
-    let previousSession: ActiveUsagePolicySession;
-    try {
-      previousSession = requireActiveUsagePolicySession();
-    } catch (error) {
-      lockEditorForUsagePolicy(
-        `페이지 복원 뒤 정책 세션을 다시 확인하지 못해 편집기를 잠갔습니다: ${errorMessage(error)}`
-      );
-      return;
-    }
-    usagePolicyRevalidationPending = true;
+    // BFCache keeps this document's in-memory state, but the same tab may have
+    // started a different project while this page was frozen. Re-read the
+    // tab-scoped lease once: a verified replacement exits this stale editor,
+    // while a transient storage error leaves the live editor usable.
     clearUsagePolicyExpiryTimer();
-    stopLocalDraftAutosave();
-    stopDevReloadObserver();
-    elements.editor_shell.inert = true;
-    elements.editor_shell.hidden = true;
-    elements.editor_policy_gate.hidden = false;
-    elements.editor_policy_gate_status.textContent =
-      "페이지 복원 뒤 이번 사용 정책 세션을 다시 확인하는 중…";
-    void reverifyUsagePolicyLeaseAfterPageRestore(previousSession)
-      .then(resumeEditorAfterPageShow)
+    void primeLocalMediaEngineTrust()
       .catch((error) => {
-        lockEditorForUsagePolicy(
-          `페이지 복원 뒤 정책 세션을 다시 확인하지 못해 편집기를 잠갔습니다: ${errorMessage(error)}`
-        );
+        console.warn("로컬 엔진 identity 재확인에 실패했습니다.", error);
+      })
+      .then(() => refreshUsagePolicyLease(expected))
+      .then((current) => {
+        if (current) {
+          resumeEditorAfterPageShow();
+          scheduleUsagePolicyLeaseHeartbeat();
+        }
+      })
+      .catch((error: unknown) => {
+        handleUsagePolicyLeaseRefreshFailure(error, expected);
+        if (
+          usagePolicySession === expected
+          && !(error instanceof ReplacedUsagePolicyLeaseError)
+        ) {
+          resumeEditorAfterPageShow();
+        }
       });
     return;
   }
@@ -21721,6 +21865,6 @@ window.addEventListener("pageshow", (event) => {
 
 void initialize().catch((error: unknown) => {
   console.error(error);
-  showEditorPolicyGateError(`편집기를 잠갔습니다: ${errorMessage(error)}`);
+  showEditorPolicyGateError(`편집기를 열지 못했습니다: ${errorMessage(error)}`);
   showToast(`편집기를 열지 못했습니다: ${errorMessage(error)}`, "error", 0);
 });

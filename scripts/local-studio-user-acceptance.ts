@@ -17,11 +17,14 @@ import {
 } from "node:child_process";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import {
+  LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA
+} from "../src/lib/local-media-engine-contract.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const studioOrigin = "http://127.0.0.1:4320";
 const gatewayOrigin = "http://127.0.0.1:4319";
-const captionProtocol = "chzzk-kirinuki-caption-request/v1";
 const databaseName = "chzzk-kirinuki-studio";
 const acceptanceSourceUrl = "https://chzzk.naver.com/video/14514980";
 const expectedClipTime = "00:03:40.000 → 00:05:30.000";
@@ -369,7 +372,7 @@ async function probeGateway(): Promise<RuntimeProbe> {
     const response = await fetch(`${gatewayOrigin}/v1/health`, {
       headers: {
         Origin: studioOrigin,
-        "X-Kirinuki-Protocol": captionProtocol
+        "X-Kirinuki-Protocol": LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL
       },
       cache: "no-store",
       signal: AbortSignal.timeout(1_500)
@@ -378,7 +381,7 @@ async function probeGateway(): Promise<RuntimeProbe> {
     const ready = Boolean(
       response.ok
       && isRecord(payload)
-      && payload.schema === "chzzk-kirinuki-caption-agent/health-v1"
+      && payload.schema === LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA
       && payload.status === "ok"
     );
     return {

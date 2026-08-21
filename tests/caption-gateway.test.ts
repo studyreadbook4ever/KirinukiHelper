@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   KIRINUKI_GATEWAY_ORIGIN_BINDING,
   KIRINUKI_LOCAL_STUDIO_ORIGIN
 } from "../src/lib/local-runtime-origin.js";
+import {
+  LOCAL_MEDIA_ENGINE_API_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_DEVELOPMENT_VERSION,
+  LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_PRODUCT
+} from "../src/lib/local-media-engine-contract.js";
 import {
   Agent,
   request as httpRequest,
@@ -11,7 +18,10 @@ import {
   type OutgoingHttpHeaders
 } from "node:http";
 import test, { type TestContext } from "node:test";
-import { createServer as createNetServer } from "node:net";
+import {
+  createConnection,
+  createServer as createNetServer
+} from "node:net";
 import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -48,8 +58,14 @@ import {
   CAPTION_AGENT_SESSION_SCHEMA_ID,
   DEFAULT_CAPTION_REQUEST_BODY_TIMEOUT_MS,
   DEFAULT_MAX_CONCURRENT_CAPTION_PIPELINES,
+  KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+  LOCAL_ENGINE_CAPABILITY_ABSOLUTE_TTL_MS,
+  LOCAL_ENGINE_CAPABILITY_IDLE_TTL_MS,
+  LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
   MAX_CAPTION_REQUEST_BODY_TIMEOUT_MS,
   MAX_CONCURRENT_CAPTION_PIPELINES,
+  MAX_LOCAL_ENGINE_CAPABILITIES,
+  MAX_LOCAL_ENGINE_SESSION_REQUEST_BYTES,
   createCaptionGatewayServer,
   resolveCaptionGatewayConfig,
   startCaptionGateway
@@ -58,9 +74,13 @@ import {
   LOCAL_VOD_RUNTIME_SCHEMA,
   PINNED_YT_DLP
 } from "../scripts/local-vod-runtime-core.js";
+import {
+  CHZZK_VOD_CACHE_PURGE_REQUEST_SCHEMA,
+  CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+} from "../scripts/chzzk-vod-job-manager.js";
 
 const ALLOWED_ORIGIN = KIRINUKI_LOCAL_STUDIO_ORIGIN;
-const AGENT_TOKEN = "test-agent-token-123456";
+const AGENT_TOKEN = Buffer.alloc(32, 5).toString("base64url");
 const LOCAL_STT_ENDPOINT =
   "http://127.0.0.1:4318/kirinuki-test/inference";
 const VOD_INSTANCE_NONCE =
@@ -111,6 +131,23 @@ interface LocalHttpJsonResult {
   status: number | undefined;
   headers: IncomingHttpHeaders;
   body: GatewayBody;
+}
+
+interface TestCapability {
+  clientNonce: string;
+  projectId: string;
+  token: string;
+}
+
+let testCapabilityCounter = 0;
+const testCapabilities = new Map<number, Map<string, TestCapability>>();
+const testJobCapabilities = new Map<string, TestCapability>();
+
+function testCapabilityNonce(label: string): string {
+  testCapabilityCounter += 1;
+  return createHash("sha256")
+    .update(`${label}:${testCapabilityCounter}`, "utf8")
+    .digest("base64url");
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
@@ -223,7 +260,7 @@ function jsonResponse(
   });
 }
 
-function localHttpJson({
+function rawLocalHttpJson({
   agent,
   port,
   path = "/v1/captions",
@@ -273,10 +310,154 @@ function localHttpJson({
   });
 }
 
-function partialCaptionHttpRequest(
+async function rawSocketResponse(
+  port: number,
+  requestLines: readonly string[]
+): Promise<string> {
+  const socket = createConnection({ host: "127.0.0.1", port });
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve, reject) => {
+    socket.once("connect", resolve);
+    socket.once("error", reject);
+  });
+  const completed = new Promise<string>((resolve, reject) => {
+    socket.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    socket.once("error", reject);
+    socket.once("close", () => resolve(
+      Buffer.concat(chunks).toString("latin1")
+    ));
+  });
+  socket.end([...requestLines, "", ""].join("\r\n"));
+  return await completed;
+}
+
+function requestBodyRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    if (typeof value !== "string") {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return value as Record<string, unknown>;
+}
+
+async function issueTestCapability(
+  port: number,
+  projectId: string = "gateway-project-1",
+  actions: readonly string[] = ["vod", "captions", "cache-delete"],
+  sourceUrl?: string
+): Promise<TestCapability> {
+  const resolvedSourceUrl = sourceUrl ?? (
+    actions.includes("vod")
+      ? "https://chzzk.naver.com/video/14252987"
+      : undefined
+  );
+  let byProject = testCapabilities.get(port);
+  if (!byProject) {
+    byProject = new Map();
+    testCapabilities.set(port, byProject);
+  }
+  const key = `${projectId}\0${actions.join(",")}\0${resolvedSourceUrl || ""}`;
+  const existing = byProject.get(key);
+  if (existing) {
+    return existing;
+  }
+  const clientNonce = testCapabilityNonce(`${port}:${projectId}`);
+  const response = await rawLocalHttpJson({
+    port,
+    path: "/v1/session",
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      "Content-Type": "application/json",
+      "X-Kirinuki-Client-Nonce": clientNonce,
+      "X-Kirinuki-Protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+    },
+    body: {
+      schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
+      clientNonce,
+      projectId,
+      actions,
+      ...(resolvedSourceUrl === undefined
+        ? {}
+        : { sourceUrl: resolvedSourceUrl })
+    }
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  const capability = {
+    clientNonce,
+    projectId,
+    token: String(response.body.token || "")
+  };
+  byProject.set(key, capability);
+  return capability;
+}
+
+async function localHttpJson(
+  options: LocalHttpJsonOptions
+): Promise<LocalHttpJsonResult> {
+  const headers = { ...(options.headers || {}) };
+  const suppliedAuthorization = String(
+    headers.Authorization ?? headers.authorization ?? ""
+  );
+  let selectedCapability: TestCapability | null = null;
+  if (suppliedAuthorization === `Bearer ${AGENT_TOKEN}`) {
+    const jobMatch = /^\/v1\/(?:chzzk-vod|vod)\/materializations\/([a-zA-Z0-9_-]{16,128})/u
+      .exec(options.path || "/v1/captions");
+    const record = requestBodyRecord(options.body);
+    const source = record?.source;
+    const projectId = typeof record?.consumerId === "string"
+      ? record.consumerId
+      : typeof source === "object"
+        && source !== null
+        && !Array.isArray(source)
+        && typeof (source as Record<string, unknown>).projectId === "string"
+        ? String((source as Record<string, unknown>).projectId)
+        : jobMatch
+          ? testJobCapabilities.get(`${options.port}:${jobMatch[1]}`)?.projectId
+            || "gateway-project-1"
+          : "gateway-project-1";
+    selectedCapability = jobMatch
+      ? testJobCapabilities.get(`${options.port}:${jobMatch[1]}`) || null
+      : null;
+    selectedCapability ??= await issueTestCapability(options.port, projectId);
+    if (Object.hasOwn(headers, "authorization")) {
+      headers.authorization = `Bearer ${selectedCapability.token}`;
+    } else {
+      headers.Authorization = `Bearer ${selectedCapability.token}`;
+    }
+    headers["X-Kirinuki-Client-Nonce"] = selectedCapability.clientNonce;
+  }
+  const result = await rawLocalHttpJson({ ...options, headers });
+  if (
+    selectedCapability
+    && options.method === "POST"
+    && /^\/v1\/(?:chzzk-vod|vod)\/materializations$/u.test(
+      options.path || ""
+    )
+    && result.status === 202
+    && typeof result.body.jobId === "string"
+  ) {
+    testJobCapabilities.set(
+      `${options.port}:${result.body.jobId}`,
+      selectedCapability
+    );
+  }
+  return result;
+}
+
+async function partialCaptionHttpRequest(
   port: number,
   partialBody: string = "{"
 ) {
+  const capability = await issueTestCapability(port);
   // Promise executors run synchronously, so this is assigned before return.
   let pendingRequest!: ClientRequest;
   const response = new Promise<LocalHttpJsonResult>((resolve, reject) => {
@@ -287,9 +468,10 @@ function partialCaptionHttpRequest(
       method: "POST",
       headers: {
         Origin: ALLOWED_ORIGIN,
-        Authorization: `Bearer ${AGENT_TOKEN}`,
+        Authorization: `Bearer ${capability.token}`,
         "Content-Type": "application/json",
-        "Content-Length": "4096"
+        "Content-Length": "4096",
+        "X-Kirinuki-Client-Nonce": capability.clientNonce
       }
     }, (incoming) => {
       const chunks: Buffer[] = [];
@@ -325,11 +507,20 @@ async function listenTestServer(
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
+  const port = (address as AddressInfo).port;
+  t.after(() => {
+    testCapabilities.delete(port);
+    for (const key of testJobCapabilities.keys()) {
+      if (key.startsWith(`${port}:`)) {
+        testJobCapabilities.delete(key);
+      }
+    }
+  });
   return {
     runtime,
     server,
     config,
-    port: (address as AddressInfo).port
+    port
   };
 }
 
@@ -780,7 +971,8 @@ test("잘못된 모델은 전사 전에 막고 전체 deadline은 진행 중 전
 test("게이트웨이 설정은 exact Origin과 세션 인증을 강제한다", () => {
   const config = resolveCaptionGatewayConfig(TEST_ENV);
   assert.equal(config.allowedOrigin, ALLOWED_ORIGIN);
-  assert.equal(config.agentToken, AGENT_TOKEN);
+  assert.equal(config.engineVersion, LOCAL_MEDIA_ENGINE_DEVELOPMENT_VERSION);
+  assert.equal(config.backgroundStart, "ready");
   assert.equal(config.pipeline.sttEndpoint, LOCAL_STT_ENDPOINT);
   assert.equal(
     config.maxConcurrentCaptionPipelines,
@@ -811,10 +1003,24 @@ test("게이트웨이 설정은 exact Origin과 세션 인증을 강제한다", 
     }).captionRequestBodyTimeoutMs,
     MAX_CAPTION_REQUEST_BODY_TIMEOUT_MS
   );
+  assert.equal(
+    resolveCaptionGatewayConfig({
+      ...TEST_ENV,
+      KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+    }).allowedOrigin,
+    KIRINUKI_PUBLIC_STUDIO_ORIGIN
+  );
+  const {
+    KIRINUKI_ALLOWED_ORIGIN: _configuredOrigin,
+    ...defaultOriginEnvironment
+  } = TEST_ENV;
+  assert.equal(
+    resolveCaptionGatewayConfig(defaultOriginEnvironment).allowedOrigin,
+    KIRINUKI_LOCAL_STUDIO_ORIGIN
+  );
 
   for (const invalidOrigin of [
     "*",
-    "https://kirinuki.eff0rtchung.kr",
     "https://kirinuki.eff0rtchung.kr/",
     "https://kirinuki.eff0rtchung.kr.attacker.example",
     " https://kirinuki.eff0rtchung.kr",
@@ -853,13 +1059,21 @@ test("게이트웨이 설정은 exact Origin과 세션 인증을 강제한다", 
       (error) => hasErrorCode(error, "INVALID_CONFIGURATION")
     );
   }
+  for (const invalidVersion of ["", "latest", "03.0.0", "3.0", " 3.0.0"]) {
+    assert.throws(
+      () => resolveCaptionGatewayConfig({
+        ...TEST_ENV,
+        KIRINUKI_LOCAL_ENGINE_VERSION: invalidVersion
+      }),
+      (error) => hasErrorCode(error, "INVALID_CONFIGURATION")
+    );
+  }
   assert.throws(
     () => resolveCaptionGatewayConfig({
       ...TEST_ENV,
-      KIRINUKI_AGENT_TOKEN: "",
-      KIRINUKI_AUTO_PAIR: "0"
+      KIRINUKI_LOCAL_ENGINE_BACKGROUND_START: "pending"
     }),
-    (error) => hasErrorCode(error, "MISSING_CONFIGURATION")
+    (error) => hasErrorCode(error, "INVALID_CONFIGURATION")
   );
   for (const invalidEnvironment of [
     {
@@ -915,23 +1129,21 @@ test("내부 자막 엔진은 앱 Origin으로 127.0.0.1에만 bind한다", asyn
   assert.equal(runtime.config.allowedOrigin, KIRINUKI_LOCAL_STUDIO_ORIGIN);
 });
 
-test("관리형 gateway는 health·자동 pairing·Whisper-only capability를 제공한다", async (t) => {
-  const { config, port } = await listenTestServer(t, {
+test("관리형 gateway는 health·문서 capability·Whisper-only 기능을 제공한다", async (t) => {
+  const { port } = await listenTestServer(t, {
     env: {
       ...TEST_ENV,
-      KIRINUKI_AGENT_TOKEN: "",
       KIRINUKI_AUTO_PAIR: "1"
     },
     randomBytesImpl: () => Buffer.alloc(32, 7)
   });
-  assert.equal(config.agentToken, Buffer.alloc(32, 7).toString("base64url"));
 
   const health = await localHttpJson({
     port,
     path: "/v1/health",
     headers: {
       Origin: ALLOWED_ORIGIN,
-      "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA_ID
+      "X-Kirinuki-Protocol": LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL
     }
   });
   assert.equal(health.status, 200);
@@ -941,6 +1153,12 @@ test("관리형 gateway는 health·자동 pairing·Whisper-only capability를 �
     KIRINUKI_GATEWAY_ORIGIN_BINDING
   );
   assert.equal(health.body.transcriptionMode, "local-whispercpp");
+  assert.deepEqual(health.body.engine, {
+    backgroundStart: "ready",
+    product: LOCAL_MEDIA_ENGINE_PRODUCT,
+    protocol: LOCAL_MEDIA_ENGINE_API_PROTOCOL,
+    version: LOCAL_MEDIA_ENGINE_DEVELOPMENT_VERSION
+  });
   assert.deepEqual(health.body.vodRuntime, {
     schema: LOCAL_VOD_RUNTIME_SCHEMA,
     kind: "caption-vod",
@@ -951,25 +1169,56 @@ test("관리형 gateway는 health·자동 pairing·Whisper-only capability를 �
   });
   assert.equal(Object.hasOwn(health.body, "token"), false);
 
-  const pairing = await localHttpJson({
+  const legacyCaptionProtocolHealth = await localHttpJson({
     port,
-    path: "/v1/session",
-    method: "POST",
+    path: "/v1/health",
     headers: {
       Origin: ALLOWED_ORIGIN,
       "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA_ID
     }
   });
+  assert.equal(legacyCaptionProtocolHealth.status, 403);
+  assert.equal(
+    legacyCaptionProtocolHealth.body.error.code,
+    "HEALTH_PROBE_NOT_ALLOWED"
+  );
+
+  const clientNonce = testCapabilityNonce("managed-session");
+  const pairing = await rawLocalHttpJson({
+    port,
+    path: "/v1/session",
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      "Content-Type": "application/json",
+      "X-Kirinuki-Client-Nonce": clientNonce,
+      "X-Kirinuki-Protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+    },
+    body: {
+      schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
+      clientNonce,
+      projectId: "gateway-project-1",
+      actions: ["captions"]
+    }
+  });
   assert.equal(pairing.status, 200);
   assert.equal(pairing.body.schema, CAPTION_AGENT_SESSION_SCHEMA_ID);
-  assert.equal(pairing.body.token, config.agentToken);
+  assert.equal(pairing.body.token, Buffer.alloc(32, 7).toString("base64url"));
+  assert.equal(pairing.body.authentication, "bearer-memory-capability");
+  const remainingLifetime = Date.parse(String(pairing.body.expiresAt))
+    - Date.now();
+  assert.ok(remainingLifetime <= LOCAL_ENGINE_CAPABILITY_ABSOLUTE_TTL_MS);
+  assert.ok(
+    remainingLifetime >= LOCAL_ENGINE_CAPABILITY_ABSOLUTE_TTL_MS - 1_000
+  );
   assert.equal(pairing.headers["cache-control"], "no-store");
 
   const capability = await localHttpJson({
     port,
     headers: {
       Origin: ALLOWED_ORIGIN,
-      Authorization: `Bearer ${pairing.body.token}`
+      Authorization: `Bearer ${pairing.body.token}`,
+      "X-Kirinuki-Client-Nonce": clientNonce
     }
   });
   assert.equal(capability.status, 200);
@@ -1019,6 +1268,12 @@ test("gateway CORS에는 앱 Origin과 필요한 접근 헤더만 노출한다",
     headers: {
       Origin: KIRINUKI_LOCAL_STUDIO_ORIGIN,
       "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": [
+        "authorization",
+        "content-type",
+        "x-kirinuki-client-nonce",
+        "x-kirinuki-protocol"
+      ].join(", "),
       "Access-Control-Request-Private-Network": "true"
     }
   });
@@ -1029,7 +1284,7 @@ test("gateway CORS에는 앱 Origin과 필요한 접근 헤더만 노출한다",
   );
   assert.equal(
     preflight.headers["access-control-allow-headers"],
-    "Authorization, Content-Type, X-Kirinuki-Media-Access, X-Kirinuki-Protocol"
+    "Authorization, Content-Type, X-Kirinuki-Client-Nonce, X-Kirinuki-Media-Access, X-Kirinuki-Protocol, X-Kirinuki-Pairing-State, X-Kirinuki-Server-Challenge, X-Kirinuki-Transport, X-Kirinuki-Transport-Counter"
   );
   assert.equal(
     preflight.headers["access-control-allow-private-network"],
@@ -1054,6 +1309,474 @@ test("gateway CORS에는 앱 Origin과 필요한 접근 헤더만 노출한다",
     wrongOrigin.headers["access-control-allow-private-network"],
     undefined
   );
+
+  const unknownHeader = await localHttpJson({
+    port,
+    method: "OPTIONS",
+    headers: {
+      Origin: KIRINUKI_LOCAL_STUDIO_ORIGIN,
+      "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "x-kirinuki-protocol, x-evil",
+      "Access-Control-Request-Private-Network": "true"
+    }
+  });
+  assert.equal(unknownHeader.status, 400);
+  assert.equal(unknownHeader.body.error.code, "INVALID_CORS_PREFLIGHT");
+  assert.equal(unknownHeader.headers["access-control-allow-origin"], undefined);
+  assert.equal(
+    unknownHeader.headers["access-control-allow-private-network"],
+    undefined
+  );
+});
+
+test("gateway는 raw Host를 Origin보다 먼저 검증하고 forwarding authority를 거절한다", async (t) => {
+  const { port } = await listenTestServer(t, { env: TEST_ENV });
+  const invalidAuthorities: readonly (readonly string[])[] = [
+    [`Host: localhost:${port}`],
+    ["Host: 127.0.0.1"],
+    [`Host: [::1]:${port}`],
+    [`Host: 127.0.0.1:${port}`, `Host: 127.0.0.1:${port}`],
+    [`Host: 127.0.0.1:${port}`, "Forwarded: host=attacker.example"],
+    [`Host: 127.0.0.1:${port}`, "X-Forwarded-Host: attacker.example"],
+    [`Host: 127.0.0.1:${port}`, "X-Forwarded-Proto: https"]
+  ];
+  for (const authorityHeaders of invalidAuthorities) {
+    const response = await rawSocketResponse(port, [
+      "GET /v1/health HTTP/1.1",
+      ...authorityHeaders,
+      "Origin: https://attacker.example",
+      `X-Kirinuki-Protocol: ${LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL}`,
+      "Connection: close"
+    ]);
+    assert.match(response, /^HTTP\/1\.1 421 /u, response);
+    assert.match(response, /"code":"MISDIRECTED_REQUEST"/u, response);
+    assert.doesNotMatch(response, /access-control-allow-origin/iu, response);
+    assert.doesNotMatch(response, /ORIGIN_NOT_ALLOWED/u, response);
+  }
+
+  const duplicatedOrigin = await rawSocketResponse(port, [
+    "GET /v1/health HTTP/1.1",
+    `Host: 127.0.0.1:${port}`,
+    `Origin: ${ALLOWED_ORIGIN}`,
+    `Origin: ${ALLOWED_ORIGIN}`,
+    `X-Kirinuki-Protocol: ${LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL}`,
+    "Connection: close"
+  ]);
+  assert.match(duplicatedOrigin, /^HTTP\/1\.1 403 /u, duplicatedOrigin);
+  assert.match(duplicatedOrigin, /ORIGIN_NOT_ALLOWED/u, duplicatedOrigin);
+
+  const duplicatedProtocol = await rawSocketResponse(port, [
+    "GET /v1/health HTTP/1.1",
+    `Host: 127.0.0.1:${port}`,
+    `Origin: ${ALLOWED_ORIGIN}`,
+    `X-Kirinuki-Protocol: ${LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL}`,
+    `X-Kirinuki-Protocol: ${LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL}`,
+    "Connection: close"
+  ]);
+  assert.match(duplicatedProtocol, /^HTTP\/1\.1 403 /u, duplicatedProtocol);
+  assert.match(duplicatedProtocol, /HEALTH_PROBE_NOT_ALLOWED/u, duplicatedProtocol);
+});
+
+test("공개 HTTPS Origin은 legacy plaintext health/session downgrade도 거부한다", async (t) => {
+  const { port } = await listenTestServer(t, {
+    env: {
+      ...TEST_ENV,
+      KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN
+    }
+  });
+  const health = await rawLocalHttpJson({
+    port,
+    path: "/v1/health",
+    headers: {
+      Origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+      "X-Kirinuki-Protocol": LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL
+    }
+  });
+  assert.equal(health.status, 403);
+  assert.equal(health.body.error.code, "HEALTH_PROBE_NOT_ALLOWED");
+
+  const clientNonce = testCapabilityNonce("public-origin");
+  const sessionBody = {
+    schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
+    clientNonce,
+    projectId: "project-public-origin",
+    actions: ["vod", "cache-delete"],
+    sourceUrl: "https://chzzk.naver.com/video/14252987"
+  };
+  const session = await rawLocalHttpJson({
+    port,
+    path: "/v1/session",
+    method: "POST",
+    headers: {
+      Origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+      "Content-Type": "application/json",
+      "X-Kirinuki-Client-Nonce": clientNonce,
+      "X-Kirinuki-Protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+    },
+    body: sessionBody
+  });
+  assert.equal(session.status, 400);
+  assert.equal(session.body.error.code, "PROTOCOL_REQUIRED");
+  assert.equal(session.body.token, undefined);
+
+  for (const origin of [
+    "https://kirinuki.eff0rtchung.kr.attacker.example",
+    "null",
+    ""
+  ]) {
+    const rejected = await rawLocalHttpJson({
+      port,
+      path: "/v1/health",
+      headers: {
+        ...(origin ? { Origin: origin } : {}),
+        "X-Kirinuki-Protocol": LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL
+      }
+    });
+    assert.equal(rejected.status, 403);
+    assert.equal(rejected.body.error.code, "ORIGIN_NOT_ALLOWED");
+  }
+});
+
+test("문서 capability 요청은 엄격한 JSON scope와 단일사용 nonce를 요구한다", async (t) => {
+  const fixedNow = Date.parse("2026-08-21T00:00:00.000Z");
+  const { port } = await listenTestServer(t, {
+    env: TEST_ENV,
+    now: () => fixedNow
+  });
+  const validNonce = testCapabilityNonce("strict-session");
+  const validBody = {
+    schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
+    clientNonce: validNonce,
+    projectId: "project-5915fbee-dd21-4f07-953c-8c50d62ccbb7",
+    actions: ["vod", "captions"],
+    sourceUrl: "https://chzzk.naver.com/video/14252987"
+  };
+  const requestSession = (
+    body: unknown,
+    clientNonce: string = validNonce
+  ) => rawLocalHttpJson({
+    port,
+    path: "/v1/session",
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      "Content-Type": "application/json",
+      "X-Kirinuki-Client-Nonce": clientNonce,
+      "X-Kirinuki-Protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+    },
+    body
+  });
+
+  const issued = await requestSession(validBody);
+  assert.equal(issued.status, 200);
+  assert.equal(issued.body.schema, CAPTION_AGENT_SESSION_SCHEMA_ID);
+  assert.equal(issued.body.authentication, "bearer-memory-capability");
+  assert.equal(
+    issued.body.expiresAt,
+    new Date(fixedNow + LOCAL_ENGINE_CAPABILITY_ABSOLUTE_TTL_MS).toISOString()
+  );
+  assert.equal(issued.headers["cache-control"], "no-store");
+
+  const replay = await requestSession(validBody);
+  assert.equal(replay.status, 409);
+  assert.equal(replay.body.error.code, "CLIENT_NONCE_REPLAYED");
+
+  const invalidRequests = [
+    { ...validBody, schema: "foreign-session/v1" },
+    { ...validBody, projectId: " project-with-whitespace" },
+    { ...validBody, projectId: "x".repeat(257) },
+    { ...validBody, actions: [] },
+    { ...validBody, actions: ["vod", "vod"] },
+    { ...validBody, actions: ["shell"] },
+    { ...validBody, unexpected: true }
+  ];
+  for (const [index, invalidBody] of invalidRequests.entries()) {
+    const nonce = testCapabilityNonce(`invalid-session-${index}`);
+    const response = await requestSession({
+      ...invalidBody,
+      clientNonce: nonce
+    }, nonce);
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.equal(response.body.error.code, "INVALID_SESSION_REQUEST");
+  }
+
+  const invalidNonce = await requestSession({
+    ...validBody,
+    clientNonce: "short"
+  }, "short");
+  assert.equal(invalidNonce.status, 400);
+  assert.equal(invalidNonce.body.error.code, "INVALID_SESSION_REQUEST");
+
+  const headerMismatch = await requestSession({
+    ...validBody,
+    clientNonce: testCapabilityNonce("body-nonce")
+  }, testCapabilityNonce("header-nonce"));
+  assert.equal(headerMismatch.status, 400);
+  assert.equal(headerMismatch.body.error.code, "CLIENT_NONCE_REQUIRED");
+
+  const oversizedNonce = testCapabilityNonce("oversized-session");
+  const oversized = await requestSession(
+    "x".repeat(MAX_LOCAL_ENGINE_SESSION_REQUEST_BYTES + 1),
+    oversizedNonce
+  );
+  assert.equal(oversized.status, 413);
+  assert.equal(oversized.body.error.code, "REQUEST_TOO_LARGE");
+});
+
+test("vod capability는 세 플랫폼의 정규 VOD URL을 필수로 하고 alias·live URL을 거절한다", async (t) => {
+  const { port } = await listenTestServer(t, { env: TEST_ENV });
+  const requestSession = async (
+    label: string,
+    sourceUrl?: string
+  ): Promise<LocalHttpJsonResult> => {
+    const clientNonce = testCapabilityNonce(label);
+    return await rawLocalHttpJson({
+      port,
+      path: "/v1/session",
+      method: "POST",
+      headers: {
+        Origin: ALLOWED_ORIGIN,
+        "Content-Type": "application/json",
+        "X-Kirinuki-Client-Nonce": clientNonce,
+        "X-Kirinuki-Protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+      },
+      body: {
+        schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
+        clientNonce,
+        projectId: `project-${label}`,
+        actions: ["vod"],
+        ...(sourceUrl === undefined ? {} : { sourceUrl })
+      }
+    });
+  };
+
+  for (const [label, sourceUrl] of [
+    ["missing", undefined],
+    ["youtube-alias", "https://youtu.be/abcdefghijk"],
+    ["soop-alias", "https://vod.sooplive.com/PLAYER/STATION/123456789"],
+    ["chzzk-live", "https://chzzk.naver.com/live/0123456789abcdef0123456789abcdef"]
+  ] as const) {
+    const rejected = await requestSession(label, sourceUrl);
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_SESSION_REQUEST");
+  }
+
+  for (const [label, sourceUrl] of [
+    ["chzzk-vod", "https://chzzk.naver.com/video/14252987"],
+    ["youtube-vod", "https://www.youtube.com/watch?v=abcdefghijk"],
+    ["soop-vod", "https://vod.sooplive.com/player/123456789"]
+  ] as const) {
+    const issued = await requestSession(label, sourceUrl);
+    assert.equal(issued.status, 200, JSON.stringify(issued.body));
+    assert.match(String(issued.body.token), /^[a-zA-Z0-9_-]{43}$/u);
+  }
+});
+
+test("문서 capability는 action·project·source와 client nonce를 API 전에 제한한다", async (t) => {
+  let pipelineCalls = 0;
+  const { port } = await listenTestServer(t, {
+    env: TEST_ENV,
+    pipelineRunner: async () => {
+      pipelineCalls += 1;
+      return { ok: true };
+    }
+  });
+  const sourceA = "https://chzzk.naver.com/video/14252987";
+  const sourceB = "https://www.youtube.com/watch?v=abcdefghijk";
+  const captionsOnly = await issueTestCapability(
+    port,
+    "project-a",
+    ["captions"]
+  );
+  const vodOnly = await issueTestCapability(
+    port,
+    "project-a",
+    ["vod"],
+    sourceA
+  );
+  const authorizedHeaders = (
+    capability: TestCapability,
+    protocol?: string
+  ) => ({
+    Origin: ALLOWED_ORIGIN,
+    Authorization: `Bearer ${capability.token}`,
+    "Content-Type": "application/json",
+    "X-Kirinuki-Client-Nonce": capability.clientNonce,
+    ...(protocol ? { "X-Kirinuki-Protocol": protocol } : {})
+  });
+
+  const wrongAction = await rawLocalHttpJson({
+    port,
+    path: "/v1/vod/materializations",
+    method: "POST",
+    headers: authorizedHeaders(
+      captionsOnly,
+      CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    ),
+    body: {}
+  });
+  assert.equal(wrongAction.status, 403);
+  assert.equal(wrongAction.body.error.code, "CAPABILITY_ACTION_NOT_ALLOWED");
+
+  for (const body of [
+    { consumerId: "project-b", sourceUrl: sourceA },
+    { consumerId: "project-a", sourceUrl: sourceB }
+  ]) {
+    const mismatch = await rawLocalHttpJson({
+      port,
+      path: "/v1/vod/materializations",
+      method: "POST",
+      headers: authorizedHeaders(
+        vodOnly,
+        CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+      ),
+      body
+    });
+    assert.equal(mismatch.status, 403, JSON.stringify(mismatch.body));
+    assert.equal(mismatch.body.error.code, "CAPABILITY_SCOPE_MISMATCH");
+  }
+
+  const wrongCaptionProject = await rawLocalHttpJson({
+    port,
+    path: "/v1/captions",
+    method: "POST",
+    headers: authorizedHeaders(captionsOnly),
+    body: captionRequest({
+      source: {
+        projectId: "project-b",
+        projectName: "B",
+        streamerName: "B"
+      }
+    })
+  });
+  assert.equal(wrongCaptionProject.status, 403);
+  assert.equal(
+    wrongCaptionProject.body.error.code,
+    "CAPABILITY_SCOPE_MISMATCH"
+  );
+  assert.equal(pipelineCalls, 0);
+
+  const validCaption = await rawLocalHttpJson({
+    port,
+    path: "/v1/captions",
+    method: "POST",
+    headers: authorizedHeaders(captionsOnly),
+    body: captionRequest({
+      source: {
+        projectId: "project-a",
+        projectName: "A",
+        streamerName: "A"
+      }
+    })
+  });
+  assert.equal(validCaption.status, 200);
+  assert.equal(pipelineCalls, 1);
+
+  const wrongNonce = await rawLocalHttpJson({
+    port,
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${captionsOnly.token}`,
+      "X-Kirinuki-Client-Nonce": vodOnly.clientNonce
+    }
+  });
+  assert.equal(wrongNonce.status, 401);
+
+  const deleteWithoutAction = await rawLocalHttpJson({
+    port,
+    path: "/v1/vod/materializations/abcdefghijklmnop/cache",
+    method: "DELETE",
+    headers: authorizedHeaders(vodOnly, CHZZK_VOD_CACHE_PURGE_REQUEST_SCHEMA)
+  });
+  assert.equal(
+    deleteWithoutAction.status,
+    403,
+    JSON.stringify(deleteWithoutAction.body)
+  );
+  assert.equal(
+    deleteWithoutAction.body.error.code,
+    "CAPABILITY_ACTION_NOT_ALLOWED"
+  );
+});
+
+test("문서 capability는 idle 30분과 absolute 12시간 경계에서 메모리에서 폐기된다", async (t) => {
+  let currentTime = Date.parse("2026-08-21T00:00:00.000Z");
+  const { port } = await listenTestServer(t, {
+    env: TEST_ENV,
+    now: () => currentTime
+  });
+  const requestCapability = (capability: TestCapability) => rawLocalHttpJson({
+    port,
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${capability.token}`,
+      "X-Kirinuki-Client-Nonce": capability.clientNonce
+    }
+  });
+
+  const idleCapability = await issueTestCapability(
+    port,
+    "project-idle",
+    ["captions"]
+  );
+  assert.equal((await requestCapability(idleCapability)).status, 200);
+  currentTime += LOCAL_ENGINE_CAPABILITY_IDLE_TTL_MS;
+  const idleExpired = await requestCapability(idleCapability);
+  assert.equal(idleExpired.status, 401);
+  assert.equal(idleExpired.body.error.code, "UNAUTHORIZED");
+
+  const absoluteCapability = await issueTestCapability(
+    port,
+    "project-absolute",
+    ["captions"]
+  );
+  currentTime += LOCAL_ENGINE_CAPABILITY_ABSOLUTE_TTL_MS;
+  const absoluteExpired = await requestCapability(absoluteCapability);
+  assert.equal(absoluteExpired.status, 401);
+  assert.equal(absoluteExpired.body.error.code, "UNAUTHORIZED");
+});
+
+test("문서 capability registry는 256개로 제한하고 만료 항목을 발급 전에 정리한다", async (t) => {
+  let currentTime = Date.parse("2026-08-21T00:00:00.000Z");
+  const { port } = await listenTestServer(t, {
+    env: TEST_ENV,
+    now: () => currentTime
+  });
+  const issue = async (index: number): Promise<LocalHttpJsonResult> => {
+    const clientNonce = testCapabilityNonce(`registry-${index}`);
+    return await rawLocalHttpJson({
+      port,
+      path: "/v1/session",
+      method: "POST",
+      headers: {
+        Origin: ALLOWED_ORIGIN,
+        "Content-Type": "application/json",
+        "X-Kirinuki-Client-Nonce": clientNonce,
+        "X-Kirinuki-Protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+      },
+      body: {
+        schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
+        clientNonce,
+        projectId: `project-registry-${index}`,
+        actions: ["captions"]
+      }
+    });
+  };
+
+  for (let index = 0; index < MAX_LOCAL_ENGINE_CAPABILITIES; index += 1) {
+    if (index > 0 && index % 12 === 0) {
+      currentTime += 60_001;
+    }
+    const response = await issue(index);
+    assert.equal(response.status, 200, `${index}: ${JSON.stringify(response.body)}`);
+  }
+  const full = await issue(MAX_LOCAL_ENGINE_CAPABILITIES);
+  assert.equal(full.status, 429);
+  assert.equal(full.body.error.code, "CAPABILITY_LIMIT_REACHED");
+
+  currentTime += LOCAL_ENGINE_CAPABILITY_IDLE_TTL_MS;
+  const afterPrune = await issue(MAX_LOCAL_ENGINE_CAPABILITIES + 1);
+  assert.equal(afterPrune.status, 200, JSON.stringify(afterPrune.body));
 });
 
 test("gateway는 잘못된 Origin·인증·health probe를 거절한다", async (t) => {
@@ -1083,6 +1806,17 @@ test("gateway는 잘못된 Origin·인증·health probe를 거절한다", async 
   });
   assert.equal(unauthorized.status, 401);
   assert.equal(unauthorized.body.error.code, "UNAUTHORIZED");
+
+  const configuredLegacyToken = await rawLocalHttpJson({
+    port,
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Authorization: `Bearer ${AGENT_TOKEN}`,
+      "X-Kirinuki-Client-Nonce": testCapabilityNonce("legacy-global-token")
+    }
+  });
+  assert.equal(configuredLegacyToken.status, 401);
+  assert.equal(configuredLegacyToken.body.error.code, "UNAUTHORIZED");
 
   const badHealth = await localHttpJson({
     port,
@@ -1171,7 +1905,7 @@ test("본문을 읽기 전 거절한 모든 gateway 경로는 keep-alive 연결�
       path: "/v1/health",
       headers: {
         Origin: ALLOWED_ORIGIN,
-        "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA_ID
+        "X-Kirinuki-Protocol": LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL
       },
       onSocket: (socket) => {
         healthSocket = socket;
@@ -1374,7 +2108,7 @@ test("부분 자막 body는 수신 기한 뒤 연결을 닫고 단일 pipeline �
       >["pipelineRunner"]
     >
   });
-  const partial = partialCaptionHttpRequest(port);
+  const partial = await partialCaptionHttpRequest(port);
   t.after(() => partial.request.destroy());
   await waitForCondition(() => runtime.activeCaptionPipelineCount === 1);
 
@@ -1461,7 +2195,7 @@ test("gateway shutdown은 수신 중인 부분 자막 body를 즉시 중단하�
       KIRINUKI_CAPTION_REQUEST_BODY_TIMEOUT_MS: "60000"
     }
   });
-  const partial = partialCaptionHttpRequest(port);
+  const partial = await partialCaptionHttpRequest(port);
   t.after(() => partial.request.destroy());
   await waitForCondition(() => runtime.activeCaptionPipelineCount === 1);
 
@@ -1589,11 +2323,10 @@ test("gateway shutdown은 VOD cleanup 실패를 성공으로 숨기지 않는다
   assert.equal(runtime.server.listening, false);
 });
 
-test("자동 pairing은 exact Origin·프로토콜과 분당 상한을 지킨다", async (t) => {
+test("문서 capability 발급은 exact Origin·프로토콜과 분당 상한을 지킨다", async (t) => {
   const { port } = await listenTestServer(t, {
     env: {
       ...TEST_ENV,
-      KIRINUKI_AGENT_TOKEN: "",
       KIRINUKI_AUTO_PAIR: "1"
     }
   });
@@ -1607,13 +2340,22 @@ test("자동 pairing은 exact Origin·프로토콜과 분당 상한을 지킨다
   assert.equal(missingProtocol.body.error.code, "PROTOCOL_REQUIRED");
 
   for (let index = 0; index < 12; index += 1) {
+    const clientNonce = testCapabilityNonce(`rate-${index}`);
     const response = await localHttpJson({
       port,
       path: "/v1/session",
       method: "POST",
       headers: {
         Origin: ALLOWED_ORIGIN,
-        "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA_ID
+        "Content-Type": "application/json",
+        "X-Kirinuki-Client-Nonce": clientNonce,
+        "X-Kirinuki-Protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
+      },
+      body: {
+        schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID,
+        clientNonce,
+        projectId: `gateway-project-${index}`,
+        actions: ["captions"]
       }
     });
     assert.equal(response.status, 200);
@@ -1624,7 +2366,7 @@ test("자동 pairing은 exact Origin·프로토콜과 분당 상한을 지킨다
     method: "POST",
     headers: {
       Origin: ALLOWED_ORIGIN,
-      "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA_ID
+      "X-Kirinuki-Protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA_ID
     }
   });
   assert.equal(limited.status, 429);

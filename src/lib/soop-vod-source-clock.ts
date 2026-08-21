@@ -12,9 +12,11 @@ export interface SoopVodSourceClockPartIdentity {
 }
 
 /**
- * Secret-free identity for the exact official SOOP multipart clock exposed by
- * the browser player. It intentionally contains no URL, token, header, title,
- * creator metadata, or playback history.
+ * Secret-free identity for the exact official SOOP multipart clock. The local
+ * media engine derives this from one yt-dlp root dump and its complete ordered
+ * `entries`; an older browser/player vector may still be compared with it as
+ * an optional compatibility assertion. It intentionally contains no URL,
+ * token, header, title, creator metadata, or playback history.
  */
 export interface SoopVodSourceClockIdentity {
   readonly schema: typeof SOOP_VOD_SOURCE_CLOCK_IDENTITY_SCHEMA;
@@ -28,6 +30,17 @@ type UnknownRecord = Record<string, unknown>;
 
 const SOOP_CONTENT_ID_PATTERN = /^\d{1,32}$/u;
 const SOOP_PART_ID_PATTERN = /^[A-Za-z0-9_-]{1,240}$/u;
+
+export interface SoopVodOfficialClockPartMetadata {
+  readonly id: string;
+  readonly durationSeconds: number;
+}
+
+export interface SoopVodOfficialClockMetadata {
+  readonly contentId: string;
+  readonly totalDurationSeconds: number;
+  readonly parts: readonly SoopVodOfficialClockPartMetadata[];
+}
 
 function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -108,6 +121,35 @@ export function normalizeSoopVodSourceClockIdentity(
     contentId: value.contentId,
     totalDurationSeconds,
     parts: Object.freeze(parts)
+  });
+}
+
+/**
+ * Builds the canonical identity from the complete official root/entry clock.
+ * Returning `null` is deliberately fail-closed: callers must not invent part
+ * IDs, round fractional durations, or continue with a partial playlist.
+ */
+export function deriveSoopVodSourceClockIdentity(
+  metadata: SoopVodOfficialClockMetadata
+): SoopVodSourceClockIdentity | null {
+  if (
+    !isRecord(metadata)
+    || !hasExactKeys(metadata, ["contentId", "totalDurationSeconds", "parts"])
+    || !Array.isArray(metadata.parts)
+  ) {
+    return null;
+  }
+  return normalizeSoopVodSourceClockIdentity({
+    schema: SOOP_VOD_SOURCE_CLOCK_IDENTITY_SCHEMA,
+    platform: "SOOP",
+    contentId: metadata.contentId,
+    totalDurationSeconds: metadata.totalDurationSeconds,
+    parts: metadata.parts.map((part, index) => ({
+      id: part?.id,
+      index,
+      order: index + 1,
+      durationSeconds: part?.durationSeconds
+    }))
   });
 }
 

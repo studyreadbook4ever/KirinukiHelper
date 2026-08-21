@@ -8,7 +8,7 @@ export const DESKTOP_FFMPEG_RELEASE = Object.freeze({
   baseUrl:
     "https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.1.2-1",
   licenseUrl:
-    "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/linux-x64.LICENSE"
+    "https://github.com/FFmpeg/FFmpeg/raw/refs/tags/n8.1.2/COPYING.GPLv3"
 });
 
 export const DESKTOP_YT_DLP_RELEASE = Object.freeze({
@@ -67,38 +67,6 @@ const TARGET_VALUES = Object.freeze({
     ytDlpSize: 39_924_536,
     ytDlpSha256:
       "6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae"
-  },
-  "linux-arm64": {
-    ffmpegVersion: "n8.1.2",
-    ffprobeVersion: "n8.1.2",
-    ffmpegAsset: "ffmpeg-linux-arm64",
-    ffmpegSize: 36_523_320,
-    ffmpegSha256:
-      "6e7b1d7d1aa8c35e3fedd78a140aa0968717aeb7386ecfb0ee00773d9f0a4503",
-    ffprobeAsset: "ffprobe-linux-arm64",
-    ffprobeSize: 36_326_648,
-    ffprobeSha256:
-      "fd2aca1456f0261cabef4514b6d97a70fa342003347f51b39c473dd364328089",
-    ytDlpAsset: "yt-dlp_linux_aarch64",
-    ytDlpSize: 39_675_904,
-    ytDlpSha256:
-      "b6ce97646773070d7a7ffd6bbbdcaecb47c48483909c54c915bf08a7a9b5e0b1"
-  },
-  "darwin-x64": {
-    ffmpegVersion: "n8.1.2",
-    ffprobeVersion: "n8.1.2",
-    ffmpegAsset: "ffmpeg-osx-x64",
-    ffmpegSize: 42_745_472,
-    ffmpegSha256:
-      "62c87854d851f202fc4a29bdda0fe7b6ebcddd37b863482ce1bdc81151b03fe4",
-    ffprobeAsset: "ffprobe-osx-x64",
-    ffprobeSize: 42_555_344,
-    ffprobeSha256:
-      "d530823f480a3c7eb6334f18a00197d1e9f1070e86172b9aa89c4bf4022bd879",
-    ytDlpAsset: "yt-dlp_macos",
-    ytDlpSize: 38_256_544,
-    ytDlpSha256:
-      "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
   },
   "darwin-arm64": {
     ffmpegVersion: "n8.1.2",

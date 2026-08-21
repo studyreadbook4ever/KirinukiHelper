@@ -1,274 +1,282 @@
-배포를 완료하고 싶은데 코덱스 토큰이 없어요...
+# Kirinuki — 웹 VOD 편집기
 
+Kirinuki는 CHZZK·YouTube·SOOP의 공개 완료 VOD에서 사용자가 직접 고른 구간만
+이 PC로 준비해 컷, 이미지, 음성, 자막을 편집하고 영상으로 내보내는 로컬 우선
+웹 편집기입니다.
 
-# Kirinuki — 로컬 우선 VOD 편집 앱
+제품의 본체는 [`https://kirinuki.eff0rtchung.kr`](https://kirinuki.eff0rtchung.kr)입니다.
+Windows x64, Apple Silicon Mac, Linux x64 사용자는 처음 한 번만 **Kirinuki 영상
+준비 도구**를 설치합니다. 그 뒤에는 별도 프로그램 창이나 브라우저 확장,
+연결 주소, 포트를 조작하지 않고 일반 웹사이트처럼 사용합니다.
 
+> 현재 저장소는 이 구조의 구현과 검증 단계입니다. 세 OS용 package를 CI에서
+> 만들고 아래에 명시한 OS별 범위만 검사하지만 아직 서명·공증된 공개 Release가
+> 아닙니다. 웹의 다운로드 링크를 일반 사용자에게 열기 전에
+> [데스크톱 바이너리 출시 게이트](legal/DESKTOP_BINARY_RELEASE_GATE.md)를 모두
+> 충족해야 합니다.
 
+## 사용자 흐름
 
-Kirinuki는 CHZZK·YouTube·SOOP VOD에서 사용자가 직접 고른 구간을 이 기기에
-필요한 만큼만 준비해 컷, 이미지, 음성, 자막을 편집하고 영상으로 내보내는
-로컬 우선 앱입니다.
+1. 웹사이트에 CHZZK·YouTube·SOOP VOD URL을 붙여넣습니다.
+2. 사용할 시작·끝을 `초`, `MM:SS` 또는 `HH:MM:SS`로 직접 입력합니다.
+3. 프로젝트 이름과 이번 사용의 권리·책임 확인란을 입력한 뒤 **편집기 열기**를
+   누릅니다.
+4. **편집 영상 준비**를 누릅니다. 영상 준비 도구가 없을 때만 OS에 맞는 설치
+   안내가 한 번 나타납니다.
+5. 최초 설치 뒤 같은 페이지에서 **이 PC 연결**을 한 번 누릅니다. 브라우저가
+   로컬 네트워크 접근을 물으면 허용해야 합니다. 한 번 연결한 뒤 잠든 도구는
+   이후 **편집 영상 준비** 클릭 한 번으로 깨어나 선택 구간 준비를 이어갑니다.
+6. 컷과 자막을 검수한 뒤 내보낼 파일 제목과 저장 위치를 정합니다.
 
-사용자는 별도 서버나 브라우저 확장, 보조 프로그램, 포트, 연결 주소를 설치하거나
-관리하지 않습니다. **Kirinuki 앱 하나**를 실행하면 편집 화면, VOD 부분 준비,
-자막 엔진, 캐시와 내보내기 생명주기를 앱이 함께 준비하고 점검합니다. 구현상
-여러 내부 프로세스가 사용될 수 있지만 이는 앱의 비공개 구성요소이며 사용자용
-제품이나 별도 서비스가 아닙니다.
+이후 방문에서는 1~3, 4~6의 편집 흐름만 반복합니다. 영상 준비 도구에는 보이는
+편집 창이 없고 로그인·계정·동기화 기능도 없습니다. 운영체제 로그인 시 백그라운드로
+시작해 웹사이트가 필요할 때만 선택한 구간을 준비합니다.
 
-사용자가 입력한 시작·끝과 컷 순서는 확정값입니다. Kirinuki는 재미있는 장면을
-대신 고르거나 컷 경계를 임의로 늘리지 않습니다. 자막 초안, 위치, 레인, 색상,
-글씨 크기, 구간별 음량과 내부 삭제 범위는 편집 화면에서 사람이 검수하고
-수정할 수 있습니다. 자막 길이에 일괄 4초 제한을 두지 않습니다.
+라이브, 비공개, 로그인 필요, DRM 또는 지역 제한 원본은 우회하지 않습니다.
+자동 준비가 불가능한 원본에는 사용 권한이 있는 파일을 **내 파일 직접 연결**로
+선택할 수 있습니다.
 
-이 프로젝트는 NAVER·CHZZK·YouTube·Google·SOOP의 공식 또는 제휴 제품이
-아닙니다. 서비스명과 상표의 권리는 각 권리자에게 있습니다.
-
-## 현재 제공 형태
-
-현재 일반 사용자에게 제공하는 경로는 **Linux 소스 설치판**입니다. 아직 자체
-런타임을 모두 포함한 AppImage, Flatpak, deb/rpm 또는 완전 독립 실행형
-바이너리가 아닙니다. 설치할 PC에 다음 기본 시스템 도구가 먼저 있어야 합니다.
-이 목록은 어떤 자막 방식을 고르더라도 필요한 요구사항입니다.
-
-- Node.js 22.17.0 이상과 npm (`node:sqlite`와 Windows 파일 identity 수정이 포함된 버전)
-- Chromium 120 이상
-- Python 3.11 이상
-- FFmpeg와 ffprobe
-
-Whisper 자막 방식을 선택할 때만 다음 빌드 도구가 추가로 필요합니다.
-
-- CMake
-- tar
-- C++ 컴파일러(예: `g++` 또는 `clang++`)
-
-`./setup.sh`는 빠진 시스템 패키지를 관리자 권한으로 대신 설치하지 않습니다.
-필요한 도구를 진단해 알려 주고 안전하게 멈춥니다. 저장소가 관리하는 npm
-구성요소와 고정 버전·크기·SHA-256으로 검증하는 미디어 도구는 첫 실행 때 앱이
-자동으로 준비합니다. Whisper를 선택한 경우 위 추가 빌드 도구를 검증한 뒤
-검증된 whisper.cpp 소스와 모델도 사용자 데이터 폴더에 준비합니다.
-
-자세한 배포 경계는
-[`legal/RUNTIME_DEPENDENCIES.md`](legal/RUNTIME_DEPENDENCIES.md)에 있습니다.
-
-Linux·Windows·macOS용 Electron 앱은 현재 **개발·CI 프리뷰**입니다. 이 경로는
-Electron `43.4.0`, FFmpeg/ffprobe `n8.1.2`(Shaka 정적 빌드 tag
-`n8.1.2-1`)와 yt-dlp `2026.07.04` standalone artifact를 대상 OS용 앱 디렉터리에
-넣습니다. 현재 manifest 대상은 Linux x64/arm64, macOS x64/arm64와 Windows
-x64입니다. 현재 정적 FFmpeg의 실행 하한에 맞춰 macOS 프리뷰는 15.0 이상을
-package metadata로 강제합니다. CI는 Linux x64·Windows x64·macOS arm64에서 unsigned 패키지를 만든 뒤
-실제로 실행해 내부 Studio·gateway health, 번들 미디어 도구, 검증용 MP4 처리,
-정상 종료를 검사합니다. Linux·macOS는 exact process group과 자식 프로세스,
-포트·임시 데이터를 모두 확인합니다. Windows는 앱이 보고한 다중 프로세스 실행,
-exact root 종료, 포트 회수와 전용 session 디렉터리 삭제를 확인하며, descendant
-전체 소유권은 아래 공개 배포용 Job Object 차단 조건으로 남깁니다.
-
-이 프리뷰 산출물은 installer가 아닌 unpacked 앱 디렉터리이며 아직 공개 다운로드가
-아닙니다. Electron/Chromium/Node 전체 고지와 SBOM, FFmpeg build configuration과
-대응 소스 의무, yt-dlp standalone의 embedded component 고지, Windows 코드 서명,
-macOS Developer ID 서명·hardened runtime·공증·staple 검증이 완료되지 않았습니다.
-따라서 `npm run package:desktop` 결과를 최종 사용자에게 배포하거나 기존 Linux
-설치판 대신 제공하면 안 됩니다. 정확한 차단 조건은
-[`legal/DESKTOP_BINARY_RELEASE_GATE.md`](legal/DESKTOP_BINARY_RELEASE_GATE.md)를
-따릅니다.
-
-## Linux 소스 설치
-
-저장소를 내려받아 `KirinukiHelper` 폴더에서 처음 한 번 실행합니다.
-
-```bash
-./setup.sh
-```
-
-이 명령은 추가 모델이 필요 없는 AudSeg로 설치합니다. 로컬 Whisper 자막도 사용할
-PC라면 위의 Whisper 전용 빌드 도구를 준비한 뒤 처음부터 다음 명령을 사용합니다.
-
-```bash
-./setup.sh --mode whisper
-```
-
-GitHub 소스 ZIP에서 실행 권한이 보존되지 않았다면 다음과 같이 실행할 수
-있습니다.
-
-```bash
-bash setup.sh
-```
-
-Whisper 설치라면 `bash setup.sh --mode whisper`를 사용합니다.
-
-설치가 끝나면 앱 메뉴의 **Kirinuki** 아이콘 또는 다음 명령만 사용합니다.
-
-```bash
-kirinuki
-```
-
-첫 실행은 저장소가 관리하는 구성요소를 준비하고 현재 버전을 검증한 뒤
-Kirinuki 전용 창을 엽니다. 이후 실행도 같은 진입점이 필요한 업데이트와 복구를
-먼저 처리합니다. 일반 브라우저에서 내부 편집 주소를 직접 열거나 별도 구성요소를
-미리 시작할 필요가 없습니다.
-
-원본 URL을 미리 넣어 열고 싶다면 다음 중 하나를 사용합니다.
-
-```bash
-kirinuki open "https://chzzk.naver.com/video/..."
-kirinuki open "https://www.youtube.com/watch?v=..."
-```
-
-공개 사이트나 데스크톱 통합은 아래의 엄격한 앱 링크만 사용합니다.
+## 무엇이 어디에서 실행되나
 
 ```text
-kirinuki://open
-kirinuki://open?source=<URLSearchParams로 인코딩한 지원 VOD HTTPS URL>
+kirinuki.eff0rtchung.kr
+  └─ 컷·자막·레이어·미리보기·내보내기 UI (브라우저)
+       └─ 127.0.0.1:4319 (사용자에게 숨긴 고정 내부 연결)
+            └─ 필요한 VOD 구간 취득·검증·로컬 캐시 (설치된 백그라운드 엔진)
+
+원본 플랫폼 ────────────────┘
 ```
 
-앱 링크는 `open` host와 선택적인 `source` 하나만 허용합니다. 중복 매개변수,
-계정 정보, 임의 포트, fragment, 지원하지 않는 host나 HTTPS가 아닌 원본은
-거절합니다. `source`는 시작 화면의 원본 입력만 채우며 컷 시각이나 권리 확인을
-자동 승인하지 않습니다.
+- 공개 서버는 정적 웹 파일만 제공합니다. VOD 바이트를 프록시하거나 편집
+  프로젝트를 저장하지 않습니다.
+- 브라우저가 컷, 자막, 이미지, 레이어, 미리보기와 내보내기를 담당합니다.
+- 로컬 엔진은 브라우저만으로 안정적으로 할 수 없는 공개 VOD 구간 취득과
+  검증만 담당합니다.
+- Cloudflare Tunnel은 공개 웹 origin으로만 연결합니다. 로컬 엔진 포트는
+  Tunnel, LAN 또는 공인 인터페이스에 노출하지 않습니다.
+- Chrome 확장 프로그램과 Electron 편집기 창은 제품 구조에 포함되지 않습니다.
+  Electron은 세 OS에서 동일한 백그라운드 엔진을 패키징하는 런타임으로만
+  사용합니다.
 
-`kirinuki doctor`, `kirinuki status`, `kirinuki stop`과 저장소 안의 저수준 npm
-명령은 일반 사용 흐름이 아니라 개발자·관리자용 진단 폴백입니다. 평상시에는 앱
-아이콘이나 `kirinuki`만 사용하세요.
+## 구간과 시간축
 
-## 공개 사이트의 역할
+사용자가 입력한 컷 경계와 순서는 확정값입니다. Kirinuki는 장면을 대신 고르거나
+컷 경계를 임의로 옮기지 않습니다. 자동 준비는 선택 범위 앞뒤의 디코딩 여유를
+로컬 파일에 포함할 수 있지만, 편집기의 원본 시간축은 사용자가 입력한 VOD
+시각을 그대로 유지합니다.
 
-`https://kirinuki.eff0rtchung.kr`은 앱 소개, 설치 안내와 **Kirinuki에서 열기**만
-제공하는 가벼운 시작 페이지입니다. 공개 페이지에서 편집기를 초기화하거나 VOD를
-부분 다운로드하지 않으며, 방문자의 기기 안에 있는 내부 서비스로 연결을
-시도하지 않습니다.
+- CHZZK·YouTube·SOOP 모두 같은 범위 계획과 검증 절차를 사용합니다.
+- 이미 준비한 조각이 있으면 같은 원본 시간축임을 증명한 뒤 재사용하고, 부족한
+  방향만 추가로 가져옵니다.
+- 원본 playlist나 SOOP 파트 구성의 identity가 준비 도중 바뀌면 다른 영상이
+  섞이지 않도록 게시 전에 중단합니다.
+- 제목 같은 표시 정보의 변화는 원본 교체로 오인하지 않습니다.
+- 인증 토큰, 서명된 CDN URL, 쿠키는 프로젝트나 영구 receipt에 저장하지 않습니다.
 
-**Kirinuki에서 열기**는 등록된 `kirinuki://open` 링크를 호출합니다. 앱이 아직
-설치되지 않았거나 브라우저가 앱 열기를 거절해도 페이지는 오류 상태의 편집기를
-보여 주지 않고 설치 안내를 그대로 유지합니다. 실제 프로젝트 생성과 편집은
-항상 앱이 소유한 전용 창에서 시작합니다.
+자막은 자유롭게 이동·분할할 수 있으며 모든 자막에 4초 상한을 강제하지 않습니다.
+4초 분할은 AudSeg가 처음 만드는 빈 타이밍의 생성 규칙일 뿐입니다.
 
-온프레미스 운영자는 `npm run public-shell:start`로 이 공개 정적 shell만
-실행할 수 있습니다. 기본 listener는 `127.0.0.1:4330`이며 Cloudflare Tunnel은
-이 listener 하나에 연결하고 원본 `Host`를 `kirinuki.eff0rtchung.kr`로
-유지해야 합니다. 포트와 loopback bind를 바꿔야 할 때만
-`KIRINUKI_PUBLIC_SHELL_PORT`, `KIRINUKI_PUBLIC_SHELL_BIND`를 사용합니다. 이
-서버는 요청 로그·쿠키·세션·분석 기능이나 별도 health 경로를 만들지 않습니다.
-배포 뒤에는 `npm run public-shell:check`로 실제 HTTPS 응답의 보안·개인정보
-경계를 읽기 전용으로 확인합니다.
+## 저장과 개인정보
 
-## 편집 흐름
+Kirinuki는 로그인 계정이나 서버 저장 프로젝트를 만들지 않습니다. 방문·사용
+기록, 원본 URL, 편집 내용, 세션 식별자, 기기 정보, 광고 식별자, telemetry 또는
+analytics를 수집하지 않습니다.
 
-1. 앱 메뉴의 **Kirinuki**를 엽니다.
-2. CHZZK·YouTube·SOOP의 지원 VOD URL을 붙여넣습니다.
-3. 원본을 확인하고 사용할 시작·끝을 `초`, `MM:SS` 또는 `HH:MM:SS`로 직접
-   입력합니다. **빈 구간 추가**로 컷을 더 만들 수 있습니다.
-4. 프로젝트 이름을 정하고 이번 사용의 권리·책임 확인란을 직접 선택합니다.
-5. **편집기 열기**를 누릅니다. 공개 완료 VOD라면 앱이 선택 범위의 앞뒤 여유와
-   독립 디코딩에 필요한 최소 조각만 이 PC에 준비합니다. 로그인·쿠키·DRM·지역
-   제한은 우회하지 않습니다.
-6. 라이브, 비공개, 접근 제한 또는 지원 밖의 원본은 **내 파일 직접 연결**에서
-   사용 권한이 있는 로컬 파일을 선택합니다.
-7. 컷, 이미지, 음성, 자막을 검수합니다. 컷을 준비 범위 밖으로 넓히면 앱이
-   필요한 방향의 누락 구간만 이어서 준비합니다.
-8. **영상 내보내기**에서 제목과 저장 위치를 정하고 결과를 확인합니다.
+- 탭을 그냥 닫으면 저장하지 않은 이번 변경을 폐기하는 것이 기본입니다.
+- 계속 작업하려면 사용자가 **지금 저장** 또는 종료 창의 저장 동작을 명시적으로
+  선택합니다.
+- 저장본과 임시 복구본은 브라우저의 이 사이트 저장소에만 남습니다.
+- 준비한 VOD 조각은 로컬 엔진의 전용 캐시에만 남고 프로젝트별 소유권을 확인해
+  삭제합니다.
+- 새 프로젝트를 열 때 예전 프로젝트의 미디어나 캐시를 자동으로 혼합하지
+  않습니다.
+- 새로고침은 현재 프로젝트를 다시 열며, 뒤로가기 뒤 다른 원본을 시작하면 새
+  프로젝트 세대와 로컬 작업 권한을 발급합니다.
 
-원본 스트리밍 화면은 시각 확인용입니다. YouTube는 공식 privacy-enhanced
-embed와 앱에 포함된 격리 Player Bridge를 사용하고, CHZZK는 문서화되지 않은
-embed 경로를 만들지 않으며, SOOP은 지원되는 공식 VOD 화면만 사용합니다. 실제
-편집·자막·내보내기는 앱이
-검증해 준비한 로컬 미디어 또는 사용자가 직접 연결한 파일을 사용합니다.
+원본 플랫폼과 GitHub Release는 사용자가 요청한 원본과 설치 파일을 전달하기
+위해 각자의 정책에 따라 네트워크 정보를 처리할 수 있습니다. Kirinuki 자체
+서버로 그 정보를 복제하지 않습니다.
 
-## 자막
+## 로컬 연결의 보안 경계
 
-- **AudSeg**: 모델 없이 브라우저 안에서 음성 활동을 찾아 사람이 채울 빈 cue를
-  만듭니다.
-- **Whisper**: 글과 타이밍 초안이 필요할 때 이 PC에서 실행합니다. 오디오는 외부
-  자막 API로 전송하지 않습니다.
-- **에이전트로 자막 넣기**: 사람이 완성한 컷 구도를 바꾸지 않고 노래 가사의
-  타이밍을 1/60초 단위로 검수하도록 돕는 프롬프트입니다. 결과는 사람이 최종
-  확인해야 합니다.
+웹페이지가 로컬 엔진을 임의의 범위로 사용할 수 없도록 다음 경계를 둡니다.
 
-자동 초벌은 컷 경계와 순서를 바꾸지 않습니다. 자막은 자유롭게 이동·분할할 수
-있고 레인별로 겹침을 검수할 수 있습니다.
+- `https://kirinuki.eff0rtchung.kr`의 정확한 Origin만 허용합니다.
+- loopback의 고정 Host·포트만 사용하고 DNS rebinding과 forwarded host를
+  거절합니다.
+- 편집기 문서마다 메모리 전용 capability를 새로 발급합니다.
+- 최초 연결 뒤 설치 identity의 P-256 공개키를 브라우저에 고정하고, health와
+  session을 매번 새 challenge로 검증합니다. 기존 pin과 다른 키는 자동 교체하지
+  않습니다.
+- session 발급과 이후 JSON control traffic은 one-shot ECDH에서 만든 AES-GCM
+  transport로 봉인합니다. token, 프로젝트 ID와 원본 URL을 plaintext loopback에
+  보내지 않으며 counter replay도 거절합니다.
+- capability는 프로젝트, canonical 원본 URL, 허용 작업에 묶이고 만료됩니다.
+- 다른 탭의 nonce 재사용, 다른 프로젝트·원본으로의 scope 변경, 과대 요청을
+  거절합니다.
+- `<video>`가 사용자 정의 헤더를 붙일 수 없는 미디어 읽기는 정확한 Origin과
+  작업별 추측 불가능한 access URL로 제한합니다.
 
-## 저장, 캐시와 종료
+엔진을 재시작하면 기존 capability는 사라집니다. 웹페이지는 새 capability를
+자동으로 받아 이어가며 사용자가 토큰이나 연결 설정을 다루지 않습니다.
 
-Kirinuki는 로그인 계정이나 서버 프로젝트를 만들지 않습니다. 방문·사용 기록,
-편집 내용, 원본 URL, 세션 식별자, GPU 정보 또는 광고 식별자를 수집·전송하지
-않습니다.
+알려진 신뢰 경계: 첫 연결 전에 같은 OS 사용자 권한의 악성 프로그램이
+`kirinuki-engine:` scheme 자체를 먼저 탈취하면, 외부 trust anchor가 없는
+TOFU(first-use) 단계에서는 진짜 설치와 완전히 구별할 수 없습니다. 한 번 정상
+키가 고정된 뒤의 key mismatch는 fail closed하며 자동 재등록하지 않습니다. 이
+제외는 다른 사용자·웹 Origin·LAN 공격자를 신뢰한다는 뜻이 아닙니다.
 
-- 저장하지 않은 프로젝트는 앱 창을 닫으면 폐기하는 것이 기본입니다.
-- 이어서 작업하려면 닫기 전에 **지금 저장**을 명시적으로 선택합니다.
-- 저장본과 준비한 VOD 조각은 이 기기에만 남고 앱의 **저장 목록/로컬 자료
-  관리**에서 확인하고 지울 수 있습니다.
-- 내보내기 검증 뒤 **세션 완료·로컬 재료 삭제**를 선택하면 해당 프로젝트가
-  단독 소유한 캐시만 정리합니다. 다른 프로젝트의 캐시와 사용자가 직접 고른
-  원본 파일은 삭제하지 않습니다.
-- 앱을 다시 열 때 이전 세션을 현재 작업에 자동 혼합하지 않습니다. 저장본을
-  계속하려면 목록에서 명시적으로 선택합니다.
+## 지원 설치 대상
 
-브라우저 탭의 자동 복구나 서버 세션 보존을 프로젝트 저장으로 간주하지
-않습니다. 운영체제나 브라우저가 비정상 종료된 경우 제안되는 복구본도 사용자가
-선택하기 전에는 현재 프로젝트가 되지 않습니다.
+공개 Release가 열릴 때 웹사이트가 자동 선택할 파일 이름은 다음과 같습니다.
 
-## 개인정보와 네트워크
+| 운영체제 | 대상 | 설치 파일 |
+|---|---|---|
+| Windows | x64 | `Kirinuki-Engine-windows-x64-setup.exe` |
+| macOS | Apple Silicon ARM64 | `Kirinuki-Engine-macos-arm64.dmg` |
+| Linux | x64, Debian 계열 | `Kirinuki-Engine-linux-x64.deb` |
 
-Kirinuki의 원격 자체 서버는 없으며 로그인, 계정, telemetry, analytics, 사용기록
-수집 기능을 두지 않습니다. 네트워크 요청은 사용자가 지정한 원본 플랫폼,
-설치 시 고정 artifact 다운로드, 공개 소개 페이지에 필요한 범위로 제한합니다.
-원본 플랫폼이 자체적으로 처리하는 요청과 정책은 각 서비스에 따릅니다.
+현재 macOS x64, Windows ARM64, Linux ARM64와 모바일 편집은 지원하지 않습니다.
+지원하지 않는 환경에서는 임의의 바이너리를 권하지 않고 로컬 파일 직접 연결을
+안내합니다.
 
-앱 내부 구성요소는 이 기기에서만 접근하도록 제한되며 Cloudflare Tunnel, LAN,
-공개 도메인에 노출하는 배포 대상이 아닙니다. 인증 토큰과 만료형 CDN 미디어
-직링크는 프로젝트에 저장하지 않습니다. 사용자가 입력한 원본 VOD 주소는 편집을
-이어가기 위해 이 기기의 프로젝트에만 남습니다.
+웹 편집기와 로컬 연결의 현재 검증 대상은 최신 Chrome/Chromium입니다. Chrome
+142 이상에서는 공개 사이트가 이 PC의 loopback 엔진에 처음 연결할 때 로컬
+네트워크 접근 권한을 한 번 묻습니다.
 
-## 지원 범위와 알려진 제한
+Windows 설치기는 사용자 범위에 설치하고 완료 뒤 엔진을 시작합니다. macOS는
+DMG에서 앱을 설치하고 최초 한 번 실행해야 하며, 배포 전 Developer ID 서명과
+공증이 필요합니다. Linux deb도 설치 뒤 앱 메뉴에서 최초 한 번 실행해야 자동
+시작이 등록됩니다. 세 OS 모두 이후 로그인부터 화면 없이 시작합니다.
 
-- 현재 사용자 지원 설치·실행 경로는 Linux와 Chromium 120 이상입니다.
-- Windows와 macOS 코드는 네이티브 CI에서 typecheck·unit test·unpacked package와
-  실제 packaged-runtime liveness smoke를 검사하는 단계입니다. 서명·공증,
-  실제 VOD·편집·내보내기 운영체제별 검증과 바이너리 단위 라이선스 검토 전에는
-  공개 배포판 또는 사용자 지원판으로 간주하지 않습니다.
-- 공개 완료 CHZZK·YouTube·SOOP VOD를 대상으로 하며 라이브·비공개·DRM·지역
-  제한을 우회하지 않습니다.
-- 플랫폼 페이지 구조나 전송 형식이 바뀌면 해당 소스 준비가 일시적으로 실패할
-  수 있습니다. 이때 권한 있는 로컬 파일을 직접 연결할 수 있습니다.
-- 장시간·고해상도·다중 레이어 출력은 브라우저 메모리와 GPU 성능의 영향을
-  받습니다.
-- 현재 소스 설치판은 시스템 Node.js, npm, Chromium, Python, FFmpeg, ffprobe에
-  의존합니다. “앱 하나”는 사용자 생명주기와 UI의 단일 경계를 뜻하며 아직
-  모든 바이너리를 포함한 AppImage라는 뜻은 아닙니다.
+업데이트 기능이나 사용 통계를 위한 별도 백그라운드 네트워크 요청은 넣지
+않습니다. 공개 엔진의 `kirinuki-local-media-engine/v1` 계약은 앱 버전과 독립된
+additive-only 장기 호환 경계입니다. 따라서 한 번 설치한 v1 엔진은 이후 웹에서도
+그대로 받아들이며, 일반 기능 변경 때문에 다시 설치하라고 요구하지 않습니다.
+실제 보안 결함처럼 로컬 바이너리 교체가 불가피한 예외에만 동일한 stable install
+path의 서명된 installer를 명시적으로 제공합니다. unsigned 자동 업데이트나 조용한
+binary replacement는 허용하지 않습니다.
 
-## 개발과 검증
+## 편집 기능
 
-일반 사용자는 이 절의 명령을 실행할 필요가 없습니다.
+- 본편과 여러 개의 독립된 쇼츠 작업공간
+- 컷별 활성화, 순서와 위·아래 레이어 조정
+- 이미지와 추가 영상 레이어
+- 자막 레인, 위치, 글꼴, 색상, 배경, 외곽선과 겹침 검사
+- 브라우저 안에서 실행하는 AudSeg 빈 타이밍
+- 사람이 완성한 컷을 유지한 채 노래 가사 타이밍을 1/60초 단위로 검수하는
+  **에이전트로 자막 넣기** 프롬프트
+- 파일 제목과 저장 위치를 정하는 영상 내보내기
+- 명시적 임시저장·복구·폐기와 로컬 캐시 관리
+
+AI 또는 Whisper가 만든 자막은 초안입니다. 컷 구도와 최종 자막은 사람이
+검수해야 합니다.
+
+현재 공개용 영상 준비 도구는 설치 크기와 생명주기를 예측 가능하게 유지하기
+위해 Whisper 모델을 포함하지 않습니다. 저장소의 기존 Whisper 코드는 로컬 개발
+및 이전 저장본 호환 경계이며 공개 웹 UI에서는 선택할 수 없습니다.
+
+## 온프레미스 웹 배포
+
+웹 배포는 정적 산출물만 사용합니다.
 
 ```bash
 npm ci --ignore-scripts
 npm run build
-npm run build:desktop
-npm run validate
-npm test
+npm run package:web
 ```
 
-현재 OS용 unsigned 개발 패키지를 검증할 때만 다음 명령을 사용합니다. 이 명령은
-고정한 Electron과 미디어 sidecar를 내려받을 수 있으며 결과를 공개 release로
-업로드하지 않습니다.
+Cloudflare Tunnel은 정적 origin 서버로 연결하고 외부 Host를
+`kirinuki.eff0rtchung.kr`로 유지합니다. 공개 응답은 쿠키, 세션, analytics,
+보고 endpoint를 만들지 않아야 합니다.
+
+로컬 관리 Tunnel을 쓴다면 최소 ingress 경계는 다음과 같습니다. 마지막 404
+catch-all을 유지하고 `httpHostHeader`로 정적 서버의 canonical Host 검사를
+통과시킵니다.
+
+```yaml
+ingress:
+  - hostname: kirinuki.eff0rtchung.kr
+    service: http://127.0.0.1:4330
+    originRequest:
+      httpHostHeader: kirinuki.eff0rtchung.kr
+  - service: http_status:404
+```
 
 ```bash
-npm run package:desktop
+npm run public-shell:start
+npm run public-shell:check -- https://kirinuki.eff0rtchung.kr
 ```
 
-공개 사이트와 앱 편집 산출물은 서로 다른 보안 경계입니다. 공개 산출물은 앱
-링크와 설치 폴백만 포함해야 하며 내부 편집 초기화, 내부 네트워크 주소, 내부
-서비스용 CSP 권한을 포함하면 배포를 차단합니다. 출시 점검은
-[`legal/WEB_DEPLOYMENT_CHECKLIST.md`](legal/WEB_DEPLOYMENT_CHECKLIST.md)를
-따릅니다.
+명령 이름의 `public-shell`은 기존 내부 이름이며, 현재 산출물은 소개 shell이
+아니라 시작 화면과 전체 편집기를 포함합니다. 실제 배포 전
+[웹 배포 체크리스트](legal/WEB_DEPLOYMENT_CHECKLIST.md)를 확인하세요.
 
-## 라이선스
+## 개발과 검증
 
-Kirinuki의 first-party 소스는 저장소 루트의 [UNLICENSE](UNLICENSE)를
-따릅니다. 번들된 글꼴·라이브러리, 실행 시 내려받는 구성요소와 시스템 도구는
-각자의 라이선스가 적용됩니다.
+일반 사용자는 아래 명령을 실행할 필요가 없습니다.
+
+```bash
+npm ci --ignore-scripts
+npm run typecheck
+npm run build
+npm run validate
+npm test
+npm run audit
+```
+
+현재 OS용 unsigned 엔진과 installer를 만들고 검사하려면 다음을 실행합니다.
+
+```bash
+npm run package:desktop:installer
+npm run test:package:desktop
+npm run test:package:desktop:installer
+```
+
+CI는 Linux x64, Windows x64, macOS ARM64에서 같은 소스를 typecheck하고 unit
+test를 실행합니다. 공통 native smoke는 격리된 사용자 상태에서 창 없는 실행,
+loopback health, 두 번째 실행의 멱등성, 정상 종료와 격리 임시 경로 정리를 검사합니다.
+설치 형식별 검증 범위는 서로 다릅니다. Windows는 임시 경로 silent install,
+실제 HKCU Run 등록·exact path/argument/enabled readback, Start Menu 대상 readback과
+엔진 실행 중 NSIS uninstall의 owned Run/StartupApproved 제거·외부 junction 보존을
+검사합니다. Linux는 deb를 설치한 뒤 격리된 실제 XDG 사용자 profile에서 autostart를
+확인하고, 엔진 실행 중 remove와 purge 및 package-owned 파일 부재를 검사합니다.
+실행 파일이 먼저 사라져도 managed XDG 항목은 다음 로그인 때 자기 항목만 회수합니다.
+macOS는 DMG를 read-only로 mount하고 `/Applications`에 복사해 실행한 다음 실행 중
+bundle 이동 감지·runtime 정리와 detach를 확인합니다. 실제 macOS 로그인 항목의
+사용자 승인과 기존 사용자 profile 정리는 비대화형 CI에서 검증하지 않습니다. Linux도 임의의
+기존 다중 사용자 profile이나 사용자 cache를 dpkg가 즉시 정리한다고 검증한 것은
+아닙니다. 실제 공개 VOD 네트워크 검증은 명시적으로
+켜는 fresh-state liveness smoke로 CHZZK·YouTube·SOOP을 각각 검사합니다.
+
+저장소 구조의 주요 경계는 다음과 같습니다.
+
+```text
+src/web/          시작 화면
+src/editor/       브라우저 편집기
+src/lib/          공유 도메인·시간축·저장 계약
+src/desktop/      화면 없는 로컬 엔진 패키지와 OS 생명주기
+scripts/          빌드·gateway·VOD materializer·검증 도구
+tests/            결정론적 unit/contract 테스트
+web/              생성된 정적 배포 산출물
+legal/            라이선스·배포·출시 게이트
+```
+
+## 오픈소스와 제3자 구성요소
+
+Kirinuki의 first-party 소스는 저장소 루트의 [UNLICENSE](UNLICENSE)를 따릅니다.
+필요에 맞게 읽고 고치고 재배포할 수 있습니다. 번들 글꼴·라이브러리·미디어
+도구에는 각자의 라이선스와 소스 제공 의무가 적용됩니다.
 
 - [전체 제3자 고지](legal/THIRD_PARTY_NOTICES.md)
+- [웹 제3자 고지](legal/WEB_THIRD_PARTY_NOTICES.md)
 - [오픈소스 인벤토리](legal/OPEN_SOURCE_INVENTORY.md)
 - [런타임 의존성 경계](legal/RUNTIME_DEPENDENCIES.md)
 - [상업 이용 정책](legal/COMMERCIAL_USE_POLICY.md)
+- [데스크톱 바이너리 출시 게이트](legal/DESKTOP_BINARY_RELEASE_GATE.md)
+- [기여 가이드](CONTRIBUTING.md)
+- [프로젝트 거버넌스](GOVERNANCE.md)
+- [보안 정책과 신고](SECURITY.md)
+- [상표·브랜드 정책](TRADEMARKS.md)
 
-문의: **lostfragment@naver.com**
+보안 문제나 문의: **lostfragment@naver.com**

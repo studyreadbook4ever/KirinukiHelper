@@ -17,7 +17,7 @@ import path from "node:path";
 import { readPackageSourceFile } from "./package-source-reader.js";
 
 export const KIRINUKI_PACKAGE_NAME = "kirinuki-app";
-export const KIRINUKI_RELEASE_SCHEMA_VERSION = 1;
+export const KIRINUKI_RELEASE_SCHEMA_VERSION = 2;
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const GIT_COMMIT_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
@@ -44,14 +44,12 @@ export interface KirinukiReleaseRecord {
   };
   readonly artifacts: {
     readonly web: KirinukiReleaseArtifact;
-    readonly linux: KirinukiReleaseArtifact;
   };
 }
 
 export interface WriteKirinukiReleaseRecordOptions {
   readonly distDirectory: string;
   readonly expectedArtifacts: {
-    readonly linux: KirinukiReleaseArtifact;
     readonly web: KirinukiReleaseArtifact;
   };
   readonly expectedPackageLockSha256: string;
@@ -202,13 +200,11 @@ export async function inspectChecksummedArtifact(
 
 export function buildKirinukiReleaseRecord({
   identity,
-  linux,
   packageLockSha256,
   sourceRevision,
   web
 }: {
   readonly identity: KirinukiPackageIdentity;
-  readonly linux: KirinukiReleaseArtifact;
   readonly packageLockSha256: string;
   readonly sourceRevision: string;
   readonly web: KirinukiReleaseArtifact;
@@ -218,10 +214,8 @@ export function buildKirinukiReleaseRecord({
   invariant(GIT_COMMIT_PATTERN.test(sourceRevision), "릴리스 git commit SHA가 올바르지 않습니다.");
   invariant(SHA256_PATTERN.test(packageLockSha256), "package-lock SHA-256이 올바르지 않습니다.");
   const expectedWebFilename = `kirinuki-web-v${identity.version}.zip`;
-  const expectedLinuxFilename = `kirinuki-linux-v${identity.version}.tar.gz`;
   for (const [label, artifact, expectedFilename] of [
-    ["web", web, expectedWebFilename],
-    ["linux", linux, expectedLinuxFilename]
+    ["web", web, expectedWebFilename]
   ] as const) {
     invariant(artifact.file === expectedFilename, `${label} artifact 이름과 제품 버전이 다릅니다.`);
     invariant(
@@ -242,8 +236,7 @@ export function buildKirinukiReleaseRecord({
       packageLockSha256
     },
     artifacts: {
-      web,
-      linux
+      web
     }
   };
 }
@@ -320,21 +313,13 @@ export async function writeKirinukiReleaseRecord({
     sha256Bytes(packageLockContent) === expectedPackageLockSha256,
     "release commit의 package-lock.json이 릴리스 시작 시 고정한 source snapshot과 다릅니다."
   );
-  const [web, linux] = await Promise.all([
-    inspectChecksummedArtifact(
-      requestedDistDirectory,
-      `kirinuki-web-v${identity.version}.zip`
-    ),
-    inspectChecksummedArtifact(
-      requestedDistDirectory,
-      `kirinuki-linux-v${identity.version}.tar.gz`
-    )
-  ]);
+  const web = await inspectChecksummedArtifact(
+    requestedDistDirectory,
+    `kirinuki-web-v${identity.version}.zip`
+  );
   assertArtifactMatches(web, expectedArtifacts.web, "공개 web");
-  assertArtifactMatches(linux, expectedArtifacts.linux, "Linux");
   const record = buildKirinukiReleaseRecord({
     identity,
-    linux,
     packageLockSha256: expectedPackageLockSha256,
     sourceRevision,
     web
@@ -391,8 +376,6 @@ export async function writeKirinukiReleaseRecord({
   const expectedReleaseFiles = [
     web.file,
     web.checksumFile,
-    linux.file,
-    linux.checksumFile,
     manifestFilename,
     checksumFilename
   ].sort();
@@ -404,7 +387,7 @@ export async function writeKirinukiReleaseRecord({
   }).sort();
   invariant(
     JSON.stringify(actualReleaseFiles) === JSON.stringify(expectedReleaseFiles),
-    "릴리스 dist 파일 목록이 현재 버전의 web/Linux/manifest와 각 checksum 6개로 정확히 닫혀 있지 않습니다."
+    "릴리스 dist 파일 목록이 현재 버전의 web/manifest와 각 checksum 4개로 정확히 닫혀 있지 않습니다."
   );
 
   return {

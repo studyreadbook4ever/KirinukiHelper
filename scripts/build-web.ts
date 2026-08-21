@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 
 import { PAPERLOGY_FONT } from "./paperlogy-font.js";
 import { PRETENDARD_FONT } from "./pretendard-font.js";
-import { buildStreamingCompanion } from "./build-streaming-companion.js";
 import { buildWebJavaScript } from "./web-javascript-build.js";
+import type {
+  LocalMediaEngineReleaseChannel
+} from "../src/editor/local-media-engine-release.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const webRoot = path.join(root, "web");
@@ -26,7 +28,11 @@ async function assertSha256(
   }
 }
 
-export async function buildWebDistribution(): Promise<void> {
+export async function buildWebDistribution({
+  engineRelease = null
+}: {
+  readonly engineRelease?: Readonly<LocalMediaEngineReleaseChannel> | null;
+} = {}): Promise<void> {
   await Promise.all([
     mkdir(path.join(webRoot, "editor", "fonts"), { recursive: true }),
     mkdir(path.join(webRoot, "licenses"), { recursive: true })
@@ -55,10 +61,10 @@ export async function buildWebDistribution(): Promise<void> {
     )
   ]);
 
-  await Promise.all([
-    buildWebJavaScript({ rootDirectory: root }),
-    buildStreamingCompanion({ rootDirectory: root })
-  ]);
+  await buildWebJavaScript({
+    rootDirectory: root,
+    engineRelease
+  });
 
   await Promise.all([
     copyFile(
@@ -92,10 +98,18 @@ export async function buildWebDistribution(): Promise<void> {
     copyFile(
       path.join(root, PAPERLOGY_FONT.sourceLicensePath),
       path.join(webRoot, PAPERLOGY_FONT.webLicensePath)
+    ),
+    copyFile(
+      path.join(root, "public-shell", "_headers"),
+      path.join(webRoot, "_headers")
+    ),
+    copyFile(
+      path.join(root, "public-shell", ".popovic-hosts"),
+      path.join(webRoot, ".popovic-hosts")
     )
   ]);
 
-  console.log("Kirinuki 앱 화면과 내부 Player Bridge 빌드 완료");
+  console.log("Kirinuki 웹 편집기 빌드 완료");
 }
 
 const invokedPath = process.argv[1];

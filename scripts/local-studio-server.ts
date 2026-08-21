@@ -53,7 +53,6 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 const MAX_HEALTH_RESPONSE_BYTES = 64 * 1024;
 
 export interface LocalStudioServerCliOptions {
-  enableLegacyMigration: boolean;
   foreground: boolean;
   json: boolean;
   studioOrigin: KirinukiAppOrigin;
@@ -91,10 +90,10 @@ function hasErrorCode(
 
 export function helpText(): string {
   return `
-Kirinuki 앱 UI 엔진
+Kirinuki 웹 편집기 개발 서버
 
 사용법:
-  node --import tsx scripts/local-studio-server.ts start [--foreground] [--json] [--enable-legacy-migration]
+  node --import tsx scripts/local-studio-server.ts start [--foreground] [--json]
   node --import tsx scripts/local-studio-server.ts status [--json]
   node --import tsx scripts/local-studio-server.ts stop [--json]
 
@@ -102,9 +101,8 @@ Kirinuki 앱 UI 엔진
   127.0.0.1:4320에만 바인딩하고 정확한 Host만 받습니다.
   PID, Linux process start time, boot ID, CLI path와 instance nonce가 모두
   일치할 때만 실행 중인 서버로 인정하거나 종료합니다.
-  legacy Extension 저장소 이동 endpoint는 기본으로 꺼져 있으며,
-  필요한 한 번의 start에 --enable-legacy-migration을 명시해야만 열립니다.
-  공개 도메인은 앱 실행·설치 안내만 제공하며 이 내부 서버에 연결하지 않습니다.
+  4320은 소스 체크아웃의 개발·회귀 테스트 전용입니다.
+  공개 제품의 전체 편집기는 https://kirinuki.eff0rtchung.kr 에서 실행됩니다.
 `.trim();
 }
 
@@ -114,7 +112,6 @@ export function parseLocalStudioServerArgs(
   const values = argv.map((value) => String(value));
   const command = values.shift() || "help";
   const options: LocalStudioServerCliOptions = {
-    enableLegacyMigration: false,
     foreground: false,
     json: false,
     studioOrigin: KIRINUKI_LOCAL_STUDIO_ORIGIN
@@ -129,10 +126,6 @@ export function parseLocalStudioServerArgs(
       options.foreground = true;
       continue;
     }
-    if (value === "--enable-legacy-migration") {
-      options.enableLegacyMigration = true;
-      continue;
-    }
     if (value === "--json") {
       options.json = true;
       continue;
@@ -145,9 +138,6 @@ export function parseLocalStudioServerArgs(
   }
   if (normalizedCommand !== "start" && options.foreground) {
     throw new TypeError("--foreground는 start에서만 사용할 수 있습니다.");
-  }
-  if (normalizedCommand !== "start" && options.enableLegacyMigration) {
-    throw new TypeError("--enable-legacy-migration은 start에서만 사용할 수 있습니다.");
   }
   return { command: normalizedCommand, options };
 }
@@ -455,8 +445,7 @@ async function foregroundStart(
     server = createLocalStudioHttpServer({
       repoRoot: paths.repoRoot,
       instanceNonce: ownRecord.instanceNonce,
-      studioOrigin: options.studioOrigin,
-      enableLegacyMigration: options.enableLegacyMigration
+      studioOrigin: options.studioOrigin
     });
     await listen(server);
     const browserUrl = studioBrowserUrl(options.studioOrigin);
@@ -567,10 +556,7 @@ export async function startLocalStudioServer(
       typescriptCommandArgs(
         cliPath,
         "start",
-        "--foreground",
-        ...(options.enableLegacyMigration
-          ? ["--enable-legacy-migration"]
-          : [])
+        "--foreground"
       ),
       {
         cwd: packageRoot,

@@ -33,6 +33,7 @@ import {
   MINIMUM_VOD_NODE_VERSION,
   MINIMUM_VOD_PYTHON_VERSION,
   PINNED_YT_DLP,
+  VOD_HEALTH_SCHEMA,
   VOD_LOOPBACK_HOST,
   commandLineRunsExactVodCli,
   createVodInstanceNonce,
@@ -1158,7 +1159,7 @@ export interface VodRuntimeStatusReport {
   managed: boolean;
   managerPid: number | null;
   healthIdentity: {
-    schema: "chzzk-kirinuki-caption-agent/health-v1";
+    schema: typeof VOD_HEALTH_SCHEMA;
     exactOriginAndManagedValidated: boolean;
     runtimeKindVersionExposedByGateway: boolean;
     runtime: Readonly<ManagedVodHealthIdentity> | null;
@@ -1243,7 +1244,7 @@ export async function collectVodRuntimeStatus(
     managed,
     managerPid: managed ? manager?.pid || null : null,
     healthIdentity: {
-      schema: "chzzk-kirinuki-caption-agent/health-v1",
+      schema: VOD_HEALTH_SCHEMA,
       exactOriginAndManagedValidated: gateway,
       runtimeKindVersionExposedByGateway: Boolean(health),
       runtime: health

@@ -15,9 +15,10 @@ export type KirinukiStudioOrigin =
   | typeof KIRINUKI_PUBLIC_STUDIO_ORIGIN;
 
 /**
- * The installed application is the only document allowed to talk to private
- * media engines.  The public origin is a launch/install shell, not a runtime
- * client.
+ * Legacy loopback document origin retained for local development and migration
+ * tooling. The production editor itself runs at the fixed public HTTPS origin;
+ * its separately installed background engine is bound to that exact origin by
+ * the gateway protocol rather than by moving the editor into a desktop window.
  */
 export type KirinukiAppOrigin = typeof KIRINUKI_LOCAL_STUDIO_ORIGIN;
 
@@ -67,8 +68,8 @@ export function requireKirinukiAppOrigin(
 }
 
 /**
- * Runtime configuration deliberately has no public opt-in.  Omitting the
- * value selects the one app origin; every other value fails closed.
+ * Legacy local-app configuration deliberately has no public opt-in. Production
+ * browser documents use `resolveKirinukiStudioOrigin` instead.
  */
 export function resolveKirinukiAppOrigin(
   value: unknown = undefined

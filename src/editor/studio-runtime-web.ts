@@ -68,6 +68,52 @@ export type ExclusiveStudioProjectAccessResult<T> =
   | { acquired: false }
   | { acquired: true; value: T };
 
+export type StudioEditorEntryResolution =
+  | { kind: "fresh-capture" }
+  | { kind: "same-session-current" }
+  | { kind: "saved-current" }
+  | {
+    kind: "error";
+    reason:
+      | "new-project-collision"
+      | "missing-capture-seed"
+      | "missing-saved-project";
+  };
+
+/**
+ * Classifies an editor entry only from state captured behind the project
+ * writer lock. In particular, an editor-new CURRENT is safe to reopen only
+ * when this exact editing-session checkpoint proves that no project existed
+ * at entry. A newly captured checkpoint whose baseline already has a project
+ * remains a real fresh-ID collision.
+ */
+export function resolveStudioEditorEntry({
+  purpose,
+  hasCaptureSeed,
+  hasCurrentProject,
+  checkpointBaselineHasProject
+}: {
+  purpose: UsagePolicyPurpose;
+  hasCaptureSeed: boolean;
+  hasCurrentProject: boolean;
+  checkpointBaselineHasProject: boolean;
+}): StudioEditorEntryResolution {
+  if (purpose !== "editor-new") {
+    return hasCurrentProject
+      ? { kind: "saved-current" }
+      : { kind: "error", reason: "missing-saved-project" };
+  }
+  if (checkpointBaselineHasProject) {
+    return { kind: "error", reason: "new-project-collision" };
+  }
+  if (hasCurrentProject) {
+    return { kind: "same-session-current" };
+  }
+  return hasCaptureSeed
+    ? { kind: "fresh-capture" }
+    : { kind: "error", reason: "missing-capture-seed" };
+}
+
 export function studioRuntimeKind(): "web" {
   return "web";
 }

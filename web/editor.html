@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <meta name="referrer" content="strict-origin-when-cross-origin">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src https://chzzk.naver.com https://www.youtube-nocookie.com https://vod.sooplive.com; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: http://127.0.0.1:4319; worker-src 'self' blob:; connect-src 'self' http://127.0.0.1:4319">
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki 영상 편집기</title>
@@ -14,10 +14,9 @@
   <body>
     <main id="editor-app-gate" class="editor-policy-gate" aria-labelledby="editor-app-gate-title" hidden>
       <div class="editor-policy-gate-card">
-        <h1 id="editor-app-gate-title">Kirinuki 앱에서만 편집할 수 있습니다</h1>
-        <p>이 공개 페이지에서는 편집기와 VOD 처리 기능을 시작하지 않습니다. PC에서 Kirinuki 앱을 설치하고 실행해 주세요.</p>
-        <a class="button primary" href="kirinuki://open">Kirinuki 앱에서 열기</a>
-        <a class="button secondary" href="https://github.com/studyreadbook4ever/KirinukiHelper#설치" target="_blank" rel="noopener noreferrer">설치 방법 보기</a>
+        <h1 id="editor-app-gate-title">이 주소에서는 편집기를 열 수 없습니다</h1>
+        <p>정식 Kirinuki 웹사이트에서 다시 시작해 주세요.</p>
+        <a class="button primary" href="https://kirinuki.eff0rtchung.kr/">Kirinuki로 이동</a>
       </div>
     </main>
 
@@ -496,7 +495,7 @@
             <div class="ai-title">
               <div>
                 <strong>자막 타이밍 자동 만들기</strong>
-                <span>설치 없이 타이밍만 만들거나, 이 PC의 Whisper로 음성을 받아쓸 수 있습니다</span>
+                <span>설치 없이 소리가 있는 구간을 찾아 빈 자막 타이밍을 만듭니다</span>
               </div>
             </div>
             <label class="select-field">
@@ -532,7 +531,10 @@
                 aria-selected="false"
                 aria-controls="whisper-provider-panel"
                 aria-expanded="false"
+                aria-hidden="true"
                 tabindex="-1"
+                hidden
+                disabled
               >
                 <strong>Whisper</strong>
                 <small>내 PC 연결</small>
@@ -568,10 +570,10 @@
               hidden
             >
               <div class="whisper-connect-heading">
-                <strong>이 PC의 Whisper로 글과 타이밍 만들기</strong>
+                <strong>Whisper 자동 자막</strong>
                 <p>
-                  버튼을 누르면 Kirinuki 앱이 내장 자막 엔진을 확인하고
-                  실행 중인 Whisper 모델에 자동으로 연결합니다.
+                  현재 공개용 영상 준비 도구는 VOD 구간 준비만 담당하며
+                  Whisper 모델을 포함하지 않습니다.
                 </p>
               </div>
               <button
@@ -579,22 +581,21 @@
                 class="button whisper-connect-button"
                 type="button"
                 aria-describedby="whisper-connection-help"
+                disabled
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5M20 4v5h-5M20 12a8 8 0 0 1-14 5M4 20v-5h5"/></svg>
-                이 PC의 Whisper 자동 연결
+                현재 공개판에서 제공하지 않음
               </button>
               <p id="whisper-connection-help" class="whisper-connection-help">
-                파일이나 실행 경로를 고를 필요가 없습니다. 연결 토큰은 현재 탭 메모리에만 있고,
-                음성은 인터넷으로 보내지 않고 이 PC 안의 Whisper에만 전달됩니다.
+                AudSeg로 빈 타이밍을 만든 뒤 직접 문구를 채우거나,
+                ‘에이전트로 자막 넣기’ 프롬프트를 사용해 주세요.
               </p>
               <details class="whisper-connection-location">
-                <summary>자동 연결이 되지 않아요</summary>
+                <summary>왜 사용할 수 없나요?</summary>
                 <div>
                   <p>
-                    AudSeg 방식으로 설치한 앱은 재실행만으로 Whisper가 추가되지 않습니다.
-                    현재 작업을 ‘지금 저장’한 뒤 앱 폴더에서 <code>./setup.sh --mode whisper</code>를
-                    한 번 완료하고 Kirinuki를 다시 열어 주세요. 이미 Whisper로 설치했다면
-                    앱을 다시 연 뒤 같은 버튼으로 연결 상태를 확인하세요.
+                    최초 한 번 설치하는 도구를 작고 예측 가능하게 유지하기 위해
+                    공개 설치판은 영상 구간 취득과 검증만 포함합니다.
                   </p>
                 </div>
               </details>
@@ -605,12 +606,12 @@
                 role="status"
                 aria-live="polite"
                 aria-atomic="true"
-              >아직 연결하지 않았습니다 · 버튼을 누르면 자동으로 확인합니다</p>
+              >현재 공개 설치판에서 제공하지 않습니다</p>
 
               <div class="whisper-model-card" aria-labelledby="whisper-model-label">
                 <span id="whisper-model-label">연결된 모델</span>
-                <strong id="whisper-model-summary">연결 후 자동으로 확인합니다</strong>
-                <small>모델 이름은 Kirinuki가 내장 자막 엔진의 실제 실행 상태를 검증한 뒤에만 표시됩니다.</small>
+                <strong id="whisper-model-summary">연결된 모델 없음</strong>
+                <small>공개용 영상 준비 도구에는 Whisper 모델이 포함되지 않습니다.</small>
               </div>
 
               <details id="whisper-model-catalog" class="caption-agent-policy whisper-model-catalog">
@@ -627,14 +628,13 @@
               </details>
 
               <details id="caption-advanced-settings" class="caption-agent-policy caption-provider-settings">
-                <summary>내장 Whisper 문제 해결</summary>
+                <summary>Whisper 개발 기능 정보</summary>
                 <div class="caption-provider-fields">
                   <p class="caption-agent-advanced-intro">
-                    AudSeg 설치에서 자동 연결이 실패하면 현재 작업을 ‘지금 저장’한 뒤
-                    <code>./setup.sh --mode whisper</code>로 Whisper를 준비하고 앱을 다시 열어 주세요.
-                    음성은 이 기기 안의 내장 Whisper에서만 처리됩니다.
+                    이 영역은 기존 로컬 개발 빌드와 저장본의 호환성을 위해 남아 있으며
+                    공개 웹 편집기에서는 선택할 수 없습니다.
                   </p>
-                  <button id="test-caption-agent" class="small-action caption-agent-test" type="button">내장 Whisper 다시 확인</button>
+                  <button id="test-caption-agent" class="small-action caption-agent-test" type="button" disabled>Whisper 미지원</button>
                   <input id="caption-agent-token" type="hidden" value="">
                   <strong class="caption-agent-rules-title">자동 자막 원칙</strong>
                   <ul>
@@ -1457,6 +1457,35 @@
           <span id="job-percent">0%</span>
           <button id="cancel-job" type="button">취소</button>
         </div>
+      </div>
+    </dialog>
+
+    <dialog id="local-media-engine-dialog" class="local-media-engine-dialog" aria-labelledby="local-media-engine-title" aria-describedby="local-media-engine-description">
+      <div class="local-media-engine-card">
+        <div class="local-media-engine-mark" aria-hidden="true">K</div>
+        <h2 id="local-media-engine-title">처음 한 번만 준비하면 됩니다</h2>
+        <p id="local-media-engine-description">
+          선택한 VOD 구간을 서버를 거치지 않고 이 PC로 직접 준비하는 작은 도구입니다.
+          설치 뒤에는 별도 앱을 열거나 연결을 설정할 필요 없이 이 사이트의 버튼만 사용하면 됩니다.
+        </p>
+        <ol>
+          <li>브라우저가 로컬 네트워크 접근을 물으면 <strong>허용</strong>합니다.</li>
+          <li>이미 설치되어 있으면 <strong>이 PC 연결</strong>을 눌러 앱 identity를 한 번 확인합니다.</li>
+          <li>아직 설치하지 않았다면 이 PC용 설치 파일을 실행한 뒤 이 화면에서 <strong>이 PC 연결</strong>을 한 번 누릅니다.</li>
+        </ol>
+        <p id="local-media-engine-unsupported" class="local-media-engine-unsupported" hidden>
+          현재는 Windows 64비트, Apple Silicon macOS 15 이상, Debian/Ubuntu Linux 64비트만 지원합니다.
+        </p>
+        <p id="local-media-engine-status" class="local-media-engine-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <div class="local-media-engine-actions">
+          <button id="local-media-engine-cancel" class="button secondary" type="button">내 파일 직접 연결 사용</button>
+          <button id="local-media-engine-reset" class="button secondary" type="button" hidden>기기 연결 초기화</button>
+          <button id="local-media-engine-retry" class="button secondary" type="button">설치 완료 · 다시 확인</button>
+          <a id="local-media-engine-download" class="button primary" href="#" target="_blank" rel="noopener noreferrer">
+            <span id="local-media-engine-download-label">이 PC용 한 번 설치</span>
+          </a>
+        </div>
+        <p class="local-media-engine-privacy">로그인이나 사용기록 전송은 없습니다. 받은 영상 조각과 편집 데이터는 이 기기에만 남습니다.</p>
       </div>
     </dialog>
 

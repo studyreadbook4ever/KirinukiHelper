@@ -10,6 +10,10 @@ import {
   resolveKirinukiAppOrigin
 } from "../src/lib/local-runtime-origin.js";
 import type { KirinukiAppOrigin } from "../src/lib/local-runtime-origin.js";
+import {
+  LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA
+} from "../src/lib/local-media-engine-contract.js";
 
 export const LOCAL_VOD_RUNTIME_SCHEMA =
   "kirinuki-local-vod-runtime/v1";
@@ -20,9 +24,9 @@ export const DEFAULT_VOD_GATEWAY_PORT = 4319;
 export const MINIMUM_VOD_NODE_VERSION = "22.17.0";
 export const MINIMUM_VOD_PYTHON_VERSION = "3.11.0";
 export const VOD_HEALTH_SCHEMA =
-  "chzzk-kirinuki-caption-agent/health-v1";
+  LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA;
 export const VOD_REQUEST_SCHEMA =
-  "chzzk-kirinuki-caption-request/v1";
+  LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL;
 export const VOD_RUNTIME_KINDS = Object.freeze([
   "vod-only",
   "caption-vod"

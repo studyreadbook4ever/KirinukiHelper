@@ -18,14 +18,22 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { CAPTION_AGENT_REQUEST_SCHEMA_ID } from "../src/caption-agent/protocol.js";
 import {
   DESKTOP_NATIVE_SMOKE_ARGUMENT,
+  DESKTOP_NATIVE_SMOKE_AUTOSTART_MODE_ENV,
   DESKTOP_NATIVE_SMOKE_IPC_SCHEMA,
   DESKTOP_NATIVE_SMOKE_ROOT_ENV,
   DESKTOP_NATIVE_SMOKE_ROOT_PREFIX,
-  DESKTOP_NATIVE_SMOKE_TOKEN_ENV
+  DESKTOP_NATIVE_SMOKE_TOKEN_ENV,
+  DESKTOP_NATIVE_SMOKE_USER_DATA_DIRECTORY
 } from "../src/desktop/native-smoke-contract.js";
+import {
+  ENGINE_AUTOSTART_SCHEMA,
+  ENGINE_BACKGROUND_ARGUMENT,
+  LINUX_ENGINE_AUTOSTART_FILE,
+  WINDOWS_ENGINE_LOGIN_ITEM_NAME,
+  isManagedLinuxEngineAutostartContent
+} from "../src/desktop/login-autostart.js";
 import {
   DESKTOP_PACKAGED_TARGETS,
   DESKTOP_YT_DLP_RELEASE,
@@ -39,9 +47,23 @@ import type {
   DesktopPlatform
 } from "../src/desktop/runtime-spec.js";
 import {
-  KIRINUKI_GATEWAY_ORIGIN_BINDING,
-  KIRINUKI_LOCAL_STUDIO_ORIGIN
+  KIRINUKI_PUBLIC_STUDIO_ORIGIN
 } from "../src/lib/local-runtime-origin.js";
+import {
+  LOCAL_MEDIA_ENGINE_API_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_PRODUCT,
+  LOCAL_MEDIA_ENGINE_VOD_RUNTIME_SCHEMA,
+  isLocalMediaEngineVersion
+} from "../src/lib/local-media-engine-contract.js";
+import {
+  LOCAL_MEDIA_ENGINE_AUTHENTICATED_HEALTH_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+  freshLocalMediaEngineChallenge,
+  localMediaEnginePairingUrl,
+  parseLocalMediaEngineDeviceProof,
+  parseLocalMediaEnginePairingRequest,
+  parseLocalMediaEngineSessionEncryptionOffer
+} from "../src/lib/local-media-engine-auth.js";
 import {
   CAPTION_AGENT_HEALTH_SCHEMA_ID,
   DEFAULT_CAPTION_GATEWAY_PORT
@@ -52,10 +74,9 @@ import {
   runExternalProcess
 } from "./external-vod-materializer.js";
 import {
-  DEFAULT_STUDIO_PORT,
-  LOCAL_STUDIO_HEALTH_SCHEMA,
-  LOCAL_STUDIO_SERVER_SCHEMA
-} from "./local-studio-server-core.js";
+  windowsPowerShellEnvironment,
+  windowsPowerShellExecutable
+} from "./windows-powershell-environment.js";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const APP_START_TIMEOUT_MS = 60_000;
@@ -68,16 +89,43 @@ const HTTP_REQUEST_TIMEOUT_MS = 2_000;
 const MAX_HTTP_RESPONSE_BYTES = 64 * 1024;
 const MAX_APP_OUTPUT_BYTES = 512 * 1024;
 const TOOL_TIMEOUT_MS = 30_000;
+const LEGACY_STUDIO_PORT = 4320;
 const PORTS = Object.freeze([
   DEFAULT_CAPTION_GATEWAY_PORT,
-  DEFAULT_STUDIO_PORT
+  LEGACY_STUDIO_PORT
 ]);
+const SMOKE_XDG_DIRECTORIES = Object.freeze({
+  config: "xdg config-사용자",
+  cache: "xdg cache-사용자",
+  data: "xdg data-사용자",
+  state: "xdg state-사용자",
+  runtime: "xdg runtime-사용자"
+});
 
 export interface ProcessIdentity {
   readonly pid: number;
   readonly parentPid: number;
   readonly started: string;
 }
+
+export interface DesktopNativeBrowserSmokeContext {
+  readonly launchPairingUrl: (url: string) => Promise<void>;
+}
+
+export type DesktopNativeBrowserSmoke = (
+  context: Readonly<DesktopNativeBrowserSmokeContext>
+) => Promise<unknown>;
+
+export interface DesktopNativeTerminationSmokeContext {
+  /** Exact isolated identity environment inherited by the running primary. */
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+  readonly executablePath: string;
+  readonly rootProcessId: number;
+}
+
+export type DesktopNativeTerminationSmoke = (
+  context: Readonly<DesktopNativeTerminationSmokeContext>
+) => Promise<unknown>;
 
 interface AppOutput {
   stdout: string;
@@ -163,11 +211,13 @@ function currentTarget(): DesktopBundleTarget {
   return target as DesktopBundleTarget;
 }
 
-function packagePaths(target: DesktopBundleTarget): Readonly<{
-  packageRoot: string;
-  executable: string;
-  resourcesRoot: string;
-}> {
+export interface DesktopNativePackagePaths {
+  readonly packageRoot: string;
+  readonly executable: string;
+  readonly resourcesRoot: string;
+}
+
+function packagePaths(target: DesktopBundleTarget): Readonly<DesktopNativePackagePaths> {
   const packageRoot = path.join(
     repositoryRoot,
     "dist",
@@ -388,6 +438,33 @@ async function verifyPackagedTools(
   }
 }
 
+async function verifyMacBackgroundAgentMetadata(
+  packageRoot: string,
+  target: DesktopBundleTarget
+): Promise<void> {
+  if (target !== "darwin-arm64") {
+    return;
+  }
+  const infoPlistPath = path.join(
+    packageRoot,
+    "Kirinuki.app",
+    "Contents",
+    "Info.plist"
+  );
+  await assertRegularPath(infoPlistPath, "file", "packaged macOS Info.plist");
+  const infoPlist = await readFile(infoPlistPath, "utf8");
+  invariant(
+    (infoPlist.match(/<key>LSUIElement<\/key>/gu) || []).length === 1
+      && /<key>LSUIElement<\/key>\s*<true\s*\/>/u.test(infoPlist),
+    "packaged macOS 앱이 LSUIElement=true인 background agent가 아닙니다."
+  );
+  invariant(
+    (infoPlist.match(/<key>CFBundleIdentifier<\/key>/gu) || []).length === 1
+      && /<key>CFBundleIdentifier<\/key>\s*<string>kr\.eff0rtchung\.kirinuki<\/string>/u.test(infoPlist),
+    "packaged macOS 앱의 bundle identity가 정확하지 않습니다."
+  );
+}
+
 async function bindAllPorts(): Promise<void> {
   const servers: Server[] = [];
   try {
@@ -518,29 +595,69 @@ function record(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function validateStudioHealth(payloadValue: unknown): void {
-  const payload = record(payloadValue, "studio health");
-  const server = record(payload.server, "studio server health");
-  invariant(payload.schema === LOCAL_STUDIO_HEALTH_SCHEMA, "studio health schema가 다릅니다.");
-  invariant(payload.status === "ok" && payload.managed === true, "studio health 상태가 다릅니다.");
-  invariant(server.schema === LOCAL_STUDIO_SERVER_SCHEMA, "studio server schema가 다릅니다.");
-  invariant(server.host === "127.0.0.1" && server.port === DEFAULT_STUDIO_PORT, "studio binding이 다릅니다.");
-  invariant(server.studioOrigin === KIRINUKI_LOCAL_STUDIO_ORIGIN, "studio origin이 다릅니다.");
-  invariant(typeof server.instanceNonce === "string" && /^[A-Za-z0-9_-]{43}$/u.test(server.instanceNonce), "studio nonce가 다릅니다.");
-}
-
 function validateGatewayHealth(payloadValue: unknown): void {
   const payload = record(payloadValue, "gateway health");
+  const engine = record(payload.engine, "gateway engine identity");
   const vodRuntime = record(payload.vodRuntime, "gateway VOD runtime");
   const ytDlp = record(vodRuntime.ytDlp, "gateway yt-dlp identity");
+  const ejs = record(vodRuntime.ejs, "gateway EJS identity");
   invariant(payload.schema === CAPTION_AGENT_HEALTH_SCHEMA_ID, "gateway health schema가 다릅니다.");
   invariant(payload.status === "ok" && payload.managed === true, "gateway health 상태가 다릅니다.");
-  invariant(payload.originBinding === KIRINUKI_GATEWAY_ORIGIN_BINDING, "gateway origin binding이 다릅니다.");
-  invariant(vodRuntime.kind === "vod-only" && vodRuntime.ready === true, "gateway VOD runtime이 준비되지 않았습니다.");
+  invariant(payload.originBinding === "exact-public-studio", "gateway origin binding이 다릅니다.");
+  invariant(payload.authentication === "bearer-memory-capability", "gateway authentication identity가 다릅니다.");
+  invariant(
+    engine.backgroundStart === "ready"
+      && engine.product === LOCAL_MEDIA_ENGINE_PRODUCT
+      && engine.protocol === LOCAL_MEDIA_ENGINE_API_PROTOCOL
+      && isLocalMediaEngineVersion(engine.version),
+    "gateway local-engine protocol identity가 다릅니다."
+  );
+  invariant(
+    vodRuntime.schema === LOCAL_MEDIA_ENGINE_VOD_RUNTIME_SCHEMA
+      && vodRuntime.kind === "vod-only"
+      && vodRuntime.ready === true,
+    "gateway VOD runtime이 준비되지 않았습니다."
+  );
   invariant(ytDlp.version === DESKTOP_YT_DLP_RELEASE.version, "gateway yt-dlp identity가 다릅니다.");
+  invariant(typeof ejs.version === "string" && ejs.version.length > 0, "gateway EJS identity가 다릅니다.");
 }
 
-function processEnvironment(smokeRoot: string, token: string): NodeJS.ProcessEnv {
+async function requestAuthenticatedGatewayHealth(): Promise<unknown> {
+  const challenge = freshLocalMediaEngineChallenge();
+  const payloadValue = await requestJson(
+    DEFAULT_CAPTION_GATEWAY_PORT,
+    "/v1/health",
+    {
+      Origin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+      "X-Kirinuki-Protocol": LOCAL_MEDIA_ENGINE_AUTHENTICATED_HEALTH_PROTOCOL,
+      [LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER]: challenge
+    }
+  );
+  const payload = record(payloadValue, "authenticated gateway health");
+  const proof = parseLocalMediaEngineDeviceProof(payload.deviceProof);
+  const sessionEncryption = parseLocalMediaEngineSessionEncryptionOffer(
+    payload.sessionEncryption
+  );
+  const vodRuntime = record(payload.vodRuntime, "authenticated gateway VOD runtime");
+  invariant(
+    proof !== null
+      && proof.challenge === challenge
+      && proof.instanceNonce === vodRuntime.instanceNonce,
+    "gateway signed health proof가 fresh challenge/runtime에 묶이지 않았습니다."
+  );
+  invariant(
+    sessionEncryption !== null
+      && Date.parse(sessionEncryption.expiresAt) > Date.now(),
+    "gateway signed health의 one-shot session encryption offer가 올바르지 않습니다."
+  );
+  return payloadValue;
+}
+
+function processEnvironment(
+  smokeRoot: string,
+  token: string,
+  autostartMode: "isolated" | "production"
+): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { ...process.env };
   for (const key of [
     "ELECTRON_RUN_AS_NODE",
@@ -552,12 +669,13 @@ function processEnvironment(smokeRoot: string, token: string): NodeJS.ProcessEnv
   }
   environment[DESKTOP_NATIVE_SMOKE_ROOT_ENV] = smokeRoot;
   environment[DESKTOP_NATIVE_SMOKE_TOKEN_ENV] = token;
+  environment[DESKTOP_NATIVE_SMOKE_AUTOSTART_MODE_ENV] = autostartMode;
   if (process.platform !== "win32") {
-    environment.XDG_CONFIG_HOME = path.join(smokeRoot, "xdg-config");
-    environment.XDG_CACHE_HOME = path.join(smokeRoot, "xdg-cache");
-    environment.XDG_DATA_HOME = path.join(smokeRoot, "xdg-data");
-    environment.XDG_STATE_HOME = path.join(smokeRoot, "xdg-state");
-    environment.XDG_RUNTIME_DIR = path.join(smokeRoot, "xdg-runtime");
+    environment.XDG_CONFIG_HOME = path.join(smokeRoot, SMOKE_XDG_DIRECTORIES.config);
+    environment.XDG_CACHE_HOME = path.join(smokeRoot, SMOKE_XDG_DIRECTORIES.cache);
+    environment.XDG_DATA_HOME = path.join(smokeRoot, SMOKE_XDG_DIRECTORIES.data);
+    environment.XDG_STATE_HOME = path.join(smokeRoot, SMOKE_XDG_DIRECTORIES.state);
+    environment.XDG_RUNTIME_DIR = path.join(smokeRoot, SMOKE_XDG_DIRECTORIES.runtime);
   }
   return environment;
 }
@@ -590,36 +708,73 @@ function appCompletion(child: ChildProcess): Promise<AppExit> {
   });
 }
 
-function readyProcessCount(value: unknown, token: string): number | null {
+interface NativeReadyEvidence {
+  readonly processCount: number;
+  readonly windowCount: 0;
+}
+
+function readyEvidence(
+  value: unknown,
+  token: string,
+  expectedAutostartMethod: "electron-login-item" | "xdg-autostart" | "isolated-smoke"
+): NativeReadyEvidence | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   const message = value as Record<string, unknown>;
+  const autostart = message.autostart !== null
+    && typeof message.autostart === "object"
+    && !Array.isArray(message.autostart)
+    ? message.autostart as Record<string, unknown>
+    : null;
+  const gateway = message.gateway !== null
+    && typeof message.gateway === "object"
+    && !Array.isArray(message.gateway)
+    ? message.gateway as Record<string, unknown>
+    : null;
   if (
-    Object.keys(message).sort().join(",") !== "processCount,schema,token,type"
+    Object.keys(message).sort().join(",")
+      !== "autostart,gateway,processCount,schema,token,type,windowCount"
     || message.schema !== DESKTOP_NATIVE_SMOKE_IPC_SCHEMA
     || message.type !== "ready"
     || message.token !== token
     || !Number.isSafeInteger(message.processCount)
-    || Number(message.processCount) < 2
+    || Number(message.processCount) < 1
     || Number(message.processCount) > 64
+    || message.windowCount !== 0
+    || JSON.stringify(autostart) !== JSON.stringify({
+      argument: "--engine-background",
+      method: expectedAutostartMethod,
+      readBack: true,
+      registered: true,
+      schema: "kirinuki-engine-autostart/v1"
+    })
+    || JSON.stringify(gateway) !== JSON.stringify({
+      allowedOrigin: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+      port: DEFAULT_CAPTION_GATEWAY_PORT,
+      reusedExisting: false
+    })
   ) {
     return null;
   }
-  return Number(message.processCount);
+  return Object.freeze({
+    processCount: Number(message.processCount),
+    windowCount: 0
+  });
 }
 
 function waitForReady(
   child: ChildProcess,
   completion: Promise<AppExit>,
-  token: string
-): Promise<number> {
-  return withTimeout(new Promise<number>((resolve, reject) => {
+  token: string,
+  expectedAutostartMethod: "electron-login-item" | "xdg-autostart" | "isolated-smoke"
+): Promise<Readonly<NativeReadyEvidence>> {
+  return withTimeout(new Promise<Readonly<NativeReadyEvidence>>((resolve, reject) => {
     const onMessage = (message: unknown) => {
       cleanup();
-      const processCount = readyProcessCount(message, token);
-      if (processCount !== null) {
-        resolve(processCount);
+      const evidence = readyEvidence(message, token, expectedAutostartMethod);
+      if (evidence !== null) {
+        resolve(evidence);
       } else {
         reject(new Error("packaged app READY IPC가 정확하지 않습니다."));
       }
@@ -930,9 +1085,249 @@ async function terminateOwnedAppTree(
   });
 }
 
-async function runNativePackageSmoke(): Promise<void> {
-  const target = currentTarget();
-  const paths = packagePaths(target);
+function productionAutostartMethod(
+  target: DesktopBundleTarget
+): "electron-login-item" | "xdg-autostart" {
+  return target === "linux-x64" ? "xdg-autostart" : "electron-login-item";
+}
+
+function productionAutostartStatePath(
+  target: DesktopBundleTarget,
+  smokeRoot: string
+): string {
+  return target === "linux-x64"
+    ? path.join(
+      smokeRoot,
+      SMOKE_XDG_DIRECTORIES.config,
+      "autostart",
+      LINUX_ENGINE_AUTOSTART_FILE
+    )
+    : path.join(
+      smokeRoot,
+      DESKTOP_NATIVE_SMOKE_USER_DATA_DIRECTORY,
+      `engine-autostart-${target}.json`
+    );
+}
+
+async function pathIsAbsent(pathname: string): Promise<boolean> {
+  try {
+    await lstat(pathname);
+    return false;
+  } catch (error) {
+    if (
+      error instanceof Error
+      && "code" in error
+      && error.code === "ENOENT"
+    ) {
+      return true;
+    }
+    throw error;
+  }
+}
+
+async function windowsLoginItemRunValue(
+  cwd: string
+): Promise<string | null> {
+  invariant(process.platform === "win32", "Windows registry probe는 Windows 전용입니다.");
+  const powershell = windowsPowerShellExecutable(process.env);
+  const result = await runExternalProcess(powershell, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    [
+      "$ErrorActionPreference='Stop'",
+      "$key='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'",
+      `if (-not (Test-Path -LiteralPath $key)) { exit 3 }`,
+      `$item=Get-ItemProperty -LiteralPath $key`,
+      `$property=$item.PSObject.Properties['${WINDOWS_ENGINE_LOGIN_ITEM_NAME}']`,
+      `if ($null -eq $property) { exit 3 }`,
+      "$bytes=[Text.Encoding]::Unicode.GetBytes([string]$property.Value)",
+      "[Console]::Out.Write([Convert]::ToBase64String($bytes))"
+    ].join("; ")
+  ], {
+    cwd,
+    env: windowsPowerShellEnvironment(process.env),
+    shell: false,
+    timeoutMs: TOOL_TIMEOUT_MS
+  });
+  if (result.exitCode === 3) {
+    return null;
+  }
+  invariant(result.exitCode === 0, "Windows Run registry readback 명령이 실패했습니다.");
+  const encoded = result.stdout.trim();
+  invariant(/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded), "Windows Run registry readback encoding이 올바르지 않습니다.");
+  return Buffer.from(encoded, "base64").toString("utf16le");
+}
+
+async function windowsLoginItemApprovalValueExists(
+  cwd: string
+): Promise<boolean> {
+  invariant(process.platform === "win32", "Windows registry probe는 Windows 전용입니다.");
+  const powershell = windowsPowerShellExecutable(process.env);
+  const result = await runExternalProcess(powershell, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    [
+      "$ErrorActionPreference='Stop'",
+      "$key='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run'",
+      "if (-not (Test-Path -LiteralPath $key)) { exit 3 }",
+      "$item=Get-ItemProperty -LiteralPath $key",
+      `$property=$item.PSObject.Properties['${WINDOWS_ENGINE_LOGIN_ITEM_NAME}']`,
+      "if ($null -eq $property) { exit 3 }"
+    ].join("; ")
+  ], {
+    cwd,
+    env: windowsPowerShellEnvironment(process.env),
+    shell: false,
+    timeoutMs: TOOL_TIMEOUT_MS
+  });
+  if (result.exitCode === 3) {
+    return false;
+  }
+  invariant(result.exitCode === 0, "Windows StartupApproved registry readback 명령이 실패했습니다.");
+  return true;
+}
+
+async function assertWindowsProductionAutostartInitiallyAbsent(
+  cwd: string
+): Promise<void> {
+  const [runValue, approvalValueExists] = await Promise.all([
+    windowsLoginItemRunValue(cwd),
+    windowsLoginItemApprovalValueExists(cwd)
+  ]);
+  invariant(
+    runValue === null && !approvalValueExists,
+    "Windows production 자동실행 smoke 전에 Kirinuki 소유 registry 값이 이미 있습니다."
+  );
+}
+
+async function removeWindowsProductionAutostartAfterSmoke(
+  cwd: string,
+  executable: string
+): Promise<void> {
+  const [runValue, approvalValueExists] = await Promise.all([
+    windowsLoginItemRunValue(cwd),
+    windowsLoginItemApprovalValueExists(cwd)
+  ]);
+  if (runValue === null && !approvalValueExists) {
+    return;
+  }
+  const expectedQuoted = `"${executable}" ${ENGINE_BACKGROUND_ARGUMENT}`;
+  const expectedUnquoted = `${executable} ${ENGINE_BACKGROUND_ARGUMENT}`;
+  invariant(
+    runValue === null
+      || runValue === expectedQuoted
+      || runValue === expectedUnquoted,
+    "Windows production 자동실행 failure cleanup이 소유권 불명 Run 값을 발견해 제거를 거부했습니다."
+  );
+  const powershell = windowsPowerShellExecutable(process.env);
+  const result = await runExternalProcess(powershell, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    [
+      "$ErrorActionPreference='Stop'",
+      "$runKey='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'",
+      "$approvalKey='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run'",
+      `$name='${WINDOWS_ENGINE_LOGIN_ITEM_NAME}'`,
+      "if (Test-Path -LiteralPath $runKey) { Remove-ItemProperty -LiteralPath $runKey -Name $name -Force -ErrorAction SilentlyContinue }",
+      "if (Test-Path -LiteralPath $approvalKey) { Remove-ItemProperty -LiteralPath $approvalKey -Name $name -Force -ErrorAction SilentlyContinue }"
+    ].join("; ")
+  ], {
+    cwd,
+    env: windowsPowerShellEnvironment(process.env),
+    shell: false,
+    timeoutMs: TOOL_TIMEOUT_MS
+  });
+  invariant(result.exitCode === 0, "Windows production 자동실행 failure cleanup 명령이 실패했습니다.");
+  const [remainingRunValue, remainingApprovalValueExists] = await Promise.all([
+    windowsLoginItemRunValue(cwd),
+    windowsLoginItemApprovalValueExists(cwd)
+  ]);
+  invariant(
+    remainingRunValue === null && !remainingApprovalValueExists,
+    "Windows production 자동실행 failure cleanup readback이 실패했습니다."
+  );
+}
+
+async function assertProductionAutostartRegistered({
+  target,
+  paths,
+  smokeRoot
+}: {
+  readonly target: DesktopBundleTarget;
+  readonly paths: Readonly<DesktopNativePackagePaths>;
+  readonly smokeRoot: string;
+}): Promise<void> {
+  const statePath = productionAutostartStatePath(target, smokeRoot);
+  if (target === "linux-x64") {
+    const body = await readFile(statePath, "utf8");
+    invariant(
+      isManagedLinuxEngineAutostartContent(body)
+        && body.includes(`X-Kirinuki-Executable=${paths.executable}\n`)
+        && body.includes(`X-Kirinuki-Autostart-Path=${statePath}\n`),
+      "실제 Linux XDG 자동실행 readback이 설치 실행 파일과 다릅니다."
+    );
+    return;
+  }
+  const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+  invariant(
+    state.schema === ENGINE_AUTOSTART_SCHEMA
+      && state.target === target
+      && state.executablePath === paths.executable
+      && JSON.stringify(state.arguments) === JSON.stringify([ENGINE_BACKGROUND_ARGUMENT])
+      && state.registered === true,
+    "실제 login-item 관리 상태 readback이 설치 실행 파일과 다릅니다."
+  );
+  if (target === "win32-x64") {
+    const registryValue = await windowsLoginItemRunValue(smokeRoot);
+    invariant(registryValue !== null, "Windows HKCU Run 값이 등록되지 않았습니다.");
+    const expectedQuoted = `"${paths.executable}" ${ENGINE_BACKGROUND_ARGUMENT}`;
+    const expectedUnquoted = `${paths.executable} ${ENGINE_BACKGROUND_ARGUMENT}`;
+    invariant(
+      registryValue === expectedQuoted || registryValue === expectedUnquoted,
+      "Windows HKCU Run 값이 exact executable/background argument와 다릅니다."
+    );
+  }
+}
+
+async function assertProductionAutostartRemoved({
+  target,
+  smokeRoot
+}: {
+  readonly target: DesktopBundleTarget;
+  readonly smokeRoot: string;
+}): Promise<void> {
+  invariant(
+    await pathIsAbsent(productionAutostartStatePath(target, smokeRoot)),
+    "production 자동실행 관리 상태가 native smoke 종료 뒤 남았습니다."
+  );
+  if (target === "win32-x64") {
+    invariant(
+      await windowsLoginItemRunValue(smokeRoot) === null,
+      "Windows HKCU Run 값이 native smoke 제거 뒤 남았습니다."
+    );
+  }
+}
+
+export async function runNativePackageSmoke({
+  target = currentTarget(),
+  paths = packagePaths(target),
+  autostartMode = "isolated",
+  browserSmoke,
+  terminateWhileRunning
+}: {
+  readonly target?: DesktopBundleTarget;
+  readonly paths?: Readonly<DesktopNativePackagePaths>;
+  readonly autostartMode?: "isolated" | "production";
+  readonly browserSmoke?: DesktopNativeBrowserSmoke;
+  readonly terminateWhileRunning?: DesktopNativeTerminationSmoke;
+} = {}): Promise<void> {
+  invariant(target === currentTarget(), "native smoke target이 현재 OS/architecture와 다릅니다.");
   await Promise.all([
     assertRegularPath(paths.packageRoot, "directory", "desktop package root"),
     assertRegularPath(paths.resourcesRoot, "directory", "desktop resources root"),
@@ -947,20 +1342,25 @@ async function runNativePackageSmoke(): Promise<void> {
   let observedProcessCount = 0;
   let output: AppOutput | undefined;
   let smokeFailure: Error | undefined;
+  let windowsProductionRegistryWasClean = false;
+  let browserPairingLaunches = 0;
   const snapshotEnvironment = minimalToolEnvironment(paths.packageRoot);
   try {
-    await Promise.all([
-      "xdg-config",
-      "xdg-cache",
-      "xdg-data",
-      "xdg-state",
-      "xdg-runtime"
-    ].map((directory) => mkdir(path.join(smokeRoot, directory), {
+    await Promise.all(Object.values(SMOKE_XDG_DIRECTORIES).map(
+      (directory) => mkdir(path.join(smokeRoot, directory), {
       recursive: false,
       mode: 0o700
-    })));
-    await verifyPackagedTools(paths.resourcesRoot, target, smokeRoot);
-    const childEnvironment = processEnvironment(smokeRoot, token);
+      })
+    ));
+    if (autostartMode === "production" && target === "win32-x64") {
+      await assertWindowsProductionAutostartInitiallyAbsent(smokeRoot);
+      windowsProductionRegistryWasClean = true;
+    }
+    await Promise.all([
+      verifyPackagedTools(paths.resourcesRoot, target, smokeRoot),
+      verifyMacBackgroundAgentMetadata(paths.packageRoot, target)
+    ]);
+    const childEnvironment = processEnvironment(smokeRoot, token, autostartMode);
     appChild = spawn(paths.executable, [DESKTOP_NATIVE_SMOKE_ARGUMENT], {
       cwd: paths.packageRoot,
       env: childEnvironment,
@@ -971,7 +1371,15 @@ async function runNativePackageSmoke(): Promise<void> {
     });
     output = captureAppOutput(appChild);
     const completion = appCompletion(appChild);
-    const ready = waitForReady(appChild, completion, token);
+    const expectedAutostartMethod = autostartMode === "isolated"
+      ? "isolated-smoke"
+      : productionAutostartMethod(target);
+    const ready = waitForReady(
+      appChild,
+      completion,
+      token,
+      expectedAutostartMethod
+    );
     void ready.catch(() => undefined);
     await withTimeout(new Promise<void>((resolve, reject) => {
       appChild?.once("spawn", resolve);
@@ -984,23 +1392,101 @@ async function runNativePackageSmoke(): Promise<void> {
       invariant(appRootIdentity !== undefined, "packaged app launch identity를 찾지 못했습니다.");
       capturedProcesses = Object.freeze([appRootIdentity]);
     }
-    const [reportedProcessCount] = await Promise.all([
+    const [reportedEvidence] = await Promise.all([
       ready,
       waitForHealth(
-        "studio health",
-        () => requestJson(DEFAULT_STUDIO_PORT, "/v1/studio/health"),
-        validateStudioHealth
-      ),
-      waitForHealth(
         "gateway health",
-        () => requestJson(DEFAULT_CAPTION_GATEWAY_PORT, "/v1/health", {
-          Origin: KIRINUKI_LOCAL_STUDIO_ORIGIN,
-          "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA_ID
-        }),
+        requestAuthenticatedGatewayHealth,
         validateGatewayHealth
-      )
+      ),
+      assertConnectionRefused(LEGACY_STUDIO_PORT)
     ]);
-    observedProcessCount = reportedProcessCount;
+    observedProcessCount = reportedEvidence.processCount;
+    invariant(reportedEvidence.windowCount === 0, "packaged app이 windowless가 아닙니다.");
+    if (autostartMode === "isolated") {
+      const autostartRecord = JSON.parse(await readFile(
+        path.join(smokeRoot, `autostart-${target}.json`),
+        "utf8"
+      )) as Record<string, unknown>;
+      invariant(
+        autostartRecord.schema === ENGINE_AUTOSTART_SCHEMA
+          && autostartRecord.target === target
+          && autostartRecord.executablePath === paths.executable
+          && JSON.stringify(autostartRecord.arguments)
+            === JSON.stringify([ENGINE_BACKGROUND_ARGUMENT])
+          && autostartRecord.registered === true,
+        "격리된 로그인 자동실행 readback이 올바르지 않습니다."
+      );
+    } else {
+      await assertProductionAutostartRegistered({ target, paths, smokeRoot });
+    }
+    if (browserSmoke) {
+      await browserSmoke(Object.freeze({
+        launchPairingUrl: async (url: string): Promise<void> => {
+          invariant(
+            browserPairingLaunches === 0,
+            "installed-browser smoke가 첫 연결 custom protocol을 두 번 요청했습니다."
+          );
+          const request = parseLocalMediaEnginePairingRequest(url);
+          invariant(
+            localMediaEnginePairingUrl(request) === url,
+            "installed-browser smoke의 pairing URL이 canonical exact form이 아닙니다."
+          );
+          browserPairingLaunches += 1;
+          const pairingChild = spawn(paths.executable, [
+            DESKTOP_NATIVE_SMOKE_ARGUMENT,
+            url
+          ], {
+            cwd: paths.packageRoot,
+            env: childEnvironment,
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+            shell: false
+          });
+          const pairingOutput = captureAppOutput(pairingChild);
+          const pairingExit = await withTimeout(
+            appCompletion(pairingChild),
+            15_000,
+            "packaged app browser pairing handoff"
+          );
+          invariant(
+            pairingExit.code === 0 && pairingExit.signal === null,
+            `browser pairing handoff가 성공 종료하지 않았습니다: code=${pairingExit.code}, signal=${pairingExit.signal ?? "none"}`
+          );
+          invariant(
+            !pairingOutput.overflow,
+            "browser pairing handoff 출력이 상한을 넘었습니다."
+          );
+          validateGatewayHealth(await requestAuthenticatedGatewayHealth());
+        }
+      }));
+      invariant(
+        browserPairingLaunches === 1,
+        "installed-browser smoke가 최초 1회 pairing handoff를 증명하지 못했습니다."
+      );
+    }
+    const secondary = spawn(paths.executable, [DESKTOP_NATIVE_SMOKE_ARGUMENT], {
+      cwd: paths.packageRoot,
+      env: childEnvironment,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    const secondaryOutput = captureAppOutput(secondary);
+    const secondaryExit = await withTimeout(
+      appCompletion(secondary),
+      15_000,
+      "packaged app secondary instance"
+    );
+    invariant(
+      secondaryExit.code === 0 && secondaryExit.signal === null,
+      `secondary instance가 성공 종료하지 않았습니다: code=${secondaryExit.code}, signal=${secondaryExit.signal ?? "none"}`
+    );
+    invariant(
+      !secondaryOutput.overflow,
+      "secondary instance 출력이 상한을 넘었습니다."
+    );
+    validateGatewayHealth(await requestAuthenticatedGatewayHealth());
     invariant(!output.overflow, "packaged app stdout/stderr 상한을 초과했습니다.");
     if (process.platform !== "win32") {
       const snapshot = await processSnapshot(smokeRoot, snapshotEnvironment);
@@ -1012,11 +1498,27 @@ async function runNativePackageSmoke(): Promise<void> {
         throw new Error("packaged app root process identity가 실행 중 바뀌었습니다.");
       }
       appRootIdentity = capturedRoot;
-      invariant(capturedProcesses.length > 1, "packaged app child process가 시작되지 않았습니다.");
+      invariant(capturedProcesses.length >= 1, "packaged app process가 시작되지 않았습니다.");
     }
-    await sendQuit(appChild, token);
+    if (terminateWhileRunning) {
+      await terminateWhileRunning(Object.freeze({
+        environment: Object.freeze({ ...childEnvironment }),
+        executablePath: paths.executable,
+        rootProcessId: appChild.pid
+      }));
+    } else if (process.platform === "win32") {
+      await sendQuit(appChild, token);
+    } else {
+      invariant(
+        appChild.kill("SIGTERM"),
+        "packaged app SIGTERM 전달에 실패했습니다."
+      );
+    }
     const exit = await withTimeout(completion, APP_QUIT_TIMEOUT_MS, "packaged app graceful quit");
     invariant(exit.code === 0 && exit.signal === null, `packaged app 종료 상태가 다릅니다: code=${exit.code}, signal=${exit.signal ?? "none"}`);
+    if (autostartMode === "production") {
+      await assertProductionAutostartRemoved({ target, smokeRoot });
+    }
     if (process.platform !== "win32") {
       await assertProcessesReclaimed(capturedProcesses, smokeRoot, snapshotEnvironment);
       invariant(appRootIdentity !== undefined, "packaged app root identity가 없습니다.");
@@ -1032,6 +1534,7 @@ async function runNativePackageSmoke(): Promise<void> {
       schema: "kirinuki-desktop-package-smoke/v1",
       status: "ok",
       target,
+      autostartMode,
       tools: {
         ffmpeg: desktopToolTargetManifest(target).ffmpegVersion,
         ffprobe: desktopToolTargetManifest(target).ffprobeVersion,
@@ -1043,15 +1546,42 @@ async function runNativePackageSmoke(): Promise<void> {
           ? "/dev/fd/3"
           : "pipe:3",
       observedProcesses: observedProcessCount,
+      secondaryInstance: "exited-0-primary-health-intact",
+      installedBrowser: browserSmoke
+        ? "pair-once+signed-health+encrypted-session+reload-reconnect"
+        : "not-requested",
+      termination: terminateWhileRunning
+        ? "external-installed-lifecycle"
+        : "native-smoke-graceful-quit",
       reclaimedProcesses: process.platform === "win32"
         ? "exact-root+ports+private-state"
         : capturedProcesses.length,
       reclaimedPorts: PORTS
     }, null, 2));
   } catch (error) {
+    let windowsAutostartEvidence = "";
+    if (windowsProductionRegistryWasClean) {
+      try {
+        const [runValue, approvalValueExists] = await Promise.all([
+          windowsLoginItemRunValue(smokeRoot),
+          windowsLoginItemApprovalValueExists(smokeRoot)
+        ]);
+        const expectedQuoted = `"${paths.executable}" ${ENGINE_BACKGROUND_ARGUMENT}`;
+        const expectedUnquoted = `${paths.executable} ${ENGINE_BACKGROUND_ARGUMENT}`;
+        windowsAutostartEvidence = `\nwindowsAutostartEvidence=${JSON.stringify({
+          runPresent: runValue !== null,
+          runMatchesExpected: runValue === expectedQuoted
+            || runValue === expectedUnquoted,
+          approvalValueExists
+        })}`;
+      } catch {
+        windowsAutostartEvidence =
+          "\nwindowsAutostartEvidence={\"probeFailed\":true}";
+      }
+    }
     const details = output
-      ? `\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`
-      : "";
+      ? `\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}${windowsAutostartEvidence}`
+      : windowsAutostartEvidence;
     smokeFailure = new Error(`native desktop package smoke 실패: ${safeError(error)}${details}`, {
       cause: error
     });
@@ -1069,6 +1599,18 @@ async function runNativePackageSmoke(): Promise<void> {
         cleanupErrors.push(error instanceof Error
           ? error
           : new Error("packaged app process cleanup이 실패했습니다."));
+      }
+    }
+    if (windowsProductionRegistryWasClean) {
+      try {
+        await removeWindowsProductionAutostartAfterSmoke(
+          smokeRoot,
+          paths.executable
+        );
+      } catch (error) {
+        cleanupErrors.push(error instanceof Error
+          ? error
+          : new Error("Windows production 자동실행 failure cleanup이 실패했습니다."));
       }
     }
     try {

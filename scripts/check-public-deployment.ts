@@ -33,48 +33,27 @@ import {
 import { PUBLIC_WEB_PACKAGE_FILES } from "./web-package-files.js";
 
 export const MAX_PUBLIC_DEPLOYMENT_HTML_BYTES = 1024 * 1024;
+export const MAX_PUBLIC_DEPLOYMENT_RESOURCE_BYTES = 16 * 1024 * 1024;
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
-const MAX_PUBLIC_DEPLOYMENT_ARCHIVE_BYTES = 16 * 1024 * 1024;
+const MAX_PUBLIC_DEPLOYMENT_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_PUBLIC_DEPLOYMENT_CHECKSUM_BYTES = 512;
 const MAX_PUBLIC_DEPLOYMENT_MANIFEST_BYTES = 64 * 1024;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const GIT_COMMIT_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/u;
-const PUBLIC_DEPLOYMENT_ARCHIVE_ALLOWLIST = Object.freeze([
-  ".popovic-hosts",
-  "THIRD_PARTY_NOTICES.md",
-  "_headers",
-  "index.html",
-  "licenses/UNLICENSE.txt",
-  "public.css"
-].sort());
-const PUBLIC_DEPLOYMENT_SOURCE_MAPPING = Object.freeze([
-  {
-    archivePath: ".popovic-hosts",
-    sourcePath: "public-shell/.popovic-hosts"
-  },
-  {
-    archivePath: "THIRD_PARTY_NOTICES.md",
-    sourcePath: "public-shell/THIRD_PARTY_NOTICES.md"
-  },
-  {
-    archivePath: "_headers",
-    sourcePath: "public-shell/_headers"
-  },
-  {
-    archivePath: "index.html",
-    sourcePath: "public-shell/index.html"
-  },
-  {
-    archivePath: "licenses/UNLICENSE.txt",
-    sourcePath: "public-shell/licenses/UNLICENSE.txt"
-  },
-  {
-    archivePath: "public.css",
-    sourcePath: "public-shell/public.css"
-  }
-] as const);
+const PUBLIC_DEPLOYMENT_SOURCE_MAPPING = Object.freeze(
+  [...PUBLIC_WEB_PACKAGE_FILES]
+    .map(({ archivePath, sourcePath }) => ({ archivePath, sourcePath }))
+    .sort((left, right) => (
+      left.archivePath < right.archivePath
+        ? -1
+        : left.archivePath > right.archivePath ? 1 : 0
+    ))
+);
+const PUBLIC_DEPLOYMENT_ARCHIVE_ALLOWLIST = Object.freeze(
+  PUBLIC_DEPLOYMENT_SOURCE_MAPPING.map(({ archivePath }) => archivePath)
+);
 
 export interface PublicDeploymentExpectedResource {
   readonly archivePath: string;
@@ -125,6 +104,23 @@ export interface PublicDeploymentCheckOptions {
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function publicDeploymentContentType(archivePath: string): string {
+  const extension = path.posix.extname(archivePath);
+  const contentType = new Map([
+    [".css", "text/css; charset=utf-8"],
+    [".html", "text/html; charset=utf-8"],
+    [".js", "text/javascript; charset=utf-8"],
+    [".md", "text/markdown; charset=utf-8"],
+    [".txt", "text/plain; charset=utf-8"],
+    [".wasm", "application/wasm"],
+    [".woff2", "font/woff2"]
+  ]).get(extension);
+  if (!contentType) {
+    throw new TypeError(`공개 배포 파일 MIME 형식을 확인하지 못했습니다: ${archivePath}`);
+  }
+  return contentType;
 }
 
 function exactStringList(
@@ -222,7 +218,7 @@ function parseCanonicalReleaseRecord(
     ["gitCommit", "packageLockSha256"],
     "release source"
   );
-  assertExactJsonKeys(artifacts, ["linux", "web"], "release artifacts");
+  assertExactJsonKeys(artifacts, ["web"], "release artifacts");
   assertArtifact(
     record.schemaVersion === KIRINUKI_RELEASE_SCHEMA_VERSION
       && product.name === KIRINUKI_PACKAGE_NAME
@@ -254,11 +250,6 @@ function parseCanonicalReleaseRecord(
         artifacts.web,
         `kirinuki-web-v${product.version}.zip`,
         "release web artifact"
-      ),
-      linux: parseReleaseArtifact(
-        artifacts.linux,
-        `kirinuki-linux-v${product.version}.tar.gz`,
-        "release Linux artifact"
       )
     }
   };
@@ -428,7 +419,7 @@ function parsePublicDeploymentZipCentralDirectory(
       && totalEntries === PUBLIC_DEPLOYMENT_ARCHIVE_ALLOWLIST.length
       && commentLength === 0
       && centralOffset + centralSize === eocdOffset,
-    "공개 배포 ZIP이 단일 디스크·6개 엔트리·주석 없는 계약과 다릅니다."
+    "공개 배포 ZIP이 단일 디스크·전체 앱 allowlist·주석 없는 계약과 다릅니다."
   );
   assertArtifact(
     !archive.subarray(0, eocdOffset).includes(Buffer.from([0x50, 0x4b, 0x06, 0x06]))
@@ -474,7 +465,7 @@ function parsePublicDeploymentZipCentralDirectory(
         && (compressionMethod === 0 || compressionMethod === 8)
         && unixMode === 0o100644
         && compressedSize <= MAX_PUBLIC_DEPLOYMENT_ARCHIVE_BYTES
-        && uncompressedSize <= MAX_PUBLIC_DEPLOYMENT_HTML_BYTES
+        && uncompressedSize <= MAX_PUBLIC_DEPLOYMENT_RESOURCE_BYTES
         && nameLength > 0
         && extraLength === 0
         && entryCommentLength === 0
@@ -563,7 +554,7 @@ function readVerifiedPublicDeploymentZipEntries(
     const bytes = entry.compressionMethod === 0
       ? Buffer.from(compressed)
       : inflateRawSync(compressed, {
-        maxOutputLength: MAX_PUBLIC_DEPLOYMENT_HTML_BYTES
+        maxOutputLength: MAX_PUBLIC_DEPLOYMENT_RESOURCE_BYTES
       });
     assertArtifact(
       bytes.byteLength === entry.uncompressedSize
@@ -630,7 +621,7 @@ export async function loadCurrentPublicDeploymentArtifact(
       archivePath,
       sourcePath
     }))) === JSON.stringify(PUBLIC_DEPLOYMENT_SOURCE_MAPPING),
-    "공개 배포 source/archive mapping이 고정된 6개 allowlist와 다릅니다."
+    "공개 배포 source/archive mapping이 전체 웹 앱 allowlist와 다릅니다."
   );
 
   const distEntries = await readdir(artifactDirectory, { withFileTypes: true });
@@ -744,7 +735,7 @@ export async function loadCurrentPublicDeploymentArtifact(
       });
       assertArtifact(
         committedBytes.byteLength > 0
-          && committedBytes.byteLength <= MAX_PUBLIC_DEPLOYMENT_HTML_BYTES,
+          && committedBytes.byteLength <= MAX_PUBLIC_DEPLOYMENT_RESOURCE_BYTES,
         `release commit의 공개 source 크기가 허용 범위를 벗어났습니다: ${sourcePath}`
       );
       const packagedBytes = bytesByArchivePath.get(packagedPath);
@@ -761,10 +752,19 @@ export async function loadCurrentPublicDeploymentArtifact(
   );
 
   const indexBytes = bytesByArchivePath.get("index.html");
-  const stylesheetBytes = bytesByArchivePath.get("public.css");
+  const editorBytes = bytesByArchivePath.get("editor.html");
+  const stylesheetBytes = bytesByArchivePath.get("studio.css");
+  const applicationBytes = bytesByArchivePath.get("studio.js");
   const headerBytes = bytesByArchivePath.get("_headers");
   const hostsBytes = bytesByArchivePath.get(".popovic-hosts");
-  if (!indexBytes || !stylesheetBytes || !headerBytes || !hostsBytes) {
+  if (
+    !indexBytes
+    || !editorBytes
+    || !stylesheetBytes
+    || !applicationBytes
+    || !headerBytes
+    || !hostsBytes
+  ) {
     throw new Error("공개 배포 artifact의 필수 identity 파일이 없습니다.");
   }
   const artifactSecurityHeaders = parsePublicShellHeaders(
@@ -778,20 +778,27 @@ export async function loadCurrentPublicDeploymentArtifact(
   }
 
   const indexHtml = decodeCanonicalUtf8(indexBytes, "공개 배포 index.html");
-  const stylesheetMatches = [...indexHtml.matchAll(
-    /<link\s+rel="stylesheet"\s+href="(\/public\.css\?v=(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)">/gu
-  )];
-  if (stylesheetMatches.length !== 1) {
+  const editorHtml = decodeCanonicalUtf8(editorBytes, "공개 배포 editor.html");
+  const expectedStylesheetPath = `/studio.css?v=${releaseRecord.product.version}`;
+  const expectedApplicationPath = `/studio.js?v=${releaseRecord.product.version}`;
+  if (
+    !indexHtml.includes(`href="${expectedStylesheetPath}"`)
+    || !indexHtml.includes(`src="${expectedApplicationPath}"`)
+  ) {
     throw new Error(
-      "공개 배포 artifact index에 canonical versioned stylesheet가 정확히 하나여야 합니다."
+      "공개 배포 artifact index가 canonical versioned 웹 앱 자산을 가리키지 않습니다."
     );
   }
-  const stylesheetPath = stylesheetMatches[0]?.[1];
-  if (
-    !stylesheetPath
-    || stylesheetPath !== `/public.css?v=${releaseRecord.product.version}`
-  ) {
-    throw new Error("공개 배포 artifact stylesheet 경로를 읽지 못했습니다.");
+  for (const [label, html] of [["index", indexHtml], ["editor", editorHtml]] as const) {
+    const cspMatches = [...html.matchAll(
+      /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/gu
+    )];
+    if (
+      cspMatches.length !== 1
+      || cspMatches[0]?.[1] !== artifactSecurityHeaders["Content-Security-Policy"]
+    ) {
+      throw new Error(`공개 배포 ${label} CSP meta와 HTTP header가 다릅니다.`);
+    }
   }
   const artifactDocumentHeaders = new Headers({
     ...artifactSecurityHeaders,
@@ -807,42 +814,45 @@ export async function loadCurrentPublicDeploymentArtifact(
   });
   assertArtifact(
     artifactViolations.length === 0,
-    `release commit의 공개 index.html이 shell-only 정책을 위반합니다:\n- `
+    `release commit의 공개 index.html이 정적 웹 편집기 정책을 위반합니다:\n- `
       + artifactViolations.join("\n- ")
   );
   const stylesheet = decodeCanonicalUtf8(
     stylesheetBytes,
-    "공개 배포 public.css"
+    "공개 배포 studio.css"
   );
   assertArtifact(
-    !/@import\b|url\s*\(|expression\s*\(|javascript\s*:|(?:127\.0\.0\.1|localhost|:4319|:4320|:4330|\/v1\/|editor\.html|\/editor\/|studio\.js|audseg-worker)/iu.test(
-      stylesheet
-    ),
-    "release commit의 public.css에 외부 resource 또는 앱 내부 경로가 있습니다."
+    !/@import\b|expression\s*\(|javascript\s*:/iu.test(stylesheet),
+    "release commit의 studio.css에 실행 가능한 외부 resource 표현이 있습니다."
+  );
+  assertArtifact(
+    applicationBytes.byteLength > 0
+      && !applicationBytes.includes(Buffer.from("chrome-extension://")),
+    "release commit의 studio.js가 비어 있거나 확장 프로그램 origin을 포함합니다."
   );
 
-  const descriptors = [
-    {
-      archivePath: "index.html",
-      contentType: "text/html; charset=utf-8",
-      requestPath: "/"
-    },
-    {
-      archivePath: "public.css",
-      contentType: "text/css; charset=utf-8",
-      requestPath: stylesheetPath
-    },
-    {
-      archivePath: "THIRD_PARTY_NOTICES.md",
-      contentType: "text/markdown; charset=utf-8",
-      requestPath: "/THIRD_PARTY_NOTICES.md"
-    },
-    {
-      archivePath: "licenses/UNLICENSE.txt",
-      contentType: "text/plain; charset=utf-8",
-      requestPath: "/licenses/UNLICENSE.txt"
-    }
-  ] as const;
+  const criticalResourceOrder = new Map([
+    ["index.html", 0],
+    ["studio.css", 1],
+    ["studio.js", 2],
+    ["editor.html", 3],
+    ["editor/editor.css", 4],
+    ["editor/editor.js", 5]
+  ]);
+  const descriptors = PUBLIC_DEPLOYMENT_ARCHIVE_ALLOWLIST
+    .filter((archivePath) => (
+      archivePath !== "_headers" && archivePath !== ".popovic-hosts"
+    ))
+    .sort((left, right) => {
+      const leftOrder = criticalResourceOrder.get(left) ?? 100;
+      const rightOrder = criticalResourceOrder.get(right) ?? 100;
+      return leftOrder - rightOrder || left.localeCompare(right);
+    })
+    .map((archivePath) => ({
+      archivePath,
+      contentType: publicDeploymentContentType(archivePath),
+      requestPath: archivePath === "index.html" ? "/" : `/${archivePath}`
+    }));
   return Object.freeze(descriptors.map((descriptor) => {
     const bytes = bytesByArchivePath.get(descriptor.archivePath);
     if (!bytes) {
@@ -974,7 +984,7 @@ function publicDeploymentResponseMetadataViolations(
     declaredLength !== null
     && (
       !/^(?:0|[1-9]\d*)$/u.test(declaredLength)
-      || Number(declaredLength) > MAX_PUBLIC_DEPLOYMENT_HTML_BYTES
+      || Number(declaredLength) > MAX_PUBLIC_DEPLOYMENT_RESOURCE_BYTES
     )
   ) {
     violations.push("Content-Length 형식 또는 크기가 허용 범위를 벗어났습니다.");
@@ -996,9 +1006,6 @@ export function publicDeploymentViolations(
   }
 
   const body = snapshot.body;
-  if (/<script\b/iu.test(body)) {
-    violations.push("공개 HTML에 script가 주입됐습니다.");
-  }
   if (
     /<meta\b(?=[^>]*\bhttp-equiv\s*=\s*(?:"refresh"|'refresh'|refresh\b))[^>]*>/iu.test(
       body
@@ -1006,19 +1013,21 @@ export function publicDeploymentViolations(
   ) {
     violations.push("공개 HTML에 meta refresh가 주입됐습니다.");
   }
+  const scriptTags = body.match(/<script\b[^>]*>[\s\S]*?<\/script>/giu) || [];
   if (
-    /<(?:img|iframe|object|embed|video|audio|source|track|use|image|form|base|style)\b/iu.test(
-      body
+    scriptTags.length !== 1
+    || !/^<script type="module" src="\/studio\.js\?v=\d+\.\d+\.\d+"><\/script>$/u.test(
+      scriptTags[0] || ""
     )
   ) {
-    violations.push("공개 HTML에 허용하지 않은 resource-bearing element가 있습니다.");
+    violations.push("공개 HTML의 실행 스크립트가 exact self-hosted 앱 진입점과 다릅니다.");
   }
   const linkTags = body.match(/<link\b[^>]*>/giu) || [];
   const hasExactIcon = linkTags.filter((tag) => (
     /^<link rel="icon" href="data:image\/svg\+xml,[^"]+">$/u.test(tag)
   )).length === 1;
   const hasExactStylesheet = linkTags.filter((tag) => (
-    /^<link rel="stylesheet" href="\/public\.css\?v=\d+\.\d+\.\d+">$/u.test(tag)
+    /^<link rel="stylesheet" href="\/studio\.css\?v=\d+\.\d+\.\d+">$/u.test(tag)
   )).length === 1;
   if (linkTags.length !== 2 || !hasExactIcon || !hasExactStylesheet) {
     violations.push("공개 HTML의 link element allowlist가 정확하지 않습니다.");
@@ -1029,9 +1038,18 @@ export function publicDeploymentViolations(
     violations.push("Cloudflare 이메일 난독화 코드가 주입됐습니다.");
   }
   if (
-    /(?:127\.0\.0\.1|localhost|:4319|:4320|:4330|\/v1\/|editor\.html|\/editor\/|studio\.js|audseg-worker)/iu.test(body)
+    /(?:localhost|:4320|:4330|chrome-extension:\/\/|kirinuki:\/\/)/iu.test(body)
   ) {
-    violations.push("공개 HTML에 앱 내부 endpoint 또는 editor 경로가 있습니다.");
+    violations.push("공개 HTML에 legacy 앱·확장 프로그램 endpoint가 있습니다.");
+  }
+  const cspMeta = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/u
+    .exec(body)?.[0] || "";
+  const bodyWithoutCsp = body.replace(cspMeta, "");
+  if (/127\.0\.0\.1|:4319|\/v1\//iu.test(bodyWithoutCsp)) {
+    violations.push("공개 HTML 본문에 CSP 이외의 로컬 엔진 endpoint가 노출됐습니다.");
+  }
+  if (/\son[a-z]+\s*=|javascript\s*:/iu.test(body)) {
+    violations.push("공개 HTML에 inline event handler 또는 javascript URL이 있습니다.");
   }
   if (
     /googletagmanager|google-analytics|plausible\.io|posthog|segment\.com/iu.test(body)
@@ -1039,11 +1057,12 @@ export function publicDeploymentViolations(
     violations.push("공개 HTML에 analytics 코드가 있습니다.");
   }
   if (
-    !body.includes('class="public-launch-shell"')
-    || !body.includes('href="kirinuki://open"')
+    !body.includes('id="local-app-surface"')
+    || !body.includes('id="start-form"')
+    || !body.includes('src="/studio.js?v=')
     || !body.includes('href="mailto:lostfragment@naver.com"')
   ) {
-    violations.push("공개 HTML의 앱 실행·문의 shell marker가 없습니다.");
+    violations.push("공개 HTML의 전체 편집기·문의 marker가 없습니다.");
   }
   return violations;
 }
@@ -1085,11 +1104,11 @@ async function readBoundedPublicDeploymentBody(
     declaredLength !== null
     && (
       !/^(?:0|[1-9]\d*)$/u.test(declaredLength)
-      || Number(declaredLength) > MAX_PUBLIC_DEPLOYMENT_HTML_BYTES
+      || Number(declaredLength) > MAX_PUBLIC_DEPLOYMENT_RESOURCE_BYTES
     )
   ) {
     const reason = new Error(
-      `${resourceLabel} 응답은 1 MiB 크기 제한을 충족하지 않습니다.`
+      `${resourceLabel} 응답은 16 MiB 크기 제한을 충족하지 않습니다.`
     );
     await cancelPublicDeploymentResponse(response, controller, reason);
     throw reason;
@@ -1115,10 +1134,10 @@ async function readBoundedPublicDeploymentBody(
         continue;
       }
       if (
-        chunk.value.byteLength > MAX_PUBLIC_DEPLOYMENT_HTML_BYTES - receivedBytes
+        chunk.value.byteLength > MAX_PUBLIC_DEPLOYMENT_RESOURCE_BYTES - receivedBytes
       ) {
         const reason = new Error(
-          `${resourceLabel} 응답이 1 MiB 크기 제한을 초과했습니다.`
+          `${resourceLabel} 응답이 16 MiB 크기 제한을 초과했습니다.`
         );
         await reader.cancel(reason).catch(() => undefined);
         if (!controller.signal.aborted) {

@@ -21,7 +21,7 @@ import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  MAX_PUBLIC_DEPLOYMENT_HTML_BYTES,
+  MAX_PUBLIC_DEPLOYMENT_RESOURCE_BYTES,
   checkPublicDeployment,
   loadCurrentPublicDeploymentArtifact,
   type PublicDeploymentExpectedResource
@@ -139,14 +139,16 @@ async function createVerifiedArtifactFixture(
     const destination = path.join(root, ...sourcePath.split("/"));
     await mkdir(path.dirname(destination), { recursive: true });
     let source = await readFile(
-      path.join(repositoryRoot, ...sourcePath.split("/")),
-      "utf8"
+      path.join(repositoryRoot, ...sourcePath.split("/"))
     );
     if (
-      sourcePath === "public-shell/index.html"
+      sourcePath === "web/index.html"
       && options.trustedIndexMutation
     ) {
-      source = options.trustedIndexMutation(source);
+      source = Buffer.from(
+        options.trustedIndexMutation(source.toString("utf8")),
+        "utf8"
+      );
     }
     await writeFile(
       destination,
@@ -158,7 +160,7 @@ async function createVerifiedArtifactFixture(
   const trustedRevision = await commitAll(root, "trusted release source");
   let releaseRevision = trustedRevision;
   if (options.untrustedReleaseIndexMutation) {
-    const indexPath = path.join(root, "public-shell", "index.html");
+    const indexPath = path.join(root, "web", "index.html");
     await writeFile(
       indexPath,
       options.untrustedReleaseIndexMutation(await readFile(indexPath, "utf8")),
@@ -201,30 +203,10 @@ async function createVerifiedArtifactFixture(
   await writeFile(`${archivePath}.sha256`, `${digest}  ${archiveName}\n`);
   await chmod(`${archivePath}.sha256`, 0o644);
 
-  const linuxName = `kirinuki-linux-v${currentMetadata.version}.tar.gz`;
-  const linuxPath = path.join(artifactDirectory, linuxName);
-  const linuxBytes = Buffer.from("test linux release artifact\n", "utf8");
-  const linuxDigest = sha256Bytes(linuxBytes);
-  await writeFile(linuxPath, linuxBytes, { mode: 0o644 });
-  await writeFile(
-    `${linuxPath}.sha256`,
-    `${linuxDigest}  ${linuxName}\n`,
-    { mode: 0o644 }
-  );
-  await Promise.all([
-    chmod(linuxPath, 0o644),
-    chmod(`${linuxPath}.sha256`, 0o644)
-  ]);
   const record = buildKirinukiReleaseRecord({
     identity: {
       name: "kirinuki-app",
       version: currentMetadata.version
-    },
-    linux: {
-      bytes: linuxBytes.byteLength,
-      checksumFile: `${linuxName}.sha256`,
-      file: linuxName,
-      sha256: linuxDigest
     },
     packageLockSha256: sha256Bytes(packageLock),
     sourceRevision: releaseRevision,
@@ -351,29 +333,32 @@ function matchingPackagedArtifactFetch(
   fixture: ArtifactFixture,
   observedRequests: string[]
 ): typeof fetch {
-  const index = fixture.packagedBytes.get("index.html");
-  assert(index);
-  const stylesheetPath = /href="(\/public\.css\?v=[^"]+)"/u
-    .exec(index.toString("utf8"))?.[1];
-  assert(stylesheetPath);
+  const contentTypeFor = (archivePath: string): string => {
+    const type = new Map([
+      [".css", "text/css; charset=utf-8"],
+      [".html", "text/html; charset=utf-8"],
+      [".js", "text/javascript; charset=utf-8"],
+      [".md", "text/markdown; charset=utf-8"],
+      [".txt", "text/plain; charset=utf-8"],
+      [".wasm", "application/wasm"],
+      [".woff2", "font/woff2"]
+    ]).get(path.posix.extname(archivePath));
+    assert(type);
+    return type;
+  };
   const resources = new Map<string, {
     readonly body: Buffer;
     readonly contentType: string;
-  }>([
-    ["/", { body: index, contentType: "text/html; charset=utf-8" }],
-    [stylesheetPath, {
-      body: fixture.packagedBytes.get("public.css")!,
-      contentType: "text/css; charset=utf-8"
-    }],
-    ["/THIRD_PARTY_NOTICES.md", {
-      body: fixture.packagedBytes.get("THIRD_PARTY_NOTICES.md")!,
-      contentType: "text/markdown; charset=utf-8"
-    }],
-    ["/licenses/UNLICENSE.txt", {
-      body: fixture.packagedBytes.get("licenses/UNLICENSE.txt")!,
-      contentType: "text/plain; charset=utf-8"
-    }]
-  ]);
+  }>();
+  for (const [archivePath, body] of fixture.packagedBytes) {
+    if (archivePath === "_headers" || archivePath === ".popovic-hosts") {
+      continue;
+    }
+    resources.set(archivePath === "index.html" ? "/" : `/${archivePath}`, {
+      body,
+      contentType: contentTypeFor(archivePath)
+    });
+  }
   return (async (input: string | URL | Request) => {
     const requestedUrl = input instanceof Request
       ? input.url
@@ -430,8 +415,12 @@ publicDeploymentArtifactTest("공개 배포 checker는 checksum이 검증된 ZIP
     canonicalFetchThroughLoopback(port),
     fixtureCheckOptions(sharedArtifact)
   );
+  const indexResource = expectedResources.find(({ archivePath }) => (
+    archivePath === "index.html"
+  ));
+  assert(indexResource);
   assert.deepEqual(result, {
-    bytes: expectedResources[0]!.bytes.byteLength,
+    bytes: indexResource.bytes.byteLength,
     status: 200,
     url: PUBLIC_SHELL_CANONICAL_URL
   });
@@ -511,7 +500,7 @@ publicDeploymentArtifactTest("공개 배포 checker는 meta refresh·link·img·
 publicDeploymentArtifactTest("공개 배포 checker는 artifact와 다른 CSS bytes를 거절한다", async (t) => {
   const observedRequests: string[] = [];
   const stylesheet = expectedResources.find(({ archivePath }) => (
-    archivePath === "public.css"
+    archivePath === "studio.css"
   ));
   assert(stylesheet);
   const wrongStylesheet = Buffer.from(stylesheet.bytes);
@@ -533,18 +522,18 @@ publicDeploymentArtifactTest("공개 배포 checker는 artifact와 다른 CSS by
       canonicalFetchThroughLoopback(port),
       fixtureCheckOptions(sharedArtifact)
     ),
-    /public\.css bytes가 현재 공개 artifact와 다릅니다/u
+    /studio\.css bytes가 현재 공개 artifact와 다릅니다/u
   );
   assert.deepEqual(observedRequests, ["/", stylesheet.requestPath]);
 });
 
-publicDeploymentArtifactTest("공개 배포 checker는 Content-Length 없는 oversized chunked body를 1 MiB에서 취소한다", async (t) => {
+publicDeploymentArtifactTest("공개 배포 checker는 Content-Length 없는 oversized chunked body를 16 MiB에서 취소한다", async (t) => {
   const observedRequests: string[] = [];
   const indexResource = expectedResources.find(({ archivePath }) => (
     archivePath === "index.html"
   ));
   assert(indexResource);
-  const maximumServerBytes = 8 * MAX_PUBLIC_DEPLOYMENT_HTML_BYTES;
+  const maximumServerBytes = 2 * MAX_PUBLIC_DEPLOYMENT_RESOURCE_BYTES;
   const chunk = Buffer.alloc(64 * 1024, 0x61);
   let sentBytes = 0;
   let resolveClosed: (() => void) | null = null;
@@ -588,7 +577,7 @@ publicDeploymentArtifactTest("공개 배포 checker는 Content-Length 없는 ove
       canonicalFetchThroughLoopback(port),
       fixtureCheckOptions(sharedArtifact)
     ),
-    /1 MiB 크기 제한을 초과/u
+    /16 MiB 크기 제한을 초과/u
   );
   await Promise.race([
     responseClosed,
@@ -711,7 +700,7 @@ publicDeploymentArtifactTest("공개 배포 checker는 commit·manifest·ZIP·fa
       matchingPackagedArtifactFetch(fixture, observedRequests),
       fixtureCheckOptions(fixture)
     ),
-    /shell-only 정책을 위반/u
+    /정적 웹 편집기 정책을 위반/u
   );
   assert.deepEqual(observedRequests, []);
 });

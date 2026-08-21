@@ -32,11 +32,27 @@ import {
   stringifySessionArchive
 } from "../src/lib/session-archive.js";
 import {
-  SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
-  STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
-  STREAMING_COMPANION_JAVASCRIPT_PATH,
-  buildStreamingCompanion
-} from "./build-streaming-companion.js";
+  LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
+  LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+  freshLocalMediaEngineChallenge,
+  localMediaEnginePairingUrl,
+  localMediaEngineProofTranscript,
+  pairingResponseUnsignedPayload,
+  parseLocalMediaEnginePairingRequest,
+  parseLocalMediaEnginePairingResponse,
+  verifyLocalMediaEngineSignature
+} from "../src/lib/local-media-engine-auth.js";
+import {
+  LOCAL_MEDIA_ENGINE_TRUST_DATABASE,
+  LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
+  LOCAL_MEDIA_ENGINE_TRUST_STORE
+} from "../src/editor/local-media-engine-trust.js";
+import {
+  createLocalMediaEngineV2Fixture,
+  type LocalMediaEngineV2Fixture,
+  type LocalMediaEngineV2FixtureRecord
+} from "./local-media-engine-v2-fixture.js";
 import { buildWebJavaScript } from "./web-javascript-build.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -198,6 +214,7 @@ let driverPort = 0;
 let sessionId = "";
 let driverOutput = "";
 let studioOutput = "";
+let localMediaEngineFixture: Readonly<LocalMediaEngineV2Fixture> | null = null;
 let cleanupPromise: Promise<void> | null = null;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -803,408 +820,110 @@ async function evaluateTarget(
     : undefined;
 }
 
-interface StreamingBridgeFixtureState {
-  readonly currentTime: number;
-  readonly playbackRate: number;
-  readonly emittedTransientFailures: number;
-  readonly unsignedResponseAttempts: number;
-  readonly calls: Array<{
-    action?: unknown;
-    deltaSeconds?: unknown;
-    targetSeconds?: unknown;
-    playbackRate?: unknown;
-  }>;
-}
-
-interface StreamingBridgeFixtureInterception {
-  readonly interceptedUrls: readonly string[];
-  readonly assertHealthy: () => void;
-  readonly close: () => Promise<void>;
-}
-
 interface LateMaterializationFixtureSnapshot {
   readonly interceptedUrls: readonly string[];
   readonly pairedSessionCount: number;
   readonly aStarted: boolean;
   readonly aConsumerId: string;
   readonly aSourceUrl: string;
-  readonly aPollHeld: boolean;
-  readonly aCancelRequests: number;
-  readonly aCompletionReleased: boolean;
-  readonly aCompletionDelivered: boolean;
-  readonly aCompletionDeliveryError: string;
-  readonly aArtifactCached: boolean;
+  readonly aStatusPolls: number;
+  readonly aExplicitCancelRequests: number;
+  readonly aAbandonedJobsReclaimed: number;
+  readonly aRunnerAborted: boolean;
+  readonly aRunnerSettled: boolean;
+  readonly aSlotReleased: boolean;
+  readonly aLateCompletionDiscarded: boolean;
+  readonly aLateArtifactExposed: boolean;
   readonly aCachePurgeRequests: number;
   readonly aMediaRequests: number;
   readonly bStartRequests: number;
-  readonly bRejected: boolean;
+  readonly bQueuedBeforeReclaim: boolean;
+  readonly bStatusPolls: number;
+  readonly bStartedAfterReclaim: boolean;
+  readonly bCompleted: boolean;
+  readonly bMediaRequests: number;
   readonly unexpectedRequests: readonly string[];
 }
 
 interface LateMaterializationFixtureInterception {
   readonly snapshot: () => LateMaterializationFixtureSnapshot;
-  readonly releaseACompletion: () => Promise<void>;
   readonly assertHealthy: () => void;
   readonly close: () => Promise<void>;
 }
 
-function inlineScriptSource(value: string): string {
-  return value.replace(/<\/script/giu, "<\\/script");
-}
-
-function streamingBridgeFixtureDocument(mediaBytes: Buffer): string {
-  const fixtureBootstrap = `
-    (() => {
-      const video = document.querySelector("#fixture-stream-video");
-      const input = document.querySelector("#fixture-stream-input");
-      let transientSnapshotFailuresRemaining = 0;
-      let emittedTransientFailures = 0;
-      let unsignedResponseAttempts = 0;
-      const calls = [];
-      const consumeTransientSnapshotFailure = () => {
-        if (transientSnapshotFailuresRemaining <= 0) return;
-        transientSnapshotFailuresRemaining -= 1;
-        emittedTransientFailures += 1;
-        throw new Error("fixture transient player state");
-      };
-      video.addEventListener("loadedmetadata", () => {
-        video.currentTime = 80.5;
-        video.pause();
-      }, { once: true });
-      addEventListener("message", (event) => {
-        const message = event.data;
-        const authenticated = message?.protocol === "kirinuki-streaming-bridge-auth/v1"
-          && message?.type === "KIRINUKI_STREAMING_BRIDGE_FRAME_REQUEST";
-        const request = authenticated ? message.inner : message;
-        if (
-          request?.protocol === "kirinuki-streaming-bridge/v2"
-          && request?.type === "KIRINUKI_STREAMING_BRIDGE_REQUEST"
-        ) {
-          calls.push(structuredClone(request));
-          if (authenticated) {
-            unsignedResponseAttempts += 1;
-            parent.postMessage({
-              protocol: request.protocol,
-              type: "KIRINUKI_STREAMING_BRIDGE_RESPONSE",
-              requestId: request.requestId,
-              generation: request.generation,
-              action: request.action,
-              source: request.source,
-              ok: false,
-              error: {
-                code: "source-mismatch",
-                message: "unsigned page-world forgery"
-              }
-            }, event.origin);
-          }
-        }
-      }, true);
-      globalThis.__kirinukiStreamingBridgeFixture = {
-        video,
-        input,
-        calls,
-        resetCalls: () => { calls.length = 0; },
-        failNextSnapshot: () => {
-          if (location.hostname === "vod.sooplive.com") {
-            transientSnapshotFailuresRemaining += 1;
-            return;
-          }
-          const originalUrl = location.href;
-          history.replaceState(null, "", "/kirinuki-transient-player-state");
-          emittedTransientFailures += 1;
-          setTimeout(() => history.replaceState(null, "", originalUrl), 450);
-        },
-        forgeUnsignedShortcut: () => {
-          const request = [...calls].reverse().find((value) => value?.source);
-          if (!request) return false;
-          parent.postMessage({
-            protocol: "kirinuki-streaming-bridge/v2",
-            type: "KIRINUKI_STREAMING_BRIDGE_SHORTCUT",
-            eventId: "unsigned-page-shortcut-0001",
-            generation: request.generation,
-            source: request.source,
-            key: "E"
-          }, "http://127.0.0.1:4320");
-          return true;
-        },
-        state: () => ({
-          currentTime: video.currentTime,
-          playbackRate: video.playbackRate,
-          emittedTransientFailures,
-          unsignedResponseAttempts,
-          calls: [...calls]
-        })
-      };
-      if (location.hostname === "vod.sooplive.com") {
-        const contentId = location.pathname.match(
-          /^\\/player\\/(\\d{1,32})\\/embed\\/?$/
-        )?.[1] || "";
-        const fileItems = Object.freeze([Object.freeze({
-          idx: 0,
-          file_order: 1,
-          id: "fixture_" + contentId + "_1",
-          duration: 200
-        })]);
-        const playerController = {
-          get fileItems() { return fileItems; },
-          get playIdx() { return 0; },
-          get currentFileItem() { return fileItems[0]; },
-          get playingTime() {
-            consumeTransientSnapshotFailure();
-            return video.currentTime;
-          },
-          get media() { return video; },
-          get isChangeFileSeeking() { return false; },
-          get isSeeking() { return false; },
-          get isPreloadingNextMedia() { return false; }
-        };
-        globalThis.vodCore = {
-          fileItems,
-          playerController,
-          config: { titleNo: contentId, totalFileDuration: 200 },
-          seek: (targetSeconds) => { video.currentTime = Number(targetSeconds); }
-        };
-      }
-    })();
-  `;
-  return `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Kirinuki streaming bridge fixture</title>
-  <style>
-    html, body { margin: 0; min-height: 100%; background: #080a0f; color: white; }
-    #fixture-stream-video { display: block; width: 960px; height: 540px; background: #111827; }
-  </style>
-</head>
-<body>
-  <video id="fixture-stream-video" tabindex="0" preload="auto" src="data:video/webm;base64,${mediaBytes.toString("base64")}#t=80.5" aria-label="원본 스트리밍 fixture"></video>
-  <input id="fixture-stream-input" aria-label="단축키 차단 fixture">
-  <script>${inlineScriptSource(fixtureBootstrap)}</script>
-</body>
-</html>`;
-}
-
-function rawHttpFixtureResponse(html: string): string {
-  const contentLength = Buffer.byteLength(html);
-  const response = [
-    "HTTP/1.1 200 OK",
-    "Content-Type: text/html; charset=utf-8",
-    "Cache-Control: no-store",
-    "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; media-src data:",
-    `Content-Length: ${contentLength}`,
-    "Connection: close",
-    "",
-    html
-  ].join("\r\n");
-  return Buffer.from(response).toString("base64");
-}
-
-async function buildStreamingBridgeFixtureMedia(): Promise<Buffer> {
-  const ffmpeg = await resolveExecutable("FFMPEG_BINARY", ["ffmpeg"]);
-  const outputPath = path.join(tempRoot, "streaming-bridge-fixture.webm");
+async function createLeaseReclaimFixtureMedia(): Promise<Buffer> {
+  const ffmpeg = await resolveExecutable(
+    "FFMPEG_BINARY",
+    process.platform === "win32" ? ["ffmpeg.exe", "ffmpeg"] : ["ffmpeg"]
+  );
+  const outputPath = path.join(tempRoot, "lease-reclaim-b.mp4");
   const stderr: Buffer[] = [];
   const child = spawn(ffmpeg, [
-    "-y",
-    "-v", "error",
-    "-f", "lavfi",
-    "-i", "color=c=black:s=16x16:r=1",
-    "-t", "200",
-    "-an",
-    "-c:v", "libvpx-vp9",
-    "-deadline", "realtime",
-    "-cpu-used", "8",
-    "-b:v", "1k",
-    outputPath
-  ], {
-    shell: false,
-    stdio: ["ignore", "ignore", "pipe"]
-  });
-  child.stderr.on("data", (chunk: Buffer | string) => {
-    stderr.push(Buffer.from(chunk));
-  });
+    "-hide_banner", "-loglevel", "error", "-nostdin",
+    "-f", "lavfi", "-i", "color=c=black:s=160x90:r=30:d=34.5",
+    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo:d=34.5",
+    "-map", "0:v:0", "-map", "1:a:0",
+    "-c:v", "libx264", "-preset", "ultrafast", "-profile:v", "baseline",
+    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k",
+    "-shortest", "-movflags", "+faststart", "-n", outputPath
+  ], { cwd: tempRoot, shell: false, stdio: ["ignore", "ignore", "pipe"] });
+  child.stderr.on("data", (chunk: Buffer | string) => stderr.push(Buffer.from(chunk)));
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", resolve);
   });
   if (exitCode !== 0) {
-    throw new Error(
-      `streaming bridge media fixture 생성 실패 (${exitCode}): ${Buffer.concat(stderr).toString("utf8")}`
-    );
+    throw new Error(`lease fixture MP4 생성 실패 (${String(exitCode)}): ${Buffer.concat(stderr).toString("utf8")}`);
   }
-  return readFile(outputPath);
+  const bytes = await readFile(outputPath);
+  assert(bytes.byteLength > 1_024, "lease fixture MP4가 너무 짧습니다.");
+  return bytes;
 }
 
-function rawHttpJsonFixtureResponse(
-  payload: unknown,
-  status = 200,
-  statusText = "OK"
-): string {
-  const body = JSON.stringify(payload);
-  const contentLength = Buffer.byteLength(body);
-  const response = [
-    `HTTP/1.1 ${status} ${statusText}`,
-    "Content-Type: application/json; charset=utf-8",
-    "Cache-Control: no-store",
-    `Access-Control-Allow-Origin: ${studioOrigin}`,
-    "Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers: Authorization, Content-Type, X-Kirinuki-Protocol, X-Kirinuki-Media-Access",
-    "Access-Control-Allow-Private-Network: true",
-    "Vary: Origin",
-    `Content-Length: ${contentLength}`,
-    "Connection: close",
-    "",
-    body
-  ].join("\r\n");
-  return Buffer.from(response).toString("base64");
-}
-
-async function installStreamingBridgeFixtureInterception({
-  debuggerAddress,
-  mediaBytes
-}: {
-  debuggerAddress: string;
-  mediaBytes: Buffer;
-}): Promise<StreamingBridgeFixtureInterception> {
-  const pageTarget = await waitFor(
-    async () => (await browserTargets(debuggerAddress)).find((target) => (
-      target.type === "page"
-      && String(target.url || "").startsWith(`${studioOrigin}/`)
-    )) || null,
-    (target): target is DevToolsTarget => Boolean(target?.webSocketDebuggerUrl),
-    "localhost Studio CDP page target을 찾지 못했습니다."
-  );
-  if (!pageTarget) {
-    throw new Error("localhost Studio CDP page target이 비어 있습니다.");
-  }
-  const connection = await DevToolsConnection.open(
-    String(pageTarget.webSocketDebuggerUrl)
-  );
-  const genericFixtureResponse = rawHttpFixtureResponse(
-    streamingBridgeFixtureDocument(mediaBytes)
-  );
-  const soopFixtureResponse = genericFixtureResponse;
-  const interceptedUrls: string[] = [];
-  let interceptionError: Error | null = null;
-  const unsubscribe = connection.on("Network.requestIntercepted", (params) => {
-    const interceptionId = String(params.interceptionId || "");
-    const request = isRecord(params.request) ? params.request : null;
-    const url = String(request?.url || "");
-    if (!interceptionId) {
-      interceptionError = new Error("streaming fixture interceptionId가 없습니다.");
-      return;
-    }
-    const isFixtureDocument = params.resourceType === "Document"
-      && (
-        url.startsWith("https://chzzk.naver.com/")
-        || url.startsWith("https://www.youtube-nocookie.com/")
-        || url.startsWith("https://vod.sooplive.com/")
-      );
-    const fixtureResponse = url.startsWith("https://vod.sooplive.com/")
-      ? soopFixtureResponse
-      : genericFixtureResponse;
-    void connection.send("Network.continueInterceptedRequest", isFixtureDocument
-      ? {
-        interceptionId,
-        rawResponse: fixtureResponse
-      }
-      : { interceptionId }).then(() => {
-        if (isFixtureDocument) {
-          interceptedUrls.push(url);
-        }
-      }).catch((error) => {
-        interceptionError = error instanceof Error ? error : new Error(String(error));
-      });
-  });
-  await connection.send("Network.enable");
-  await connection.send("Network.setRequestInterception", {
-    patterns: [
-      {
-        urlPattern: "https://chzzk.naver.com/*",
-        resourceType: "Document",
-        interceptionStage: "Request"
-      },
-      {
-        urlPattern: "https://www.youtube-nocookie.com/*",
-        resourceType: "Document",
-        interceptionStage: "Request"
-      },
-      {
-        urlPattern: "https://vod.sooplive.com/*",
-        resourceType: "Document",
-        interceptionStage: "Request"
-      }
-    ]
-  });
-  return {
-    interceptedUrls,
-    assertHealthy: () => {
-      if (interceptionError) {
-        throw interceptionError;
-      }
-    },
-    close: async () => {
-      unsubscribe();
-      await connection.send("Network.setRequestInterception", { patterns: [] });
-      connection.close();
-    }
-  };
-}
-
-async function installLateMaterializationFixtureInterception({
-  debuggerAddress,
+async function installLateMaterializationV2Fixture({
   sourceAUrl,
   sourceBUrl
 }: {
-  debuggerAddress: string;
   sourceAUrl: string;
   sourceBUrl: string;
 }): Promise<LateMaterializationFixtureInterception> {
-  const pageTarget = await waitFor(
-    async () => (await browserTargets(debuggerAddress)).find((target) => (
-      target.type === "page"
-      && String(target.url || "").startsWith(`${studioOrigin}/`)
-    )) || null,
-    (target): target is DevToolsTarget => Boolean(target?.webSocketDebuggerUrl),
-    "late materialization용 localhost Studio CDP page target을 찾지 못했습니다."
-  );
-  if (!pageTarget) {
-    throw new Error("late materialization용 CDP page target이 비어 있습니다.");
-  }
-  const connection = await DevToolsConnection.open(
-    String(pageTarget.webSocketDebuggerUrl)
-  );
+  const observerLeaseTtlMs = 2_000;
+  const bMediaBytes = await createLeaseReclaimFixtureMedia();
   const state = {
     interceptedUrls: [] as string[],
     pairedSessionCount: 0,
     aStarted: false,
     aConsumerId: "",
     aSourceUrl: "",
-    aPollHeld: false,
-    aCancelRequests: 0,
-    aCompletionReleased: false,
-    aCompletionDelivered: false,
-    aCompletionDeliveryError: "",
-    aArtifactCached: false,
+    aStatusPolls: 0,
+    aExplicitCancelRequests: 0,
+    aAbandonedJobsReclaimed: 0,
+    aRunnerAborted: false,
+    aRunnerSettled: false,
+    aSlotReleased: false,
+    aLateCompletionDiscarded: false,
+    aLateArtifactExposed: false,
     aCachePurgeRequests: 0,
     aMediaRequests: 0,
     bStartRequests: 0,
-    bRejected: false,
+    bQueuedBeforeReclaim: false,
+    bStatusPolls: 0,
+    bStartedAfterReclaim: false,
+    bCompleted: false,
+    bMediaRequests: 0,
     unexpectedRequests: [] as string[]
   };
   const aJobId = "late_a_job_00000001";
-  const pairingToken = "late-materialization-browser-smoke-token";
-  let aRequest: Record<string, unknown> | null = null;
-  let interceptionError: Error | null = null;
-  const delayedAStatusRequests: string[] = [];
-  const inFlightResponses = new Set<Promise<void>>();
+  const bJobId = "lease_b_job_00000001";
+  const bMediaAccess = Buffer.alloc(32, 0x5a).toString("base64url");
+  let aObserverNonce = "";
+  let bObserverNonce = "";
+  let bRequest: Record<string, unknown> | null = null;
+  let aLeaseTimer: ReturnType<typeof setTimeout> | null = null;
+  let aRunnerSettleTimer: ReturnType<typeof setTimeout> | null = null;
+  let fixtureClosed = false;
+  let fixtureError: Error | null = null;
 
-  const snapshot = (): LateMaterializationFixtureSnapshot => ({
-    ...state,
-    interceptedUrls: [...state.interceptedUrls],
-    unexpectedRequests: [...state.unexpectedRequests]
-  });
   const queuedAStatus = () => ({
     schema: "chzzk-kirinuki-vod-materialization-status/v1",
     jobId: aJobId,
@@ -1213,10 +932,18 @@ async function installLateMaterializationFixtureInterception({
     message: "A fixture materialization is deliberately finishing late",
     reused: false
   });
-  const completedAStatus = () => {
-    const clips = Array.isArray(aRequest?.clips) ? aRequest.clips : [];
+  const queuedBStatus = () => ({
+    schema: "chzzk-kirinuki-vod-materialization-status/v1",
+    jobId: bJobId,
+    state: "queued",
+    progress: 0,
+    message: "B waits for the abandoned A runner slot",
+    reused: false
+  });
+  const completedBStatus = () => {
+    const clips = Array.isArray(bRequest?.clips) ? bRequest.clips : [];
     if (clips.length !== 1 || !isRecord(clips[0])) {
-      throw new Error("late A fixture는 정확히 한 개의 materialization clip을 기대합니다.");
+      throw new Error("lease B fixture는 정확히 한 개의 materialization clip을 기대합니다.");
     }
     const clip = clips[0];
     const clipId = String(clip.id || "").trim();
@@ -1229,10 +956,10 @@ async function installLateMaterializationFixtureInterception({
       || sourceStartMs < 0
       || sourceEndMs <= sourceStartMs
     ) {
-      throw new Error("late A fixture materialization clip identity가 올바르지 않습니다.");
+      throw new Error("lease B fixture materialization clip identity가 올바르지 않습니다.");
     }
-    const requestedEditableRanges = Array.isArray(aRequest?.editableRanges)
-      ? aRequest.editableRanges
+    const requestedEditableRanges = Array.isArray(bRequest?.editableRanges)
+      ? bRequest.editableRanges
       : [];
     const requestedEditable = requestedEditableRanges.find((candidate) => (
       isRecord(candidate) && String(candidate.id || "") === clipId
@@ -1250,16 +977,17 @@ async function installLateMaterializationFixtureInterception({
       || editableSourceStartMs > sourceStartMs
       || editableSourceEndMs < sourceEndMs
     ) {
-      throw new Error("late A fixture editable coverage가 올바르지 않습니다.");
+      throw new Error("lease B fixture editable coverage가 올바르지 않습니다.");
     }
     const mediaDurationMs = editableSourceEndMs - editableSourceStartMs;
-    const planFingerprint = "a".repeat(64);
+    assert(mediaDurationMs === 34_500, `lease B fixture duration 불일치: ${mediaDurationMs}`);
+    const planFingerprint = "c".repeat(64);
     return {
       schema: "chzzk-kirinuki-vod-materialization-status/v1",
-      jobId: aJobId,
+      jobId: bJobId,
       state: "completed",
       progress: 1,
-      message: "A fixture materialization completed after the A to B transition",
+      message: "B completed after A observer lease reclamation",
       reused: false,
       materialization: {
         schema: "chzzk-kirinuki-chzzk-vod-materialization/v2",
@@ -1268,14 +996,14 @@ async function installLateMaterializationFixtureInterception({
         source: {
           platform: "CHZZK",
           contentType: "vod",
-          contentId: "14514980",
-          sourceVersionId: "b".repeat(64)
+          contentId: "14514981",
+          sourceVersionId: "d".repeat(64)
         },
         sourceDurationMs: Math.max(600_000, editableSourceEndMs),
         handleMs: 10_000,
         mediaDurationMs,
         windows: [{
-          id: "late-a-window-1",
+          id: "lease-b-window-1",
           editableSourceStartMs,
           editableSourceEndMs,
           fetchedSourceStartMs: editableSourceStartMs,
@@ -1291,215 +1019,301 @@ async function installLateMaterializationFixtureInterception({
           editableSourceStartMs,
           editableSourceEndMs
         }],
-        preparedAt: "2026-08-15T00:00:00.000Z",
+        preparedAt: "2026-08-21T00:00:00.000Z",
         localOnly: true
       },
       media: {
-        url: `http://127.0.0.1:4319/v1/vod/media/${aJobId}?access=late-a-access`,
-        name: "late-a-materialized.mp4",
-        size: 34_500,
+        url: `http://127.0.0.1:4319/v1/vod/media/${bJobId}?access=${bMediaAccess}`,
+        name: "lease-b-materialized.mp4",
+        size: bMediaBytes.byteLength,
         type: "video/mp4",
-        lastModified: 1_786_752_000_000
+        lastModified: 1_787_270_400_000
       }
     };
   };
-  const respond = (
-    interceptionId: string,
-    rawResponse: string,
-    onDelivered: () => void = () => {}
-  ): void => {
-    let responsePromise: Promise<void>;
-    responsePromise = connection.send("Network.continueInterceptedRequest", {
-      interceptionId,
-      rawResponse
-    }).then(() => {
-      onDelivered();
-    }).catch((error) => {
-      interceptionError = error instanceof Error
-        ? error
-        : new Error(String(error));
-    }).finally(() => {
-      inFlightResponses.delete(responsePromise);
-    });
-    inFlightResponses.add(responsePromise);
+  const finishAbandonedARunner = () => {
+    if (fixtureClosed || state.aRunnerSettled) return;
+    state.aRunnerSettled = true;
+    state.aLateCompletionDiscarded = true;
+    state.aLateArtifactExposed = false;
+    state.aSlotReleased = true;
+    if (state.bStartRequests === 1) {
+      state.bStartedAfterReclaim = true;
+      state.bCompleted = true;
+    }
   };
-  const unsubscribe = connection.on("Network.requestIntercepted", (params) => {
-    const interceptionId = String(params.interceptionId || "");
-    const request = isRecord(params.request) ? params.request : null;
-    const urlText = String(request?.url || "");
-    const method = String(request?.method || "GET").toUpperCase();
-    if (!interceptionId || !urlText) {
-      interceptionError = new Error("late materialization fixture request identity가 없습니다.");
-      return;
-    }
-    state.interceptedUrls.push(`${method} ${urlText}`);
-    let url: URL;
-    try {
-      url = new URL(urlText);
-    } catch {
-      interceptionError = new Error(`late materialization fixture URL이 올바르지 않습니다: ${urlText}`);
-      return;
-    }
-    if (method === "OPTIONS") {
-      respond(interceptionId, rawHttpJsonFixtureResponse({ ok: true }));
-      return;
-    }
-    if (url.pathname === "/v1/session" && method === "POST") {
-      state.pairedSessionCount += 1;
-      respond(interceptionId, rawHttpJsonFixtureResponse({
-        schema: "chzzk-kirinuki-caption-agent/session-v1",
-        status: "ok",
-        authentication: "bearer-process-memory",
-        expires: "companion-restart",
-        token: pairingToken
-      }));
-      return;
-    }
-    if (url.pathname === "/v1/captions" && method === "GET") {
-      respond(interceptionId, rawHttpJsonFixtureResponse({ status: "ok" }));
-      return;
-    }
-    if (url.pathname === "/v1/vod/materializations" && method === "POST") {
-      let body: unknown;
-      try {
-        body = JSON.parse(String(request?.postData || "null"));
-      } catch {
-        body = null;
-      }
-      if (!isRecord(body)) {
-        state.unexpectedRequests.push(`${method} ${url.pathname} invalid-json`);
-        respond(interceptionId, rawHttpJsonFixtureResponse({
-          error: { code: "INVALID_FIXTURE_REQUEST", message: "fixture request JSON missing" }
-        }, 400, "Bad Request"));
-        return;
-      }
-      const sourceUrl = String(body.sourceUrl || "");
-      if (sourceUrl === sourceAUrl) {
-        state.aStarted = true;
-        state.aConsumerId = String(body.consumerId || "");
-        state.aSourceUrl = sourceUrl;
-        aRequest = body;
-        respond(interceptionId, rawHttpJsonFixtureResponse(queuedAStatus()));
-        return;
-      }
-      if (sourceUrl === sourceBUrl) {
-        state.bStartRequests += 1;
-        state.bRejected = true;
-        respond(interceptionId, rawHttpJsonFixtureResponse({
-          error: {
-            code: "SMOKE_B_MATERIALIZATION_BLOCKED",
-            message: "B fixture intentionally rejects media preparation"
-          }
-        }, 503, "Service Unavailable"));
-        return;
-      }
-    }
-    if (url.pathname === `/v1/vod/materializations/${aJobId}`) {
-      if (method === "GET") {
-        if (state.aCompletionReleased) {
-          respond(interceptionId, rawHttpJsonFixtureResponse(completedAStatus()));
-        } else {
-          state.aPollHeld = true;
-          delayedAStatusRequests.push(interceptionId);
+  const expireAObserverLease = () => {
+    aLeaseTimer = null;
+    if (fixtureClosed || state.aRunnerAborted) return;
+    state.aAbandonedJobsReclaimed += 1;
+    state.aRunnerAborted = true;
+    aRunnerSettleTimer = setTimeout(finishAbandonedARunner, 50);
+    aRunnerSettleTimer.unref();
+  };
+  const renewAObserverLease = () => {
+    if (fixtureClosed || state.aRunnerAborted) return;
+    if (aLeaseTimer) clearTimeout(aLeaseTimer);
+    aLeaseTimer = setTimeout(expireAObserverLease, observerLeaseTtlMs);
+    aLeaseTimer.unref();
+  };
+  const fixtureRecords: LocalMediaEngineV2FixtureRecord[] = [];
+  const fixtureErrors: string[] = [];
+  const fixture = await createLocalMediaEngineV2Fixture({
+    allowedOrigin: studioOrigin,
+    errors: fixtureErrors,
+    originBinding: "exact-local-studio",
+    records: fixtureRecords,
+    onControlRequest: async (request) => {
+      const url = new URL(request.path, "http://127.0.0.1:4319");
+      if (
+        url.pathname === "/v1/vod/materializations"
+        && request.method === "POST"
+      ) {
+        if (!isRecord(request.body)) {
+          state.unexpectedRequests.push(`${request.method} ${url.pathname} invalid-json`);
+          return {
+            status: 400,
+            payload: {
+              error: {
+                code: "INVALID_FIXTURE_REQUEST",
+                message: "fixture request JSON missing"
+              }
+            }
+          };
         }
-        return;
+        const sourceUrl = String(request.body.sourceUrl || "");
+        if (sourceUrl === sourceAUrl) {
+          state.aStarted = true;
+          state.aConsumerId = String(request.body.consumerId || "");
+          state.aSourceUrl = sourceUrl;
+          aObserverNonce = request.clientNonce;
+          renewAObserverLease();
+          return { status: 202, payload: queuedAStatus() };
+        }
+        if (sourceUrl === sourceBUrl) {
+          state.bStartRequests += 1;
+          bObserverNonce = request.clientNonce;
+          bRequest = request.body;
+          if (!state.aSlotReleased) {
+            state.bQueuedBeforeReclaim = true;
+          } else {
+            state.bStartedAfterReclaim = true;
+            state.bCompleted = true;
+          }
+          if (!aObserverNonce || bObserverNonce === aObserverNonce) {
+            state.unexpectedRequests.push("A와 B가 document observer nonce를 공유했습니다.");
+          }
+          return {
+            status: 202,
+            payload: state.bCompleted ? completedBStatus() : queuedBStatus()
+          };
+        }
       }
-      if (method === "DELETE") {
-        state.aCancelRequests += 1;
-        // Model the real race where the companion has already committed the
-        // verified artifact before the fire-and-forget unload cancellation.
-        respond(interceptionId, rawHttpJsonFixtureResponse(
-          state.aCompletionReleased ? completedAStatus() : queuedAStatus()
-        ));
-        return;
+      if (
+        url.pathname === `/v1/vod/materializations/${aJobId}`
+        && request.method === "POST"
+      ) {
+        state.aStatusPolls += 1;
+        if (request.clientNonce === aObserverNonce) {
+          renewAObserverLease();
+        }
+        return { status: 200, payload: queuedAStatus() };
       }
+      if (
+        url.pathname === `/v1/vod/materializations/${aJobId}`
+        && request.method === "DELETE"
+      ) {
+        state.aExplicitCancelRequests += 1;
+        if (aLeaseTimer) {
+          clearTimeout(aLeaseTimer);
+          aLeaseTimer = null;
+        }
+        state.aRunnerAborted = true;
+        finishAbandonedARunner();
+        return {
+          status: 200,
+          payload: {
+            schema: "chzzk-kirinuki-vod-materialization-status/v1",
+            jobId: aJobId,
+            state: "cancelled",
+            progress: 0,
+            message: "A fixture materialization was explicitly cancelled",
+            reused: false
+          }
+        };
+      }
+      if (
+        url.pathname === `/v1/vod/materializations/${bJobId}`
+        && request.method === "POST"
+      ) {
+        state.bStatusPolls += 1;
+        if (request.clientNonce !== bObserverNonce) {
+          state.unexpectedRequests.push("B status observer nonce가 create와 다릅니다.");
+        }
+        return {
+          status: 200,
+          payload: state.bCompleted ? completedBStatus() : queuedBStatus()
+        };
+      }
+      if (
+        url.pathname === `/v1/vod/materializations/${aJobId}/cache`
+        || url.pathname === `/v1/vod/materializations/${aJobId}/session-cache`
+      ) {
+        state.aCachePurgeRequests += 1;
+        return {
+          status: 409,
+          statusText: "Conflict",
+          payload: {
+            error: {
+              code: "SMOKE_PURGE_NOT_ALLOWED",
+              message: "late A cache must remain owned by A"
+            }
+          }
+        };
+      }
+      state.unexpectedRequests.push(`${request.method} ${url.pathname}`);
+      return {
+        status: 404,
+        statusText: "Not Found",
+        payload: {
+          error: {
+            code: "SMOKE_UNEXPECTED_REQUEST",
+            message: "unexpected v2 fixture request"
+          }
+        }
+      };
+    },
+    onMediaRequest: ({ method, path: mediaPath, request, response }) => {
+      const url = new URL(mediaPath, "http://127.0.0.1:4319");
+      if (url.pathname === `/v1/vod/media/${aJobId}`) {
+        state.aMediaRequests += 1;
+        request.resume();
+        const bytes = Buffer.from(JSON.stringify({
+          error: {
+            code: "SMOKE_STALE_ATTACH",
+            message: "late A media must never be requested by B"
+          }
+        }), "utf8");
+        response.writeHead(409, "Conflict", {
+          "Access-Control-Allow-Origin": studioOrigin,
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Length": String(bytes.byteLength),
+          "X-Content-Type-Options": "nosniff"
+        });
+        response.end(method === "HEAD" ? undefined : bytes);
+        return true;
+      }
+      if (url.pathname !== `/v1/vod/media/${bJobId}`) {
+        return false;
+      }
+      state.bMediaRequests += 1;
+      request.resume();
+      if (url.searchParams.get("access") !== bMediaAccess) {
+        response.writeHead(403, "Forbidden", {
+          "Access-Control-Allow-Origin": studioOrigin,
+          "Cache-Control": "no-store",
+          "Content-Length": "0"
+        });
+        response.end();
+        return true;
+      }
+      const rawRange = request.headers.range;
+      const rangeHeader = Array.isArray(rawRange) ? "" : String(rawRange || "");
+      let start = 0;
+      let end = bMediaBytes.byteLength - 1;
+      let status = 200;
+      if (rangeHeader) {
+        const match = /^bytes=(\d+)-(\d*)$/u.exec(rangeHeader);
+        const requestedStart = match ? Number(match[1]) : Number.NaN;
+        const requestedEnd = match && match[2]
+          ? Number(match[2])
+          : bMediaBytes.byteLength - 1;
+        if (
+          !Number.isSafeInteger(requestedStart)
+          || !Number.isSafeInteger(requestedEnd)
+          || requestedStart < 0
+          || requestedEnd < requestedStart
+          || requestedStart >= bMediaBytes.byteLength
+        ) {
+          response.writeHead(416, "Range Not Satisfiable", {
+            "Access-Control-Allow-Origin": studioOrigin,
+            "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range",
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-store",
+            "Content-Range": `bytes */${bMediaBytes.byteLength}`,
+            "Content-Length": "0",
+            "X-Content-Type-Options": "nosniff"
+          });
+          response.end();
+          return true;
+        }
+        start = requestedStart;
+        end = Math.min(requestedEnd, bMediaBytes.byteLength - 1);
+        status = 206;
+      }
+      const bytes = bMediaBytes.subarray(start, end + 1);
+      response.writeHead(status, status === 206 ? "Partial Content" : "OK", {
+        "Access-Control-Allow-Origin": studioOrigin,
+        "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range",
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+        "Content-Type": "video/mp4",
+        "Content-Length": String(bytes.byteLength),
+        ...(status === 206
+          ? { "Content-Range": `bytes ${start}-${end}/${bMediaBytes.byteLength}` }
+          : {}),
+        "X-Content-Type-Options": "nosniff"
+      });
+      response.end(method === "HEAD" ? undefined : bytes);
+      return true;
     }
-    if (
-      url.pathname === `/v1/vod/materializations/${aJobId}/cache`
-      || url.pathname === `/v1/vod/materializations/${aJobId}/session-cache`
-    ) {
-      state.aCachePurgeRequests += 1;
-      respond(interceptionId, rawHttpJsonFixtureResponse({
-        error: { code: "SMOKE_PURGE_NOT_ALLOWED", message: "late A cache must remain owned by A" }
-      }, 409, "Conflict"));
-      return;
-    }
-    if (url.pathname === `/v1/vod/media/${aJobId}`) {
-      state.aMediaRequests += 1;
-      respond(interceptionId, rawHttpJsonFixtureResponse({
-        error: { code: "SMOKE_STALE_ATTACH", message: "late A media must never be requested by B" }
-      }, 409, "Conflict"));
-      return;
-    }
-    state.unexpectedRequests.push(`${method} ${url.pathname}`);
-    respond(interceptionId, rawHttpJsonFixtureResponse({
-      error: { code: "SMOKE_UNEXPECTED_REQUEST", message: "unexpected gateway fixture request" }
-    }, 404, "Not Found"));
   });
-  await connection.send("Network.enable");
-  await connection.send("Network.setRequestInterception", {
-    patterns: [{
-      urlPattern: gatewayPattern,
-      interceptionStage: "Request"
-    }]
-  });
+  localMediaEngineFixture = fixture;
+  await fixture.listen();
+
+  const snapshot = (): LateMaterializationFixtureSnapshot => {
+    state.pairedSessionCount = fixture.sessions.length;
+    state.interceptedUrls = fixtureRecords.map((record) => (
+      `${record.method} http://127.0.0.1:4319${record.path}`
+    ));
+    return {
+      ...state,
+      interceptedUrls: [...state.interceptedUrls],
+      unexpectedRequests: [
+        ...state.unexpectedRequests,
+        ...fixtureErrors.map((error) => `fixture-error ${error}`)
+      ]
+    };
+  };
   return {
     snapshot,
-    releaseACompletion: async () => {
-      if (!aRequest || !state.aStarted || delayedAStatusRequests.length === 0) {
-        throw new Error("late A materialization이 시작되고 status poll이 대기한 뒤에만 완료할 수 있습니다.");
-      }
-      state.aCompletionReleased = true;
-      state.aArtifactCached = true;
-      const rawResponse = rawHttpJsonFixtureResponse(completedAStatus());
-      const heldRequests = delayedAStatusRequests.splice(0);
-      for (const interceptionId of heldRequests) {
-        try {
-          await connection.send("Network.continueInterceptedRequest", {
-            interceptionId,
-            rawResponse
-          });
-          state.aCompletionDelivered = true;
-        } catch (error) {
-          state.aCompletionDeliveryError = errorMessage(error);
-        }
-      }
-    },
     assertHealthy: () => {
-      if (interceptionError) {
-        throw interceptionError;
+      if (fixtureErrors.length > 0) {
+        throw new Error(fixtureErrors.join("\n"));
+      }
+      if (fixtureError) {
+        throw fixtureError;
       }
     },
     close: async () => {
-      await Promise.allSettled([...inFlightResponses]);
-      unsubscribe();
-      await connection.send("Network.setRequestInterception", { patterns: [] });
-      connection.close();
+      try {
+        fixtureClosed = true;
+        if (aLeaseTimer) clearTimeout(aLeaseTimer);
+        if (aRunnerSettleTimer) clearTimeout(aRunnerSettleTimer);
+        aLeaseTimer = null;
+        aRunnerSettleTimer = null;
+        await fixture.close();
+      } catch (error) {
+        fixtureError = error instanceof Error ? error : new Error(String(error));
+        throw fixtureError;
+      } finally {
+        if (localMediaEngineFixture === fixture) {
+          localMediaEngineFixture = null;
+        }
+      }
     }
   };
-}
-
-async function streamingBridgeFixtureState(
-  target: DevToolsTarget
-): Promise<StreamingBridgeFixtureState> {
-  const value = await evaluateTarget(
-    target,
-    "JSON.stringify(globalThis.__kirinukiStreamingBridgeFixture?.state?.() || null)"
-  );
-  const parsed: unknown = JSON.parse(String(value || "null"));
-  if (!isRecord(parsed) || !Array.isArray(parsed.calls)) {
-    throw new Error("streaming bridge iframe fixture 상태를 읽지 못했습니다.");
-  }
-  return parsed as unknown as StreamingBridgeFixtureState;
-}
-
-async function resetStreamingBridgeFixtureCalls(
-  target: DevToolsTarget
-): Promise<void> {
-  await evaluateTarget(
-    target,
-    "globalThis.__kirinukiStreamingBridgeFixture?.resetCalls?.(); true"
-  );
 }
 
 async function dispatchStudioShortcut(key: string): Promise<boolean> {
@@ -1515,398 +1329,211 @@ async function dispatchStudioShortcut(key: string): Promise<boolean> {
   `, [key]);
 }
 
-async function dispatchStreamingFrameShortcut({
-  target,
-  key,
-  selector = "#fixture-stream-video",
-  extras = "{}"
-}: {
-  target: DevToolsTarget;
-  key: string;
-  selector?: string;
-  extras?: string;
-}): Promise<boolean> {
-  if (extras === "{}") {
-    await evaluateTarget(target, `(() => {
-      const target = document.querySelector(${JSON.stringify(selector)});
-      if (!target) throw new Error("streaming shortcut fixture target 없음");
-      target.focus();
-      globalThis.__kirinukiTrustedKeyObservation = null;
-      addEventListener("keydown", (event) => {
-        setTimeout(() => {
-          globalThis.__kirinukiTrustedKeyObservation = {
-            isTrusted: event.isTrusted,
-            defaultPrevented: event.defaultPrevented
-          };
-        }, 0);
-      }, { capture: true, once: true });
-      return true;
-    })()`);
-    const upper = key.toUpperCase();
-    const virtualKeyCode = upper.charCodeAt(0);
-    const common = {
-      key: key.toLowerCase(),
-      code: `Key${upper}`,
-      windowsVirtualKeyCode: virtualKeyCode,
-      nativeVirtualKeyCode: virtualKeyCode
-    };
-    await targetCommand(target, "Input.dispatchKeyEvent", {
-      type: "rawKeyDown",
-      ...common
-    });
-    await targetCommand(target, "Input.dispatchKeyEvent", {
-      type: "keyUp",
-      ...common
-    });
-    await delay(30);
-    const observed = await evaluateTarget(
-      target,
-      "globalThis.__kirinukiTrustedKeyObservation"
-    );
-    return isRecord(observed)
-      && observed.isTrusted === true
-      && observed.defaultPrevented === true;
+async function captureLocalMediaEngineProtocolAttempt(
+  debuggerAddress: string
+): Promise<string> {
+  const pageTarget = await waitFor(
+    async () => (await browserTargets(debuggerAddress)).find((target) => (
+      target.type === "page"
+      && String(target.url || "").startsWith(`${studioOrigin}/editor.html`)
+    )) || null,
+    (target): target is DevToolsTarget => Boolean(target?.webSocketDebuggerUrl),
+    "pairing protocol 확인용 editor CDP target을 찾지 못했습니다."
+  );
+  if (!pageTarget) {
+    throw new Error("pairing protocol 확인용 editor target이 비어 있습니다.");
   }
-  const value = await evaluateTarget(target, `(() => {
-    const target = document.querySelector(${JSON.stringify(selector)});
-    if (!target) throw new Error("streaming shortcut fixture target 없음");
-    target.focus();
-    const event = new KeyboardEvent("keydown", {
-      key: ${JSON.stringify(key.toLowerCase())},
-      code: ${JSON.stringify(`Key${key.toUpperCase()}`)},
-      bubbles: true,
-      cancelable: true,
-      ...(${extras})
-    });
-    target.dispatchEvent(event);
-    return event.defaultPrevented;
-  })()`);
-  return value === true;
-}
-
-interface StreamingShortcutSequenceResult {
-  readonly start: string;
-  readonly end: string;
-  readonly currentTime: number;
-  readonly playbackRate: number;
-  readonly allHandled: boolean;
-  readonly iframeVisible: boolean;
-  readonly iframePreserved: boolean;
-  readonly orderedBridgeActions: boolean;
-  readonly inputBlocked: boolean;
-  readonly imeBlocked: boolean;
-  readonly modifierBlocked: boolean;
-  readonly repeatBlocked: boolean;
-  readonly videoFocusedAllowed: boolean;
-  readonly disabledButtonIgnored: boolean;
-  readonly controlsEnabled: boolean;
-  readonly transientFailureRecovered: boolean;
-  readonly unsignedResponseIgnored: boolean;
-  readonly unsignedShortcutIgnored: boolean;
-  readonly calls: StreamingBridgeFixtureState["calls"];
-}
-
-function bridgeActionSubsequence(
-  calls: StreamingBridgeFixtureState["calls"]
-): boolean {
-  const expected = [
-    (call: StreamingBridgeFixtureState["calls"][number]) => call.action === "snapshot",
-    (call: StreamingBridgeFixtureState["calls"][number]) => (
-      call.action === "seek-absolute" && call.targetSeconds === 85.5
-    ),
-    (call: StreamingBridgeFixtureState["calls"][number]) => call.action === "snapshot",
-    (call: StreamingBridgeFixtureState["calls"][number]) => (
-      call.action === "seek-absolute" && call.targetSeconds === 80.5
-    ),
-    (call: StreamingBridgeFixtureState["calls"][number]) => (
-      call.action === "set-playback-rate" && call.playbackRate === 0.25
-    ),
-    (call: StreamingBridgeFixtureState["calls"][number]) => (
-      call.action === "set-playback-rate" && call.playbackRate === 2
-    )
-  ];
-  let expectedIndex = 0;
-  for (const call of calls) {
-    if (expected[expectedIndex]?.(call)) {
-      expectedIndex += 1;
+  const connection = await DevToolsConnection.open(
+    String(pageTarget.webSocketDebuggerUrl)
+  );
+  await connection.send("Page.enable");
+  let resolveAttempt: (url: string) => void = () => undefined;
+  const attempted = new Promise<string>((resolve) => {
+    resolveAttempt = resolve;
+  });
+  const unsubscribe = connection.on("Page.frameRequestedNavigation", (params) => {
+    const url = String(params.url || "");
+    if (!url.startsWith("kirinuki-engine://pair?")) {
+      return;
     }
-  }
-  return expectedIndex === expected.length;
-}
-
-async function runStreamingShortcutSequence({
-  debuggerAddress,
-  expectedEmbedUrl,
-  expectedStart = "00:01:20.500",
-  expectedEnd = "00:01:25.500",
-  verifyFrameShortcutGuards = false,
-  verifyAuthenticatedForgeryGuards = false
-}: {
-  debuggerAddress: string;
-  expectedEmbedUrl: string;
-  expectedStart?: string;
-  expectedEnd?: string;
-  verifyFrameShortcutGuards?: boolean;
-  verifyAuthenticatedForgeryGuards?: boolean;
-}): Promise<StreamingShortcutSequenceResult> {
-  const target = await waitForIframeTarget(debuggerAddress, expectedEmbedUrl);
-  await waitFor(
-    async () => evaluateTarget(target, `(() => {
-      const video = document.querySelector("#fixture-stream-video");
-      return video instanceof HTMLVideoElement ? {
-        ready: video.readyState >= HTMLMediaElement.HAVE_METADATA
-          && Number.isFinite(video.duration)
-          && video.duration >= 199,
-        readyState: video.readyState,
-        networkState: video.networkState,
-        duration: video.duration,
-        currentSrc: video.currentSrc,
-        errorCode: video.error?.code || 0,
-        errorMessage: video.error?.message || ""
-      } : { ready: false, missing: true };
-    })()`),
-    (value) => isRecord(value) && value.ready === true,
-    "streaming bridge 실제 media fixture metadata를 읽지 못했습니다."
-  );
-  await evaluateTarget(target, `(() => {
-    const video = document.querySelector("#fixture-stream-video");
-    if (!(video instanceof HTMLVideoElement)) return false;
-    video.currentTime = 80.5;
-    video.pause();
-    return true;
-  })()`);
-  await waitFor(
-    () => streamingBridgeFixtureState(target),
-    (value) => Math.abs(value.currentTime - 80.5) <= 0.05,
-    "streaming bridge 실제 media fixture를 80.5초에 맞추지 못했습니다."
-  );
-  await waitFor(
-    () => execute<{ enabled: boolean; status: string }>(`
-      return {
-        enabled: ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-          .every((id) => !document.querySelector("#" + id)?.disabled),
-        status: document.querySelector("#stream-cut-console-status")?.textContent || ""
-      };
-    `),
-    (value) => value.enabled && value.status.includes("원본 스트리밍 연결 완료"),
-    "production streaming bridge가 컷 제어를 활성화하지 못했습니다."
-  );
-  let unsignedResponseIgnored = true;
-  let unsignedShortcutIgnored = true;
-  if (verifyAuthenticatedForgeryGuards) {
-    const before = await execute<string>(`
-      return document.querySelector('.clip-row [data-field="start"]')?.value || "";
-    `);
-    const forged = await evaluateTarget(
-      target,
-      "globalThis.__kirinukiStreamingBridgeFixture?.forgeUnsignedShortcut?.() === true"
-    );
-    await delay(120);
-    const after = await execute<string>(`
-      return document.querySelector('.clip-row [data-field="start"]')?.value || "";
-    `);
-    const fixtureState = await streamingBridgeFixtureState(target);
-    unsignedShortcutIgnored = forged === true && after === before;
-    unsignedResponseIgnored = fixtureState.unsignedResponseAttempts > 0;
-  }
-  const frameBeforeTransientFailure = await execute<boolean>(`
-    globalThis.__kirinukiStreamingFrameBeforeTransientFailure =
-      document.querySelector("#stream-preview-frame");
-    return true;
-  `);
-  if (!frameBeforeTransientFailure) {
-    throw new Error("transient bridge recovery 기준 iframe을 저장하지 못했습니다.");
-  }
-  const failureCountBefore = (
-    await streamingBridgeFixtureState(target)
-  ).emittedTransientFailures;
-  await evaluateTarget(
-    target,
-    "globalThis.__kirinukiStreamingBridgeFixture?.failNextSnapshot?.(); true"
-  );
-  await waitFor(
-    () => streamingBridgeFixtureState(target),
-    (value) => value.emittedTransientFailures === failureCountBefore + 1,
-    "fixture가 일시적인 streaming action-failed를 발생시키지 못했습니다."
-  );
-  const transientFailureRecovered = await waitFor(
-    () => execute<boolean>(`
-      const frame = document.querySelector("#stream-preview-frame");
-      const status = document.querySelector("#stream-cut-console-status")
-        ?.textContent || "";
-      return frame === globalThis.__kirinukiStreamingFrameBeforeTransientFailure
-        && ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-          .every((id) => !document.querySelector("#" + id)?.disabled)
-        && status.includes("시각 동기화를 자동으로 복구했습니다");
-    `),
-    Boolean,
-    "한 번의 streaming action-failed 뒤 iframe reload 없이 자동 복구하지 못했습니다."
-  );
-  await resetStreamingBridgeFixtureCalls(target);
-  await execute(`
-    const row = document.querySelector(".clip-row");
-    const start = row?.querySelector('[data-field="start"]');
-    const end = row?.querySelector('[data-field="end"]');
-    if (!(start instanceof HTMLInputElement) || !(end instanceof HTMLInputElement)) {
-      throw new Error("streaming bridge 구간 입력 행이 없습니다.");
-    }
-    start.value = "";
-    end.value = "";
-    start.dispatchEvent(new Event("input", { bubbles: true }));
-    end.dispatchEvent(new Event("input", { bubbles: true }));
-    globalThis.__kirinukiStreamingFrameBeforeSequence =
-      document.querySelector("#stream-preview-frame");
-    return true;
-  `);
-
-  const handled: boolean[] = [];
-  handled.push(await dispatchStudioShortcut("E"));
-  await waitFor(
-    () => execute<string>(`
-      return document.querySelector('.clip-row [data-field="start"]')?.value || "";
-    `),
-    (value) => value === expectedStart,
-    "E가 원본 스트리밍 현재 시각을 시작점으로 캡처하지 못했습니다."
-  );
-  handled.push(await dispatchStudioShortcut("F"));
-  await waitFor(
-    () => streamingBridgeFixtureState(target),
-    (value) => value.currentTime === 85.5,
-    "F가 원본 스트리밍을 +5초 이동하지 못했습니다."
-  );
-  handled.push(await dispatchStudioShortcut("R"));
-  await waitFor(
-    () => execute<string>(`
-      return document.querySelector('.clip-row [data-field="end"]')?.value || "";
-    `),
-    (value) => value === expectedEnd,
-    "R이 이동한 원본 스트리밍 시각을 끝점으로 캡처하지 못했습니다."
-  );
-  handled.push(await dispatchStudioShortcut("D"));
-  await waitFor(
-    () => streamingBridgeFixtureState(target),
-    (value) => value.currentTime === 80.5,
-    "D가 원본 스트리밍을 -5초 이동하지 못했습니다."
-  );
-  handled.push(await dispatchStudioShortcut("Y"));
-  await waitFor(
-    () => streamingBridgeFixtureState(target),
-    (value) => value.playbackRate === 0.25,
-    "Y가 원본 스트리밍을 0.25배속으로 설정하지 못했습니다."
-  );
-  handled.push(await dispatchStudioShortcut("U"));
-  const finalState = await waitFor(
-    () => streamingBridgeFixtureState(target),
-    (value) => value.playbackRate === 2 && bridgeActionSubsequence(value.calls),
-    "U 또는 E→F→R→D→Y→U bridge 명령 순서가 올바르지 않습니다."
-  );
-
-  let inputBlocked = true;
-  let imeBlocked = true;
-  let modifierBlocked = true;
-  let repeatBlocked = true;
-  let videoFocusedAllowed = true;
-  let disabledButtonIgnored = true;
-  if (verifyFrameShortcutGuards) {
-    inputBlocked = !await dispatchStreamingFrameShortcut({
-      target,
-      key: "E",
-      selector: "#fixture-stream-input"
-    });
-    imeBlocked = !await dispatchStreamingFrameShortcut({
-      target,
-      key: "E",
-      extras: "{ isComposing: true }"
-    });
-    modifierBlocked = !await dispatchStreamingFrameShortcut({
-      target,
-      key: "E",
-      extras: "{ ctrlKey: true }"
-    });
-    repeatBlocked = !await dispatchStreamingFrameShortcut({
-      target,
-      key: "E",
-      extras: "{ repeat: true }"
-    });
-
-    await execute(`
-      const row = document.querySelector(".clip-row");
-      const start = row?.querySelector('[data-field="start"]');
-      const button = document.querySelector("#capture-start");
-      if (!(start instanceof HTMLInputElement) || !(button instanceof HTMLButtonElement)) {
-        throw new Error("disabled shortcut fixture 요소가 없습니다.");
-      }
-      start.value = "00:00:01";
-      Object.defineProperty(button, "disabled", {
-        configurable: true,
-        get: () => true,
-        set: () => undefined
-      });
-      return true;
-    `);
-    await dispatchStreamingFrameShortcut({ target, key: "E" });
-    await delay(120);
-    disabledButtonIgnored = await execute<boolean>(`
-      const start = document.querySelector('.clip-row [data-field="start"]');
-      const button = document.querySelector("#capture-start");
-      const ignored = start?.value === "00:00:01";
-      if (button instanceof HTMLButtonElement) {
-        delete button.disabled;
-        button.removeAttribute("disabled");
-      }
-      return ignored;
-    `);
-    videoFocusedAllowed = await dispatchStreamingFrameShortcut({
-      target,
-      key: "E"
-    });
-    await waitFor(
-      () => execute<string>(`
-        return document.querySelector('.clip-row [data-field="start"]')?.value || "";
+    resolveAttempt(url);
+    void connection.send("Page.stopLoading").catch(() => undefined);
+  });
+  try {
+    const prompt = await waitFor(
+      () => execute<{
+        dialogOpen: boolean;
+        retryDisabled: boolean;
+        retryLabel: string;
+      }>(`
+        const dialog = document.querySelector("#local-media-engine-dialog");
+        const retry = document.querySelector("#local-media-engine-retry");
+        return {
+          dialogOpen: dialog instanceof HTMLDialogElement && dialog.open,
+          retryDisabled: !(retry instanceof HTMLButtonElement) || retry.disabled,
+          retryLabel: retry?.textContent?.trim() || ""
+        };
       `),
-      (value) => value === expectedStart,
-      "iframe VIDEO 포커스 단축키가 enabled parent 버튼을 click하지 못했습니다."
+      (value) => (
+        value.dialogOpen
+        && !value.retryDisabled
+        && value.retryLabel === "이 PC 연결"
+      ),
+      "최초 1회 이 PC 연결 버튼이 표시되지 않았습니다.",
+      20_000
     );
+    assert(prompt.dialogOpen, "최초 로컬 엔진 연결 안내가 열리지 않았습니다.");
+    await execute(`
+      const retry = document.querySelector("#local-media-engine-retry");
+      if (!(retry instanceof HTMLButtonElement) || retry.disabled) {
+        throw new Error("이 PC 연결 버튼을 누를 수 없습니다.");
+      }
+      retry.click();
+      return true;
+    `);
+    const timeout = delay(5_000).then(() => {
+      throw new Error("이 PC 연결 버튼이 custom scheme navigation을 시도하지 않았습니다.");
+    });
+    const attemptedUrl = await Promise.race([attempted, timeout]);
+    const parsed = parseLocalMediaEnginePairingRequest(attemptedUrl);
+    assert(
+      localMediaEnginePairingUrl(parsed) === attemptedUrl,
+      `이 PC 연결 버튼의 pairing payload가 canonical form이 아닙니다: ${attemptedUrl}`
+    );
+    process.stderr.write("[browser-smoke] 이 PC 연결 custom-scheme payload 확인\n");
+    return attemptedUrl;
+  } finally {
+    unsubscribe();
+    connection.close();
   }
+}
 
-  const hostState = await execute<{
-    start: string;
-    end: string;
-    iframeVisible: boolean;
-    iframePreserved: boolean;
-    controlsEnabled: boolean;
-  }>(`
-    const frame = document.querySelector("#stream-preview-frame");
-    const row = document.querySelector(".clip-row");
-    return {
-      start: row?.querySelector('[data-field="start"]')?.value || "",
-      end: row?.querySelector('[data-field="end"]')?.value || "",
-      iframeVisible: frame instanceof HTMLIFrameElement
-        && frame.hidden === false
-        && frame.getBoundingClientRect().width > 0
-        && frame.getBoundingClientRect().height > 0,
-      iframePreserved: frame === globalThis.__kirinukiStreamingFrameBeforeSequence,
-    controlsEnabled: ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-        .every((id) => !document.querySelector("#" + id)?.disabled)
+async function enrollLocalMediaEngineFixture(
+  fixture: Readonly<LocalMediaEngineV2Fixture>
+): Promise<void> {
+  const state = freshLocalMediaEngineChallenge();
+  const challenge = freshLocalMediaEngineChallenge();
+  await execute(`
+    globalThis.__kirinukiSmokePairing = null;
+    fetch("http://127.0.0.1:4319/v1/pairing", {
+      method: "GET",
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      targetAddressSpace: "loopback",
+      headers: {
+        "X-Kirinuki-Protocol": arguments[0],
+        [arguments[1]]: arguments[2],
+        [arguments[3]]: arguments[4]
+      }
+    }).then(async (response) => {
+      globalThis.__kirinukiSmokePairing = {
+        ok: response.ok,
+        status: response.status,
+        value: await response.json(),
+        error: ""
+      };
+    }, (error) => {
+      globalThis.__kirinukiSmokePairing = {
+        ok: false,
+        status: 0,
+        value: null,
+        error: String(error)
+      };
+    });
+    return true;
+  `, [
+    LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
+    LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
+    state,
+    LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+    challenge
+  ]);
+  const pairingResult = await waitFor(
+    () => execute<{
+      ok: boolean;
+      status: number;
+      value: unknown;
+      error: string;
+    } | null>("return globalThis.__kirinukiSmokePairing || null;"),
+    (value) => value !== null,
+    "브라우저가 v2 signed pairing fixture 응답을 받지 못했습니다."
+  );
+  const pairing = parseLocalMediaEnginePairingResponse(pairingResult?.value);
+  assert(
+    pairingResult?.ok
+      && pairingResult.status === 200
+      && !pairingResult.error
+      && pairing
+      && pairing.state === state
+      && pairing.challenge === challenge
+      && pairing.keyId === fixture.keyId
+      && pairing.publicKeySpki === fixture.publicKeySpki
+      && await verifyLocalMediaEngineSignature({
+        publicKeySpki: pairing.publicKeySpki,
+        signature: pairing.signature,
+        transcript: localMediaEngineProofTranscript({
+          kind: "pairing",
+          challenge,
+          instanceNonce: "",
+          requestBinding: state,
+          payload: pairingResponseUnsignedPayload(pairing)
+        })
+      }),
+    `v2 fixture pairing identity 서명이 올바르지 않습니다: ${JSON.stringify(pairingResult)}`
+  );
+  await execute(`
+    globalThis.__kirinukiSmokePinWrite = null;
+    const open = indexedDB.open(arguments[0], 1);
+    open.onupgradeneeded = () => {
+      if (!open.result.objectStoreNames.contains(arguments[1])) {
+        open.result.createObjectStore(arguments[1]);
+      }
     };
-  `);
-  return {
-    ...hostState,
-    currentTime: finalState.currentTime,
-    playbackRate: finalState.playbackRate,
-    allHandled: handled.every(Boolean),
-    orderedBridgeActions: bridgeActionSubsequence(finalState.calls),
-    inputBlocked,
-    imeBlocked,
-    modifierBlocked,
-    repeatBlocked,
-    videoFocusedAllowed,
-    disabledButtonIgnored,
-    transientFailureRecovered,
-    unsignedResponseIgnored,
-    unsignedShortcutIgnored,
-    calls: finalState.calls
-  };
+    open.onerror = () => {
+      globalThis.__kirinukiSmokePinWrite = {
+        ready: false,
+        error: String(open.error || "open failed")
+      };
+    };
+    open.onsuccess = () => {
+      const database = open.result;
+      const transaction = database.transaction(arguments[1], "readwrite");
+      transaction.objectStore(arguments[1]).put(arguments[2], "active");
+      transaction.oncomplete = () => {
+        database.close();
+        globalThis.__kirinukiSmokePinWrite = { ready: true, error: "" };
+      };
+      transaction.onerror = () => {
+        globalThis.__kirinukiSmokePinWrite = {
+          ready: false,
+          error: String(transaction.error || "pin write failed")
+        };
+      };
+    };
+    return true;
+  `, [
+    LOCAL_MEDIA_ENGINE_TRUST_DATABASE,
+    LOCAL_MEDIA_ENGINE_TRUST_STORE,
+    {
+      schema: LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
+      algorithm: pairing.algorithm,
+      keyId: pairing.keyId,
+      publicKeySpki: pairing.publicKeySpki,
+      enrolledAt: new Date().toISOString(),
+      maxSeenVersion: pairing.engineVersion
+    }
+  ]);
+  const stored = await waitFor(
+    () => execute<{ ready: boolean; error: string } | null>(
+      "return globalThis.__kirinukiSmokePinWrite || null;"
+    ),
+    (value) => Boolean(value?.ready || value?.error),
+    "검증된 v2 fixture pairing identity를 임시 브라우저 profile에 고정하지 못했습니다."
+  );
+  assert(stored?.ready && !stored.error, `v2 fixture pin 저장 실패: ${stored?.error || "unknown"}`);
+  process.stderr.write("[browser-smoke] signed pairing identity 임시 profile 고정 완료\n");
 }
 
 async function setSourceAndVerify({
@@ -2076,6 +1703,11 @@ async function cleanup(): Promise<void> {
       }
       sessionId = "";
     }
+    if (localMediaEngineFixture) {
+      const fixture = localMediaEngineFixture;
+      localMediaEngineFixture = null;
+      await fixture.close().catch(() => undefined);
+    }
     await stopManagedChild(driver);
     await stopManagedChild(studio);
     await rm(tempRoot, {
@@ -2115,33 +1747,11 @@ async function main(): Promise<void> {
   ]) {
     await access(path.join(root, requiredPath));
   }
-  const companionBuild = await buildStreamingCompanion({
-    rootDirectory: root,
-    write: false,
-    logLevel: "silent"
-  });
   const freshWebBuild = await buildWebJavaScript({
     rootDirectory: root,
     write: false,
     logLevel: "silent"
   });
-  const companionJavaScriptBytes = companionBuild.outputs.get(
-    STREAMING_COMPANION_JAVASCRIPT_PATH
-  );
-  const soopCompanionJavaScriptBytes = companionBuild.outputs.get(
-    SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH
-  );
-  const studioRelayJavaScriptBytes = companionBuild.outputs.get(
-    STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH
-  );
-  if (
-    !companionJavaScriptBytes
-    || !soopCompanionJavaScriptBytes
-    || !studioRelayJavaScriptBytes
-  ) {
-    throw new Error("production streaming companion bundle을 준비하지 못했습니다.");
-  }
-  const companionRoot = path.join(root, "streaming-companion");
   const serverMode = await ensureStudioServer();
   for (const relativePath of ["web/studio.js", "web/editor/editor.js"]) {
     const outputPath = relativePath.replace(/^web\//u, "");
@@ -2205,8 +1815,6 @@ async function main(): Promise<void> {
             "--disable-dev-shm-usage",
             "--no-first-run",
             "--no-default-browser-check",
-            `--disable-extensions-except=${companionRoot}`,
-            `--load-extension=${companionRoot}`,
             `--user-data-dir=${profileRoot}`
           ]
         }
@@ -2242,15 +1850,13 @@ async function main(): Promise<void> {
     browserArguments.some((argument) => argument === `--user-data-dir=${profileRoot}`),
     "Chromium이 smoke 전용 임시 프로필을 쓰지 않습니다."
   );
-  const extensionArguments = browserArguments.filter((argument) => (
-    argument.startsWith("--load-extension")
-    || argument.startsWith("--disable-extensions-except")
-    || argument.includes("chrome-extension://")
-  ));
   assert(
-    extensionArguments.length === 2
-      && extensionArguments.every((argument) => argument.endsWith(companionRoot)),
-    "localhost smoke는 exact 최소 streaming companion 하나만 로드해야 합니다."
+    !browserArguments.some((argument) => (
+      argument.startsWith("--load-extension")
+      || argument.startsWith("--disable-extensions-except")
+      || argument.includes("chrome-extension://")
+    )),
+    "웹 편집기 smoke는 브라우저 확장 프로그램을 로드하면 안 됩니다."
   );
   await cdp("Network.enable", {});
   await cdp("Network.setBlockedURLs", {
@@ -2258,9 +1864,7 @@ async function main(): Promise<void> {
       gatewayPattern,
       ...(liveEmbedSmoke
         ? []
-        : externalEmbedPatterns.filter((pattern) => (
-          pattern === "https://www.youtube.com/*"
-      )))
+        : externalEmbedPatterns)
     ]
   });
   const desktopClientSignals = await execute<{
@@ -2548,13 +2152,6 @@ async function main(): Promise<void> {
     studioReferrerPolicy === "strict-origin-when-cross-origin",
     `YouTube client identity를 보존할 localhost referrer policy가 다릅니다: ${studioReferrerPolicy}`
   );
-  const streamingBridgeFixture = liveEmbedSmoke
-    ? null
-    : await installStreamingBridgeFixtureInterception({
-      debuggerAddress,
-      mediaBytes: await buildStreamingBridgeFixtureMedia()
-    });
-
   const chzzkUrl = "https://chzzk.naver.com/video/14514980";
   const transitionChzzkUrl = "https://chzzk.naver.com/video/14514981";
   const youtubeUrl = "https://youtu.be/M7lc1UVf-VE?t=5";
@@ -2570,51 +2167,7 @@ async function main(): Promise<void> {
     debuggerAddress,
     requireLiveTarget: liveEmbedSmoke
   });
-  let chzzkLiveBridge: { enabled: boolean; frameHidden: boolean } | null = null;
-  let chzzkStreamingBridge: StreamingShortcutSequenceResult | null = null;
-  if (liveEmbedSmoke) {
-    chzzkLiveBridge = await waitFor(
-      () => execute<{ enabled: boolean; frameHidden: boolean }>(`
-        const frame = document.querySelector("#stream-preview-frame");
-        return {
-          enabled: ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-            .every((id) => !document.querySelector("#" + id)?.disabled),
-          frameHidden: Boolean(frame?.hidden)
-        };
-      `),
-      (value) => value.enabled && value.frameHidden === false,
-      "실제 CHZZK iframe companion이 컷 제어를 활성화하지 못했습니다.",
-      20_000
-    );
-  } else {
-    chzzkStreamingBridge = await runStreamingShortcutSequence({
-      debuggerAddress,
-      expectedEmbedUrl: chzzkUrl,
-      verifyAuthenticatedForgeryGuards: true
-    });
-  }
-  assert(
-    liveEmbedSmoke
-      ? Boolean(chzzkLiveBridge?.enabled && chzzkLiveBridge.frameHidden === false)
-      : Boolean(chzzkStreamingBridge
-        && chzzkStreamingBridge.start === "00:01:20.500"
-        && chzzkStreamingBridge.end === "00:01:25.500"
-        && chzzkStreamingBridge.currentTime === 80.5
-        && chzzkStreamingBridge.playbackRate === 2
-        && chzzkStreamingBridge.allHandled
-        && chzzkStreamingBridge.orderedBridgeActions
-        && chzzkStreamingBridge.transientFailureRecovered
-        && chzzkStreamingBridge.unsignedResponseIgnored
-        && chzzkStreamingBridge.unsignedShortcutIgnored
-        && chzzkStreamingBridge.iframeVisible
-        && chzzkStreamingBridge.iframePreserved
-        && chzzkStreamingBridge.controlsEnabled),
-    `CHZZK 원본 streaming bridge 제어가 깨졌습니다: ${JSON.stringify({
-      chzzkLiveBridge,
-      chzzkStreamingBridge
-    })}`
-  );
-  process.stderr.write("[browser-smoke] CHZZK streaming bridge 검증 완료\n");
+  process.stderr.write("[browser-smoke] CHZZK 원본 임베드 검증 완료\n");
   const youtubeFrame = await setSourceAndVerify({
     inputUrl: youtubeUrl,
     expectedSourceLabel: "YouTube VOD",
@@ -2638,58 +2191,7 @@ async function main(): Promise<void> {
       && youtubeStreamingFrame.frameUrl === youtubeEmbed,
     `YouTube 원본 streaming iframe이 유지되지 않았습니다: ${JSON.stringify(youtubeStreamingFrame)}`
   );
-  let youtubeLiveBridge: { enabled: boolean; frameHidden: boolean } | null = null;
-  let youtubeStreamingBridge: StreamingShortcutSequenceResult | null = null;
-  if (liveEmbedSmoke) {
-    youtubeLiveBridge = await waitFor(
-      () => execute<{ enabled: boolean; frameHidden: boolean }>(`
-        const frame = document.querySelector("#stream-preview-frame");
-        return {
-          enabled: ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-            .every((id) => !document.querySelector("#" + id)?.disabled),
-          frameHidden: Boolean(frame?.hidden)
-        };
-      `),
-      (value) => value.enabled && value.frameHidden === false,
-      "실제 YouTube iframe의 격리된 Player Bridge가 컷 제어를 활성화하지 못했습니다.",
-      20_000
-    );
-  } else {
-    youtubeStreamingBridge = await runStreamingShortcutSequence({
-      debuggerAddress,
-      expectedEmbedUrl: youtubeEmbed,
-      verifyFrameShortcutGuards: true,
-      verifyAuthenticatedForgeryGuards: true
-    });
-  }
-  assert(
-    liveEmbedSmoke
-      ? Boolean(youtubeLiveBridge?.enabled && youtubeLiveBridge.frameHidden === false)
-      : Boolean(youtubeStreamingBridge
-        && youtubeStreamingBridge.start === "00:01:20.500"
-        && youtubeStreamingBridge.end === "00:01:25.500"
-        && youtubeStreamingBridge.currentTime === 80.5
-        && youtubeStreamingBridge.playbackRate === 2
-        && youtubeStreamingBridge.allHandled
-        && youtubeStreamingBridge.orderedBridgeActions
-        && youtubeStreamingBridge.transientFailureRecovered
-        && youtubeStreamingBridge.unsignedResponseIgnored
-        && youtubeStreamingBridge.unsignedShortcutIgnored
-        && youtubeStreamingBridge.iframeVisible
-        && youtubeStreamingBridge.iframePreserved
-        && youtubeStreamingBridge.controlsEnabled
-        && youtubeStreamingBridge.inputBlocked
-        && youtubeStreamingBridge.imeBlocked
-        && youtubeStreamingBridge.modifierBlocked
-        && youtubeStreamingBridge.repeatBlocked
-        && youtubeStreamingBridge.videoFocusedAllowed
-        && youtubeStreamingBridge.disabledButtonIgnored),
-    `YouTube 원본 streaming bridge 제어가 깨졌습니다: ${JSON.stringify({
-      youtubeLiveBridge,
-      youtubeStreamingBridge
-    })}`
-  );
-  process.stderr.write("[browser-smoke] YouTube streaming player 검증 완료\n");
+  process.stderr.write("[browser-smoke] YouTube 원본 임베드 검증 완료\n");
   const soopFrame = await setSourceAndVerify({
     inputUrl: soopUrl,
     expectedSourceLabel: "SOOP VOD",
@@ -2698,57 +2200,32 @@ async function main(): Promise<void> {
     debuggerAddress,
     requireLiveTarget: liveEmbedSmoke
   });
-  let soopLiveBridge: { enabled: boolean; frameHidden: boolean } | null = null;
-  let soopStreamingBridge: StreamingShortcutSequenceResult | null = null;
-  if (liveEmbedSmoke) {
-    soopLiveBridge = await waitFor(
-      () => execute<{ enabled: boolean; frameHidden: boolean }>(`
-        const frame = document.querySelector("#stream-preview-frame");
-        return {
-          enabled: ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-            .every((id) => !document.querySelector("#" + id)?.disabled),
-          frameHidden: Boolean(frame?.hidden)
-        };
-      `),
-      (value) => value.enabled && value.frameHidden === false,
-      "실제 SOOP iframe companion이 컷 제어를 활성화하지 못했습니다.",
-      20_000
-    );
-  } else {
-    soopStreamingBridge = await runStreamingShortcutSequence({
-      debuggerAddress,
-      expectedEmbedUrl: soopEmbed,
-      verifyFrameShortcutGuards: true
-    });
-  }
+  const extensionlessCaptureState = await execute<{
+    obsoleteBridgeControlsAbsent: boolean;
+    manualInputsEnabled: boolean;
+    iframeVisible: boolean;
+  }>(`
+    const frame = document.querySelector("#stream-preview-frame");
+    const row = document.querySelector(".clip-row");
+    const start = row?.querySelector('[data-field="start"]');
+    const end = row?.querySelector('[data-field="end"]');
+    return {
+      obsoleteBridgeControlsAbsent: ["stream-cut-console", "capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
+        .every((id) => document.querySelector("#" + id) === null),
+      manualInputsEnabled: start instanceof HTMLInputElement
+        && end instanceof HTMLInputElement
+        && !start.disabled
+        && !end.disabled,
+      iframeVisible: frame instanceof HTMLIFrameElement && frame.hidden === false
+    };
+  `);
   assert(
-    liveEmbedSmoke
-      ? Boolean(soopLiveBridge?.enabled && soopLiveBridge.frameHidden === false)
-      : Boolean(
-        soopStreamingBridge
-        && soopStreamingBridge.start === "00:01:20.500"
-        && soopStreamingBridge.end === "00:01:25.500"
-        && soopStreamingBridge.currentTime === 80.5
-        && soopStreamingBridge.playbackRate === 2
-        && soopStreamingBridge.allHandled
-        && soopStreamingBridge.orderedBridgeActions
-        && soopStreamingBridge.transientFailureRecovered
-        && soopStreamingBridge.iframeVisible
-        && soopStreamingBridge.iframePreserved
-        && soopStreamingBridge.controlsEnabled
-        && soopStreamingBridge.inputBlocked
-        && soopStreamingBridge.imeBlocked
-        && soopStreamingBridge.modifierBlocked
-        && soopStreamingBridge.repeatBlocked
-        && soopStreamingBridge.videoFocusedAllowed
-        && soopStreamingBridge.disabledButtonIgnored
-      ),
-    `SOOP 원본 streaming bridge·단축키 경계가 깨졌습니다: ${JSON.stringify({
-      soopLiveBridge,
-      soopStreamingBridge
-    })}`
+    extensionlessCaptureState.obsoleteBridgeControlsAbsent
+      && extensionlessCaptureState.manualInputsEnabled
+      && extensionlessCaptureState.iframeVisible,
+    `확장 프로그램 없이 원본 임베드와 수동 구간 입력을 제공하지 못했습니다: ${JSON.stringify(extensionlessCaptureState)}`
   );
-  process.stderr.write("[browser-smoke] SOOP streaming bridge 검증 완료\n");
+  process.stderr.write("[browser-smoke] SOOP 임베드·확장 없는 수동 구간 입력 검증 완료\n");
 
   await execute(`
     const input = document.querySelector("#source-url");
@@ -2823,7 +2300,7 @@ async function main(): Promise<void> {
       };
     `),
     (value) => value.frameUrl === chzzkUrl && !value.refreshDisabled,
-    "Q/W 단축키 검사 전에 CHZZK 원본 창이 준비되지 않았습니다."
+    "CHZZK 원본 창이 준비되지 않았습니다."
   );
   await execute(`
     const manager = document.querySelector("#recent-section");
@@ -2859,54 +2336,7 @@ async function main(): Promise<void> {
     ),
     "Q 단축키가 이 기기의 최근 편집을 다시 읽지 않았습니다."
   );
-  const refreshShortcut = await execute<{
-    framePreserved: boolean;
-    frameUrl: string;
-    handled: boolean;
-  }>(`
-    const previousFrame = document.querySelector("#stream-preview-frame");
-    const event = new KeyboardEvent("keydown", {
-      key: "w",
-      code: "KeyW",
-      bubbles: true,
-      cancelable: true
-    });
-    document.dispatchEvent(event);
-    const currentFrame = document.querySelector("#stream-preview-frame");
-    return {
-      framePreserved: currentFrame === previousFrame,
-      frameUrl: currentFrame?.getAttribute("src") || "",
-      handled: event.defaultPrevented
-    };
-  `);
-  assert(
-    refreshShortcut.handled
-      && refreshShortcut.framePreserved
-      && refreshShortcut.frameUrl === chzzkUrl,
-    `W 단축키가 원본 iframe을 보존한 채 context를 갱신하지 못했습니다: ${JSON.stringify(refreshShortcut)}`
-  );
-  process.stderr.write("[browser-smoke] Q/W streaming iframe 재연결 검증 완료\n");
-  await waitFor(
-    () => execute<{
-      controlsEnabled: boolean;
-      frameHidden: boolean;
-      status: string;
-    }>(`
-      const frame = document.querySelector("#stream-preview-frame");
-      return {
-        controlsEnabled: ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-          .every((id) => !document.querySelector("#" + id)?.disabled),
-        frameHidden: Boolean(frame?.hidden),
-        status: document.querySelector("#stream-cut-console-status")?.textContent || ""
-      };
-    `),
-    (value) => (
-      value.controlsEnabled
-      && value.frameHidden === false
-      && value.status.includes("현재 원본 스트리밍 시각을 다시 읽었습니다")
-    ),
-    "W가 동일 iframe의 streaming context를 다시 읽지 못했습니다."
-  );
+  process.stderr.write("[browser-smoke] 최근 편집 다시 읽기 검증 완료\n");
   const footerReload = await execute<{
     frameReplaced: boolean;
     frameUrl: string;
@@ -2923,13 +2353,13 @@ async function main(): Promise<void> {
     footerReload.frameReplaced && footerReload.frameUrl === chzzkUrl,
     `footer 플레이어 다시 불러오기가 iframe을 교체하지 못했습니다: ${JSON.stringify(footerReload)}`
   );
-  await waitFor(
-    () => execute<boolean>(`
-      return ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-        .every((id) => !document.querySelector("#" + id)?.disabled);
-    `),
-    Boolean,
-    "footer reload 뒤 streaming companion이 다시 연결되지 않았습니다."
+  const obsoleteControlsRemainAbsent = await execute<boolean>(`
+    return ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
+      .every((id) => document.querySelector("#" + id) === null);
+  `);
+  assert(
+    obsoleteControlsRemainAbsent,
+    "원본 다시 불러오기 뒤 삭제된 플레이어 제어가 다시 나타났습니다."
   );
 
   const capturePerformanceLogs = await webdriver<BrowserLogEntry[]>(
@@ -2958,19 +2388,9 @@ async function main(): Promise<void> {
     acquisitionRequests === 0,
     `컷 캡처 단계에서 로컬 VOD acquisition이 ${acquisitionRequests}회 발생했습니다.`
   );
-  streamingBridgeFixture?.assertHealthy();
-  if (streamingBridgeFixture) {
-    assert(
-      streamingBridgeFixture.interceptedUrls.some((url) => url === chzzkUrl)
-        && streamingBridgeFixture.interceptedUrls.some((url) => url === youtubeEmbed)
-        && streamingBridgeFixture.interceptedUrls.some((url) => url === soopEmbed),
-      `production companion iframe fixture가 세 원본 origin에서 실행되지 않았습니다: ${JSON.stringify(streamingBridgeFixture.interceptedUrls)}`
-    );
-    await streamingBridgeFixture.close();
-  }
   const clipInitialState = await execute<{
     initialDisabled: boolean;
-    handled: boolean;
+    manualFieldsEnabled: boolean;
   }>(`
     const first = document.querySelector(".clip-row");
     if (!(first instanceof HTMLElement)) throw new Error("초기 구간 행이 없습니다.");
@@ -2988,36 +2408,32 @@ async function main(): Promise<void> {
     start.value = "00:01:20.500";
     end.value = "00:01:35.000";
     end.dispatchEvent(new Event("input", { bubbles: true }));
-    const event = new KeyboardEvent("keydown", {
-      key: "t",
-      code: "KeyT",
-      bubbles: true,
-      cancelable: true
-    });
-    document.dispatchEvent(event);
-    return { initialDisabled, handled: event.defaultPrevented };
+    document.querySelector("#add-clip")?.click();
+    return {
+      initialDisabled,
+      manualFieldsEnabled: !start.disabled && !end.disabled
+    };
   `);
   const clipAddedState = await waitFor(
     () => execute<{
       countAfterAdd: number;
-      finalizedByShortcut: boolean;
       enabledAfterAdd: boolean;
     }>(`
       const rows = [...document.querySelectorAll(".clip-row")];
       return {
         countAfterAdd: rows.length,
-        finalizedByShortcut: rows[0]?.dataset.finalized === "true",
         enabledAfterAdd: rows[0] instanceof HTMLElement
           && !rows[0].querySelector('[data-action="remove"]')?.disabled
       };
     `),
-    (value) => value.countAfterAdd === 2 && value.finalizedByShortcut,
-    "T 직렬 작업이 현재 구간 확정과 다음 행 추가를 완료하지 못했습니다."
+    (value) => value.countAfterAdd === 2,
+    "빈 구간 추가 버튼이 두 번째 수동 입력 행을 만들지 못했습니다."
   );
   const clipFinalState = await execute<{
     finalCount: number;
     finalDisabled: boolean;
-    shortcutHintsComplete: boolean;
+    bridgeConsoleAbsent: boolean;
+    visibleShortcutHintsComplete: boolean;
     coverage: string;
   }>(`
     const rows = () => [...document.querySelectorAll(".clip-row")];
@@ -3027,19 +2443,20 @@ async function main(): Promise<void> {
     }
     secondRemove.click();
     const first = rows()[0];
-    const shortcutHintsComplete = ["Q", "W", "E", "R", "T", "A", "D", "F", "Y", "U"]
+    const visibleShortcutHintsComplete = ["Q", "A"]
       .every((key) => {
         const button = document.querySelector('[aria-keyshortcuts="' + key + '"]');
         if (!(button instanceof HTMLButtonElement) || !button.title.includes("단축키 " + key)) {
           return false;
         }
         const visibleKey = button.querySelector("kbd")?.textContent;
-        return key === "Q" || key === "A" ? visibleKey === undefined : visibleKey === key;
+        return visibleKey === undefined;
       });
     return {
       finalCount: rows().length,
       finalDisabled: Boolean(first?.querySelector('[data-action="remove"]')?.disabled),
-      shortcutHintsComplete,
+      bridgeConsoleAbsent: document.querySelector("#stream-cut-console") === null,
+      visibleShortcutHintsComplete,
       coverage: first?.querySelector(".coverage")?.textContent || ""
     };
   `);
@@ -3052,10 +2469,11 @@ async function main(): Promise<void> {
     clipState.countAfterAdd === 2
       && clipState.finalCount === 1
       && clipState.initialDisabled
+      && clipState.manualFieldsEnabled
       && clipState.enabledAfterAdd
       && clipState.finalDisabled
-      && clipState.finalizedByShortcut
-      && clipState.shortcutHintsComplete,
+      && clipState.bridgeConsoleAbsent
+      && clipState.visibleShortcutHintsComplete,
     `구간 추가·삭제 상태가 올바르지 않습니다: ${JSON.stringify(clipState)}`
   );
   assert(
@@ -3147,10 +2565,7 @@ async function main(): Promise<void> {
     alignedTops: boolean;
     railScrollable: boolean;
     railScrolled: boolean;
-    controlsCount: number;
-    controlsInside: boolean;
-    controlsUnclipped: boolean;
-    maximumControlHeight: number;
+    bridgeConsoleAbsent: boolean;
     timeInputCount: number;
     timesInside: boolean;
     timesUnclipped: boolean;
@@ -3161,7 +2576,7 @@ async function main(): Promise<void> {
     const stream = document.querySelector(".stream-preview");
     const rail = document.querySelector(".selection-rail");
     const list = document.querySelector("#clip-list");
-    const controls = [...document.querySelectorAll(".stream-cut-buttons button")];
+    const bridgeConsole = document.querySelector("#stream-cut-console");
     const timeInputs = [...document.querySelectorAll(
       '.clip-row [data-field="start"], .clip-row [data-field="end"]'
     )];
@@ -3198,13 +2613,7 @@ async function main(): Promise<void> {
       alignedTops: Math.abs(railRect.top - streamRect.top) <= 1,
       railScrollable: list.scrollHeight > list.clientHeight,
       railScrolled: list.scrollTop > 0,
-      controlsCount: controls.length,
-      controlsInside: controls.every((button) => inside(streamRect, button.getBoundingClientRect())),
-      controlsUnclipped: controls.every((button) => (
-        button.scrollWidth <= button.clientWidth + 1
-        && button.scrollHeight <= button.clientHeight + 1
-      )),
-      maximumControlHeight: Math.max(...controls.map((button) => button.getBoundingClientRect().height)),
+      bridgeConsoleAbsent: bridgeConsole === null,
       timeInputCount: timeInputs.length,
       timesInside: timeInputs.every((input) => {
         const rect = input.getBoundingClientRect();
@@ -3224,15 +2633,12 @@ async function main(): Promise<void> {
       && layout.alignedTops
       && layout.railScrollable
       && layout.railScrolled
-      && layout.controlsCount === 8
-      && layout.controlsInside
-      && layout.controlsUnclipped
-      && layout.maximumControlHeight <= 42
+      && layout.bridgeConsoleAbsent
       && layout.timeInputCount === 24
       && layout.timesInside
       && layout.timesUnclipped
       && !layout.horizontalOverflow,
-    `넓은 PC 화면의 compact 컷 캡처·오른쪽 구간 rail 배치가 깨졌습니다: ${JSON.stringify(layout)}`
+    `넓은 PC 화면의 원본 미리보기·오른쪽 수동 구간 rail 배치가 깨졌습니다: ${JSON.stringify(layout)}`
   );
 
   const policyUi = await execute<{
@@ -3299,12 +2705,40 @@ async function main(): Promise<void> {
   assert(rejected.href === `${studioOrigin}/`, "빠진 책임 확인 항목으로 편집기에 이동했습니다.");
   assert(rejected.disabled === false, "책임 확인 거절 뒤 시작 버튼이 복구되지 않았습니다.");
 
+  // Automation stands in for the one local-network confirmation a real user
+  // accepts before the installed engine is contacted. Chromium releases use
+  // either the compatibility permission name or the loopback-specific name.
+  const grantedLnaPermissions: string[] = [];
+  const rejectedLnaPermissions: string[] = [];
+  for (const permissionName of [
+    "local-network-access",
+    "loopback-network"
+  ] as const) {
+    try {
+      await cdp("Browser.setPermission", {
+        permission: { name: permissionName },
+        setting: "granted",
+        origin: studioOrigin
+      });
+      grantedLnaPermissions.push(permissionName);
+    } catch (error) {
+      rejectedLnaPermissions.push(
+        `${permissionName}: ${errorMessage(error)}`
+      );
+    }
+  }
+  assert(
+    grantedLnaPermissions.length >= 1,
+    `Chrome가 local engine smoke용 LNA permission automation을 지원하지 않습니다: ${JSON.stringify(rejectedLnaPermissions)}`
+  );
+
   const lateMaterializationFixture =
-    await installLateMaterializationFixtureInterception({
-      debuggerAddress,
+    await installLateMaterializationV2Fixture({
       sourceAUrl: chzzkUrl,
       sourceBUrl: transitionChzzkUrl
     });
+  await cdp("Network.disable", {});
+  await cdp("Network.enable", {});
   await cdp("Network.setBlockedURLs", {
     urls: liveEmbedSmoke
       ? []
@@ -3387,7 +2821,7 @@ async function main(): Promise<void> {
     }>(`
       const row = document.querySelector(".local-project-row");
       return {
-        status: document.querySelector("#stream-cut-console-status")?.textContent || "",
+        status: document.querySelector("#form-status")?.textContent || "",
         listedProjectId: row?.getAttribute("data-project-id") || "",
         startLabel: document.querySelector("#start-editor")?.textContent || "",
         sameSource: row?.querySelector(".local-project-same-source")?.textContent || ""
@@ -3447,6 +2881,33 @@ async function main(): Promise<void> {
       && !firstEditor.clipTime.includes("00:01:45.000"),
     `편집기에 +10초가 다시 더해졌습니다: ${firstEditor.clipTime}`
   );
+  await captureLocalMediaEngineProtocolAttempt(debuggerAddress);
+  assert(localMediaEngineFixture, "v2 local media engine fixture가 시작되지 않았습니다.");
+  await enrollLocalMediaEngineFixture(localMediaEngineFixture);
+  await webdriver("POST", `/session/${sessionId}/refresh`, {});
+  await waitFor(
+    () => execute<{
+      href: string;
+      gateHidden: boolean;
+      shellHidden: boolean;
+      projectName: string;
+    }>(`
+      return {
+        href: location.href,
+        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
+        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        projectName: document.querySelector("#project-name")?.value || ""
+      };
+    `),
+    (value) => (
+      value.href.startsWith(`${studioOrigin}/editor.html?project=`)
+      && value.gateHidden
+      && !value.shellHidden
+      && value.projectName === "localhost-browser-smoke"
+    ),
+    "동일 public key pin 주입 뒤 editor reload가 기존 A 작업을 복원하지 못했습니다.",
+    20_000
+  );
   const firstTransitionProjectId = new URL(firstEditor.href)
     .searchParams.get("project") || "";
   const lateAStarted = await waitFor(
@@ -3454,10 +2915,11 @@ async function main(): Promise<void> {
     (value) => (
       value.aStarted
       && value.aSourceUrl === chzzkUrl
-      && value.aPollHeld
-      && !value.aCompletionReleased
+      && value.aStatusPolls >= 1
+      && value.aAbandonedJobsReclaimed === 0
+      && !value.aRunnerAborted
     ),
-    "A의 VOD materialization status 응답을 늦은 완료 상태로 보류하지 못했습니다.",
+    "A의 VOD materialization observer lease를 status poll로 시작하지 못했습니다.",
     15_000
   );
   const firstTransitionSession = await execute<{
@@ -3593,34 +3055,61 @@ async function main(): Promise<void> {
       && freshProjectId !== firstTransitionProjectId,
     `저장본/A/다른 VOD B가 projectId를 공유했습니다: ${freshProjectId}`
   );
-  await waitFor(
-    async () => lateMaterializationFixture.snapshot(),
-    (value) => value.bStartRequests === 1 && value.bRejected,
-    "B 편집기가 자기 source로 독립 materialization을 요청하지 않았습니다.",
-    15_000
-  );
-  await lateMaterializationFixture.releaseACompletion();
   const lateMaterializationAfterTransition = await waitFor(
     async () => lateMaterializationFixture.snapshot(),
     (value) => (
-      value.aCompletionReleased
-      && value.aArtifactCached
+      value.aAbandonedJobsReclaimed === 1
+      && value.aRunnerAborted
+      && value.aRunnerSettled
+      && value.aSlotReleased
+      && value.aLateCompletionDiscarded
+      && !value.aLateArtifactExposed
       && value.bStartRequests === 1
-      && value.bRejected
+      && value.bQueuedBeforeReclaim
+      && value.bStatusPolls >= 1
+      && value.bStartedAfterReclaim
+      && value.bCompleted
     ),
-    "B 세션이 열린 뒤 A의 늦은 완료 artifact를 A cache에 확정하지 못했습니다.",
+    "닫힌 A observer lease가 runner와 늦은 결과를 회수한 뒤 B에 queue slot을 넘기지 못했습니다.",
     15_000
   );
-  const blockedToast = await waitFor(
-    () => execute<string>(
-      "return document.querySelector('#toast')?.textContent || ''"
-    ),
+  const preparedB = await waitFor(
+    async () => ({
+      fixture: lateMaterializationFixture.snapshot(),
+      ...(await execute<{
+        mediaName: string;
+        mediaMeta: string;
+        toast: string;
+      }>(`
+        return {
+          mediaName: document.querySelector("#media-name")?.textContent || "",
+          mediaMeta: document.querySelector("#media-meta")?.textContent || "",
+          toast: document.querySelector("#toast")?.textContent || ""
+        };
+      `))
+    }),
     (value) => (
-      value.includes("VOD 편집 영상을 준비하지 못했습니다")
-      && !value.includes("자동으로 다시 연결하지 못했습니다")
+      value.fixture.bMediaRequests >= 1
+      && value.mediaName === "치지직 편집 영상 준비됨"
+      && value.mediaMeta.includes("구간 1개")
+      && !value.toast.includes("VOD 편집 영상을 준비하지 못했습니다")
+      && !value.toast.includes("자동으로 다시 연결하지 못했습니다")
     ),
-    "gateway 차단 뒤 새 VOD 준비 오류 대신 저장본 재연결 오류가 표시됐습니다.",
-    15_000
+    "A runner 회수 뒤 B가 로컬 MP4를 받아 편집기에 연결하지 못했습니다.",
+    20_000
+  );
+  await waitFor(
+    () => execute<boolean>(`
+      const exportButton = document.querySelector("#export-video");
+      const openShortFormButton = document.querySelector("#open-short-form");
+      return exportButton instanceof HTMLButtonElement
+        && !exportButton.disabled
+        && openShortFormButton instanceof HTMLButtonElement
+        && !openShortFormButton.disabled;
+    `),
+    (ready) => ready,
+    "VOD 준비 후 편집기 작업 잠금이 해제되지 않았습니다.",
+    10_000
   );
   const editorChrome = await execute<{
     adWidth: number;
@@ -3648,7 +3137,6 @@ async function main(): Promise<void> {
     const adRect = ad.getBoundingClientRect();
     const workspaceRect = workspace.getBoundingClientRect();
     const timelineRect = timeline.getBoundingClientRect();
-    exportButton.disabled = false;
     exportButton.click();
     const dialog = document.querySelector("#export-options-dialog");
     const title = document.querySelector("#export-file-title");
@@ -3668,7 +3156,6 @@ async function main(): Promise<void> {
     const sanitizedPreview = preview.textContent || "";
     const validTitleAccepted = !confirm.disabled && title.getAttribute("aria-invalid") === "false";
     document.querySelector("#cancel-export-options")?.click();
-    exportButton.disabled = true;
     return {
       adWidth: adRect.width,
       adHeight: adRect.height,
@@ -3937,6 +3424,10 @@ async function main(): Promise<void> {
   const firstProject = storedTiming.projects?.first;
   const freshProject = storedTiming.projects?.fresh;
   const freshClip = freshProject?.clips?.[0];
+  const freshCoverage = freshProject?.mediaAsset?.materialization
+    ?.clipRanges?.[0];
+  const freshWindow = freshProject?.mediaAsset?.materialization
+    ?.windows?.[0];
   const cachedProject = storedTiming.projects?.cached;
   const cachedClip = cachedProject?.clips?.[0];
   const cachedCoverage = cachedProject?.mediaAsset?.materialization
@@ -3951,7 +3442,7 @@ async function main(): Promise<void> {
         && firstProject.source.canonicalUrl === chzzkUrl
         && firstProject.mediaAsset === null
       ),
-    `A의 늦은 companion 완료 결과가 A 문서 또는 B 전환 중 잘못 부착됐습니다: ${JSON.stringify(storedTiming)}`
+    `A의 늦은 로컬 엔진 완료 결과가 A 문서 또는 B 전환 중 잘못 부착됐습니다: ${JSON.stringify(storedTiming)}`
   );
   assert(
     !storedTiming.error
@@ -3968,7 +3459,16 @@ async function main(): Promise<void> {
       && freshClip.selectionEndMs === 95_000
       && freshClip.sourceStartMs === 80_500
       && freshClip.sourceEndMs === 95_000
-      && freshProject.mediaAsset === null,
+      && freshProject.mediaAsset?.materialization?.clipRanges?.length === 1
+      && freshProject.mediaAsset.materialization.windows?.length === 1
+      && freshCoverage?.sourceStartMs === 80_500
+      && freshCoverage.sourceEndMs === 95_000
+      && freshCoverage.editableSourceStartMs === 70_500
+      && freshCoverage.editableSourceEndMs === 105_000
+      && freshWindow?.editableSourceStartMs === 70_500
+      && freshWindow.editableSourceEndMs === 105_000
+      && freshWindow.fetchedSourceStartMs === 70_500
+      && freshWindow.fetchedSourceEndMs === 105_000,
     `새 편집의 선택·표시 시간축에 저장본 정보가 섞였습니다: ${JSON.stringify(storedTiming)}`
   );
   assert(
@@ -3993,25 +3493,27 @@ async function main(): Promise<void> {
   );
   const lateMaterializationFinal = lateMaterializationFixture.snapshot();
   lateMaterializationFixture.assertHealthy();
-  const lateResponseTransportSafe =
-    lateMaterializationFinal.aCompletionDelivered
-      ? !lateMaterializationFinal.aCompletionDeliveryError
-      : /Invalid InterceptionId/u.test(
-        lateMaterializationFinal.aCompletionDeliveryError
-      );
   assert(
     lateMaterializationFinal.aConsumerId === firstTransitionProjectId
       && lateMaterializationFinal.pairedSessionCount === 2
-      && lateMaterializationFinal.aCancelRequests === 1
-      && lateMaterializationFinal.aCompletionReleased
-      && lateResponseTransportSafe
-      && lateMaterializationFinal.aArtifactCached
+      && lateMaterializationFinal.aStatusPolls >= 1
+      && lateMaterializationFinal.aExplicitCancelRequests === 0
+      && lateMaterializationFinal.aAbandonedJobsReclaimed === 1
+      && lateMaterializationFinal.aRunnerAborted
+      && lateMaterializationFinal.aRunnerSettled
+      && lateMaterializationFinal.aSlotReleased
+      && lateMaterializationFinal.aLateCompletionDiscarded
+      && !lateMaterializationFinal.aLateArtifactExposed
       && lateMaterializationFinal.aCachePurgeRequests === 0
       && lateMaterializationFinal.aMediaRequests === 0
       && lateMaterializationFinal.bStartRequests === 1
-      && lateMaterializationFinal.bRejected
+      && lateMaterializationFinal.bQueuedBeforeReclaim
+      && lateMaterializationFinal.bStatusPolls >= 1
+      && lateMaterializationFinal.bStartedAfterReclaim
+      && lateMaterializationFinal.bCompleted
+      && lateMaterializationFinal.bMediaRequests >= 1
       && lateMaterializationFinal.unexpectedRequests.length === 0,
-    `A의 늦은 결과가 A cache에만 남고 B에는 미부착되는 계약이 깨졌습니다: ${JSON.stringify(lateMaterializationFinal)}`
+    `닫힌 A 작업 회수와 B 편집 영상 연결 계약이 깨졌습니다: ${JSON.stringify(lateMaterializationFinal)}`
   );
   await lateMaterializationFixture.close();
   await cdp("Network.setBlockedURLs", {
@@ -4995,24 +4497,15 @@ async function main(): Promise<void> {
     ok: true,
     server: serverMode,
     runtime: "localhost-web",
-    extensionFlags: "exact-minimal-companion",
-    gateway4319: "blocked-by-cdp",
-    externalEmbedMode: liveEmbedSmoke ? "live" : "production-companion-fixtures",
+    browserExtension: "not-loaded",
+    gateway4319: "signed-v2-fixture-during-transition-otherwise-blocked",
+    externalEmbedMode: liveEmbedSmoke ? "live" : "dom-only",
     iframe: {
       CHZZK: { url: chzzkUrl, ...chzzkFrame },
       YOUTUBE: { url: youtubeEmbed, ...youtubeFrame },
       SOOP: { url: soopEmbed, ...soopFrame }
     },
-    authenticatedRelayForgeryGuards: liveEmbedSmoke ? "live-mode" : {
-      chzzkUnsignedResponseIgnored:
-        chzzkStreamingBridge?.unsignedResponseIgnored === true,
-      chzzkUnsignedShortcutIgnored:
-        chzzkStreamingBridge?.unsignedShortcutIgnored === true,
-      youtubeUnsignedResponseIgnored:
-        youtubeStreamingBridge?.unsignedResponseIgnored === true,
-      youtubeUnsignedShortcutIgnored:
-        youtubeStreamingBridge?.unsignedShortcutIgnored === true
-    },
+    playerBridge: "removed-manual-time-input-only",
     sourceFallback: openedSource,
     clipCoverage: clipState.coverage,
     sessionArchiveImport: {
@@ -5032,7 +4525,7 @@ async function main(): Promise<void> {
     editorShell: {
       href: editor.href,
       projectName: editor.projectName,
-      materialization: blockedToast,
+      materialization: preparedB.mediaName,
       chrome: editorChrome
     },
     sessionTransition: {
@@ -5046,18 +4539,20 @@ async function main(): Promise<void> {
         !== secondTransitionSession.sessionLeaseId,
       lateMaterialization: {
         aConsumerId: lateMaterializationFinal.aConsumerId,
-        heldBeforeTransition: lateAStarted.aPollHeld,
-        releasedAfterTransition:
-          lateMaterializationAfterTransition.aCompletionReleased,
-        responseDelivered: lateMaterializationFinal.aCompletionDelivered,
-        responseTransport: lateMaterializationFinal.aCompletionDelivered
-          ? "delivered-to-stale-document"
-          : "canceled-by-navigation-before-delivery",
-        artifactCachedForA: lateMaterializationFinal.aArtifactCached,
-        unloadCancelRequests: lateMaterializationFinal.aCancelRequests,
+        statusPollsBeforeTransition: lateAStarted.aStatusPolls,
+        reclaimedAfterTransition:
+          lateMaterializationAfterTransition.aAbandonedJobsReclaimed,
+        runnerAborted: lateMaterializationFinal.aRunnerAborted,
+        runnerSettled: lateMaterializationFinal.aRunnerSettled,
+        lateCompletionDiscarded:
+          lateMaterializationFinal.aLateCompletionDiscarded,
+        explicitCancelRequests:
+          lateMaterializationFinal.aExplicitCancelRequests,
         cachePurges: lateMaterializationFinal.aCachePurgeRequests,
         staleMediaRequests: lateMaterializationFinal.aMediaRequests,
-        bRejected: lateMaterializationFinal.bRejected,
+        bQueuedBeforeReclaim: lateMaterializationFinal.bQueuedBeforeReclaim,
+        bStartedAfterReclaim: lateMaterializationFinal.bStartedAfterReclaim,
+        bMediaRequests: lateMaterializationFinal.bMediaRequests,
         bMediaAsset: freshProject?.mediaAsset ?? null
       }
     },

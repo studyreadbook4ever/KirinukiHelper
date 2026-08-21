@@ -13,6 +13,38 @@ import {
 import {
   studioStorageArea
 } from "./studio-runtime.js";
+import {
+  LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+  LOCAL_MEDIA_ENGINE_SESSION_STATUS_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_SESSION_STATUS_SCHEMA,
+  decryptLocalMediaEngineSessionResponse,
+  freshLocalMediaEngineChallenge,
+  localMediaEngineProofTranscript,
+  prepareLocalMediaEngineSessionRequest,
+  parseLocalMediaEngineDeviceProof,
+  verifyLocalMediaEngineSignature
+} from "../lib/local-media-engine-auth.js";
+import {
+  probeLocalMediaEngine
+} from "./local-media-engine-onboarding.js";
+import {
+  currentAuthenticatedLocalMediaEngine,
+  forgetAuthenticatedLocalMediaEngine,
+  localMediaEngineTrustStore
+} from "./local-media-engine-trust.js";
+import type {
+  LocalMediaEngineTrustStore
+} from "./local-media-engine-trust.js";
+import {
+  establishLocalMediaEngineTransport,
+  forgetLocalMediaEngineTransport,
+  hasLocalMediaEngineTransport,
+  localMediaEngineTransportFetch
+} from "./local-media-engine-transport.js";
+import {
+  localMediaEngineLoopbackRequestInit
+} from "../lib/local-media-engine-contract.js";
 
 export const CAPTION_AGENT_SETTINGS_KEY = "chzzk-kirinuki-caption-agent-settings-v4";
 const PREVIOUS_CAPTION_AGENT_SETTINGS_KEY =
@@ -24,7 +56,11 @@ const OLDEST_CAPTION_AGENT_SETTINGS_KEY =
 export const CAPTION_AGENT_REQUEST_SCHEMA = "chzzk-kirinuki-caption-request/v1";
 export const CAPTION_AGENT_RESPONSE_SCHEMA = "chzzk-kirinuki-caption-response/v1";
 export const CAPTION_AGENT_SESSION_SCHEMA =
-  "chzzk-kirinuki-caption-agent/session-v1";
+  "kirinuki-local-engine-session/v1";
+export const LOCAL_ENGINE_SESSION_REQUEST_SCHEMA =
+  LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL;
+export const LOCAL_ENGINE_SESSION_AUTHENTICATION =
+  "bearer-memory-capability";
 export const CAPTION_AGENT_CAPABILITY_SCHEMA =
   "chzzk-kirinuki-caption-agent/capability-v2";
 export const MAX_REMOTE_CUES = 4_000;
@@ -116,12 +152,17 @@ export interface NormalizedCaptionCue {
 type JsonRecord = Record<string, unknown>;
 type StorageArea = ReturnType<typeof studioStorageArea>;
 type FetchImplementation = typeof fetch;
+export type LocalMediaEngineSessionPurpose = "vod" | "captions";
 
 interface CaptionAgentConnectionOptions {
   endpoint: unknown;
+  purpose?: LocalMediaEngineSessionPurpose;
+  projectId?: unknown;
+  sourceUrl?: unknown;
   signal?: AbortSignal;
   fetchImpl?: FetchImplementation;
   timeoutMs?: number;
+  trustStore?: Readonly<LocalMediaEngineTrustStore>;
 }
 
 interface CaptionAgentProbeOptions extends CaptionAgentConnectionOptions {
@@ -223,11 +264,143 @@ function normalizeSessionToken(value: unknown): string {
   }
   if (
     secret.length > MAX_SESSION_TOKEN_LENGTH
-    || /[\r\n]/u.test(secret)
+    || !/^[A-Za-z0-9_-]{43}$/u.test(secret)
   ) {
     throw new Error("Kirinuki 내부 자막 엔진의 연결 정보가 올바르지 않습니다.");
   }
+  try {
+    const base64 = secret.replace(/-/gu, "+").replace(/_/gu, "/") + "=";
+    if (atob(base64).length !== 32) {
+      throw new Error("invalid length");
+    }
+  } catch {
+    throw new Error("Kirinuki 내부 자막 엔진의 연결 정보가 올바르지 않습니다.");
+  }
   return secret;
+}
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  let output = "";
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index] ?? 0;
+    const second = bytes[index + 1];
+    const third = bytes[index + 2];
+    const packed = (first << 16) | ((second ?? 0) << 8) | (third ?? 0);
+    output += alphabet[(packed >>> 18) & 63];
+    output += alphabet[(packed >>> 12) & 63];
+    if (second !== undefined) {
+      output += alphabet[(packed >>> 6) & 63];
+    }
+    if (third !== undefined) {
+      output += alphabet[packed & 63];
+    }
+  }
+  return output;
+}
+
+function freshLocalEngineDocumentNonce(): string {
+  const bytes = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(bytes);
+  return encodeBase64Url(bytes);
+}
+
+const fallbackLocalEngineDocumentNonce = freshLocalEngineDocumentNonce();
+
+interface LocalEngineDocumentSession {
+  readonly token: string;
+  readonly clientNonce: string;
+  readonly purpose: LocalMediaEngineSessionPurpose;
+  readonly projectId: string;
+  readonly sourceUrl?: string;
+  readonly expiresAtMs: number;
+}
+
+let activeLocalEngineDocumentSession: LocalEngineDocumentSession | null = null;
+
+export function clearLocalMediaEngineSessionState(): void {
+  activeLocalEngineDocumentSession = null;
+  forgetLocalMediaEngineTransport();
+  forgetAuthenticatedLocalMediaEngine();
+}
+
+export function localEngineDocumentClientNonce(): string {
+  return activeLocalEngineDocumentSession?.clientNonce
+    ?? fallbackLocalEngineDocumentNonce;
+}
+
+function normalizeLocalEngineProjectId(value: unknown): string {
+  const projectId = String(value ?? "").normalize("NFC").trim();
+  if (
+    !projectId
+    || projectId.length > 256
+    || new TextEncoder().encode(projectId).byteLength > 1_024
+    || /[\u0000-\u001f\u007f-\u009f]/u.test(projectId)
+  ) {
+    throw new Error("로컬 영상 엔진에 연결할 편집 프로젝트가 올바르지 않습니다.");
+  }
+  return projectId;
+}
+
+function normalizeLocalEngineSourceUrl(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const sourceUrl = String(value).trim();
+  if (
+    sourceUrl !== value
+    || sourceUrl.length > 8_192
+    || /[\u0000-\u001f\u007f]/u.test(sourceUrl)
+  ) {
+    throw new Error("로컬 영상 엔진에 연결할 원본 주소가 올바르지 않습니다.");
+  }
+  const parsed = new URL(sourceUrl);
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw new Error("로컬 영상 엔진에는 공개 HTTPS VOD 주소만 연결할 수 있습니다.");
+  }
+  return sourceUrl;
+}
+
+function normalizeLocalEngineSessionPurpose(
+  value: unknown,
+  sourceUrl: string | undefined
+): LocalMediaEngineSessionPurpose {
+  const purpose = value === undefined
+    ? (sourceUrl === undefined ? "captions" : "vod")
+    : value;
+  if (purpose !== "vod" && purpose !== "captions") {
+    throw new TypeError("로컬 엔진 session 목적이 올바르지 않습니다.");
+  }
+  if (
+    (purpose === "vod" && sourceUrl === undefined)
+    || (purpose === "captions" && sourceUrl !== undefined)
+  ) {
+    throw new TypeError(
+      purpose === "vod"
+        ? "VOD session에는 정규 원본 주소가 필요합니다."
+        : "자막 session에는 VOD 원본 권한을 함께 요청할 수 없습니다."
+    );
+  }
+  return purpose;
+}
+
+function matchingCachedLocalEngineToken(
+  projectId: string,
+  purpose: LocalMediaEngineSessionPurpose,
+  sourceUrl: string | undefined
+): string {
+  const session = activeLocalEngineDocumentSession;
+  if (
+    !session
+    || session.projectId !== projectId
+    || session.purpose !== purpose
+    || session.sourceUrl !== sourceUrl
+    || Date.now() >= session.expiresAtMs
+  ) {
+    return "";
+  }
+  return session.token;
 }
 
 export function captionAgentSessionEndpoint(endpoint: unknown): string {
@@ -241,13 +414,16 @@ export function captionAgentSessionEndpoint(endpoint: unknown): string {
   return url.toString();
 }
 
-function captionAgentRequestHeaders(
+export function captionAgentRequestHeaders(
   token: unknown
 ): Record<string, string> {
   const normalizedToken = normalizeSessionToken(token);
-  return normalizedToken
-    ? { Authorization: `Bearer ${normalizedToken}` }
-    : {};
+  return {
+    "X-Kirinuki-Client-Nonce": localEngineDocumentClientNonce(),
+    ...(normalizedToken
+      ? { Authorization: `Bearer ${normalizedToken}` }
+      : {})
+  };
 }
 
 export function normalizeCaptionAgentEndpoint(value: unknown): string {
@@ -1434,40 +1610,124 @@ function assertSafeStatusUrl(statusUrl: unknown, endpoint: string): string {
 
 export async function pairCaptionAgent({
   endpoint,
+  purpose: requestedPurpose,
+  projectId,
+  sourceUrl,
   signal,
   fetchImpl = fetch,
-  timeoutMs = CAPTION_AGENT_PROBE_TIMEOUT_MS
+  timeoutMs = CAPTION_AGENT_PROBE_TIMEOUT_MS,
+  trustStore = localMediaEngineTrustStore
 }: CaptionAgentConnectionOptions): Promise<string> {
   const sessionEndpoint = captionAgentSessionEndpoint(endpoint);
+  if (new URL(sessionEndpoint).origin !== "http://127.0.0.1:4319") {
+    throw new Error("인증된 Kirinuki 엔진 세션은 고정된 127.0.0.1:4319에서만 발급할 수 있습니다.");
+  }
+  await probeLocalMediaEngine(signal, fetchImpl, timeoutMs, trustStore);
+  const authenticatedEngine = currentAuthenticatedLocalMediaEngine();
+  if (!authenticatedEngine) {
+    throw new Error("서명된 Kirinuki 엔진 health 확인이 만료됐습니다.");
+  }
+  const normalizedProjectId = normalizeLocalEngineProjectId(projectId);
+  const normalizedSourceUrl = normalizeLocalEngineSourceUrl(sourceUrl);
+  const purpose = normalizeLocalEngineSessionPurpose(
+    requestedPurpose,
+    normalizedSourceUrl
+  );
+  const clientNonce = freshLocalEngineDocumentNonce();
+  const challenge = freshLocalMediaEngineChallenge();
+  const sessionRequest = {
+    schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA,
+    clientNonce,
+    projectId: normalizedProjectId,
+    actions: purpose === "captions"
+      ? ["captions"]
+      : ["vod", "cache-delete"],
+    ...(normalizedSourceUrl === undefined
+      ? {}
+      : { sourceUrl: normalizedSourceUrl })
+  };
+  const encryptedSession = await prepareLocalMediaEngineSessionRequest({
+    offer: authenticatedEngine.sessionEncryption,
+    responseChallenge: challenge,
+    plaintext: JSON.stringify(sessionRequest)
+  });
   throwIfAborted(signal);
   const deadline = createDeadlineSignal(signal, timeoutMs);
+  let transportEstablished = false;
   try {
-    const response = await fetchImpl(sessionEndpoint, {
+    const response = await fetchImpl(
+      sessionEndpoint,
+      localMediaEngineLoopbackRequestInit({
       method: "POST",
       headers: {
-        "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA
+        "Content-Type": "application/json",
+        "X-Kirinuki-Client-Nonce": clientNonce,
+        "X-Kirinuki-Protocol": LOCAL_ENGINE_SESSION_REQUEST_SCHEMA,
+        [LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER]: challenge
       },
+      body: JSON.stringify(encryptedSession.request),
       signal: deadline.signal,
       cache: "no-store",
       credentials: "omit",
       redirect: "error"
-    });
-    const payload = await parseResponse(response);
+      })
+    );
+    const encryptedPayload = await parseResponse(response);
+    let decryptedPayload: unknown;
+    try {
+      decryptedPayload = JSON.parse(await decryptLocalMediaEngineSessionResponse({
+        sharedKey: encryptedSession.sharedKey,
+        request: encryptedSession.request,
+        responseChallenge: challenge,
+        response: encryptedPayload
+      }));
+    } catch {
+      throw new Error(
+        "Kirinuki 내부 자막 엔진의 암호화된 연결 응답 인증에 실패했습니다."
+      );
+    }
+    const payload = decryptedPayload;
     if (!isPlainObject(payload)) {
       throw new Error("Kirinuki 내부 자막 엔진의 연결 응답이 올바르지 않습니다.");
     }
     assertExactResponseFields(payload, [
       "schema",
-      "status",
       "authentication",
-      "expires",
-      "token"
+      "expiresAt",
+      "token",
+      "deviceProof"
     ], "Kirinuki 내부 자막 엔진 연결 응답");
+    const sessionPayload = {
+      schema: payload.schema,
+      authentication: payload.authentication,
+      expiresAt: payload.expiresAt,
+      token: payload.token
+    };
+    const proof = parseLocalMediaEngineDeviceProof(payload.deviceProof);
+    const proofValid = proof !== null
+      && proof.keyId === authenticatedEngine.keyId
+      && proof.challenge === challenge
+      && proof.instanceNonce === authenticatedEngine.instanceNonce
+      && await verifyLocalMediaEngineSignature({
+        publicKeySpki: authenticatedEngine.publicKeySpki,
+        signature: proof.signature,
+        transcript: localMediaEngineProofTranscript({
+          kind: "session",
+          challenge,
+          instanceNonce: proof.instanceNonce,
+          requestBinding: JSON.stringify(sessionRequest),
+          payload: sessionPayload
+        })
+      });
+    if (!proofValid) {
+      throw new Error("Kirinuki 내부 자막 엔진 세션의 설치 identity 서명이 올바르지 않습니다.");
+    }
+    const expiresAtMs = Date.parse(String(payload.expiresAt || ""));
     if (
       payload.schema !== CAPTION_AGENT_SESSION_SCHEMA
-      || payload.status !== "ok"
-      || payload.authentication !== "bearer-process-memory"
-      || payload.expires !== "companion-restart"
+      || payload.authentication !== LOCAL_ENGINE_SESSION_AUTHENTICATION
+      || !Number.isFinite(expiresAtMs)
+      || expiresAtMs <= Date.now()
     ) {
       throw new Error("Kirinuki 내부 자막 엔진의 연결 응답 버전이 맞지 않습니다.");
     }
@@ -1475,8 +1735,28 @@ export async function pairCaptionAgent({
     if (!token) {
       throw new Error("Kirinuki 내부 자막 엔진이 연결 정보를 반환하지 않았습니다.");
     }
+    activeLocalEngineDocumentSession = {
+      token,
+      clientNonce,
+      purpose,
+      projectId: normalizedProjectId,
+      ...(normalizedSourceUrl === undefined
+        ? {}
+        : { sourceUrl: normalizedSourceUrl }),
+      expiresAtMs
+    };
+    await establishLocalMediaEngineTransport({
+      transportId: encryptedSession.request.grantId,
+      clientNonce,
+      sharedKey: encryptedSession.sharedKey
+    });
+    transportEstablished = true;
     return token;
   } finally {
+    encryptedSession.sharedKey.fill(0);
+    if (!transportEstablished) {
+      forgetLocalMediaEngineTransport();
+    }
     deadline.cleanup();
   }
 }
@@ -1492,6 +1772,12 @@ export async function requestCaptionAgent({
   maxPollAttempts = MAX_CAPTION_AGENT_POLL_ATTEMPTS
 }: CaptionAgentRequestOptions): Promise<JsonRecord> {
   const normalizedEndpoint = normalizeCaptionAgentEndpoint(endpoint);
+  if (
+    isLoopbackCaptionAgentEndpoint(normalizedEndpoint)
+    && !currentAuthenticatedLocalMediaEngine()
+  ) {
+    throw new Error("서명된 Kirinuki 엔진 health 확인 전에 프로젝트 자막 데이터를 보낼 수 없습니다.");
+  }
   throwIfAborted(signal);
   const normalizedMaxPollAttempts = Number(maxPollAttempts);
   if (
@@ -1511,7 +1797,7 @@ export async function requestCaptionAgent({
     };
     onProgress(0.08, "자막 엔진에 선택 구간 음성을 보내는 중");
     throwIfAborted(requestSignal);
-    let response = await fetchImpl(normalizedEndpoint, {
+    let response = await localMediaEngineTransportFetch(normalizedEndpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(request),
@@ -1519,7 +1805,7 @@ export async function requestCaptionAgent({
       cache: "no-store",
       credentials: "omit",
       redirect: "error"
-    });
+    }, fetchImpl);
     let payload = await parseResponse(response);
     let statusUrl = payload.statusUrl
       ? assertSafeStatusUrl(payload.statusUrl, normalizedEndpoint)
@@ -1549,19 +1835,17 @@ export async function requestCaptionAgent({
         requestSignal
       );
       throwIfAborted(requestSignal);
-      response = await fetchImpl(statusUrl, {
-        method: "GET",
+      response = await localMediaEngineTransportFetch(statusUrl, {
+        method: "POST",
         headers: {
           "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA,
-          ...(String(token || "").trim()
-            ? { Authorization: `Bearer ${String(token).trim()}` }
-            : {})
+          ...captionAgentRequestHeaders(token)
         },
         signal: requestSignal,
         cache: "no-store",
         credentials: "omit",
         redirect: "error"
-      });
+      }, fetchImpl);
       payload = await parseResponse(response);
       statusUrl = payload.statusUrl
         ? assertSafeStatusUrl(payload.statusUrl, normalizedEndpoint)
@@ -1587,6 +1871,12 @@ export async function probeCaptionAgent({
   timeoutMs = CAPTION_AGENT_PROBE_TIMEOUT_MS
 }: CaptionAgentProbeOptions): Promise<JsonRecord> {
   const normalizedEndpoint = normalizeCaptionAgentEndpoint(endpoint);
+  if (
+    isLoopbackCaptionAgentEndpoint(normalizedEndpoint)
+    && !currentAuthenticatedLocalMediaEngine()
+  ) {
+    throw new Error("서명된 Kirinuki 엔진 health 확인 전에 capability를 보낼 수 없습니다.");
+  }
   throwIfAborted(signal);
   const deadline = createDeadlineSignal(signal, timeoutMs);
   try {
@@ -1594,15 +1884,76 @@ export async function probeCaptionAgent({
       "X-Kirinuki-Protocol": CAPTION_AGENT_REQUEST_SCHEMA,
       ...captionAgentRequestHeaders(token)
     };
-    const response = await fetchImpl(normalizedEndpoint, {
-      method: "GET",
+    const response = await localMediaEngineTransportFetch(normalizedEndpoint, {
+      method: "POST",
       headers,
       signal: deadline.signal,
       cache: "no-store",
       credentials: "omit",
       redirect: "error"
-    });
+    }, fetchImpl);
     return parseResponse(response);
+  } finally {
+    deadline.cleanup();
+  }
+}
+
+export async function probeLocalMediaEngineSession({
+  endpoint,
+  token,
+  purpose = "captions",
+  signal,
+  fetchImpl = fetch,
+  timeoutMs = CAPTION_AGENT_PROBE_TIMEOUT_MS
+}: CaptionAgentProbeOptions): Promise<void> {
+  if (!isLoopbackCaptionAgentEndpoint(endpoint)) {
+    return;
+  }
+  if (purpose !== "vod" && purpose !== "captions") {
+    throw new TypeError("확인할 로컬 엔진 session 목적이 올바르지 않습니다.");
+  }
+  const deadline = createDeadlineSignal(signal, timeoutMs);
+  try {
+    const sessionStatusEndpoint = new URL(
+      captionAgentSessionEndpoint(endpoint)
+    );
+    sessionStatusEndpoint.pathname = "/v1/session/status";
+    const response = await localMediaEngineTransportFetch(
+      sessionStatusEndpoint,
+      {
+        method: "POST",
+        headers: {
+          "X-Kirinuki-Protocol": LOCAL_MEDIA_ENGINE_SESSION_STATUS_PROTOCOL,
+          ...captionAgentRequestHeaders(token)
+        },
+        signal: deadline.signal,
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error"
+      },
+      fetchImpl
+    );
+    const payload = await parseResponse(response);
+    assertExactResponseFields(payload, [
+      "schema",
+      "status",
+      "actions",
+      "sourceBound",
+      "expiresAt"
+    ], "Kirinuki 내부 엔진 session status");
+    const expectedActions = purpose === "vod"
+      ? ["vod", "cache-delete"]
+      : ["captions"];
+    if (
+      payload.schema !== LOCAL_MEDIA_ENGINE_SESSION_STATUS_SCHEMA
+      || payload.status !== "active"
+      || JSON.stringify(payload.actions) !== JSON.stringify(expectedActions)
+      || payload.sourceBound !== (purpose === "vod")
+      || !Number.isFinite(Date.parse(String(payload.expiresAt || "")))
+      || Date.parse(String(payload.expiresAt || "")) <= Date.now()
+    ) {
+      throw new Error("Kirinuki 내부 엔진 session status 범위가 다릅니다.");
+    }
   } finally {
     deadline.cleanup();
   }
@@ -1611,35 +1962,67 @@ export async function probeCaptionAgent({
 export async function ensureCaptionAgentSession({
   endpoint,
   token,
+  purpose: requestedPurpose,
+  projectId,
+  sourceUrl,
   signal,
   fetchImpl = fetch,
-  timeoutMs = CAPTION_AGENT_PROBE_TIMEOUT_MS
+  timeoutMs = CAPTION_AGENT_PROBE_TIMEOUT_MS,
+  trustStore = localMediaEngineTrustStore
 }: CaptionAgentProbeOptions): Promise<string> {
   if (!isLoopbackCaptionAgentEndpoint(endpoint)) {
     return String(token || "").trim();
   }
-  const currentToken = String(token || "").trim();
-  if (currentToken) {
+  const normalizedProjectId = normalizeLocalEngineProjectId(projectId);
+  const normalizedSourceUrl = normalizeLocalEngineSourceUrl(sourceUrl);
+  const purpose = normalizeLocalEngineSessionPurpose(
+    requestedPurpose,
+    normalizedSourceUrl
+  );
+  const currentToken = String(token || "").trim()
+    || matchingCachedLocalEngineToken(
+      normalizedProjectId,
+      purpose,
+      normalizedSourceUrl
+    );
+  const activeSessionMatches = activeLocalEngineDocumentSession?.token
+      === currentToken
+    && activeLocalEngineDocumentSession.projectId === normalizedProjectId
+    && activeLocalEngineDocumentSession.purpose === purpose
+    && activeLocalEngineDocumentSession.sourceUrl === normalizedSourceUrl;
+  if (currentToken && hasLocalMediaEngineTransport() && activeSessionMatches) {
     try {
-      await probeCaptionAgent({
+      await probeLocalMediaEngineSession({
         endpoint,
         token: currentToken,
+        purpose,
         ...(signal === undefined ? {} : { signal }),
         fetchImpl,
         timeoutMs
       });
       return currentToken;
     } catch (error) {
-      if (httpStatus(error) !== 401) {
+      const status = httpStatus(error);
+      if (status !== 401 && (status !== 0 || signal?.aborted)) {
         throw error;
+      }
+      forgetLocalMediaEngineTransport();
+      if (activeLocalEngineDocumentSession?.token === currentToken) {
+        activeLocalEngineDocumentSession = null;
       }
     }
   }
   return pairCaptionAgent({
     endpoint,
+    purpose,
+    projectId: normalizedProjectId,
+    ...(normalizedSourceUrl === undefined
+      ? {}
+      : { sourceUrl: normalizedSourceUrl }),
     ...(signal === undefined ? {} : { signal }),
     fetchImpl,
-    timeoutMs
+    timeoutMs,
+    trustStore
   });
 }
 
@@ -1662,10 +2045,21 @@ export async function requestCaptionAgentWithSessionRetry({
     ) {
       throw error;
     }
+    if (activeLocalEngineDocumentSession?.token === options.token) {
+      activeLocalEngineDocumentSession = null;
+    }
+    const projectId = normalizeLocalEngineProjectId(
+      options.projectId ?? options.request.source.projectId
+    );
     const token = await pairCaptionAgent({
       endpoint: options.endpoint,
+      purpose: "captions",
+      projectId,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
-      fetchImpl
+      fetchImpl,
+      ...(options.trustStore === undefined
+        ? {}
+        : { trustStore: options.trustStore })
     });
     onSessionToken(token);
     return requestCaptionAgent({

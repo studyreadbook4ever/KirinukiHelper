@@ -1,165 +1,235 @@
-# Kirinuki 데스크톱 바이너리 공개 배포 차단 조건
+# Kirinuki 로컬 미디어 엔진 공개 배포 차단 조건
 
-이 문서는 Linux·Windows·macOS Electron 패키지의 현재 공학적·법적 경계를
-기록합니다. 법률 자문이나 특정 관할권의 적법성 보증이 아닙니다.
+이 문서는 웹 편집기와 함께 쓰는 **화면 없는 로컬 구간 준비 엔진**의 설치 파일을
+공개하기 전에 닫아야 할 공학적·법적 조건입니다. Electron 편집기나 브라우저
+확장 프로그램의 출시 문서가 아닙니다. 법률 자문 또는 무위험 보증도 아닙니다.
 
-## 현재 상태
+## 현재 상태: 공개 차단
 
-`npm run package:desktop`은 실행한 운영체제와 아키텍처에 맞는 **unsigned,
-unpacked 개발 검증용 앱 디렉터리**를 만듭니다. CI도 이 디렉터리를 빌드하고
-실제로 실행해 내부 Studio·gateway health, Player Bridge 로드, 고정 미디어 도구
-버전과 검증용 H.264/AAC MP4의 production 검사 경계를 확인합니다. Linux·macOS는
-정상 종료 뒤 exact process group·자식 프로세스·포트·임시 데이터를 모두
-검사합니다. Windows는 앱이 보고한 다중 프로세스 실행, exact root 종료, 포트
-회수와 전용 session 디렉터리 삭제를 검사합니다. descendant 전체 소유권은 아래
-Job Object 차단 조건이 닫히기 전까지 증명됐다고 간주하지 않습니다. CI 결과를
-release artifact로 업로드하거나 게시하지 않습니다.
+native CI는 다음 unsigned package를 만들지만 OS별 smoke 범위는 동일하지 않습니다.
+공통 검증은 격리된 사용자 상태에서 windowless 실행, loopback health, 두 번째 실행,
+정상 종료와 격리 임시 경로 정리입니다. Windows는 임시 경로 silent install에 더해
+실제 HKCU Run의 exact name/path/argument/enabled 등록·readback과, 엔진 실행 중 실제
+NSIS 제거가 owned Run/StartupApproved 값만 제거하고 외부 junction을 보존하는지
+확인합니다. Linux는 deb 설치 뒤 격리된 실제 XDG 사용자 profile의 autostart
+등록·readback, 엔진 실행 중 `dpkg --remove`, purge와 package-owned
+파일 부재를 확인합니다. 실행 파일이 먼저 사라진 managed XDG entry는 다음 로그인에
+자기 파일만 회수하지만, dpkg가 임의의 기존 다중 사용자 profile을 즉시 정리한다는
+증거는 아닙니다. macOS는 DMG를 read-only mount한 뒤 앱을 `/Applications`에 복사해
+실행하고, 실행 중 bundle 이동을 감지해 자체 runtime을 정리하는 것과 DMG detach를
+확인합니다. 실제 macOS 로그인 항목 승인과 일반 사용자 profile cleanup은
+비대화형 CI에서 아직 검증하지 않습니다.
 
-현재 패키지는 installer, AppImage, DMG, PKG, MSI 또는 서명된 ZIP이 아닙니다.
-아래 라이선스·provenance·서명 조건이 모두 닫힐 때까지 공개 다운로드, 자동
-업데이트, 미러 또는 최종 사용자 배포에 사용하면 안 됩니다. Linux 소스 설치판의
-기존 지원 상태와도 혼동하지 않습니다.
-
-## 고정된 개발 입력
-
-| 구성요소 | 현재 고정점 | 개발 패키지에서의 위치·역할 |
+| 대상 | 파일 | 형식 |
 | --- | --- | --- |
-| Electron | `43.4.0` | Chromium·Node가 포함된 앱 shell/runtime |
-| `@electron/asar` | `4.2.1` | 생성된 ASAR의 정확한 파일 목록·바이트 검증 |
-| `@electron/packager` | `20.3.0` | 빌드 시 unpacked 앱 디렉터리 생성 |
-| `@electron/fuses` | `2.1.3` | Electron fuse 검증·설정용 build dependency |
-| FFmpeg·ffprobe | FFmpeg `n8.1.2`, Shaka build tag `n8.1.2-1` | 대상별 native media sidecar |
-| yt-dlp | `2026.07.04` official standalone | 대상별 공개 VOD metadata·media 준비 sidecar |
+| Windows x64 | `UNSIGNED-TEST-ONLY-Kirinuki-Engine-windows-x64-setup.exe` | per-user NSIS |
+| macOS arm64 | `UNSIGNED-TEST-ONLY-Kirinuki-Engine-macos-arm64.dmg` | DMG, macOS 15.0+ |
+| Linux x64 | `UNSIGNED-TEST-ONLY-Kirinuki-Engine-linux-x64.deb` | Debian package |
 
-Electron npm wrapper와 패키징 도구는 `package-lock.json`의 exact version,
-registry URL과 integrity로 고정합니다. Electron이 패키징 시 내려받는 실제
-플랫폼 runtime은 버전만으로 공개 release provenance가 완성되지 않습니다.
-최종 Electron archive의 URL, 바이트 수, SHA-256과 upstream checksum 검증 결과를
-별도 release manifest에 고정해야 합니다.
+현재 artifact는 Windows Authenticode 서명이 없고 macOS Developer ID 서명·공증·
+staple이 없으며, installer 전체 SBOM·provenance도 완결되지 않았습니다. 그러므로
+CI 산출물을 Release, 웹 다운로드, mirror, 자동 업데이트에 올리면 안 됩니다.
+hash 고정, unit test 또는 한 개발 PC의 성공은 이 차단을 해제하지 않습니다.
 
-FFmpeg·ffprobe와 yt-dlp의 대상별 URL, 압축·해제 바이트 수와 SHA-256은
-`src/desktop/tool-manifest.ts`가 canonical 개발 manifest입니다. 현재 대상은
-다음 다섯 개입니다.
+`Signed desktop installer release` workflow는 수동 dispatch, exact existing tag,
+`PUBLISH_SIGNED_INSTALLERS`, protected `installer-release` environment가 모두 맞을 때만
+시작합니다. 현재 저장소에 아래 서명·공증·provenance secret과 사람이 승인한 묶음이
+없으면 public asset을 만들거나 Release를 publish하지 못하는 것이 정상입니다.
 
-- `linux-x64`
-- `linux-arm64`
-- `darwin-x64`
-- `darwin-arm64`
-- `win32-x64`
+일반 `npm run build`는 설치 파일 URL을 싣지 않습니다. Release를 publish한 뒤에도
+웹 링크는 자동으로 열리지 않습니다. 최종 remote asset 전체의 tag·size·SHA-256
+digest와 이 문서의 signed readback을 다시 대조한 배포 작업만, absolute
+`KIRINUKI_WEB_ENGINE_RELEASE_READBACK`을 주고 `npm run build:web:release`를 실행해
+tag에 고정된 세 installer URL을 정적 bundle에 넣을 수 있습니다. 이 검증이
+실패하거나 입력이 없으면 웹은 **설치 파일 준비 중** 상태를 유지합니다. 브라우저
+runtime은 GitHub API나 `latest` alias를 조회하지 않습니다.
 
-Windows arm64는 경로 타입에는 예약되어 있지만 실제 artifact manifest와 공개
-지원 대상이 아닙니다. CI의 현재 네이티브 대표 대상은 `linux-x64`, `win32-x64`,
-`darwin-arm64`입니다. 현재 Shaka macOS sidecar가 요구하는 최소 macOS는 15.0이며,
-패키지는 `LSMinimumSystemVersion=15.0`을 강제합니다. 더 오래된 macOS 지원은
-별도의 재현 빌드와 네이티브 회귀 검증 없이는 선언하지 않습니다.
+- Windows: PFX/password, exact SHA-1 thumbprint·publisher subject
+- macOS: Developer ID P12/password, exact identity·Team ID, App Store Connect API key
+- Linux/release integrity: exact OpenPGP private key·fingerprint·passphrase
+- provenance: credential 없는 HTTPS URL과 exact SHA-256으로 고정한
+  `Kirinuki-Engine-source-provenance.tar.gz`
 
-## 아직 끝나지 않은 라이선스 검토
+provenance archive는 linked FFmpeg component의 exact source revision·license 원문,
+대응 소스, Shaka build scripts, source offer, CycloneDX 1.6 SBOM을 포함해야 합니다.
+세 native job이 같은 archive bytes를 검증하고, 최종 GitHub Release도 그 archive를
+installer·signed checksum과 함께 공개합니다. archive가 없거나 tree/hash/review가
+다르면 installer signing 전 단계에서 fail closed합니다.
 
-### Electron, Chromium과 Node
+## 실제 제품 계약
 
-Electron 소스 자체는 MIT이지만 배포 runtime에는 Chromium, Node.js와 다수의
-제3자 구성요소가 포함됩니다. 최종 패키지의 Electron `LICENSE`와
-`LICENSES.chromium.html`을 보존하고, 실제 포함 파일 SBOM과 대응 고지를
-산출물별로 검사해야 합니다. npm의 `electron@43.4.0` 핀만으로 Electron runtime
-전체의 재배포 인벤토리가 완성되었다고 간주하지 않습니다.
+- 제품 UI는 `https://kirinuki.eff0rtchung.kr`의 전체 웹 편집기입니다.
+- 설치 파일은 편집 창을 만들지 않고 background engine만 설치합니다.
+- 운영체제 로그인 시 화면 없이 시작하고 `127.0.0.1`의 고정 내부 연결에만
+  bind합니다.
+- 정확한 public Origin과 문서별 memory capability만 허용합니다.
+- 로그인, 서버 저장 세션, analytics, telemetry, 자동 업데이트 요청이 없습니다.
+- 공개 Kirinuki 서버는 VOD proxy가 아닙니다.
+- uninstall은 엔진 등록과 package-owned 파일을 제거하되 사용자 원본이나 다른 앱
+  데이터를 건드리지 않아야 합니다. Windows 사용자 데이터는 현재 reparse-safe
+  ownership 검증이 없으므로 재귀 삭제하지 않고 cache residue를 보존합니다.
 
-- Electron license: https://github.com/electron/electron/blob/v43.4.0/LICENSE
-- Electron distribution guide:
-  https://www.electronjs.org/docs/latest/tutorial/application-distribution/
+## 고정된 빌드 입력
 
-`@electron/packager@20.3.0`은 BSD-2-Clause, `@electron/fuses@2.1.3`은 MIT입니다.
-이들과 전체 transitive build dependency의 license·source·integrity를 canonical
-registry가 아직 승인하지 않았으므로 기존 `license:check` 통과를 데스크톱
-바이너리 승인으로 해석하면 안 됩니다.
+| 구성요소 | 고정점 | 역할 |
+| --- | --- | --- |
+| Electron | `43.4.1` | background runtime; Chromium·Node 포함 |
+| electron-builder | `26.15.3` | NSIS·DMG·deb installer 생성 |
+| `@electron/asar` | `4.2.1` | ASAR exact-file 검증 |
+| `@electron/packager` | `20.3.0` | target app stage 생성 |
+| `@electron/fuses` | `2.1.3` | fuse 설정·readback |
+| `@electron/osx-sign` | `2.6.0` | macOS nested executable·app signing |
+| FFmpeg·ffprobe | `n8.1.2`, Shaka tag `n8.1.2-1` | target media sidecar |
+| yt-dlp | `2026.07.04` | target public-VOD sidecar |
 
-### FFmpeg와 ffprobe
+npm wrapper·build 도구는 `package-lock.json`의 exact version, HTTPS registry URL,
+integrity로 고정합니다. target sidecar의 URL·크기·SHA-256은
+`src/desktop/tool-manifest.ts`, 지원 target과 파일명은
+`src/desktop/installer-contract.ts`가 canonical 기록입니다. 이 입력 고정은 아래
+최종 산출물 검토를 대체하지 않습니다.
 
-현재 개발 패키지는 `shaka-project/static-ffmpeg-binaries`의 `n8.1.2-1`
-대상별 executable과 canonical GPLv3 원문을 함께 준비합니다. 그러나 공개 배포 전에는
-각 대상에서 실제 `ffmpeg -version`, `ffprobe -version`, `ffmpeg -buildconf`,
-linked library와 codec 구성을 증거로 남겨 LGPL/GPL 적용 범위를 확정해야 합니다.
+release 승인 job은 yt-dlp의 고정 공개키 fingerprint로 공식 release checksum 서명을
+검증한 뒤 세 target hash를 manifest와 대조합니다. Electron runtime archive는
+`electron` npm package에 integrity로 묶인 exact version의 upstream checksum map에서
+대상 파일 hash를 읽어 packager download gate에 전달합니다. FFmpeg artifact는 현재
+고정 hash와 GitHub release digest의 사람 검토에 의존하므로 공개 승인 전 독립된 두
+검토자가 provenance bundle과 target manifest 일치를 확인해야 합니다.
 
-`--enable-nonfree`가 발견되면 해당 바이너리의 자동 공개 배포를 차단합니다.
-GPL component가 활성화된 경우에는 그 실제 조건에 맞는 전체 고지·대응 소스 또는
-source offer를 준비해야 합니다. `FFMPEG-LICENSE.txt` 한 파일만 존재한다는 사실은
-이 검토를 대체하지 않습니다.
+## 라이선스·SBOM hard gate
 
-현재 Shaka 빌드는 Mbed TLS `3.4.1`을 정적으로 포함합니다. 앱은 직접 HTTPS 입력에
-Node 신뢰 루트, `tls_verify=1`, redirect 0회를 강제하지만, 공개 바이너리 전에는
-지원 중인 TLS library로 재현 빌드하거나 FFmpeg의 원격 HTTPS 입력 자체를 제거해야
-합니다. 이 조건을 취약 구성요소 검토가 끝난 것으로 간주하지 않습니다.
+### Electron·Chromium·Node
 
-- FFmpeg legal and license considerations: https://ffmpeg.org/legal.html
-- 개발 artifact provenance:
-  https://github.com/shaka-project/static-ffmpeg-binaries/releases/tag/n8.1.2-1
+Electron 소스는 MIT이지만 runtime에는 Chromium, Node.js와 다수의 제3자 파일이
+포함됩니다. 각 target에서 실제로 내려받은 Electron archive의 immutable URL,
+byte size, SHA-256과 upstream checksum을 release manifest에 기록하고, 최종
+installer가 보존한 `LICENSE`·`LICENSES.chromium.html`을 packaged-file SBOM과
+대조해야 합니다.
+
+- Source/license: https://github.com/electron/electron/tree/v43.4.1
+- Distribution guide: https://www.electronjs.org/docs/latest/tutorial/application-distribution/
+
+electron-builder와 모든 transitive build dependency는 build-only라는 이유로
+검토에서 제외하지 않습니다. exact artifact·license·source를 canonical registry와
+release evidence에 기록하고 최종 installer에 잘못 섞이지 않았는지 검사합니다.
+
+### FFmpeg·ffprobe
+
+현재 target sidecar는 `shaka-project/static-ffmpeg-binaries` tag `n8.1.2-1`에서
+가져옵니다. 각 target의 실제 `ffmpeg -version`, `ffprobe -version`,
+`ffmpeg -buildconf`, linked library와 codec 구성을 보관해 LGPL/GPL 적용 범위를
+확정해야 합니다.
+
+`--enable-nonfree`가 있으면 자동 배포를 **차단**합니다. GPL component가
+활성화되면 실제 조건에 맞는 전체 원문·대응 소스 또는 source offer를 같은
+release에서 제공합니다. `FFMPEG-LICENSE.txt` 하나나 hash 일치만으로 충분하지
+않습니다. Mbed TLS 등 정적 linked component도 별도 취약성·라이선스 검토
+대상입니다.
+
+- Guidance: https://ffmpeg.org/legal.html
+- Development provenance: https://github.com/shaka-project/static-ffmpeg-binaries/releases/tag/n8.1.2-1
 
 ### yt-dlp standalone
 
-대상별 official standalone artifact의 URL, 바이트 수와 SHA-256은
-`src/desktop/tool-manifest.ts`에 고정되어 있습니다. yt-dlp 본체는 Unlicense지만
-standalone 실행 파일에 포함된 Python runtime, yt-dlp-ejs와 그 밖의 embedded
-component 고지·라이선스를 실제 대상별 바이너리에서 다시 수집해야 합니다.
-기존 Linux Unix zipimport용 고지를 standalone 패키지에 그대로 재사용하지
-않습니다.
+target별 official standalone은 본체 Unlicense 외에도 Python runtime,
+yt-dlp-ejs와 기타 embedded component를 포함할 수 있습니다. 각 Windows x64,
+macOS arm64, Linux x64 binary에서 실제 inventory와 notice를 수집합니다. 저장소
+source-run용 Unix zipimport 고지를 그대로 복사해 완료 처리하지 않습니다.
 
-- yt-dlp license: https://github.com/yt-dlp/yt-dlp/blob/2026.07.04/LICENSE
-- release artifacts: https://github.com/yt-dlp/yt-dlp/releases/tag/2026.07.04
+- Source/license: https://github.com/yt-dlp/yt-dlp/tree/2026.07.04
+- Artifacts: https://github.com/yt-dlp/yt-dlp/releases/tag/2026.07.04
 
-## 서명·공증과 배포 형식
+## 서명·공증 hard gate
 
-macOS 공개 배포에는 최소한 Developer ID Application 서명, hardened runtime,
-필요한 최소 entitlement, 모든 nested executable·dylib·FFmpeg·ffprobe·yt-dlp
-sidecar 서명, Apple notarization과 ticket staple이 필요합니다. 최종 산출물은
-`codesign --verify --deep --strict`, `spctl --assess --type execute`와
-`stapler validate`를 통과해야 합니다.
+macOS는 앱과 모든 nested executable·dylib·FFmpeg·ffprobe·yt-dlp를 Developer ID로
+서명하고 hardened runtime·최소 entitlement를 적용한 뒤 notarization과 ticket
+staple을 완료합니다. 최종 DMG에서 `codesign --verify --deep --strict`,
+`spctl --assess --type execute`, `stapler validate`를 모두 실행합니다. 서명으로
+upstream 도구 byte가 바뀌므로 signed byte의 size/SHA-256은 앱 내부 manifest에
+기록하되, 런타임은 그 manifest를 읽기 전에 outer `.app` seal을 검증하고 모든
+도구를 hash한 뒤 seal을 다시 검증합니다. 따라서 mutable manifest 단독으로는
+신뢰 근거가 되지 않습니다.
 
-Windows 공개 배포에는 앱과 native sidecar의 Authenticode 서명, 신뢰할 수 있는
-timestamp와 최종 서명 검증이 필요합니다. 서명은 SmartScreen reputation을 즉시
-보장하지 않으므로 새 사용자 계정의 실제 설치·실행 경고도 별도로 검사합니다.
+Windows는 installer, app executable과 Kirinuki가 빌드한 native launcher를
+Authenticode로 서명하고 신뢰할 수 있는 timestamp를 적용합니다. 검토한 upstream
+FFmpeg·ffprobe·yt-dlp는 재서명하지 않고 pinned size/SHA-256 bytes를 installer 생성
+뒤에도 다시 확인합니다. 최종 EXE의 signature readback과 깨끗한 사용자 계정에서
+SmartScreen/설치·제거·실제 엔진 기동을 확인합니다.
 
-현재 production runner는 PID를 다시 여는 `taskkill /T /F`를 사용하지 않고,
-Node/libuv가 보관한 exact child process handle만 종료합니다. 이 방식은 PID 재사용
-오종료를 막고 close 대기를 bounded하게 끝내지만, 이미 만든 descendant 전체의
-종료까지 보장하지는 못합니다. 따라서 Windows 공개 바이너리는 native
-`CreateJobObject`/`AssignProcessToJobObject`와
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`를 적용하고, 정상 종료·취소·timeout·강제
-종료 각각에서 descendant orphan이 없다는 실제 Windows 회귀 테스트를 통과할
-때까지 fail closed합니다.
+Linux deb도 exact manifest·digest·SBOM·notice와 배포 채널의 서명·검증 절차를
+release record에 포함합니다.
 
-Linux 공개 배포 형식을 정한 뒤에는 파일 manifest·SHA-256·SBOM·provenance와
-선택한 패키지 형식의 서명·검증 절차를 함께 제공해야 합니다.
-
-Electron도 Windows와 macOS에 배포할 앱은 코드 서명을 권고하며, macOS 외부
-배포에는 서명 뒤 공증 단계가 필요하다고 설명합니다:
+Electron의 공식 안내도 Windows/macOS 코드 서명과 macOS 외부 배포의 공증을
+요구 경계로 설명합니다:
 https://www.electronjs.org/docs/latest/tutorial/code-signing
+
+## 생명주기·안전성 hard gate
+
+- [ ] 세 OS에서 설치 전 → 설치 → 첫 실행 → 로그인 자동 시작 → 두 번째 실행 →
+  업데이트 재설치 → uninstall을 실제 native runner에서 검증했다.
+- [ ] 실행 중 창/webContents가 0이고 편집 UI가 공개 웹사이트에만 있음을 readback했다.
+- [ ] loopback listener가 LAN/공인 interface에 노출되지 않고 정확한 Origin·Host·
+  nonce·capability scope를 강제한다.
+- [ ] 같은 엔진이 이미 있을 때 멱등적으로 재사용하고 다른 프로세스가 port를
+  차지하면 takeover하거나 종료하지 않고 fail closed한다.
+- [ ] 정상 종료·취소·timeout·crash·uninstall 뒤 gateway, FFmpeg, ffprobe, yt-dlp와
+  임시 파일이 남지 않는다.
+- [ ] Windows는 외부 도구 전체를 native Job Object에 원자적으로 묶고
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`로 descendant orphan이 없음을 실제
+  회귀 테스트한다. 이 조건이 구현·검증되기 전에는 Windows 공개 배포를 차단한다.
+- [ ] macOS/Linux는 process group과 PID identity를 재확인해 다른 프로세스를
+  종료하지 않으며 전체 descendant 소멸을 검사한다.
+- [ ] uninstall이 사용자가 직접 선택한 원본 파일과 다른 프로젝트의 자료를
+  삭제하지 않는다.
+- [ ] 업데이트 agent나 숨은 network poll이 없고 protocol 불일치는 웹에서 최신
+  설치 파일을 명시적으로 다시 설치하도록 안내한다.
+
+## 1회 설치 호환성과 업데이트 경계
+
+Windows NSIS, macOS DMG, Linux deb 전부에서 동일한 보안 수준의 무인 자동 업데이트를
+제공하려면 서명된 update metadata, freshness·rollback 보호, 실패 복구와 Linux package
+권한 모델까지 별도 설계해야 합니다. 이 기반 없이 background engine이 파일을
+내려받아 실행하거나 unsigned update를 적용하는 기능은 넣지 않습니다.
+
+대신 `kirinuki-local-media-engine/v1`은 앱 release 번호와 독립된 additive-only
+호환성 경계입니다. 같은 v1을 광고하는 기존 설치는 이후 웹에서도 계속 사용해야
+하며, 기존 필드·endpoint·request schema를 제거하거나 의미를 바꾸면 안 됩니다.
+breaking change가 불가피하면 v1을 깨는 대신 parallel protocol을 추가하고, 사용자
+교체가 정말 필요할 때만 같은 stable install path에 서명된 installer를 다시
+실행합니다. 자동 network polling, unsigned updater, 조용한 binary replacement는
+release manifest에서 모두 `false`로 readback합니다.
+
+이 정책은 실제 OS별 old→new 설치 덮어쓰기 smoke를 대체하지 않습니다. 해당 native
+검증이 완료되기 전에는 위 업데이트 재설치 체크를 완료 처리하지 않습니다.
 
 ## 공개 release 승인 체크
 
 다음 항목은 하나라도 미완료이면 fail closed합니다.
 
-- [ ] Electron 플랫폼 archive의 immutable URL·크기·SHA-256과 upstream checksum을
-  release manifest에 고정했다.
-- [ ] Electron/Chromium/Node와 전체 packaged file의 SBOM·license·copyright·
-  대응 고지를 최종 산출물에 포함했다.
-- [ ] FFmpeg·ffprobe 대상별 version/buildconf/link evidence를 저장하고
-  `--enable-nonfree`가 없음을 자동 확인했다.
-- [ ] FFmpeg의 실제 LGPL/GPL 조건에 맞는 원문·대응 소스 또는 source offer를
-  최종 산출물과 같은 release에서 제공했다.
-- [ ] yt-dlp standalone의 대상별 embedded component 인벤토리와 고지를 포함했다.
-- [ ] `npm run license:check`가 Electron packaging dependency와 세 sidecar의 실제
-  재배포 경계를 canonical registry로 검사한다.
-- [ ] Linux x64·Windows x64·macOS arm64 native CI에서 같은 commit의 typecheck,
-  unit test, package 검증과 packaged-runtime liveness smoke를 통과했다.
-- [ ] 지원한다고 표시할 각 OS·architecture에서 실제 Player Bridge, VOD 부분
-  준비, 컷 편집, 내보내기, 종료와 orphan-process 회귀를 통과했다.
-- [ ] macOS 앱과 모든 nested code를 서명·공증·staple한 뒤 Gatekeeper 검증을
-  통과했다.
-- [ ] Windows 앱과 모든 native sidecar를 서명·timestamp한 뒤 새 사용자 환경에서
-  검증했다.
-- [ ] Windows에서 모든 외부 미디어 도구를 native Job Object에 원자적으로 묶고
-  `KILL_ON_JOB_CLOSE`와 실제 orphan-process 회귀를 검증했다.
-- [ ] 최종 installer/archive의 digest, signing identity, timestamp/notarization
-  request와 검증 로그를 release record에 남겼다.
+- [ ] 세 installer의 exact file tree, byte size, SHA-256, SBOM, notice와 build
+  provenance를 같은 commit의 release record에 고정했다.
+- [ ] Electron archive provenance와 Electron/Chromium/Node 전체 고지를 검증했다.
+- [ ] electron-builder를 포함한 installer build dependency의 exact license
+  inventory와 최종 비포함 여부를 검증했다.
+- [ ] FFmpeg·ffprobe target별 build/link evidence와 적용 조건에 맞는 대응 소스를
+  제공했다.
+- [ ] yt-dlp standalone의 target별 embedded component 인벤토리를 제공했다.
+- [ ] Windows x64 native CI의 silent install·Start Menu readback·liveness·uninstall
+  smoke를 같은 commit에서 통과했다.
+- [ ] Linux x64 native CI의 deb install·liveness·remove/purge와 package-owned path
+  smoke를 같은 commit에서 통과했다.
+- [ ] macOS arm64에서 `/Applications` copy, 로그인 자동 시작, uninstall과 실제 사용자
+  profile cleanup을 포함한 native lifecycle smoke를 같은 commit에서 통과했다.
+- [ ] 세 플랫폼 CHZZK·YouTube·SOOP 공개 VOD의 부분 준비와 범위·시간축 검증을
+  실제 브라우저↔설치 엔진 경로에서 통과했다.
+- [ ] 실제 Chrome에서 최초 custom-scheme pairing, signed health, 암호화 VOD
+  session, 같은 profile 새로고침 뒤 무재pairing 재연결을 설치본마다 통과했다.
+- [ ] Windows Job Object/orphan gate를 닫았다.
+- [ ] Windows Authenticode/timestamp와 macOS Developer ID/notarization/staple을
+  최종 artifact에서 검증했다.
+- [ ] digest, signing identity, timestamp/notarization request와 readback log를
+  release record에 보관했다.
+- [ ] publish 뒤 exact remote asset digest readback으로 `build:web:release`를
+  실행하고, 그 전 web bundle에 installer URL이 없음을 확인했다.
 
-CI에서 unsigned package가 만들어졌다는 사실, 버전과 SHA-256을 핀했다는 사실,
-또는 개발 PC에서 실행됐다는 사실만으로 위 항목을 완료 처리하지 않습니다.
+`npm run license:check` 성공, unsigned installer 생성, checksum 고정, 개발 PC
+실행 성공 중 어느 것도 위 항목을 완료 처리하지 않습니다.

@@ -113,8 +113,9 @@ test("편집기 chrome은 장식 문구와 중복 상태 표시를 없애고 저
   assert.match(html, /id="local-draft-status"[^>]*>편집 중 임시 복구 · 탭 종료 시 폐기</u);
   assert.match(html, /탭 종료 뒤에는 ‘지금 저장’으로 만든 버전만 남습니다/u);
   assert.match(html, /이 복구본도 탭 종료 시 폐기됩니다/u);
-  assert.match(html, /AudSeg 방식으로 설치한 앱은 재실행만으로 Whisper가 추가되지 않습니다/u);
-  assert.match(html, /\.\/setup\.sh --mode whisper/u);
+  assert.match(html, /현재 공개용 영상 준비 도구는 VOD 구간 준비만 담당/u);
+  assert.match(html, /id="whisper-provider-tab"[^>]*aria-hidden="true"[^>]*hidden[^>]*disabled/u);
+  assert.doesNotMatch(html, /\.\/setup\.sh --mode whisper/u);
   assert.match(main, /local_draft_status\.dataset\.state = state/u);
   assert.match(main, /state === "saved"[\s\S]*편집 중 임시 복구됨/u);
   assert.match(main, /탭 종료 시 임시본 폐기/u);

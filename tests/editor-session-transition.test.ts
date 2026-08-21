@@ -339,7 +339,23 @@ test("editor는 BFCache·seed·checkpoint·늦은 materialization을 같은 leas
   );
   assert.match(
     source,
-    /verifiedSession\.sessionLeaseId !== previousSession\.sessionLeaseId[\s\S]*verifiedSession\.transitionGeneration[\s\S]*previousSession\.transitionGeneration/u
+    /function sameUsagePolicyLease\([\s\S]*left\.sessionLeaseId === right\.sessionLeaseId[\s\S]*left\.transitionGeneration === right\.transitionGeneration/u
+  );
+  assert.match(
+    source,
+    /event\.persisted[\s\S]*same tab may have[\s\S]*refreshUsagePolicyLease\(expected\)[\s\S]*resumeEditorAfterPageShow\(\);/u
+  );
+  assert.match(
+    source,
+    /async function refreshUsagePolicyLease[\s\S]*!sameUsagePolicyLease\(refreshed, expected\)[\s\S]*throw new ReplacedUsagePolicyLeaseError/u
+  );
+  assert.match(
+    source,
+    /function handleUsagePolicyLeaseRefreshFailure[\s\S]*ReplacedUsagePolicyLeaseError[\s\S]*leaveReplacedUsagePolicySession[\s\S]*transient case only/u
+  );
+  assert.doesNotMatch(
+    source,
+    /reverifyUsagePolicyLeaseAfterPageRestore|lockEditorForUsagePolicy|편집기를 잠갔습니다/u
   );
   assert.match(
     source,

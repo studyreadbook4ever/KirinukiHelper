@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Kirinuki">
+  <rect width="1024" height="1024" rx="224" fill="#101113"/>
+  <rect x="142" y="166" width="740" height="692" rx="112" fill="none" stroke="#3c4247" stroke-width="36"/>
+  <g fill="#00e6a3">
+    <rect x="188" y="216" width="78" height="72" rx="18"/>
+    <rect x="758" y="216" width="78" height="72" rx="18"/>
+    <rect x="188" y="736" width="78" height="72" rx="18"/>
+    <rect x="758" y="736" width="78" height="72" rx="18"/>
+  </g>
+  <path d="M350 300v424M370 542 662 300M500 432l190 292" fill="none" stroke="#f6f8f7" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m458 490 52 52-52 52m164-104-52 52 52 52" fill="none" stroke="#00e6a3" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

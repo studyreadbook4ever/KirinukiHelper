@@ -43,6 +43,7 @@ import {
   externalVodArtifactCacheFileName,
   externalPublishedArtifactInspectionBinding,
   externalVodConsumerScopeHash,
+  externalVodPlanFingerprint,
   externalVodSourceRootCacheFileName,
   externalYtDlpCommand,
   materializeExternalVod as strictMaterializeExternalVod,
@@ -1250,14 +1251,39 @@ test("SOOP multi-video는 root 길이·완전한 고유 part vector로만 전역
     })),
     /완전한 원본 시간축/u
   );
-  assert.doesNotThrow(
+  assert.throws(
     () => parseExternalVodMetadata(SOOP_URL, JSON.stringify({
       ...payload,
-      // Each extractor entry is integer seconds. At most one truncated
-      // fractional second per part may be represented only by the root.
       duration: 121.999
-    }))
+    })),
+    /완전한 원본 시간축/u
   );
+  for (const incomplete of [
+    { ...payload, duration: 120, entries: [] },
+    { ...payload, _type: "multi_video", duration: 120, entries: undefined },
+    { ...payload, duration: 120, playlist_count: 3 },
+    {
+      ...payload,
+      duration: 120,
+      entries: [
+        { duration: 60, availability: "public" },
+        { id: "part-2", duration: 60, availability: "public" }
+      ]
+    },
+    {
+      ...payload,
+      duration: 120,
+      entries: [
+        { id: "part-1", duration: 60.5, availability: "public" },
+        { id: "part-2", duration: 59.5, availability: "public" }
+      ]
+    }
+  ]) {
+    assert.throws(
+      () => parseExternalVodMetadata(SOOP_URL, JSON.stringify(incomplete)),
+      /파트|ID|정수초/u
+    );
+  }
 });
 
 test("SOOP multi-video를 연속 원본 시간축 파트로 만들고 ±10초 합집합을 파트 경계에서 나눈다", () => {
@@ -1278,6 +1304,13 @@ test("SOOP multi-video를 연속 원본 시간축 파트로 만들고 ±10초 �
       durationMs: 60_000
     }
   ]);
+  assert.deepEqual(
+    metadata.sourceClockIdentity,
+    soopSourceClockIdentity([
+      { id: "part_1", durationSeconds: 60 },
+      { id: "part_2", durationSeconds: 60 }
+    ])
+  );
 
   const plan = planExternalVodSections(metadata, [
     { id: "a", startMs: 55_000, endMs: 56_000 },
@@ -1305,6 +1338,84 @@ test("SOOP multi-video를 연속 원본 시간축 파트로 만들고 ±10초 �
     { playlistItem: 2, source: [60_000, 74_000], local: [0, 14_000] },
     { playlistItem: 2, source: [90_000, 115_000], local: [30_000, 55_000] }
   ]);
+
+  const proofSetId = "a".repeat(64);
+  const originalFingerprint = externalVodPlanFingerprint({
+    metadata,
+    clips: [
+      { id: "a", startMs: 55_000, endMs: 56_000 },
+      { id: "b", startMs: 63_000, endMs: 64_000 },
+      { id: "c", startMs: 100_000, endMs: 105_000 }
+    ],
+    plan,
+    acquisitionClockProofSetId: proofSetId
+  });
+  const replacedParts = metadata.parts.map((part, index) => ({
+    ...part,
+    id: `replacement_${index + 1}`
+  }));
+  const replacementFingerprint = externalVodPlanFingerprint({
+    metadata: {
+      ...metadata,
+      // Deliberately retain sourceVersionId: the v3 plan itself must bind the
+      // independently derived official vector rather than trust this field.
+      parts: replacedParts,
+      sourceClockIdentity: soopSourceClockIdentity([
+        { id: "replacement_1", durationSeconds: 60 },
+        { id: "replacement_2", durationSeconds: 60 }
+      ]) as NonNullable<ExternalVodMetadata["sourceClockIdentity"]>
+    },
+    clips: [
+      { id: "a", startMs: 55_000, endMs: 56_000 },
+      { id: "b", startMs: 63_000, endMs: 64_000 },
+      { id: "c", startMs: 100_000, endMs: 105_000 }
+    ],
+    plan,
+    acquisitionClockProofSetId: proofSetId
+  });
+  assert.notEqual(
+    replacementFingerprint,
+    originalFingerprint,
+    "SOOP v3 계획 fingerprint가 공식 part identity 교체를 포함해야 합니다."
+  );
+});
+
+test("SOOP source version은 비시간축 표시 metadata가 아니라 official root·entries에만 결정된다", () => {
+  const basePayload = {
+    id: SOOP_ID,
+    extractor: "soop",
+    webpage_url: SOOP_URL,
+    original_url: SOOP_URL,
+    availability: "public",
+    live_status: "was_live",
+    duration: 120,
+    entries: [
+      { id: "part_1", duration: 60, availability: "public" },
+      { id: "part_2", duration: 60, availability: "public" }
+    ]
+  };
+  const initial = parseExternalVodMetadata(SOOP_URL, JSON.stringify({
+    ...basePayload,
+    timestamp: 1_700_000_000,
+    modified_timestamp: 1_700_000_010
+  }));
+  const presentationMetadataChanged = parseExternalVodMetadata(
+    SOOP_URL,
+    JSON.stringify({
+      ...basePayload,
+      timestamp: 1_800_000_000,
+      modified_timestamp: 1_800_000_010,
+      title: "표시 제목 변경"
+    })
+  );
+  assert.equal(
+    presentationMetadataChanged.sourceVersionId,
+    initial.sourceVersionId
+  );
+  assert.deepEqual(
+    presentationMetadataChanged.sourceClockIdentity,
+    initial.sourceClockIdentity
+  );
 });
 
 test("clip anchor는 불변으로 두고 per-clip hot-load 범위만 정확히 확장한다", () => {
@@ -2007,9 +2118,15 @@ test("macOS child fd 3은 실제 /dev/fd/3 입력으로 열린 파일 bytes를 �
   }
 });
 
-test("Windows 취소는 PID fallback 없이 exact child handle만 종료한다", async () => {
+test("Windows 취소는 retained handle 신원 확인 뒤 process tree를 종료하고 정리를 기다린다", async () => {
   const controller = new AbortController();
   const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let releaseTreeCleanup: (() => void) | undefined;
+  const treeCleanupGate = new Promise<void>((resolve) => {
+    releaseTreeCleanup = resolve;
+  });
+  let terminationPid: number | undefined;
+  let identityConfirmed = false;
   let child: (EventEmitter & {
     pid: number;
     stdout: PassThrough;
@@ -2023,15 +2140,17 @@ test("Windows 취소는 PID fallback 없이 exact child handle만 종료한다",
     child.stderr = new PassThrough();
     child.kill = (signal) => {
       leaderSignals.push(signal);
-      queueMicrotask(() => {
-        child?.stdout.end();
-        child?.stderr.end();
-        child?.emit("close", 1, null);
-      });
       return true;
     };
     return child as unknown as ChildProcess;
   }) as unknown as typeof spawn;
+  const terminateWindowsProcessTreeImpl: typeof terminateWindowsExternalProcessTree =
+    async (processId, terminationOptions = {}) => {
+      terminationPid = processId;
+      identityConfirmed = await terminationOptions.confirmTargetIdentityImpl?.()
+        ?? false;
+      await treeCleanupGate;
+    };
   const pending = runExternalProcess("yt-dlp.exe", ["--version"], {
     cwd: "/tmp",
     env: {},
@@ -2039,13 +2158,28 @@ test("Windows 취소는 PID fallback 없이 exact child handle만 종료한다",
     signal: controller.signal
   }, {
     platform: "win32",
-    spawnImpl
+    spawnImpl,
+    terminateWindowsProcessTreeImpl
   });
+  let settled = false;
+  void pending.then(
+    () => { settled = true; },
+    () => { settled = true; }
+  );
   controller.abort();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(terminationPid, 4_321);
+  assert.equal(identityConfirmed, true);
+  assert.deepEqual(leaderSignals, [0]);
+  child?.stdout.end();
+  child?.stderr.end();
+  child?.emit("close", 1, null);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "tree cleanup 전에는 abort 결과를 확정하면 안 됩니다.");
+  releaseTreeCleanup?.();
   await assert.rejects(pending, (error: unknown) => (
     error instanceof Error && "code" in error && error.code === "ABORT_ERR"
   ));
-  assert.deepEqual(leaderSignals, ["SIGKILL"]);
 });
 
 test("Windows taskkill helper timeout은 killer를 종료하고 close까지 기다린다", async () => {
@@ -2098,9 +2232,10 @@ test("Windows taskkill helper timeout은 killer를 종료하고 close까지 기�
   assert.equal(timerCleared, true);
 });
 
-test("Windows exact child kill은 반복 abort에도 한 번만 실행된다", async () => {
+test("Windows process tree 종료는 반복 abort에도 한 번만 실행된다", async () => {
   const controller = new AbortController();
   const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let treeTerminationCalls = 0;
   let childRef: (EventEmitter & {
     pid: number;
     stdout: PassThrough;
@@ -2114,16 +2249,24 @@ test("Windows exact child kill은 반복 abort에도 한 번만 실행된다", a
     child.stderr = new PassThrough();
     child.kill = (signal) => {
       leaderSignals.push(signal);
-      queueMicrotask(() => {
-        child.stdout.end();
-        child.stderr.end();
-        child.emit("close", null, "SIGKILL");
-      });
       return true;
     };
     childRef = child;
     return child as unknown as ChildProcess;
   }) as unknown as typeof spawn;
+  const terminateWindowsProcessTreeImpl: typeof terminateWindowsExternalProcessTree =
+    async (_processId, terminationOptions = {}) => {
+      treeTerminationCalls += 1;
+      assert.equal(
+        await terminationOptions.confirmTargetIdentityImpl?.(),
+        true
+      );
+      queueMicrotask(() => {
+        childRef?.stdout.end();
+        childRef?.stderr.end();
+        childRef?.emit("close", null, "SIGKILL");
+      });
+    };
   const pending = runExternalProcess("yt-dlp.exe", [], {
     cwd: "C:\\Kirinuki",
     env: {},
@@ -2131,7 +2274,8 @@ test("Windows exact child kill은 반복 abort에도 한 번만 실행된다", a
     signal: controller.signal
   }, {
     platform: "win32",
-    spawnImpl
+    spawnImpl,
+    terminateWindowsProcessTreeImpl
   });
   controller.abort();
   controller.abort();
@@ -2140,10 +2284,11 @@ test("Windows exact child kill은 반복 abort에도 한 번만 실행된다", a
     && "code" in error
     && error.code === "ABORT_ERR"
   ));
-  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  assert.equal(treeTerminationCalls, 1);
+  assert.deepEqual(leaderSignals, [0]);
 });
 
-test("Windows timeout은 exact child를 한 번 죽이고 close 한 번으로 원래 오류를 보존한다", async () => {
+test("Windows timeout은 process tree 정리와 close 뒤 원래 오류를 보존한다", async () => {
   const scheduled: Array<{
     callback: () => void;
     delay: number;
@@ -2164,6 +2309,10 @@ test("Windows timeout은 exact child를 한 번 죽이고 close 한 번으로 �
     }
   }) as unknown as typeof clearTimeout;
   const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let releaseTreeCleanup: (() => void) | undefined;
+  const treeCleanupGate = new Promise<void>((resolve) => {
+    releaseTreeCleanup = resolve;
+  });
   let childRef: (EventEmitter & {
     pid: number;
     stdout: PassThrough;
@@ -2177,17 +2326,19 @@ test("Windows timeout은 exact child를 한 번 죽이고 close 한 번으로 �
     child.stderr = new PassThrough();
     child.kill = (signal) => {
       leaderSignals.push(signal);
-      queueMicrotask(() => {
-        child.stdout.end();
-        child.stderr.end();
-        child.emit("close", null, "SIGKILL");
-        child.emit("close", null, "SIGKILL");
-      });
       return true;
     };
     childRef = child;
     return child as unknown as ChildProcess;
   }) as unknown as typeof spawn;
+  const terminateWindowsProcessTreeImpl: typeof terminateWindowsExternalProcessTree =
+    async (_processId, terminationOptions = {}) => {
+      assert.equal(
+        await terminationOptions.confirmTargetIdentityImpl?.(),
+        true
+      );
+      await treeCleanupGate;
+    };
   const pending = runExternalProcess("ffmpeg.exe", [], {
     cwd: "C:\\Kirinuki",
     env: {},
@@ -2197,23 +2348,37 @@ test("Windows timeout은 exact child를 한 번 죽이고 close 한 번으로 �
     platform: "win32",
     spawnImpl,
     setTimeoutImpl,
-    clearTimeoutImpl
+    clearTimeoutImpl,
+    killGraceMs: 17,
+    terminateWindowsProcessTreeImpl
   });
   assert.equal(scheduled[0]?.delay, 123);
   scheduled[0]?.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  childRef?.stdout.end();
+  childRef?.stderr.end();
+  childRef?.emit("close", null, "SIGKILL");
+  let settled = false;
+  void pending.then(
+    () => { settled = true; },
+    () => { settled = true; }
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  releaseTreeCleanup?.();
   await assert.rejects(pending, (error: unknown) => (
     error instanceof Error
     && "code" in error
     && error.code === "ETIMEDOUT"
   ));
-  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  assert.deepEqual(leaderSignals, [0]);
   assert.equal(scheduled[0]?.cleared, true);
   assert.equal(scheduled.length, 2);
   assert.equal(scheduled[1]?.cleared, true);
   assert.equal(childRef?.listenerCount("close"), 0);
 });
 
-test("Windows exact child가 닫히지 않아도 timeout 결과는 bounded하게 끝난다", async () => {
+test("Windows child가 닫히지 않아도 tree helper 이후 outer deadline에서 bounded하게 끝난다", async () => {
   const scheduled: Array<{ callback: () => void; delay: number }> = [];
   const setTimeoutImpl = ((callback: () => void, delay = 0) => {
     scheduled.push({ callback, delay });
@@ -2234,11 +2399,18 @@ test("Windows exact child가 닫히지 않아도 timeout 결과는 bounded하게
     child.stderr = new PassThrough();
     child.kill = (signal) => {
       leaderSignals.push(signal);
-      return false;
+      return true;
     };
     child.unref = () => { unrefCount += 1; };
     return child as unknown as ChildProcess;
   }) as unknown as typeof spawn;
+  const terminateWindowsProcessTreeImpl: typeof terminateWindowsExternalProcessTree =
+    async (_processId, terminationOptions = {}) => {
+      assert.equal(
+        await terminationOptions.confirmTargetIdentityImpl?.(),
+        true
+      );
+    };
   const pending = runExternalProcess("ffmpeg.exe", [], {
     cwd: "C:\\Kirinuki",
     env: {},
@@ -2249,10 +2421,12 @@ test("Windows exact child가 닫히지 않아도 timeout 결과는 bounded하게
     spawnImpl,
     setTimeoutImpl,
     clearTimeoutImpl: (() => undefined) as unknown as typeof clearTimeout,
-    killGraceMs: 17
+    killGraceMs: 17,
+    terminateWindowsProcessTreeImpl
   });
   scheduled[0]?.callback();
-  assert.equal(scheduled[1]?.delay, 17);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(scheduled[1]?.delay, 14);
   scheduled[1]?.callback();
   await assert.rejects(pending, (error: unknown) => (
     error instanceof Error
@@ -2260,8 +2434,180 @@ test("Windows exact child가 닫히지 않아도 timeout 결과는 bounded하게
     && error.code === "ETIMEDOUT"
     && error.cause instanceof Error
   ));
-  assert.deepEqual(leaderSignals, ["SIGKILL"]);
+  assert.deepEqual(leaderSignals, [0]);
   assert.equal(unrefCount, 1);
+});
+
+test("Windows tree retry identity는 captured PID가 바뀌면 fail-closed 한다", async () => {
+  const controller = new AbortController();
+  const leaderSignals: Array<NodeJS.Signals | number | undefined> = [];
+  let checkIdentity: (() => Promise<boolean>) | undefined;
+  let releaseTreeCleanup: (() => void) | undefined;
+  const treeCleanupGate = new Promise<void>((resolve) => {
+    releaseTreeCleanup = resolve;
+  });
+  let childRef: (EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  }) | undefined;
+  const spawnImpl = (() => {
+    const child = new EventEmitter() as NonNullable<typeof childRef>;
+    child.pid = 7_654;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      leaderSignals.push(signal);
+      return true;
+    };
+    childRef = child;
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  const terminateWindowsProcessTreeImpl: typeof terminateWindowsExternalProcessTree =
+    async (processId, terminationOptions = {}) => {
+      assert.equal(processId, 7_654);
+      checkIdentity = terminationOptions.confirmTargetIdentityImpl;
+      await treeCleanupGate;
+    };
+  const pending = runExternalProcess("yt-dlp.exe", [], {
+    cwd: "C:\\Kirinuki",
+    env: {},
+    shell: false,
+    signal: controller.signal
+  }, {
+    platform: "win32",
+    spawnImpl,
+    terminateWindowsProcessTreeImpl
+  });
+  controller.abort();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert(checkIdentity);
+  childRef!.pid = 7_655;
+  assert.equal(await checkIdentity(), false);
+  assert.deepEqual(leaderSignals, []);
+  releaseTreeCleanup?.();
+  childRef?.stdout.end();
+  childRef?.stderr.end();
+  childRef?.emit("close", null, "SIGKILL");
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ABORT_ERR"
+  ));
+});
+
+test("실제 Windows 취소는 leader와 descendant process를 모두 회수한다", {
+  skip: process.platform !== "win32",
+  timeout: 20_000
+}, async (t) => {
+  const cwd = await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-windows-process-tree-test-"
+  ));
+  const processTreePath = path.join(cwd, "process-tree.json");
+  const stopPath = path.join(cwd, "stop");
+  let processTree: { leader: number; descendant: number } | undefined;
+  const controller = new AbortController();
+  const descendantScript = [
+    "const { existsSync } = require('node:fs');",
+    "const timer = setInterval(() => { if (existsSync(process.argv[1])) { clearInterval(timer); process.exit(0); } }, 50);"
+  ].join("\n");
+  const leaderScript = [
+    "const { spawn } = require('node:child_process');",
+    "const { existsSync, writeFileSync } = require('node:fs');",
+    `const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}, process.argv[2]], { stdio: 'ignore', windowsHide: true });`,
+    "writeFileSync(process.argv[1], JSON.stringify({ leader: process.pid, descendant: descendant.pid }));",
+    "const timer = setInterval(() => { if (existsSync(process.argv[2])) { clearInterval(timer); process.exit(0); } }, 50);"
+  ].join("\n");
+  const pending = runExternalProcess(process.execPath, [
+    "-e",
+    leaderScript,
+    processTreePath,
+    stopPath
+  ], {
+    cwd,
+    env: createExternalProcessEnvironment(process.env, cwd),
+    shell: false,
+    signal: controller.signal,
+    timeoutMs: 10_000
+  }, {
+    platform: "win32",
+    killGraceMs: 5_000
+  });
+  void pending.catch(() => undefined);
+  t.after(async () => {
+    controller.abort();
+    // The unique sentinel only reaches this fixture; unlike a late PID kill,
+    // it cannot terminate an unrelated process after PID reuse.
+    await writeFile(stopPath, "stop").catch(() => undefined);
+    await pending.catch(() => undefined);
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  const processTreeDeadline = Date.now() + 5_000;
+  while (!processTree && Date.now() < processTreeDeadline) {
+    try {
+      const value = JSON.parse(await readFile(processTreePath, "utf8")) as {
+        leader?: unknown;
+        descendant?: unknown;
+      };
+      if (
+        Number.isSafeInteger(value.leader)
+        && Number(value.leader) > 0
+        && Number.isSafeInteger(value.descendant)
+        && Number(value.descendant) > 0
+      ) {
+        processTree = {
+          leader: Number(value.leader),
+          descendant: Number(value.descendant)
+        };
+      }
+    } catch (error) {
+      if (
+        !(error instanceof Error)
+        || !("code" in error)
+        || error.code !== "ENOENT"
+      ) {
+        throw error;
+      }
+    }
+    if (!processTree) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  assert(processTree, "Windows process tree fixture가 PID를 게시해야 합니다.");
+  controller.abort();
+  await assert.rejects(pending, (error: unknown) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ABORT_ERR"
+  ));
+
+  const waitForAbsence = async (processId: number): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(processId, 0);
+      } catch (error) {
+        if (
+          error instanceof Error
+          && "code" in error
+          && error.code === "ESRCH"
+        ) {
+          return;
+        }
+        throw error;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+    assert.fail(`Windows process ${processId}가 취소 뒤에도 남아 있습니다.`);
+  };
+  await Promise.all([
+    waitForAbsence(processTree.leader),
+    waitForAbsence(processTree.descendant)
+  ]);
 });
 
 test("외부 프로세스 시간 제한은 전체 프로세스 그룹에 TERM 후 KILL하고 close에서 끝난다", async () => {
@@ -2783,6 +3129,52 @@ test("실시간 statfs도 음수 bavail과 0 이하 bsize를 곱하기 전에 �
   }
 });
 
+test("SOOP 레거시 player identity는 선택 입력이며 official root·entries와 다르면 중단한다", async (t) => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-soop-legacy-clock-"));
+  t.after(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  let metadataCalls = 0;
+  await assert.rejects(
+    strictMaterializeExternalVod({
+      consumerId: TEST_CONSUMER_ID,
+      sourceUrl: SOOP_URL,
+      sourceClockIdentity: soopSourceClockIdentity([
+        { id: "legacy-wrong-part", durationSeconds: 120 }
+      ]),
+      clips: [{ id: "clip", startMs: 20_000, endMs: 21_000 }],
+      stateDir
+    }, {
+      pythonBinary: PYTHON_BINARY,
+      ytDlpBinary: YT_DLP_ARTIFACT,
+      runProcess: async (_command, args) => {
+        assert(args.includes("--dump-single-json"));
+        metadataCalls += 1;
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            id: SOOP_ID,
+            extractor: "soop",
+            webpage_url: SOOP_URL,
+            original_url: SOOP_URL,
+            availability: "public",
+            live_status: "was_live",
+            duration: 120,
+            entries: [{ id: "official-part", duration: 120 }]
+          }),
+          stderr: ""
+        };
+      }
+    }),
+    (error: unknown) => {
+      assert(error instanceof ExternalVodMaterializationError);
+      assert.equal(error.code, "SOURCE_CLOCK_MISMATCH");
+      return true;
+    }
+  );
+  assert.equal(metadataCalls, 1);
+});
+
 test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병합하며 검증된 cache를 재사용한다", async (t) => {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-external-vod-"));
   t.after(async () => {
@@ -2856,10 +3248,6 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
   const request = {
     consumerId: TEST_CONSUMER_ID,
     sourceUrl: `${SOOP_URL}?change_second=55`,
-    sourceClockIdentity: soopSourceClockIdentity([
-      { id: "part_1", durationSeconds: 60 },
-      { id: "part_2", durationSeconds: 60 }
-    ]),
     clips: [{ id: "clip-a", startMs: 55_000, endMs: 56_000 }],
     stateDir
   } as const;
@@ -2896,6 +3284,11 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
   }]);
   assert.ok(normalizeChzzkVodMaterialization(first.manifest));
   assert.equal(first.receipt.schemaId, EXTERNAL_VOD_CACHE_SCHEMA);
+  assert.match(
+    first.receipt.sourceClockProof.browserClockIdentitySha256 ?? "",
+    /^[a-f0-9]{64}$/u,
+    "SOOP receipt가 engine-derived root·entries identity를 보존해야 합니다."
+  );
   assert.equal(path.dirname(first.artifactPath), externalJobDirectory(
     stateDir,
     TEST_CONSUMER_ID,
@@ -2954,6 +3347,9 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
     clips: Array<{ endMs: number }>;
     acquiredSections: Array<{ sourceEndMs: number }>;
     sourceRoots: Array<{ sourceEndMs: number }>;
+    sourceClockProof: {
+      browserClockIdentitySha256: string | null;
+    };
     artifact: {
       sizeBytes: number;
       hashSha256: string;
@@ -2966,6 +3362,9 @@ test("SOOP 외부 materializer는 두 파트의 필요한 구간만 받고 병�
     (receipt) => { receipt.schemaId = "invalid"; },
     (receipt) => { receipt.canonicalUrl = YOUTUBE_URL; },
     (receipt) => { receipt.sourceVersionId = "0".repeat(64); },
+    (receipt) => {
+      receipt.sourceClockProof.browserClockIdentitySha256 = "0".repeat(64);
+    },
     (receipt) => { receipt.manifest.source.contentId = "987654321"; },
     (receipt) => { receipt.manifest.planFingerprint = "0".repeat(64); },
     (receipt) => { receipt.manifest.handleMs = 9_999; },
@@ -3449,10 +3848,10 @@ test("다운로드 완료 전 metadata 재검증에서 sourceVersionId 변화가
           live_status: "was_live",
           duration: 120,
           timestamp: 1_700_000_000,
-          ...(metadataProbeCalls > 1
-            ? { modified_timestamp: 1_700_000_001 }
-            : {}),
-          entries: [{ id: "stable-part", duration: 120 }]
+          entries: [{
+            id: metadataProbeCalls > 1 ? "replaced-part" : "stable-part",
+            duration: 120
+          }]
         }),
         stderr: ""
       };
@@ -3484,9 +3883,6 @@ test("다운로드 완료 전 metadata 재검증에서 sourceVersionId 변화가
     materializeExternalVod({
       consumerId: TEST_CONSUMER_ID,
       sourceUrl: SOOP_URL,
-      sourceClockIdentity: soopSourceClockIdentity([
-        { id: "stable-part", durationSeconds: 120 }
-      ]),
       clips: [{ id: "clip", startMs: 20_000, endMs: 21_000 }],
       stateDir
     }, {
@@ -3502,7 +3898,7 @@ test("다운로드 완료 전 metadata 재검증에서 sourceVersionId 변화가
     (error: unknown) => {
       assert(error instanceof ExternalVodMaterializationError);
       assert.equal(error.code, "SOURCE_CHANGED");
-      assert.match(error.message, /버전 또는 파트 구성/u);
+      assert.match(error.message, /root·entries 시간축/u);
       return true;
     }
   );

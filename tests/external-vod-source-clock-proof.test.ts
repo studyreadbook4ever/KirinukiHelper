@@ -377,7 +377,7 @@ test("whole-clock binding rejects independently valid mismatched roots", () => {
   }
 });
 
-test("SOOP official browser vector must exactly match extractor part IDs and seconds", () => {
+test("SOOP official root·entries identity must exactly match selected part IDs and seconds", () => {
   const input = {
     platform: "SOOP" as const,
     contentId: "99",

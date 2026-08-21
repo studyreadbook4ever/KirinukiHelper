@@ -103,6 +103,44 @@ async function nextTurn() {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+function deterministicObserverLeaseClock(start = 10_000) {
+  let timestamp = start;
+  let nextId = 1;
+  const scheduled = new Map<number, {
+    at: number;
+    callback: () => void;
+  }>();
+  return {
+    now: () => timestamp,
+    scheduler: {
+      schedule(callback: () => void, delayMs: number): unknown {
+        const id = nextId;
+        nextId += 1;
+        scheduled.set(id, { at: timestamp + delayMs, callback });
+        return id;
+      },
+      cancel(handle: unknown): void {
+        if (typeof handle === "number") {
+          scheduled.delete(handle);
+        }
+      }
+    },
+    advance(milliseconds: number): void {
+      timestamp += milliseconds;
+      for (;;) {
+        const due = [...scheduled.entries()]
+          .filter(([, task]) => task.at <= timestamp)
+          .sort((left, right) => left[1].at - right[1].at)[0];
+        if (!due) {
+          return;
+        }
+        scheduled.delete(due[0]);
+        due[1].callback();
+      }
+    }
+  };
+}
+
 function integrity(value: string | Buffer) {
   const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
   return {
@@ -431,18 +469,16 @@ test("요청은 공개 CHZZK VOD, 고정 10초, 명시적 권리 확인만 받�
   );
 });
 
-test("SOOP 요청은 브라우저 공식 part vector를 exact-key로 검증하고 작업 identity에 보존한다", () => {
+test("SOOP 요청은 선택 legacy part vector를 exact-key로 검증하고 엔진 유도를 허용한다", () => {
   const normalized = normalizeChzzkVodMaterializationRequest(request({
     sourceUrl: "https://vod.sooplive.com/player/169475287",
     sourceClockIdentity: SOOP_SOURCE_CLOCK_IDENTITY
   }));
   assert.deepEqual(normalized.sourceClockIdentity, SOOP_SOURCE_CLOCK_IDENTITY);
-  assert.throws(
-    () => normalizeChzzkVodMaterializationRequest(request({
-      sourceUrl: "https://vod.sooplive.com/player/169475287"
-    })),
-    /part 시계 증명/u
-  );
+  const extensionFree = normalizeChzzkVodMaterializationRequest(request({
+    sourceUrl: "https://vod.sooplive.com/player/169475287"
+  }));
+  assert.equal(Object.hasOwn(extensionFree, "sourceClockIdentity"), false);
   assert.throws(
     () => normalizeChzzkVodMaterializationRequest(request({
       sourceUrl: "https://vod.sooplive.com/player/169475287",
@@ -865,6 +901,97 @@ test("대기 작업 취소는 runner를 시작하지 않고, 실행 작업 취�
   manager.cancel(running.id);
   assert.equal(deferred.calls[0]?.signal.aborted, true);
   assert.equal(manager.get(running.id)?.state, "cancelled");
+});
+
+test("A 문서 observer가 사라지면 runner와 late 결과를 폐기하고 살아 있는 B의 queue slot을 회수한다", async () => {
+  const clock = deterministicObserverLeaseClock();
+  const calls: string[] = [];
+  const aSignals: AbortSignal[] = [];
+  const runner: ChzzkVodMaterializationRunner = async ({ clips, signal }) => {
+    const clip = clips[0];
+    assert.ok(clip);
+    calls.push(clip.id);
+    if (clip.id === "clip-a") {
+      aSignals.push(signal);
+      return await new Promise<ChzzkVodRunnerResult>((resolve) => {
+        signal.addEventListener("abort", () => resolve({
+          manifest: validManifest({ clips }),
+          artifactPath: "/safe/local/late-a.mp4",
+          artifact: integrity("late-a-must-not-attach"),
+          reused: false
+        }), { once: true });
+      });
+    }
+    return {
+      manifest: validManifest({ clips }),
+      artifactPath: "/safe/local/b.mp4",
+      artifact: integrity("b-artifact"),
+      reused: false
+    };
+  };
+  const manager = createChzzkVodJobManager({
+    runner,
+    maximumConcurrentJobs: 1,
+    observerLeaseTtlMs: 100,
+    observerLeaseScheduler: clock.scheduler,
+    now: clock.now
+  });
+  const a = manager.create(request());
+  assert.equal(manager.observe(a.id, "observer-a-document"), true);
+  const b = manager.create(request({
+    clips: [{ id: "clip-b", startMs: 90_000, endMs: 100_000 }]
+  }));
+  assert.equal(manager.observe(b.id, "observer-b-document"), true);
+  assert.deepEqual(calls, ["clip-a"]);
+
+  clock.advance(60);
+  assert.equal(manager.renewObserver(b.id, "observer-b-document"), true);
+  clock.advance(40);
+  await nextTurn();
+  await nextTurn();
+
+  assert.equal(aSignals[0]?.aborted, true);
+  assert.equal(manager.get(a.id)?.state, "cancelled");
+  assert.equal(a.result, undefined, "abort 뒤 도착한 A artifact를 노출하면 안 됩니다.");
+  assert.equal(await manager.resolveMedia(a.id, "unused"), null);
+  assert.deepEqual(calls, ["clip-a", "clip-b"]);
+  assert.equal(manager.get(b.id)?.state, "completed");
+  await manager.close();
+});
+
+test("동일 job의 observer 하나가 만료되어도 다른 문서가 갱신하면 작업을 유지한다", async () => {
+  const clock = deterministicObserverLeaseClock();
+  const observedSignals: AbortSignal[] = [];
+  const manager = createChzzkVodJobManager({
+    runner: async ({ signal }) => {
+      observedSignals.push(signal);
+      return await new Promise<ChzzkVodRunnerResult>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true
+        });
+      });
+    },
+    observerLeaseTtlMs: 100,
+    observerLeaseScheduler: clock.scheduler,
+    now: clock.now
+  });
+  const job = manager.create(request());
+  assert.equal(manager.observe(job.id, "observer-first-document"), true);
+  assert.equal(manager.observe(job.id, "observer-second-document"), true);
+  clock.advance(60);
+  assert.equal(
+    manager.renewObserver(job.id, "observer-second-document"),
+    true
+  );
+  clock.advance(40);
+  assert.equal(observedSignals[0]?.aborted, false);
+  assert.equal(manager.get(job.id)?.state, "resolving");
+  assert.equal(
+    manager.renewObserver(job.id, "observer-first-document"),
+    false,
+    "만료한 observer는 status만으로 되살아나면 안 됩니다."
+  );
+  await manager.close();
 });
 
 test("identity가 같으면 SHA를 캐시하고 same-size 변경 때만 다시 해시해 변조를 차단한다", async () => {

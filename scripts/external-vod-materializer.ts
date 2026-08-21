@@ -42,7 +42,9 @@ import type {
   MaterializationWindow
 } from "../src/lib/chzzk-vod-materialization.js";
 import {
-  normalizeSoopVodSourceClockIdentity
+  deriveSoopVodSourceClockIdentity,
+  normalizeSoopVodSourceClockIdentity,
+  sameSoopVodSourceClockIdentity
 } from "../src/lib/soop-vod-source-clock.js";
 import type {
   SoopVodSourceClockIdentity
@@ -96,7 +98,8 @@ import {
 } from "./external-vod-transfer.js";
 import {
   terminatePosixProcessGroup,
-  terminateWindowsProcessTreeWithTaskkill
+  terminateWindowsProcessTreeWithTaskkill,
+  windowsTaskkillOuterGuardTimeoutMs
 } from "./process-tree-termination.js";
 import {
   MAX_VOD_CONSUMER_ID_LENGTH,
@@ -284,6 +287,8 @@ export interface ExternalVodMetadata extends ExternalVodSource {
   durationMs: number;
   sourceVersionId: string;
   parts: readonly ExternalVodMetadataPart[];
+  /** Engine-derived from the complete official yt-dlp SOOP root + entries. */
+  sourceClockIdentity?: SoopVodSourceClockIdentity;
 }
 
 export interface PlannedExternalVodSection {
@@ -387,7 +392,7 @@ export interface ExternalVodMaterializationRequest {
    */
   consumerId: string;
   sourceUrl: string;
-  /** Official, secret-free SOOP browser/controller clock vector. */
+  /** Optional legacy SOOP browser clock; engine-derived metadata is authoritative. */
   sourceClockIdentity?: unknown;
   clips: readonly ExternalVodClipRange[];
   editableRanges?: readonly ExternalVodEditableRange[];
@@ -561,20 +566,57 @@ function normalizedRequestSourceClockIdentity(
     }
     return undefined;
   }
+  if (value === undefined) {
+    return undefined;
+  }
   const identity = normalizeSoopVodSourceClockIdentity(value);
   if (!identity || identity.contentId !== source.contentId) {
     fail(
-      "SOOP 공식 플레이어의 전체 파트 시간축 identity가 필요합니다.",
+      "선택적으로 전달한 SOOP 레거시 시간축 identity가 올바르지 않습니다.",
       "INVALID_SOURCE_CLOCK"
     );
   }
   return identity;
 }
 
-function browserClockIdentitySha256(
+function soopSourceClockIdentitySha256(
   identity: SoopVodSourceClockIdentity | undefined
 ): string | undefined {
   return identity ? sha256Text(stableJson(identity)) : undefined;
+}
+
+function metadataSoopSourceClockIdentity(
+  metadata: ExternalVodMetadata,
+  legacyIdentity?: SoopVodSourceClockIdentity
+): SoopVodSourceClockIdentity | undefined {
+  if (metadata.platform !== "SOOP") {
+    if (metadata.sourceClockIdentity !== undefined || legacyIdentity !== undefined) {
+      fail(
+        "SOOP이 아닌 VOD에 SOOP 시간축 identity가 결합되었습니다.",
+        "INVALID_SOURCE_CLOCK"
+      );
+    }
+    return undefined;
+  }
+  const derived = normalizeSoopVodSourceClockIdentity(
+    metadata.sourceClockIdentity
+  );
+  if (!derived || derived.contentId !== metadata.contentId) {
+    fail(
+      "SOOP 공식 root·entries에서 전체 파트 시간축을 만들지 못했습니다.",
+      "INVALID_SOURCE_CLOCK"
+    );
+  }
+  if (
+    legacyIdentity
+    && !sameSoopVodSourceClockIdentity(derived, legacyIdentity)
+  ) {
+    fail(
+      "SOOP 공식 root·entries 시간축이 레거시 플레이어 시간축과 다릅니다.",
+      "SOURCE_CLOCK_MISMATCH"
+    );
+  }
+  return derived;
 }
 
 function normalizedExternalVodConsumerId(value: unknown): string {
@@ -1186,14 +1228,52 @@ export function parseExternalVodMetadata(
   const payloadId = String(payload.id || "").trim();
   assertExternalMetadataIdentity(source, payload);
 
-  const entries = Array.isArray(payload.entries)
-    ? payload.entries
-    : [];
+  const hasEntries = Object.prototype.hasOwnProperty.call(payload, "entries");
+  if (
+    source.platform === "SOOP"
+    && hasEntries
+    && !Array.isArray(payload.entries)
+  ) {
+    fail("SOOP VOD 파트 목록이 올바르지 않습니다.", "INVALID_METADATA");
+  }
+  const entries = Array.isArray(payload.entries) ? payload.entries : [];
+  const metadataType = typeof payload._type === "string"
+    ? payload._type.trim().toLowerCase()
+    : "";
   if (source.platform !== "SOOP" && entries.length > 0) {
     fail(`${source.platform} 재생목록이 아닌 단일 공개 VOD만 사용할 수 있습니다.`, "INVALID_METADATA");
   }
+  if (
+    source.platform === "SOOP"
+    && entries.length === 0
+    && (
+      hasEntries
+      || metadataType === "playlist"
+      || metadataType === "multi_video"
+    )
+  ) {
+    fail("SOOP VOD의 공식 파트 목록이 비어 있습니다.", "INVALID_METADATA");
+  }
   if (entries.length > MAX_EXTERNAL_VOD_PARTS) {
     fail("SOOP VOD 파트 수가 안전한 처리 상한을 넘었습니다.", "INVALID_METADATA");
+  }
+  if (source.platform === "SOOP" && entries.length > 0) {
+    for (const countKey of ["playlist_count", "n_entries"] as const) {
+      const declaredCount = payload[countKey];
+      if (
+        declaredCount !== undefined
+        && declaredCount !== null
+        && (
+          !Number.isSafeInteger(declaredCount)
+          || Number(declaredCount) !== entries.length
+        )
+      ) {
+        fail(
+          "SOOP VOD가 선언한 파트 수와 받은 공식 파트 목록이 다릅니다.",
+          "INVALID_METADATA"
+        );
+      }
+    }
   }
 
   const parts: ExternalVodMetadataPart[] = [];
@@ -1213,8 +1293,26 @@ export function parseExternalVodMetadata(
         entryValue.duration,
         `SOOP VOD ${index + 1}번 파트`
       );
+      if (durationMs % 1_000 !== 0) {
+        fail(
+          "SOOP VOD 공식 파트 길이는 정수 초 단위여야 합니다.",
+          "INVALID_METADATA"
+        );
+      }
+      if (
+        entryValue.playlist_index !== undefined
+        && (
+          !Number.isSafeInteger(entryValue.playlist_index)
+          || Number(entryValue.playlist_index) !== index + 1
+        )
+      ) {
+        fail(
+          "SOOP VOD 공식 파트 순서가 root entries 순서와 다릅니다.",
+          "INVALID_METADATA"
+        );
+      }
       const partId = safeIdentifier(
-        String(entryValue.id || `part-${index + 1}`),
+        String(entryValue.id || ""),
         `SOOP VOD ${index + 1}번 파트 ID`
       );
       if (partIds.has(partId)) {
@@ -1233,15 +1331,10 @@ export function parseExternalVodMetadata(
       });
       sourceCursorMs += durationMs;
     }
-    // SOOP reports each entry in integer seconds. The root duration may
-    // therefore exceed the sum by at most one truncated fractional second per
-    // entry. A larger difference means the extractor returned an incomplete
-    // (commonly restricted) part vector; never invent a shorter global clock.
-    const omittedDurationMs = rootDurationMs - sourceCursorMs;
-    if (
-      omittedDurationMs < 0
-      || omittedDurationMs >= parts.length * 1_000
-    ) {
+    // Root and entries come from the same official yt-dlp resolution. Any
+    // difference means the playlist is partial, reordered, or was replaced
+    // while resolving; never round or invent the global player clock.
+    if (rootDurationMs !== sourceCursorMs) {
       fail(
         "SOOP VOD 전체 길이와 공개 파트 합계가 달라 완전한 원본 시간축을 증명할 수 없습니다.",
         "INVALID_METADATA"
@@ -1262,30 +1355,47 @@ export function parseExternalVodMetadata(
   if (parts.length === 0 || sourceCursorMs <= 0) {
     fail("공개 VOD 재생 파트를 찾지 못했습니다.", "INVALID_METADATA");
   }
+  const sourceClockIdentity = source.platform === "SOOP"
+    ? deriveSoopVodSourceClockIdentity({
+      contentId: source.contentId,
+      totalDurationSeconds: rootDurationMs / 1_000,
+      parts: parts.map((part) => ({
+        id: part.id,
+        durationSeconds: part.durationMs / 1_000
+      }))
+    })
+    : undefined;
+  if (source.platform === "SOOP" && !sourceClockIdentity) {
+    fail(
+      "SOOP VOD 공식 root·entries에서 완전한 정수초 시간축을 만들지 못했습니다.",
+      "INVALID_METADATA"
+    );
+  }
   const sourceVersionId = sha256Text(stableJson({
-    version: 2,
+    version: source.platform === "SOOP" ? 3 : 2,
     platform: source.platform,
     contentId: source.contentId,
     durationMs: sourceCursorMs,
     rootDurationMs,
-    timestamp: payload.timestamp ?? null,
-    releaseTimestamp: payload.release_timestamp ?? null,
-    modifiedTimestamp: payload.modified_timestamp ?? null,
-    parts: parts.map((part) => ({
-      id: part.id,
-      durationMs: part.durationMs,
-      playlistItem: part.playlistItem ?? null,
-      timestamp: source.platform === "SOOP"
-        ? (entries[part.playlistItem ? part.playlistItem - 1 : 0] as UnknownRecord | undefined)
-          ?.timestamp ?? null
-        : null
-    }))
+    ...(source.platform === "SOOP"
+      ? { sourceClockIdentity }
+      : {
+        timestamp: payload.timestamp ?? null,
+        releaseTimestamp: payload.release_timestamp ?? null,
+        modifiedTimestamp: payload.modified_timestamp ?? null,
+        parts: parts.map((part) => ({
+          id: part.id,
+          durationMs: part.durationMs,
+          playlistItem: part.playlistItem ?? null
+        }))
+      })
   }));
   return {
     ...source,
     durationMs: sourceCursorMs,
     sourceVersionId,
-    parts
+    parts,
+    ...(sourceClockIdentity ? { sourceClockIdentity } : {})
   };
 }
 
@@ -1581,7 +1691,8 @@ export function externalVodPlanFingerprint({
   plan,
   handleMs = DEFAULT_EXTERNAL_VOD_HANDLE_MS,
   acquisitionVersion = 3,
-  acquisitionClockProofSetId
+  acquisitionClockProofSetId,
+  sourceClockIdentitySha256
 }: {
   metadata: ExternalVodMetadata;
   clips: readonly ExternalVodClipRange[];
@@ -1589,6 +1700,7 @@ export function externalVodPlanFingerprint({
   handleMs?: number;
   acquisitionVersion?: 1 | 2 | 3;
   acquisitionClockProofSetId?: string;
+  sourceClockIdentitySha256?: string;
 }): string {
   validatedHandleMs(handleMs);
   if (
@@ -1633,6 +1745,62 @@ export function externalVodPlanFingerprint({
   }
   if (acquisitionVersion === 3) {
     fingerprintPayload.acquisitionClockProofSetId = acquisitionClockProofSetId;
+    if (metadata.platform === "SOOP") {
+      const identityFromParts = metadata.parts.length > 0
+        ? deriveSoopVodSourceClockIdentity({
+          contentId: metadata.contentId,
+          totalDurationSeconds: metadata.durationMs / 1_000,
+          parts: metadata.parts.map((part) => ({
+            id: part.id,
+            durationSeconds: part.durationMs / 1_000
+          }))
+        })
+        : undefined;
+      const declaredIdentity = metadata.sourceClockIdentity === undefined
+        ? undefined
+        : normalizeSoopVodSourceClockIdentity(metadata.sourceClockIdentity);
+      if (
+        metadata.sourceClockIdentity !== undefined
+        && (
+          !declaredIdentity
+          || !identityFromParts
+          || !sameSoopVodSourceClockIdentity(
+            declaredIdentity,
+            identityFromParts
+          )
+        )
+      ) {
+        fail(
+          "SOOP 계획의 metadata part와 시간축 identity가 다릅니다.",
+          "INVALID_SOURCE_CLOCK"
+        );
+      }
+      const metadataIdentity = declaredIdentity ?? identityFromParts;
+      const metadataIdentitySha256 = metadataIdentity
+        ? soopSourceClockIdentitySha256(metadataIdentity)
+        : undefined;
+      const identitySha256 = sourceClockIdentitySha256
+        ?? metadataIdentitySha256;
+      if (
+        typeof identitySha256 !== "string"
+        || !/^[a-f0-9]{64}$/u.test(identitySha256)
+        || (
+          metadataIdentitySha256 !== undefined
+          && metadataIdentitySha256 !== identitySha256
+        )
+      ) {
+        fail(
+          "SOOP v3 계획에는 공식 root·entries 시간축 지문이 필요합니다.",
+          "INVALID_SOURCE_CLOCK"
+        );
+      }
+      fingerprintPayload.sourceClockIdentitySha256 = identitySha256;
+    } else if (sourceClockIdentitySha256 !== undefined) {
+      fail(
+        "SOOP이 아닌 v3 계획에는 SOOP 시간축 지문을 넣을 수 없습니다.",
+        "INVALID_SOURCE_CLOCK"
+      );
+    }
   }
   return sha256Text(stableJson(fingerprintPayload));
 }
@@ -1826,6 +1994,7 @@ export async function runExternalProcess(
     clearTimeoutImpl = clearTimeout,
     killProcessGroupImpl = (pid, signal) => process.kill(-pid, signal),
     probeProcessGroupImpl = (pid) => process.kill(-pid, 0),
+    terminateWindowsProcessTreeImpl = terminateWindowsExternalProcessTree,
     killGraceMs = EXTERNAL_PROCESS_KILL_GRACE_MS,
     platform = process.platform,
     statFileSystemImpl = statFileSystem
@@ -1835,6 +2004,7 @@ export async function runExternalProcess(
     clearTimeoutImpl?: typeof clearTimeout;
     killProcessGroupImpl?: (pid: number, signal: NodeJS.Signals) => void;
     probeProcessGroupImpl?: (pid: number) => void;
+    terminateWindowsProcessTreeImpl?: typeof terminateWindowsExternalProcessTree;
     killGraceMs?: number;
     platform?: NodeJS.Platform;
     statFileSystemImpl?: (directory: string) => Promise<{
@@ -1930,7 +2100,7 @@ export async function runExternalProcess(
     let resourceMonitor: ReturnType<typeof setInterval> | undefined;
     let resourceInspectionPromise: Promise<void> | undefined;
     let resourceInspectionError: Error | undefined;
-    let processGroupCleanupPromise: Promise<void> | undefined;
+    let processTreeCleanupPromise: Promise<void> | undefined;
     const resourceLimitsEnabled = (
       options.workingDirectoryByteLimit !== undefined
       || options.minimumAvailableDiskBytes !== undefined
@@ -1964,8 +2134,8 @@ export async function runExternalProcess(
     const ensurePosixProcessGroupCleanup = (
       pid: number
     ): Promise<void> => {
-      if (!processGroupCleanupPromise) {
-        processGroupCleanupPromise = terminatePosixProcessGroup({
+      if (!processTreeCleanupPromise) {
+        processTreeCleanupPromise = terminatePosixProcessGroup({
           processGroupId: pid,
           signalProcessGroupImpl: killProcessGroupImpl,
           probeProcessGroupImpl,
@@ -1973,29 +2143,72 @@ export async function runExternalProcess(
           setTimeoutImpl
         }).catch(recordCleanupError);
       }
-      return processGroupCleanupPromise;
+      return processTreeCleanupPromise;
+    };
+    const ensureWindowsProcessTreeCleanup = (
+      pid: number
+    ): Promise<void> => {
+      if (!processTreeCleanupPromise) {
+        const capturedPid = pid;
+        processTreeCleanupPromise = terminateWindowsProcessTreeImpl(
+          capturedPid,
+          {
+            setTimeoutImpl,
+            clearTimeoutImpl,
+            timeoutMs: Math.max(1, killGraceMs),
+            confirmTargetIdentityImpl: async () => {
+              if (
+                closed
+                || processId() !== capturedPid
+                || child.exitCode != null
+                || child.signalCode != null
+              ) {
+                return false;
+              }
+              try {
+                // ChildProcess.kill(0) probes the retained OS process handle.
+                // Combined with the captured numeric PID, this prevents a
+                // later taskkill retry from following a reused PID.
+                return child.kill(0);
+              } catch {
+                return false;
+              }
+            }
+          }
+        ).catch(recordCleanupError);
+      }
+      return processTreeCleanupPromise;
     };
     const terminate = (error: Error) => {
       if (terminationError) {
         return;
       }
       terminationError = error;
+      if (closed) {
+        // A retained handle that has already emitted close no longer binds a
+        // numeric PID strongly enough for taskkill. The close finalizer will
+        // propagate this termination error without touching a reused PID.
+        return;
+      }
       const pid = processId();
       if (platform === "win32") {
-        // Kill only the process HANDLE retained by this ChildProcess. A
-        // PID-based taskkill fallback can race PID reuse and terminate an
-        // unrelated process tree after the original tool exits.
-        if (!signalLeader("SIGKILL")) {
+        if (pid !== undefined) {
+          void ensureWindowsProcessTreeCleanup(pid);
+        } else {
+          // A successfully spawned real ChildProcess has a PID. Retain the
+          // exact-handle fallback for malformed injected implementations, but
+          // fail closed because descendant cleanup could not be proven.
           recordCleanupError(new Error(
-            "Windows 외부 도구의 exact child handle 종료 요청이 실패했습니다."
+            "Windows 외부 도구의 process tree 식별자를 확인하지 못했습니다."
           ));
+          signalLeader("SIGKILL");
         }
         windowsCloseDeadlineTimer = setTimeoutImpl(() => {
           if (settled) {
             return;
           }
           recordCleanupError(Object.assign(
-            new Error("Windows 외부 도구가 exact child 종료 요청 뒤 닫히지 않았습니다."),
+            new Error("Windows 외부 도구 process tree 정리 뒤에도 child가 닫히지 않았습니다."),
             { code: "EPROCESSCLOSEDEADLINE" }
           ));
           settled = true;
@@ -2005,21 +2218,30 @@ export async function runExternalProcess(
             clearInterval(resourceMonitor);
           }
           options.signal?.removeEventListener("abort", abortListener);
-          child.stdout?.destroy();
-          child.stderr?.destroy();
-          (child as typeof child & { unref?: () => void }).unref?.();
-          const finalError = terminationError
-            ?? childError
-            ?? resourceInspectionError
-            ?? cleanupError!;
-          if (cleanupError && cleanupError !== finalError && finalError.cause === undefined) {
-            Object.defineProperty(finalError, "cause", {
-              configurable: true,
-              value: cleanupError
-            });
-          }
-          reject(finalError);
-        }, Math.max(1, killGraceMs));
+          void (async () => {
+            if (processTreeCleanupPromise) {
+              await processTreeCleanupPromise;
+            }
+            child.stdout?.destroy();
+            child.stderr?.destroy();
+            (child as typeof child & { unref?: () => void }).unref?.();
+            const finalError = terminationError
+              ?? childError
+              ?? resourceInspectionError
+              ?? cleanupError!;
+            if (
+              cleanupError
+              && cleanupError !== finalError
+              && finalError.cause === undefined
+            ) {
+              Object.defineProperty(finalError, "cause", {
+                configurable: true,
+                value: cleanupError
+              });
+            }
+            reject(finalError);
+          })().catch(reject);
+        }, windowsTaskkillOuterGuardTimeoutMs(Math.max(1, killGraceMs)));
         return;
       }
       if (useProcessGroup && pid !== undefined) {
@@ -2138,8 +2360,8 @@ export async function runExternalProcess(
             terminate(resourceInspectionError);
           }
         }
-        if (processGroupCleanupPromise) {
-          await processGroupCleanupPromise;
+        if (processTreeCleanupPromise) {
+          await processTreeCleanupPromise;
         }
         clearTimer(forceKillTimer);
         clearTimer(windowsCloseDeadlineTimer);
@@ -3976,7 +4198,8 @@ function receiptPlanFingerprint({
   manifest,
   clips,
   sections,
-  acquisitionClockProofSetId
+  acquisitionClockProofSetId,
+  sourceClockIdentitySha256
 }: {
   canonicalUrl: string;
   sourceVersionId: string;
@@ -3984,6 +4207,7 @@ function receiptPlanFingerprint({
   clips: readonly ExternalVodClipRange[];
   sections: readonly Omit<PlannedExternalVodSection, "clipIds">[];
   acquisitionClockProofSetId: string;
+  sourceClockIdentitySha256?: string;
 }): string {
   const metadata: ExternalVodMetadata = {
     platform: manifest.source.platform as ExternalVodPlatform,
@@ -4001,6 +4225,9 @@ function receiptPlanFingerprint({
     handleMs: manifest.handleMs,
     acquisitionVersion: 3,
     acquisitionClockProofSetId,
+    ...(sourceClockIdentitySha256
+      ? { sourceClockIdentitySha256 }
+      : {}),
     plan: {
       clipRanges: manifest.clipRanges
         ? manifest.clipRanges.map((range) => ({ ...range }))
@@ -4177,7 +4404,13 @@ async function reusableExternalVodReceipt({
         manifest,
         clips: normalizedClips,
         sections,
-        acquisitionClockProofSetId: acquisitionClockProofSet.proofSetId
+        acquisitionClockProofSetId: acquisitionClockProofSet.proofSetId,
+        ...(sourceClockProof.browserClockIdentitySha256
+          ? {
+            sourceClockIdentitySha256:
+              sourceClockProof.browserClockIdentitySha256
+          }
+          : {})
       }) !== expectedPlanFingerprint
       || typeof parsed.preparedAt !== "string"
       || !Number.isFinite(Date.parse(parsed.preparedAt))
@@ -5816,12 +6049,12 @@ export async function materializeExternalVod(
 ): Promise<ExternalVodMaterializationResult> {
   const consumerScopeHash = externalVodConsumerScopeHash(request.consumerId);
   const source = normalizeExternalVodUrl(request.sourceUrl);
-  const sourceClockIdentity = normalizedRequestSourceClockIdentity(
+  const legacySourceClockIdentity = normalizedRequestSourceClockIdentity(
     source,
     request.sourceClockIdentity
   );
-  const expectedBrowserClockIdentitySha256 = browserClockIdentitySha256(
-    sourceClockIdentity
+  const expectedLegacyClockIdentitySha256 = soopSourceClockIdentitySha256(
+    legacySourceClockIdentity
   );
   const handleMs = validatedHandleMs(request.handleMs);
   const { publicClips } = normalizeClipRanges(request.clips);
@@ -5856,8 +6089,11 @@ export async function materializeExternalVod(
       jobDirectory: resumedJobDirectory,
       expectedCanonicalUrl: source.canonicalUrl,
       expectedContentId: source.contentId,
-      ...(expectedBrowserClockIdentitySha256
-        ? { expectedBrowserClockIdentitySha256 }
+      ...(expectedLegacyClockIdentitySha256
+        ? {
+          expectedBrowserClockIdentitySha256:
+            expectedLegacyClockIdentitySha256
+        }
         : {}),
       expectedPlanFingerprint: resume.planFingerprint,
       expectedHandleMs: handleMs,
@@ -5970,6 +6206,13 @@ export async function materializeExternalVod(
       await rm(metadataProbeDirectory, { recursive: true, force: true });
     }
   })();
+  const sourceClockIdentity = metadataSoopSourceClockIdentity(
+    rawMetadata,
+    legacySourceClockIdentity
+  );
+  const expectedBrowserClockIdentitySha256 = soopSourceClockIdentitySha256(
+    sourceClockIdentity
+  );
   const clockResolver = dependencies.resolveClockProofSet
     ?? resolveExternalVodClockProofs;
   const resolveClockParts = async (
@@ -6117,7 +6360,13 @@ export async function materializeExternalVod(
     clips: publicClips,
     plan,
     handleMs,
-    acquisitionClockProofSetId: acquisitionClockProofSet.proofSetId
+    acquisitionClockProofSetId: acquisitionClockProofSet.proofSetId,
+    ...(sourceClockProof.browserClockIdentitySha256
+      ? {
+        sourceClockIdentitySha256:
+          sourceClockProof.browserClockIdentitySha256
+      }
+      : {})
   });
   const materializationId = planFingerprint.slice(0, 32);
   const jobDirectory = scopedExternalVodJobDirectory({
@@ -6380,6 +6629,26 @@ export async function materializeExternalVod(
       cwd: attemptDirectory,
       ...(request.signal ? { signal: request.signal } : {})
     });
+    const completionSourceClockIdentity = metadataSoopSourceClockIdentity(
+      completionRawMetadata,
+      legacySourceClockIdentity
+    );
+    if (
+      source.platform === "SOOP"
+      && (
+        !sourceClockIdentity
+        || !completionSourceClockIdentity
+        || !sameSoopVodSourceClockIdentity(
+          sourceClockIdentity,
+          completionSourceClockIdentity
+        )
+      )
+    ) {
+      fail(
+        "선택 구간을 받는 동안 SOOP 공식 root·entries 시간축이 바뀌었습니다.",
+        "SOURCE_CHANGED"
+      );
+    }
     if (completionRawMetadata.sourceVersionId !== rawMetadata.sourceVersionId) {
       fail(
         "선택 구간을 받는 동안 원본 VOD의 버전 또는 파트 구성이 바뀌었습니다.",
@@ -6405,7 +6674,7 @@ export async function materializeExternalVod(
     const completionSourceClock = completionRawMetadata.platform === "SOOP"
       ? resolveWholeSourceClock({
         metadata: completionRawMetadata,
-        soopSourceClockIdentity: sourceClockIdentity!
+        soopSourceClockIdentity: completionSourceClockIdentity!
       })
       : resolveWholeSourceClock({
         metadata: completionRawMetadata,

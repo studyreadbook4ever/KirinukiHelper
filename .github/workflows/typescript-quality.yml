@@ -35,8 +35,8 @@ jobs:
 
       - name: Prove generated app artifacts are current
         run: |
-          git diff --check -- web streaming-companion
-          git diff --exit-code -- web streaming-companion
+          git diff --check -- web
+          git diff --exit-code -- web
 
   web-browser-e2e:
     name: Kirinuki app browser E2E
@@ -112,14 +112,25 @@ jobs:
       - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
 
+      - name: Install matching Chrome and ChromeDriver for the installed-engine browser proof
+        id: setup-native-chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+
       - name: Typecheck the complete cross-platform source
-        run: npm run typecheck
+        run: npm run typecheck && npm run desktop:icons:check
 
       - name: Run the complete unit test suite natively
         run: npm test
 
-      - name: Build and validate the unsigned native desktop package
-        run: npm run package:desktop
+      - name: Build the unsigned prepackaged app and native installer
+        run: npm run package:desktop:installer
+
+      - name: Prove Windows Job Object lifetime and descendant cleanup natively
+        if: runner.os == 'Windows'
+        run: npm run test:windows:job-launcher
 
       - name: Install the Linux sandbox helper in the unsigned package copy
         if: runner.os == 'Linux'
@@ -140,11 +151,51 @@ jobs:
         if: runner.os != 'Linux'
         run: npm run test:package:desktop
 
+      - name: Prove exact health, document capability, three-platform fixture materialization, and Range media
+        run: npm run test:semantic:engine
+
+      - name: Install and read back exact Linux deb runtime dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libnotify4 libsecret-1-0
+          for dependency in libnotify4 libsecret-1-0; do
+            test "$(dpkg-query --show --showformat='${Status}' "$dependency")" = "install ok installed"
+          done
+
+      - name: Run the exact Linux installer smoke under an isolated display
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:package:desktop:installer
+        env:
+          CHROMIUM_BINARY: ${{ steps.setup-native-chrome.outputs.chrome-path }}
+          CHROMEDRIVER_BINARY: ${{ steps.setup-native-chrome.outputs.chromedriver-path }}
+          KIRINUKI_INSTALLED_BROWSER_SMOKE: "1"
+          KIRINUKI_INSTALLER_SYSTEM_SMOKE: "1"
+
+      - name: Run the exact native OS-specific installer or package smoke
+        if: runner.os != 'Linux'
+        run: npm run test:package:desktop:installer
+        env:
+          CHROMIUM_BINARY: ${{ steps.setup-native-chrome.outputs.chrome-path }}
+          CHROMEDRIVER_BINARY: ${{ steps.setup-native-chrome.outputs.chromedriver-path }}
+          KIRINUKI_INSTALLED_BROWSER_SMOKE: "1"
+          KIRINUKI_INSTALLER_SYSTEM_SMOKE: "1"
+
       - name: Prove native packaging kept tracked sources clean
         run: |
           git diff --check
-          git diff --exit-code -- web streaming-companion
+          git diff --exit-code -- web
 
-      # Deliberately no upload-artifact or release step: these packages remain
-      # unsigned development evidence until the binary license and signing gates
-      # in legal/DESKTOP_BINARY_RELEASE_GATE.md are complete.
+      - name: Upload only the unsigned lifecycle manifest (never the installer binary)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-test-evidence-${{ matrix.target }}-${{ github.sha }}
+          path: dist/installers/${{ matrix.target }}/UNSIGNED-TEST-ONLY-installer-manifest.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+
+      # The public Actions artifact contains JSON evidence only. Installer bytes
+      # remain runner-local and are destroyed with the job; this workflow has
+      # contents:read and cannot create a GitHub Release.
