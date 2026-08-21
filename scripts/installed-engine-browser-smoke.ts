@@ -100,8 +100,16 @@ interface WebDriverSession {
   readonly sessionId?: unknown;
 }
 
-interface CdpTargetCreation {
-  readonly targetId?: unknown;
+interface WebDriverWindowCreation {
+  readonly handle?: unknown;
+  readonly type?: unknown;
+}
+
+interface CdpPageNavigation {
+  readonly errorText?: unknown;
+  readonly frameId?: unknown;
+  readonly isDownload?: unknown;
+  readonly loaderId?: unknown;
 }
 
 interface BrowserProbeResult {
@@ -669,27 +677,81 @@ export async function runInstalledEngineBrowserSmoke({
       }
     }
     invariant(grantedPermissions.length >= 1, "Chrome LNA/loopback permission을 자동 확인하지 못했습니다.");
-    // ChromeDriver 152 on macOS can acknowledge a pageLoadStrategy=none
-    // WebDriver navigation without dispatching it after the renderer target is
-    // replaced. Create the real probe target through the browser-level CDP
-    // command instead, then never depend on that target through ChromeDriver.
-    const probeTarget = await webdriver<CdpTargetCreation>(
+    // ChromeDriver 152 on macOS can acknowledge WebDriver navigation without
+    // dispatching it, while Target.createTarget only proves target creation.
+    // Select a fresh stable tab first, then use Page.navigate so the response
+    // proves a cross-document navigation was accepted without waiting on
+    // ChromeDriver's renderer NavigationTracker.
+    const probeWindow = await webdriver<WebDriverWindowCreation>(
+      "POST",
+      `/session/${sessionId}/window/new`,
+      { type: "tab" },
+      10_000
+    );
+    invariant(
+      typeof probeWindow.handle === "string"
+        && probeWindow.handle.length >= 1
+        && probeWindow.handle.length <= 512
+        && probeWindow.type === "tab",
+      "Chrome browser probe tab을 만들지 못했습니다."
+    );
+    await webdriver(
+      "POST",
+      `/session/${sessionId}/window`,
+      { handle: probeWindow.handle },
+      10_000
+    );
+    const selectedWindow = await webdriver<unknown>(
+      "GET",
+      `/session/${sessionId}/window`,
+      undefined,
+      10_000
+    );
+    invariant(
+      selectedWindow === probeWindow.handle,
+      "Chrome browser probe tab 선택을 readback하지 못했습니다."
+    );
+    const navigationOutcomePromise = webdriver<CdpPageNavigation>(
       "POST",
       `/session/${sessionId}/goog/cdp/execute`,
       {
-        cmd: "Target.createTarget",
+        cmd: "Page.navigate",
         params: { url: `${KIRINUKI_PUBLIC_STUDIO_ORIGIN}/` }
+      },
+      10_000
+    ).then((navigation) => {
+      invariant(
+        typeof navigation.frameId === "string"
+          && navigation.frameId.length >= 1
+          && navigation.frameId.length <= 256
+          && typeof navigation.loaderId === "string"
+          && navigation.loaderId.length >= 1
+          && navigation.loaderId.length <= 256
+          && navigation.errorText === undefined
+          && navigation.isDownload !== true,
+        `Chrome browser probe navigation이 거부되었습니다: ${JSON.stringify(navigation)}`
+      );
+      return { ok: true as const };
+    }).catch((error: unknown) => ({ ok: false as const, error }));
+    let requested: BrowserProbeEvent;
+    try {
+      requested = await waitForNextProbeEvent(
+        "첫 설치 browser pairing request"
+      );
+    } catch (eventError) {
+      const navigationOutcome = await navigationOutcomePromise;
+      if (!navigationOutcome.ok) {
+        throw new AggregateError(
+          [navigationOutcome.error, eventError],
+          "Chrome navigation과 실제 browser pairing request가 모두 실패했습니다."
+        );
       }
-    );
-    invariant(
-      typeof probeTarget.targetId === "string"
-        && probeTarget.targetId.length >= 1
-        && probeTarget.targetId.length <= 256,
-      "Chrome browser probe target ID가 올바르지 않습니다."
-    );
-    const requested = await waitForNextProbeEvent(
-      "첫 설치 browser pairing request"
-    );
+      throw eventError;
+    }
+    // Page.navigate's callback can disappear during a renderer swap on macOS.
+    // The nonce-bound HTTPS event is stronger proof that the exact document and
+    // probe script loaded. navigationOutcomePromise always handles its own
+    // rejection and is consulted only when no authoritative event arrives.
     invariant(requested.kind === "pairing", "첫 browser probe event가 pairing 요청이 아닙니다.");
     await launchPairingUrl(exactPairingUrl(requested.pairingUrl));
     const first = await waitForNextProbeEvent(
