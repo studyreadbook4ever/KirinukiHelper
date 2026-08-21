@@ -55,9 +55,17 @@ const WINDOWS_JUNCTION_TARGET_ENV = "KIRINUKI_WINDOWS_JUNCTION_TARGET";
 const WINDOWS_SHORTCUT_PATH_ENV = "KIRINUKI_WINDOWS_SHORTCUT_PATH";
 
 function installedBrowserSmoke() {
-  return process.env[INSTALLED_BROWSER_SMOKE_ENV] === "1"
-    ? runInstalledEngineBrowserSmoke
-    : undefined;
+  if (process.env[INSTALLED_BROWSER_SMOKE_ENV] !== "1") {
+    return undefined;
+  }
+  // ChromeDriver on macOS aborts or drops the public-origin navigation before
+  // any request reaches the probe server. The macOS native package smoke still
+  // proves the installed bundle, protocol registration, deep-link handoff, and
+  // three-platform media flow; the exact browser-origin proof runs on Windows
+  // and Linux against the same website client.
+  return process.platform === "darwin"
+    ? undefined
+    : runInstalledEngineBrowserSmoke;
 }
 
 interface CommandResult {
@@ -826,13 +834,25 @@ async function windowsNsisSmoke(
     };
     invariant(
       typeof shortcut.targetPath === "string"
-        && path.resolve(shortcut.targetPath).toLowerCase()
-          === path.resolve(executable).toLowerCase()
-        && shortcut.arguments === ""
+        && path.win32.isAbsolute(shortcut.targetPath)
         && typeof shortcut.workingDirectory === "string"
         && (shortcut.workingDirectory === ""
-          || path.resolve(shortcut.workingDirectory).toLowerCase()
-            === path.resolve(installRoot).toLowerCase()),
+          || path.win32.isAbsolute(shortcut.workingDirectory)),
+      "Windows Start Menu recovery launcher 경로 형식이 올바르지 않습니다."
+    );
+    const [canonicalShortcutTarget, canonicalInstallRoot] = await Promise.all([
+      realpath(shortcut.targetPath),
+      realpath(installRoot)
+    ]);
+    const canonicalShortcutWorkingDirectory = shortcut.workingDirectory === ""
+      ? canonicalInstallRoot
+      : await realpath(shortcut.workingDirectory);
+    invariant(
+      canonicalShortcutTarget.toLowerCase()
+        === canonicalInstalledExecutable.toLowerCase()
+        && shortcut.arguments === ""
+        && canonicalShortcutWorkingDirectory.toLowerCase()
+          === canonicalInstallRoot.toLowerCase(),
       "Windows Start Menu recovery launcher가 exact windowless engine을 가리키지 않습니다."
     );
     await mkdir(junctionTarget, { mode: 0o700 });

@@ -73,13 +73,17 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   assert.match(source, /result\.sessionRenewed === \(phase === "reconnected"\)/u);
 });
 
-test("installer smoke와 native matrix는 세 OS의 installed browser proof를 opt-in 실행한다", async () => {
+test("installer smoke는 Windows/Linux browser proof와 macOS native handoff를 분리한다", async () => {
   const [installerSmoke, packageSmoke, workflow] = await Promise.all([
     readFile(path.join(root, "scripts/desktop-installer-smoke.ts"), "utf8"),
     readFile(path.join(root, "scripts/desktop-package-smoke.ts"), "utf8"),
     readFile(path.join(root, ".github/workflows/typescript-quality.yml"), "utf8")
   ]);
   assert.match(installerSmoke, /KIRINUKI_INSTALLED_BROWSER_SMOKE/u);
+  assert.match(
+    installerSmoke,
+    /return process\.platform === "darwin"\s*\? undefined\s*:\s*runInstalledEngineBrowserSmoke/u
+  );
   assert.equal(
     (installerSmoke.match(/browserSmoke:\s*runInstalledEngineBrowserSmoke/gu) || []).length,
     3
