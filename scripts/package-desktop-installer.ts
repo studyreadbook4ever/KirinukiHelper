@@ -871,7 +871,9 @@ export async function packageDesktopInstaller(): Promise<Readonly<{
     contract.builderTarget,
     `--${contract.arch}`,
     "--prepackaged",
-    prepackaged.outputDirectory,
+    target === "darwin-arm64"
+      ? path.join(prepackaged.outputDirectory, "Kirinuki.app")
+      : prepackaged.outputDirectory,
     "--publish",
     "never",
     "--config",

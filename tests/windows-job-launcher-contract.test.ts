@@ -188,14 +188,24 @@ test("native source는 suspended→assign→resume 순서와 parent/job/exit 불
 });
 
 test("package/signing/provenance와 windows-2025 native orphan smoke가 launcher를 누락하지 않는다", async () => {
-  const [packager, installer, installerSmoke, runtime, quality, release, smoke] = await Promise.all([
+  const [
+    packager,
+    installer,
+    installerSmoke,
+    runtime,
+    quality,
+    release,
+    smoke,
+    launcherPreparation
+  ] = await Promise.all([
     readFile(path.join(root, "scripts/package-desktop.ts"), "utf8"),
     readFile(path.join(root, "scripts/package-desktop-installer.ts"), "utf8"),
     readFile(path.join(root, "scripts/desktop-installer-smoke.ts"), "utf8"),
     readFile(path.join(root, "src/desktop/runtime-supervisor.ts"), "utf8"),
     readFile(path.join(root, ".github/workflows/typescript-quality.yml"), "utf8"),
     readFile(path.join(root, ".github/workflows/desktop-installer-release.yml"), "utf8"),
-    readFile(path.join(root, "scripts/windows-job-launcher-smoke.ts"), "utf8")
+    readFile(path.join(root, "scripts/windows-job-launcher-smoke.ts"), "utf8"),
+    readFile(path.join(root, "scripts/prepare-windows-job-launcher.ts"), "utf8")
   ]);
   assert.match(packager, /prepareWindowsJobLauncher/u);
   assert.match(packager, /desktop-native/u);
@@ -250,4 +260,55 @@ test("package/signing/provenance와 windows-2025 native orphan smoke가 launcher
   assert.match(smoke, /unexpectedDescriptorResult\.code === 249/u);
   assert.match(smoke, /rootExitResult\.code === 19/u);
   assert.match(smoke, /launcher crash 뒤 Job Object descendant가 orphan으로 남았습니다/u);
+  const vcvarsStart = launcherPreparation.indexOf(
+    "const initialized = spawnSync(commandProcessor"
+  );
+  const vcvarsEnd = launcherPreparation.indexOf(
+    "const environment: NodeJS.ProcessEnv",
+    vcvarsStart
+  );
+  assert.ok(vcvarsStart >= 0 && vcvarsEnd > vcvarsStart);
+  const vcvarsInvocation = launcherPreparation.slice(vcvarsStart, vcvarsEnd);
+  const vcvarsPathValidationStart = launcherPreparation.indexOf(
+    "const vcvars = safeWindowsSystemFile"
+  );
+  const vcvarsIdentityCheck = launcherPreparation.indexOf(
+    "await regularFileIdentity(vcvars);",
+    vcvarsPathValidationStart
+  );
+  assert.ok(
+    vcvarsPathValidationStart >= 0
+      && vcvarsIdentityCheck > vcvarsPathValidationStart
+  );
+  const vcvarsPathValidation = launcherPreparation.slice(
+    vcvarsPathValidationStart,
+    vcvarsIdentityCheck
+  );
+  assert.match(vcvarsPathValidation, /!vcvars\.includes\("%"\)/u);
+  assert.match(
+    launcherPreparation,
+    /const WINDOWS_VCVARS_ENVIRONMENT_STDIN = \[\s*"@echo off",\s*`call "%\$\{WINDOWS_VCVARS_ENVIRONMENT_KEY\}%" >nul`,\s*"if errorlevel 1 exit \/b %errorlevel%",\s*"set",\s*"exit",\s*""\s*\]\.join\("\\r\\n"\)/u
+  );
+  assert.match(
+    vcvarsInvocation,
+    /spawnSync\(commandProcessor, \["\/d", "\/q", "\/v:off"\]/u
+  );
+  assert.match(vcvarsInvocation, /env:\s*vcvarsEnvironment/u);
+  assert.match(vcvarsInvocation, /input:\s*WINDOWS_VCVARS_ENVIRONMENT_STDIN/u);
+  assert.match(vcvarsInvocation, /shell:\s*false/u);
+  assert.match(vcvarsInvocation, /maxBuffer:\s*MAX_COMMAND_OUTPUT_BYTES/u);
+  assert.match(vcvarsInvocation, /timeout:\s*COMMAND_TIMEOUT_MS/u);
+  assert.match(vcvarsInvocation, /initialized\.error/u);
+  assert.match(vcvarsInvocation, /initialized\.status === 0/u);
+  assert.match(vcvarsInvocation, /initialized\.signal === null/u);
+  assert.doesNotMatch(vcvarsInvocation, /["']\/c["']/u);
+  assert.doesNotMatch(vcvarsInvocation, /windowsVerbatimArguments/u);
+  assert.doesNotMatch(
+    launcherPreparation,
+    /call[^\r\n]*\$\{vcvars\}/u
+  );
+  assert.match(
+    launcherPreparation,
+    /vcvarsEnvironment\[WINDOWS_VCVARS_ENVIRONMENT_KEY\] = vcvars/u
+  );
 });

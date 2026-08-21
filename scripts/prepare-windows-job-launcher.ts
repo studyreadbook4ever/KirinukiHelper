@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import {
@@ -35,6 +35,15 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 2 * 60 * 1_000;
 const MAX_COMMAND_OUTPUT_BYTES = 4 * 1_024 * 1_024;
+const WINDOWS_VCVARS_ENVIRONMENT_KEY = "KIRINUKI_VCVARS" as const;
+const WINDOWS_VCVARS_ENVIRONMENT_STDIN = [
+  "@echo off",
+  `call "%${WINDOWS_VCVARS_ENVIRONMENT_KEY}%" >nul`,
+  "if errorlevel 1 exit /b %errorlevel%",
+  "set",
+  "exit",
+  ""
+].join("\r\n");
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -151,23 +160,46 @@ async function visualStudioEnvironment(): Promise<Readonly<{
     "Build",
     "vcvars64.bat"
   ), "vcvars64");
+  invariant(
+    !vcvars.includes("%"),
+    "vcvars64 경로에는 CMD 환경 변수 재확장 문자를 허용하지 않습니다."
+  );
   await regularFileIdentity(vcvars);
   const commandProcessor = safeWindowsSystemFile(
     path.win32.join(systemRoot, "System32", "cmd.exe"),
     "cmd.exe"
   );
   await regularFileIdentity(commandProcessor);
-  const initialized = await execFileAsync(commandProcessor, [
-    "/d",
-    "/s",
-    "/c",
-    `call "${vcvars}" >nul && set`
-  ], {
+  const vcvarsEnvironment = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => (
+      key.toUpperCase() !== WINDOWS_VCVARS_ENVIRONMENT_KEY
+    ))
+  );
+  vcvarsEnvironment[WINDOWS_VCVARS_ENVIRONMENT_KEY] = vcvars;
+  const initialized = spawnSync(commandProcessor, ["/d", "/q", "/v:off"], {
+    cwd: root,
+    env: vcvarsEnvironment,
+    input: WINDOWS_VCVARS_ENVIRONMENT_STDIN,
+    shell: false,
     windowsHide: true,
     encoding: "utf8",
     maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
     timeout: COMMAND_TIMEOUT_MS
   });
+  if (initialized.error) {
+    throw new Error("vcvars64 환경 초기화 프로세스를 실행하지 못했습니다.", {
+      cause: initialized.error
+    });
+  }
+  invariant(
+    initialized.status === 0 && initialized.signal === null,
+    `vcvars64 환경 초기화가 실패했습니다: status=${initialized.status ?? "null"}, signal=${initialized.signal ?? "none"}`
+  );
+  invariant(
+    typeof initialized.stdout === "string"
+      && typeof initialized.stderr === "string",
+    "vcvars64 환경 초기화 출력을 문자열로 읽지 못했습니다."
+  );
   const environment: NodeJS.ProcessEnv = {};
   for (const line of initialized.stdout.split(/\r?\n/u)) {
     const separator = line.indexOf("=");
@@ -176,7 +208,11 @@ async function visualStudioEnvironment(): Promise<Readonly<{
     }
     const key = line.slice(0, separator);
     const value = line.slice(separator + 1);
-    if (/^[A-Za-z_][A-Za-z0-9_()]*$/u.test(key) && !value.includes("\0")) {
+    if (
+      key.toUpperCase() !== WINDOWS_VCVARS_ENVIRONMENT_KEY
+      && /^[A-Za-z_][A-Za-z0-9_()]*$/u.test(key)
+      && !value.includes("\0")
+    ) {
       environment[key] = value;
     }
   }
