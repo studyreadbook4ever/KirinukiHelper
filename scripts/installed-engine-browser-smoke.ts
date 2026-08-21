@@ -100,6 +100,10 @@ interface WebDriverSession {
   readonly sessionId?: unknown;
 }
 
+interface CdpTargetCreation {
+  readonly targetId?: unknown;
+}
+
 interface BrowserProbeResult {
   readonly origin?: unknown;
   readonly phase?: unknown;
@@ -665,9 +669,24 @@ export async function runInstalledEngineBrowserSmoke({
       }
     }
     invariant(grantedPermissions.length >= 1, "Chrome LNA/loopback permission을 자동 확인하지 못했습니다.");
-    await webdriver("POST", `/session/${sessionId}/url`, {
-      url: `${KIRINUKI_PUBLIC_STUDIO_ORIGIN}/`
-    });
+    // ChromeDriver 152 on macOS can acknowledge a pageLoadStrategy=none
+    // WebDriver navigation without dispatching it after the renderer target is
+    // replaced. Create the real probe target through the browser-level CDP
+    // command instead, then never depend on that target through ChromeDriver.
+    const probeTarget = await webdriver<CdpTargetCreation>(
+      "POST",
+      `/session/${sessionId}/goog/cdp/execute`,
+      {
+        cmd: "Target.createTarget",
+        params: { url: `${KIRINUKI_PUBLIC_STUDIO_ORIGIN}/` }
+      }
+    );
+    invariant(
+      typeof probeTarget.targetId === "string"
+        && probeTarget.targetId.length >= 1
+        && probeTarget.targetId.length <= 256,
+      "Chrome browser probe target ID가 올바르지 않습니다."
+    );
     const requested = await waitForNextProbeEvent(
       "첫 설치 browser pairing request"
     );

@@ -42,12 +42,15 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   assert.match(source, /loopback-network/u);
   assert.match(source, /launchPairingUrl\(exactPairingUrl/u);
   assert.match(source, /randomBytes\(32\)\.toString\("base64url"\)/u);
+  assert.match(source, /cmd:\s*"Target\.createTarget"/u);
+  assert.match(source, /params:\s*\{ url: `\$\{KIRINUKI_PUBLIC_STUDIO_ORIGIN\}\/` \}/u);
   assert.match(source, /connect-src 'self' http:\/\/127\.0\.0\.1:4319/u);
   assert.match(source, /request\.headers\.origin === KIRINUKI_PUBLIC_STUDIO_ORIGIN/u);
   assert.match(source, /bytes <= 8 \* 1024/u);
   assert.match(source, /probeEventCursor === 3 && probeEvents\.length === 3/u);
   assert.match(source, /entry === "\/probe-event"\)\.length === 3/u);
   assert.doesNotMatch(source, /execute\/sync/u);
+  assert.doesNotMatch(source, /\/session\/\$\{sessionId\}\/url/u);
   assert.doesNotMatch(source, /\/session\/\$\{sessionId\}\/refresh/u);
   assert.match(source, /assertProbeResult\(second\.result, "reconnected", keyId\)/u);
   assert.match(source, /assertProbeResult\(first\.result, "paired"\)/u);

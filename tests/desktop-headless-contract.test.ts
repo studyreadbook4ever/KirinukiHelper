@@ -38,6 +38,7 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
     installerSmoke,
     desktopPackageSmoke,
     powershellEnvironment,
+    builderEnvironment,
     nsisInclude
   ] = await Promise.all([
     readFile(path.join(root, "electron-builder.yml"), "utf8"),
@@ -47,6 +48,7 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
     readFile(path.join(root, "scripts/desktop-installer-smoke.ts"), "utf8"),
     readFile(path.join(root, "scripts/desktop-package-smoke.ts"), "utf8"),
     readFile(path.join(root, "scripts/windows-powershell-environment.ts"), "utf8"),
+    readFile(path.join(root, "scripts/electron-builder-environment.ts"), "utf8"),
     readFile(path.join(root, "build/installer.nsh"), "utf8")
   ]);
   for (const fileName of [
@@ -75,6 +77,7 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
   assert.match(releaseConfig, /rfc3161TimeStampServer:/u);
   for (const config of [ciConfig, releaseConfig]) {
     assert.match(config, /include:\s*build\/installer\.nsh/u);
+    assert.match(config, /differentialPackage:\s*false/u);
     assert.match(config, /LSUIElement:\s*true/u);
     assert.match(config, /createStartMenuShortcut:\s*true/u);
     assert.match(config, /deleteAppDataOnUninstall:\s*false/u);
@@ -102,6 +105,9 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
   }
   assert.match(powershellEnvironment, /WINPSMODULEPATH/u);
   assert.match(powershellEnvironment, /delete environment\[key\]/u);
+  assert.match(packageScript, /electronBuilderEnvironment/u);
+  assert.match(builderEnvironment, /normalized === "DEBUG"/u);
+  assert.match(builderEnvironment, /normalized === "CSC_IDENTITY_AUTO_DISCOVERY"/u);
   assert.match(installerSmoke, /KIRINUKI_WINDOWS_SHORTCUT_PATH/u);
   assert.match(installerSmoke, /KIRINUKI_WINDOWS_JUNCTION_PATH/u);
   assert.match(installerSmoke, /KIRINUKI_WINDOWS_JUNCTION_TARGET/u);

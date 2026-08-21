@@ -56,6 +56,8 @@ win:
 nsis:
   include: build/installer.nsh
   oneClick: true
+  # Signed replacement is explicit and manual, never differential update.
+  differentialPackage: false
   perMachine: false
   allowElevation: false
   runAfterFinish: true

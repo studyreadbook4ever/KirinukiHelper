@@ -47,6 +47,9 @@ win:
 nsis:
   include: build/installer.nsh
   oneClick: true
+  # Kirinuki has no auto-updater. Do not emit a differential-update blockmap
+  # beside the exact installer and lifecycle manifest allowlist.
+  differentialPackage: false
   perMachine: false
   allowElevation: false
   runAfterFinish: true

@@ -65,6 +65,9 @@ import {
   windowsPowerShellEnvironment,
   windowsPowerShellExecutable
 } from "./windows-powershell-environment.js";
+import {
+  electronBuilderEnvironment
+} from "./electron-builder-environment.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const require = createRequire(import.meta.url);
@@ -879,9 +882,10 @@ export async function packageDesktopInstaller(): Promise<Readonly<{
     "cli",
     "cli.js"
   );
-  const builderEnvironment: NodeJS.ProcessEnv = request.channel === "public-release"
-    ? { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "true" }
-    : { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" };
+  const builderEnvironment = electronBuilderEnvironment(
+    process.env,
+    request.channel === "public-release"
+  );
   const builderConfig = request.channel === "public-release"
     ? "electron-builder.release.yml"
     : "electron-builder.yml";
