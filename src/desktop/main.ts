@@ -16,6 +16,7 @@ import type {
   LoginItemSettings
 } from "./login-autostart.js";
 import {
+  desktopNativeSmokeDisconnectExitCode,
   desktopNativeSmokeReadyMessage,
   isDesktopNativeSmokeQuitMessage,
   resolveDesktopNativeSmokeContract
@@ -408,9 +409,11 @@ function configureNativeSmokeControl(
   let ready = false;
   let quitRequested = false;
   process.once("disconnect", () => {
-    if (!quitRequested) {
-      process.exitCode = 1;
-    }
+    process.exitCode = desktopNativeSmokeDisconnectExitCode({
+      quitRequested,
+      ownedCleanupRequested: cleanupOwnedInstallation,
+      currentExitCode: currentNumericExitCode()
+    });
     if (ready) {
       requestTermination(currentNumericExitCode());
     }

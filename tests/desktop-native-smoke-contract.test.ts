@@ -12,6 +12,7 @@ import {
   DESKTOP_NATIVE_SMOKE_ROOT_ENV,
   DESKTOP_NATIVE_SMOKE_ROOT_PREFIX,
   DESKTOP_NATIVE_SMOKE_TOKEN_ENV,
+  desktopNativeSmokeDisconnectExitCode,
   desktopNativeSmokeReadyMessage,
   isDesktopNativeSmokeQuitMessage,
   resolveDesktopNativeSmokeContract
@@ -21,6 +22,29 @@ import { ENGINE_OWNED_UNINSTALL_ARGUMENT } from "../src/desktop/instance-lifecyc
 function token(): string {
   return randomBytes(32).toString("base64url");
 }
+
+test("native smoke IPC disconnect는 owned uninstall의 정상 종료 코드를 보존한다", () => {
+  assert.equal(desktopNativeSmokeDisconnectExitCode({
+    quitRequested: false,
+    ownedCleanupRequested: false,
+    currentExitCode: 0
+  }), 1);
+  assert.equal(desktopNativeSmokeDisconnectExitCode({
+    quitRequested: true,
+    ownedCleanupRequested: false,
+    currentExitCode: 0
+  }), 0);
+  assert.equal(desktopNativeSmokeDisconnectExitCode({
+    quitRequested: false,
+    ownedCleanupRequested: true,
+    currentExitCode: 0
+  }), 0);
+  assert.equal(desktopNativeSmokeDisconnectExitCode({
+    quitRequested: false,
+    ownedCleanupRequested: true,
+    currentExitCode: 1
+  }), 1);
+});
 
 test("native smoke is inert without its exact internal argument", () => {
   assert.equal(resolveDesktopNativeSmokeContract({

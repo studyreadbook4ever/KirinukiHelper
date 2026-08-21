@@ -16,6 +16,27 @@ export const DESKTOP_NATIVE_SMOKE_ROOT_PREFIX =
 export const DESKTOP_NATIVE_SMOKE_IPC_SCHEMA =
   "kirinuki-desktop-native-smoke/ipc-v1" as const;
 
+export function desktopNativeSmokeDisconnectExitCode({
+  quitRequested,
+  ownedCleanupRequested,
+  currentExitCode
+}: {
+  readonly quitRequested: boolean;
+  readonly ownedCleanupRequested: boolean;
+  readonly currentExitCode: number;
+}): number {
+  if (
+    typeof quitRequested !== "boolean"
+    || typeof ownedCleanupRequested !== "boolean"
+    || !Number.isSafeInteger(currentExitCode)
+    || currentExitCode < 0
+    || currentExitCode > 255
+  ) {
+    throw new TypeError("데스크톱 native smoke 종료 상태가 올바르지 않습니다.");
+  }
+  return quitRequested || ownedCleanupRequested ? currentExitCode : 1;
+}
+
 export const DESKTOP_NATIVE_SMOKE_USER_DATA_DIRECTORY =
   "user data-사용자" as const;
 const NATIVE_SMOKE_CRASH_DUMPS_DIRECTORY = "crash dumps-사용자" as const;
