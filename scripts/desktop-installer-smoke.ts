@@ -887,7 +887,12 @@ async function windowsNsisSmoke(
     if (appDataFixtureCreated) {
       await rmdir(appDataRoot);
     }
-    await rm(temporaryRoot, { recursive: true, force: true });
+    await rm(temporaryRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 250
+    });
   }
   await assertPathAbsent(temporaryRoot);
   await assertPathAbsent(recoveryShortcut);

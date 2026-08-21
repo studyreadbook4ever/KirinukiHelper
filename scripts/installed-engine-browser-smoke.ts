@@ -689,16 +689,6 @@ export async function runInstalledEngineBrowserSmoke({
     );
     const navigationOutcomePromise = (async () => {
       for (let navigationAttempt = 0; navigationAttempt < 2; navigationAttempt += 1) {
-        const stopped = await webdriver<unknown>(
-          "POST",
-          `/session/${sessionId}/goog/cdp/execute`,
-          { cmd: "Page.stopLoading", params: {} },
-          10_000
-        );
-        invariant(
-          isRecord(stopped) && Object.keys(stopped).length === 0,
-          "Chrome browser probe의 이전 navigation을 정지하지 못했습니다."
-        );
         const navigation = await webdriver<CdpPageNavigation>(
           "POST",
           `/session/${sessionId}/goog/cdp/execute`,

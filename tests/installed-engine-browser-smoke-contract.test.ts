@@ -43,7 +43,6 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   assert.match(source, /launchPairingUrl\(exactPairingUrl/u);
   assert.match(source, /randomBytes\(32\)\.toString\("base64url"\)/u);
   assert.match(source, /ChromeDriver initial browser tab/u);
-  assert.match(source, /cmd:\s*"Page\.stopLoading"/u);
   assert.match(source, /cmd:\s*"Page\.navigate"/u);
   assert.match(source, /navigationAttempt < 2/u);
   assert.match(source, /navigation\.loaderId === undefined \|\| validLoaderId/u);
@@ -60,6 +59,7 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   assert.match(source, /probeEventCursor === 3 && probeEvents\.length === 3/u);
   assert.match(source, /entry === "\/probe-event"\)\.length === 3/u);
   assert.doesNotMatch(source, /execute\/sync/u);
+  assert.doesNotMatch(source, /cmd:\s*"Page\.stopLoading"/u);
   assert.doesNotMatch(source, /cmd:\s*"Target\.createTarget"/u);
   assert.doesNotMatch(source, /\/window\/new/u);
   assert.doesNotMatch(source, /\/session\/\$\{sessionId\}\/url/u);
