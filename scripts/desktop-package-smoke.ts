@@ -73,6 +73,10 @@ import {
   inspectExternalMp4,
   runExternalProcess
 } from "./external-vod-materializer.js";
+import {
+  windowsPowerShellEnvironment,
+  windowsPowerShellExecutable
+} from "./windows-powershell-environment.js";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const APP_START_TIMEOUT_MS = 60_000;
@@ -1125,15 +1129,7 @@ async function windowsLoginItemRunValue(
   cwd: string
 ): Promise<string | null> {
   invariant(process.platform === "win32", "Windows registry probe는 Windows 전용입니다.");
-  const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
-  invariant(typeof systemRoot === "string" && path.win32.isAbsolute(systemRoot), "Windows SystemRoot가 없습니다.");
-  const powershell = path.win32.join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe"
-  );
+  const powershell = windowsPowerShellExecutable(process.env);
   const result = await runExternalProcess(powershell, [
     "-NoLogo",
     "-NoProfile",
@@ -1151,7 +1147,7 @@ async function windowsLoginItemRunValue(
     ].join("; ")
   ], {
     cwd,
-    env: process.env,
+    env: windowsPowerShellEnvironment(process.env),
     shell: false,
     timeoutMs: TOOL_TIMEOUT_MS
   });
@@ -1168,15 +1164,7 @@ async function windowsLoginItemApprovalValueExists(
   cwd: string
 ): Promise<boolean> {
   invariant(process.platform === "win32", "Windows registry probe는 Windows 전용입니다.");
-  const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
-  invariant(typeof systemRoot === "string" && path.win32.isAbsolute(systemRoot), "Windows SystemRoot가 없습니다.");
-  const powershell = path.win32.join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe"
-  );
+  const powershell = windowsPowerShellExecutable(process.env);
   const result = await runExternalProcess(powershell, [
     "-NoLogo",
     "-NoProfile",
@@ -1192,7 +1180,7 @@ async function windowsLoginItemApprovalValueExists(
     ].join("; ")
   ], {
     cwd,
-    env: process.env,
+    env: windowsPowerShellEnvironment(process.env),
     shell: false,
     timeoutMs: TOOL_TIMEOUT_MS
   });
@@ -1235,15 +1223,7 @@ async function removeWindowsProductionAutostartAfterSmoke(
       || runValue === expectedUnquoted,
     "Windows production 자동실행 failure cleanup이 소유권 불명 Run 값을 발견해 제거를 거부했습니다."
   );
-  const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
-  invariant(typeof systemRoot === "string" && path.win32.isAbsolute(systemRoot), "Windows SystemRoot가 없습니다.");
-  const powershell = path.win32.join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe"
-  );
+  const powershell = windowsPowerShellExecutable(process.env);
   const result = await runExternalProcess(powershell, [
     "-NoLogo",
     "-NoProfile",
@@ -1259,7 +1239,7 @@ async function removeWindowsProductionAutostartAfterSmoke(
     ].join("; ")
   ], {
     cwd,
-    env: process.env,
+    env: windowsPowerShellEnvironment(process.env),
     shell: false,
     timeoutMs: TOOL_TIMEOUT_MS
   });

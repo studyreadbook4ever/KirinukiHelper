@@ -17,6 +17,15 @@ test("installed-browser probe는 실제 onboarding/trust/session code를 두 loa
   assert.match(source, /sourceUrl:\s*SOURCE_URL/u);
   assert.match(source, /existing \? "reconnected" : "paired"/u);
   assert.match(source, /sessionRenewed/u);
+  assert.match(source, /fetch\("\/probe-event"/u);
+  assert.match(source, /credentials:\s*"omit"/u);
+  assert.match(source, /AbortSignal\.timeout\(5_000\)/u);
+  assert.match(source, /kirinuki-browser-probe-nonce/u);
+  const resultReport = source.indexOf(
+    'await reportProbeEvent({ kind: "result", result });'
+  );
+  const selfReload = source.indexOf("location.reload();");
+  assert.ok(resultReport >= 0 && selfReload > resultReport);
   assert.doesNotMatch(source, /mock|fixture|localStorage/iu);
 });
 
@@ -32,11 +41,16 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   assert.match(source, /local-network-access/u);
   assert.match(source, /loopback-network/u);
   assert.match(source, /launchPairingUrl\(exactPairingUrl/u);
-  assert.match(source, /\/session\/\$\{sessionId\}\/refresh/u);
+  assert.match(source, /randomBytes\(32\)\.toString\("base64url"\)/u);
+  assert.match(source, /connect-src 'self' http:\/\/127\.0\.0\.1:4319/u);
+  assert.match(source, /request\.headers\.origin === KIRINUKI_PUBLIC_STUDIO_ORIGIN/u);
+  assert.match(source, /bytes <= 8 \* 1024/u);
+  assert.match(source, /probeEventCursor === 3 && probeEvents\.length === 3/u);
+  assert.match(source, /entry === "\/probe-event"\)\.length === 3/u);
+  assert.doesNotMatch(source, /execute\/sync/u);
+  assert.doesNotMatch(source, /\/session\/\$\{sessionId\}\/refresh/u);
   assert.match(source, /assertProbeResult\(second\.result, "reconnected", keyId\)/u);
-  assert.match(source, /state\.result\.phase === "paired"/u);
-  assert.match(source, /state\.result\.phase === "reconnected"/u);
-  assert.match(source, /second\.pairingUrl === ""/u);
+  assert.match(source, /assertProbeResult\(first\.result, "paired"\)/u);
   assert.match(source, /sessionCapabilityBytes === 43/u);
   assert.match(source, /result\.sessionRenewed === \(phase === "reconnected"\)/u);
 });

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import {
   access,
@@ -11,6 +12,7 @@ import {
   createServer as createHttpsServer,
   type Server as HttpsServer
 } from "node:https";
+import type { IncomingMessage } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -107,11 +109,11 @@ interface BrowserProbeResult {
   readonly status?: unknown;
 }
 
-interface BrowserProbeState {
-  readonly error: string;
-  readonly pairingUrl: string;
-  readonly result: BrowserProbeResult | null;
-}
+type BrowserProbeEvent = Readonly<
+  | { kind: "pairing"; pairingUrl: string }
+  | { kind: "result"; result: BrowserProbeResult }
+  | { kind: "error"; error: string }
+>;
 
 export interface InstalledEngineBrowserSmokeOptions {
   readonly launchPairingUrl: (url: string) => Promise<void>;
@@ -303,13 +305,76 @@ async function browserBundle(): Promise<Buffer> {
   return Buffer.from(result.outputFiles[0]!.contents);
 }
 
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[]
+): boolean {
+  return JSON.stringify(Object.keys(value).sort())
+    === JSON.stringify([...expected].sort());
+}
+
+async function readProbeEvent(
+  request: IncomingMessage,
+  expectedNonce: string
+): Promise<BrowserProbeEvent> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.byteLength;
+    invariant(bytes <= 8 * 1024, "browser probe event가 너무 큽니다.");
+    chunks.push(buffer);
+  }
+  invariant(bytes > 0, "browser probe event body가 없습니다.");
+  const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  invariant(isRecord(value), "browser probe event가 object가 아닙니다.");
+  invariant(value.nonce === expectedNonce, "browser probe event nonce가 다릅니다.");
+  if (value.kind === "pairing") {
+    invariant(
+      hasExactKeys(value, ["kind", "nonce", "pairingUrl"])
+        && typeof value.pairingUrl === "string"
+        && value.pairingUrl.length <= 4_096,
+      "browser pairing event 형식이 올바르지 않습니다."
+    );
+    return Object.freeze({ kind: "pairing", pairingUrl: value.pairingUrl });
+  }
+  if (value.kind === "result") {
+    invariant(
+      hasExactKeys(value, ["kind", "nonce", "result"])
+        && isRecord(value.result)
+        && hasExactKeys(value.result, [
+          "keyId",
+          "origin",
+          "phase",
+          "sessionCapabilityBytes",
+          "sessionRenewed",
+          "status"
+        ]),
+      "browser result event 형식이 올바르지 않습니다."
+    );
+    return Object.freeze({ kind: "result", result: value.result });
+  }
+  invariant(
+    value.kind === "error"
+      && hasExactKeys(value, ["error", "kind", "nonce"])
+      && typeof value.error === "string"
+      && value.error.length > 0
+      && value.error.length <= 2_000,
+    "browser error event 형식이 올바르지 않습니다."
+  );
+  return Object.freeze({ kind: "error", error: value.error });
+}
+
 function createProbeServer(
   javaScript: Buffer,
-  observedPaths: string[]
+  observedPaths: string[],
+  events: BrowserProbeEvent[],
+  probeNonce: string
 ): HttpsServer {
   const html = Buffer.from(
     "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
-      + "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'self'; connect-src http://127.0.0.1:4319\">"
+      + `<meta name="kirinuki-browser-probe-nonce" content="${probeNonce}">`
+      + "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'self'; connect-src 'self' http://127.0.0.1:4319\">"
       + "<title>Kirinuki installed engine smoke</title></head>"
       + "<body><main>installed engine browser smoke</main><script type=\"module\" src=\"/probe.js\"></script></body></html>",
     "utf8"
@@ -318,49 +383,72 @@ function createProbeServer(
     cert: TEST_CERTIFICATE,
     key: TEST_PRIVATE_KEY
   }, (request, response) => {
-    const host = String(request.headers.host || "").replace(/:\d+$/u, "");
-    if (request.method !== "GET" || host !== canonicalHost) {
-      response.writeHead(400, { connection: "close" });
+    void (async () => {
+      const host = String(request.headers.host || "").replace(/:\d+$/u, "");
+      invariant(host === canonicalHost, "browser probe Host가 다릅니다.");
+      const requestUrl = new URL(request.url || "/", KIRINUKI_PUBLIC_STUDIO_ORIGIN);
+      observedPaths.push(requestUrl.pathname);
+      const headers = {
+        "cache-control": "no-store",
+        "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self' http://127.0.0.1:4319",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "permissions-policy": "accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      };
+      if (request.method === "POST" && requestUrl.pathname === "/probe-event") {
+        invariant(
+          request.headers.origin === KIRINUKI_PUBLIC_STUDIO_ORIGIN,
+          "browser probe event Origin이 다릅니다."
+        );
+        invariant(
+          request.headers["content-type"] === "application/json",
+          "browser probe event Content-Type이 다릅니다."
+        );
+        events.push(await readProbeEvent(request, probeNonce));
+        response.writeHead(204, headers);
+        response.end();
+        return;
+      }
+      invariant(request.method === "GET", "browser probe method가 허용되지 않습니다.");
+      if (requestUrl.pathname === "/") {
+        response.writeHead(200, {
+          ...headers,
+          "content-length": String(html.byteLength),
+          "content-type": "text/html; charset=utf-8"
+        });
+        response.end(html);
+        return;
+      }
+      if (requestUrl.pathname === "/probe.js") {
+        response.writeHead(200, {
+          ...headers,
+          "content-length": String(javaScript.byteLength),
+          "content-type": "text/javascript; charset=utf-8"
+        });
+        response.end(javaScript);
+        return;
+      }
+      if (requestUrl.pathname === "/favicon.ico") {
+        response.writeHead(204, headers);
+        response.end();
+        return;
+      }
+      response.writeHead(404, { ...headers, "content-type": "text/plain; charset=utf-8" });
+      response.end("not found");
+    })().catch((error: unknown) => {
+      events.push(Object.freeze({
+        kind: "error",
+        error: `probe server rejected request: ${errorMessage(error).slice(0, 1_800)}`
+      }));
+      if (!response.headersSent) {
+        response.writeHead(400, { connection: "close" });
+      }
       response.end();
-      return;
-    }
-    const requestUrl = new URL(request.url || "/", KIRINUKI_PUBLIC_STUDIO_ORIGIN);
-    observedPaths.push(requestUrl.pathname);
-    const headers = {
-      "cache-control": "no-store",
-      "content-security-policy": "default-src 'none'; script-src 'self'; connect-src http://127.0.0.1:4319",
-      "cross-origin-opener-policy": "same-origin",
-      "cross-origin-resource-policy": "same-origin",
-      "permissions-policy": "accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()",
-      "referrer-policy": "no-referrer",
-      "x-content-type-options": "nosniff",
-      "x-frame-options": "DENY"
-    };
-    if (requestUrl.pathname === "/") {
-      response.writeHead(200, {
-        ...headers,
-        "content-length": String(html.byteLength),
-        "content-type": "text/html; charset=utf-8"
-      });
-      response.end(html);
-      return;
-    }
-    if (requestUrl.pathname === "/probe.js") {
-      response.writeHead(200, {
-        ...headers,
-        "content-length": String(javaScript.byteLength),
-        "content-type": "text/javascript; charset=utf-8"
-      });
-      response.end(javaScript);
-      return;
-    }
-    if (requestUrl.pathname === "/favicon.ico") {
-      response.writeHead(204, headers);
-      response.end();
-      return;
-    }
-    response.writeHead(404, { ...headers, "content-type": "text/plain; charset=utf-8" });
-    response.end("not found");
+      request.destroy();
+    });
   });
   server.on("clientError", (_error, socket) => socket.destroy());
   server.on("connect", (_request, socket) => socket.destroy());
@@ -429,7 +517,9 @@ export async function runInstalledEngineBrowserSmoke({
       reservePort()
     ]);
     const observedPaths: string[] = [];
-    server = createProbeServer(javaScript, observedPaths);
+    const probeEvents: BrowserProbeEvent[] = [];
+    const probeNonce = randomBytes(32).toString("base64url");
+    server = createProbeServer(javaScript, observedPaths, probeEvents, probeNonce);
     const publicPort = await listenLoopback(server);
     driver = spawn(chromeDriverPath, [`--port=${driverPort}`], {
       cwd: temporaryRoot,
@@ -528,49 +618,29 @@ export async function runInstalledEngineBrowserSmoke({
     invariant(typeof created.sessionId === "string" && created.sessionId, "WebDriver session ID가 없습니다.");
     sessionId = created.sessionId;
 
-    const execute = <T>(script: string): Promise<T> => webdriver<T>(
-      "POST",
-      `/session/${sessionId}/execute/sync`,
-      { script, args: [] }
-    );
-    const sample = async (): Promise<BrowserProbeState> => execute<BrowserProbeState>(`
-      return {
-        pairingUrl: String(globalThis.__kirinukiInstalledEnginePairingUrl || ""),
-        error: String(globalThis.__kirinukiInstalledEngineError || ""),
-        result: globalThis.__kirinukiInstalledEngineResult || null
-      };
-    `);
-    const waitFor = async (
-      predicate: (state: BrowserProbeState) => boolean,
+    let probeEventCursor = 0;
+    const waitForNextProbeEvent = async (
       label: string,
       timeoutMs = 45_000
-    ): Promise<BrowserProbeState> => {
+    ): Promise<BrowserProbeEvent> => {
       const startedAt = Date.now();
-      let latest: BrowserProbeState = { error: "", pairingUrl: "", result: null };
-      let latestNavigationError = "";
       while (Date.now() - startedAt < timeoutMs) {
-        try {
-          latest = await sample();
-          if (latest.error) {
-            throw new Error(`브라우저 probe 실패: ${latest.error}`);
+        const event = probeEvents[probeEventCursor];
+        if (event) {
+          probeEventCursor += 1;
+          if (event.kind === "error") {
+            throw new Error(`브라우저 probe 실패: ${event.error}`);
           }
-          if (predicate(latest)) {
-            return latest;
-          }
-        } catch (error) {
-          if (error instanceof Error && error.message.startsWith("브라우저 probe 실패:")) {
-            throw error;
-          }
-          // Navigation 중 교체된 execution context만 재시도한다.
-          latestNavigationError = errorMessage(error).slice(0, 2_000);
+          return event;
         }
+        invariant(driver?.exitCode === null, "ChromeDriver가 browser probe 중 종료했습니다.");
         await delay(100);
       }
+      const summaries = probeEvents.map((event) => event.kind === "result"
+        ? `${event.kind}:${String(event.result.phase || "unknown")}`
+        : event.kind);
       throw new Error(
-        `${label} 시간 제한을 초과했습니다: ${JSON.stringify(latest)}`
-          + (latestNavigationError
-            ? `; 마지막 navigation 오류: ${latestNavigationError}`
-            : "")
+        `${label} 시간 제한을 초과했습니다: events=${JSON.stringify(summaries)} paths=${JSON.stringify(observedPaths)}`
       );
     };
 
@@ -598,31 +668,37 @@ export async function runInstalledEngineBrowserSmoke({
     await webdriver("POST", `/session/${sessionId}/url`, {
       url: `${KIRINUKI_PUBLIC_STUDIO_ORIGIN}/`
     });
-    const requested = await waitFor(
-      (state) => state.pairingUrl.length > 0,
+    const requested = await waitForNextProbeEvent(
       "첫 설치 browser pairing request"
     );
+    invariant(requested.kind === "pairing", "첫 browser probe event가 pairing 요청이 아닙니다.");
     await launchPairingUrl(exactPairingUrl(requested.pairingUrl));
-    const first = await waitFor(
-      (state) => state.result?.status === "ok" && state.result.phase === "paired",
+    const first = await waitForNextProbeEvent(
       "첫 설치 signed pairing/encrypted session"
     );
+    invariant(first.kind === "result", "두 번째 browser probe event가 pairing 결과가 아닙니다.");
     const keyId = assertProbeResult(first.result, "paired");
 
-    await webdriver("POST", `/session/${sessionId}/refresh`, {});
-    const second = await waitFor(
-      (state) => state.result?.status === "ok" && state.result.phase === "reconnected",
-      "새로고침 뒤 무재페어링 재연결"
+    const second = await waitForNextProbeEvent(
+      "브라우저 자체 새로고침 뒤 무재페어링 재연결"
     );
+    invariant(second.kind === "result", "세 번째 browser probe event가 재연결 결과가 아닙니다.");
     assertProbeResult(second.result, "reconnected", keyId);
+    await delay(250);
     invariant(
-      second.pairingUrl === "",
-      "이미 연결된 브라우저가 새로고침 뒤 custom protocol pairing을 다시 요구했습니다."
+      probeEventCursor === 3 && probeEvents.length === 3,
+      `browser probe event 순서/개수가 pairing→paired→reconnected와 다릅니다: ${JSON.stringify(probeEvents.map((event) => event.kind))}`
     );
     invariant(
       observedPaths.filter((entry) => entry === "/").length === 2
         && observedPaths.filter((entry) => entry === "/probe.js").length === 2
-        && observedPaths.every((entry) => ["/", "/probe.js", "/favicon.ico"].includes(entry)),
+        && observedPaths.filter((entry) => entry === "/probe-event").length === 3
+        && observedPaths.every((entry) => [
+          "/",
+          "/probe.js",
+          "/probe-event",
+          "/favicon.ico"
+        ].includes(entry)),
       `browser probe HTTPS 요청이 exact two-load allowlist와 다릅니다: ${JSON.stringify(observedPaths)}`
     );
     return Object.freeze({

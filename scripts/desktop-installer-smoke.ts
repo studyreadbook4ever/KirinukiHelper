@@ -41,6 +41,10 @@ import {
 import {
   verifyPackagedDesktopTools
 } from "./package-desktop.js";
+import {
+  windowsPowerShellEnvironment,
+  windowsPowerShellExecutable
+} from "./windows-powershell-environment.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const COMMAND_TIMEOUT_MS = 3 * 60 * 1_000;
@@ -90,9 +94,16 @@ function run(
   } = {}
 ): Promise<Readonly<CommandResult>> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], {
+    const isWindowsPowerShell = path.win32.basename(command).toLowerCase() === "powershell.exe";
+    const childEnvironment = isWindowsPowerShell
+      ? windowsPowerShellEnvironment(env)
+      : env;
+    const childCommand = isWindowsPowerShell
+      ? windowsPowerShellExecutable(env)
+      : command;
+    const child = spawn(childCommand, [...args], {
       cwd: root,
-      env,
+      env: childEnvironment,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       shell: false
@@ -110,7 +121,7 @@ function run(
     child.stderr.on("data", append("stderr"));
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`installer smoke command timeout: ${path.basename(command)}`));
+      reject(new Error(`installer smoke command timeout: ${path.basename(childCommand)}`));
     }, COMMAND_TIMEOUT_MS);
     timer.unref?.();
     child.once("error", (error) => {

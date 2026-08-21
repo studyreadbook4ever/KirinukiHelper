@@ -61,6 +61,10 @@ import type {
 import {
   refreshPackagedWindowsJobLauncherManifest
 } from "./prepare-windows-job-launcher.js";
+import {
+  windowsPowerShellEnvironment,
+  windowsPowerShellExecutable
+} from "./windows-powershell-environment.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const require = createRequire(import.meta.url);
@@ -353,13 +357,10 @@ const WINDOWS_AUTHENTICODE_PATH_ENV =
   "KIRINUKI_WINDOWS_AUTHENTICODE_PATH";
 const WINDOWS_CERTIFICATE_THUMBPRINT_ENV =
   "KIRINUKI_WINDOWS_CERTIFICATE_THUMBPRINT";
-
-function windowsProcessEnvironment(
-  base: NodeJS.ProcessEnv,
-  values: Readonly<Record<string, string>>
-): NodeJS.ProcessEnv {
-  return { ...base, ...values };
-}
+const WINDOWS_SECURITY_MODULE_IMPORT = [
+  "$securityModule=$PSHOME+'\\Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1'",
+  "Import-Module -Name $securityModule -Force -ErrorAction Stop"
+].join(";");
 
 async function windowsSignatureReadback(
   filePath: string,
@@ -369,9 +370,10 @@ async function windowsSignatureReadback(
 ): Promise<Readonly<WindowsSignatureReadback>> {
   await runCaptured(signTool, ["verify", "/pa", "/all", "/v", filePath], process.env);
   const script = [
+    WINDOWS_SECURITY_MODULE_IMPORT,
     `$path=[Environment]::GetEnvironmentVariable('${WINDOWS_AUTHENTICODE_PATH_ENV}','Process')`,
     "if([string]::IsNullOrWhiteSpace($path)){throw 'missing Authenticode path'}",
-    "$signature=Get-AuthenticodeSignature -LiteralPath $path",
+    "$signature=Microsoft.PowerShell.Security\\Get-AuthenticodeSignature -LiteralPath $path",
     "$result=[ordered]@{",
     "status=$signature.Status.ToString()",
     "signerCertificateSha1=if($signature.SignerCertificate){$signature.SignerCertificate.Thumbprint}else{''}",
@@ -380,13 +382,13 @@ async function windowsSignatureReadback(
     "}",
     "$result|ConvertTo-Json -Compress"
   ].join(";");
-  const result = await runCaptured("powershell.exe", [
+  const result = await runCaptured(windowsPowerShellExecutable(process.env), [
     "-NoLogo",
     "-NoProfile",
     "-NonInteractive",
     "-Command",
     script
-  ], windowsProcessEnvironment(process.env, {
+  ], windowsPowerShellEnvironment(process.env, {
     [WINDOWS_AUTHENTICODE_PATH_ENV]: filePath
   }));
   const payload = JSON.parse(result.stdout) as Partial<WindowsSignatureReadback>;
@@ -421,13 +423,13 @@ async function signWindowsPrepackaged(
   const expectedSubject = requiredEnvironment("KIRINUKI_WINDOWS_PUBLISHER_SUBJECT");
   const thumbprint = release.signingIdentity.toUpperCase();
   await assertExactRegularFile(signTool, "Windows signtool");
-  const certificate = await runCaptured("powershell.exe", [
+  const certificate = await runCaptured(windowsPowerShellExecutable(process.env), [
     "-NoLogo",
     "-NoProfile",
     "-NonInteractive",
     "-Command",
-    `$thumbprint=[Environment]::GetEnvironmentVariable('${WINDOWS_CERTIFICATE_THUMBPRINT_ENV}','Process');if([string]::IsNullOrWhiteSpace($thumbprint)){throw 'missing certificate thumbprint'};$certificate=Get-Item -LiteralPath ('Cert:\\CurrentUser\\My\\'+$thumbprint);if(-not $certificate.HasPrivateKey){throw 'certificate has no private key'};[ordered]@{thumbprint=$certificate.Thumbprint;subject=$certificate.Subject}|ConvertTo-Json -Compress`
-  ], windowsProcessEnvironment(process.env, {
+    `${WINDOWS_SECURITY_MODULE_IMPORT};$thumbprint=[Environment]::GetEnvironmentVariable('${WINDOWS_CERTIFICATE_THUMBPRINT_ENV}','Process');if([string]::IsNullOrWhiteSpace($thumbprint)){throw 'missing certificate thumbprint'};$certificate=Get-Item -LiteralPath ('Cert:\\CurrentUser\\My\\'+$thumbprint);if(-not $certificate.HasPrivateKey){throw 'certificate has no private key'};[ordered]@{thumbprint=$certificate.Thumbprint;subject=$certificate.Subject}|ConvertTo-Json -Compress`
+  ], windowsPowerShellEnvironment(process.env, {
     [WINDOWS_CERTIFICATE_THUMBPRINT_ENV]: thumbprint
   }));
   const certificatePayload = JSON.parse(certificate.stdout) as {
@@ -780,15 +782,15 @@ async function verifyNativeUnsignedArtifact(
     throw new Error("DMG에 예상하지 않은 code signature가 있습니다.");
   }
   if (target === "win32-x64") {
-    const signatureEnvironment = windowsProcessEnvironment(env, {
+    const signatureEnvironment = windowsPowerShellEnvironment(env, {
       [WINDOWS_AUTHENTICODE_PATH_ENV]: artifactPath
     });
-    const signature = await execFileAsync("powershell.exe", [
+    const signature = await execFileAsync(windowsPowerShellExecutable(env), [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      `$path=[Environment]::GetEnvironmentVariable('${WINDOWS_AUTHENTICODE_PATH_ENV}','Process');if([string]::IsNullOrWhiteSpace($path)){throw 'missing Authenticode path'};(Get-AuthenticodeSignature -LiteralPath $path).Status.ToString()`
+      `${WINDOWS_SECURITY_MODULE_IMPORT};$path=[Environment]::GetEnvironmentVariable('${WINDOWS_AUTHENTICODE_PATH_ENV}','Process');if([string]::IsNullOrWhiteSpace($path)){throw 'missing Authenticode path'};(Microsoft.PowerShell.Security\\Get-AuthenticodeSignature -LiteralPath $path).Status.ToString()`
     ], {
       cwd: root,
       env: signatureEnvironment,
