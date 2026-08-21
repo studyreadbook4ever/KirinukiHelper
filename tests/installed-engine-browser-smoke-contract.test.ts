@@ -36,6 +36,7 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   );
   assert.match(source, /KIRINUKI_PUBLIC_STUDIO_ORIGIN/u);
   assert.match(source, /--host-resolver-rules=MAP/u);
+  assert.match(source, /--testing-fixed-https-port=\$\{publicPort\}/u);
   assert.match(source, /pageLoadStrategy:\s*"none"/u);
   assert.match(source, /Browser\.setPermission/u);
   assert.match(source, /local-network-access/u);

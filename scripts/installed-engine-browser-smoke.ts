@@ -619,7 +619,8 @@ export async function runInstalledEngineBrowserSmoke({
               "--no-proxy-server",
               "--password-store=basic",
               "--use-mock-keychain",
-              `--host-resolver-rules=MAP ${canonicalHost}:443 127.0.0.1:${publicPort},EXCLUDE localhost`,
+              `--host-resolver-rules=MAP ${canonicalHost} 127.0.0.1,EXCLUDE localhost`,
+              `--testing-fixed-https-port=${publicPort}`,
               `--user-data-dir=${profileRoot}`
             ]
           }

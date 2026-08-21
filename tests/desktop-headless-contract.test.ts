@@ -145,6 +145,9 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
   assert.match(installerSmoke, /protocolRootDefault: null/u);
   assert.match(installerSmoke, /protocolRootExists: false/u);
   assert.match(installerSmoke, /protocolUrlMarkerPresent: false/u);
+  assert.match(installerSmoke, /ToBase64String\(\[Text\.Encoding\]::UTF8\.GetBytes\(\$json\)\)/u);
+  assert.match(installerSmoke, /Buffer\.from\(encoded, "base64"\)\.toString\("utf8"\)/u);
+  assert.match(installerSmoke, /Buffer\.from\(shortcutEnvelope, "base64"\)\.toString\("utf8"\)/u);
   assert.doesNotMatch(nsisInclude, /DefaultIcon/u);
   assert.doesNotMatch(nsisInclude, /DeleteRegKey HKCU "Software\\Classes\\kirinuki-engine\\shell\\open\\command"/u);
   assert.doesNotMatch(nsisInclude, /RMDir\s+\/r/iu);

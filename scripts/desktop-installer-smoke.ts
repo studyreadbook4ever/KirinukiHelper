@@ -438,10 +438,20 @@ async function windowsEngineRegistrySnapshot(): Promise<WindowsEngineRegistrySna
       "if (Test-Path -LiteralPath $approvalKey) { $property=(Get-ItemProperty -LiteralPath $approvalKey).PSObject.Properties[$name]; if ($null -ne $property) { $approval=[Convert]::ToBase64String([byte[]]$property.Value) } }",
       "if ($protocolRootExists) { $item=Get-Item -LiteralPath $protocolRoot; $valueNames=@($item.GetValueNames()); if ($valueNames -contains '') { $protocolRootDefault=[string]$item.GetValue('') }; $protocolUrlMarkerPresent=$valueNames -contains 'URL Protocol' }",
       "if (Test-Path -LiteralPath $protocolKey) { $value=(Get-Item -LiteralPath $protocolKey).GetValue(''); if ($null -ne $value) { $protocolCommand=[string]$value } }",
-      "[ordered]@{approval=$approval;protocolCommand=$protocolCommand;protocolRootDefault=$protocolRootDefault;protocolRootExists=$protocolRootExists;protocolUrlMarkerPresent=$protocolUrlMarkerPresent;run=$run}|ConvertTo-Json -Compress"
+      "$json=[ordered]@{approval=$approval;protocolCommand=$protocolCommand;protocolRootDefault=$protocolRootDefault;protocolRootExists=$protocolRootExists;protocolUrlMarkerPresent=$protocolUrlMarkerPresent;run=$run}|ConvertTo-Json -Compress",
+      "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))"
     ].join("; ")
   ]);
-  const value = JSON.parse(result.stdout) as Record<string, unknown>;
+  const encoded = result.stdout.trim();
+  invariant(
+    encoded.length > 0
+      && encoded.length <= 16 * 1024
+      && /^[A-Za-z0-9+/]+={0,2}$/u.test(encoded),
+    "Windows engine registry readback의 UTF-8 envelope가 올바르지 않습니다."
+  );
+  const value = JSON.parse(
+    Buffer.from(encoded, "base64").toString("utf8")
+  ) as Record<string, unknown>;
   invariant(
     Object.keys(value).sort().join(",") === "approval,protocolCommand,protocolRootDefault,protocolRootExists,protocolUrlMarkerPresent,run"
       && (value.approval === null || typeof value.approval === "string")
@@ -794,12 +804,22 @@ async function windowsNsisSmoke(
         `$path=[Environment]::GetEnvironmentVariable('${WINDOWS_SHORTCUT_PATH_ENV}','Process')`,
         "if([string]::IsNullOrWhiteSpace($path)){throw 'missing shortcut path'}",
         "$shortcut=(New-Object -ComObject WScript.Shell).CreateShortcut($path)",
-        "[ordered]@{targetPath=$shortcut.TargetPath;arguments=$shortcut.Arguments;workingDirectory=$shortcut.WorkingDirectory}|ConvertTo-Json -Compress"
+        "$json=[ordered]@{targetPath=$shortcut.TargetPath;arguments=$shortcut.Arguments;workingDirectory=$shortcut.WorkingDirectory}|ConvertTo-Json -Compress",
+        "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))"
       ].join(";")
     ], {
       env: { ...process.env, [WINDOWS_SHORTCUT_PATH_ENV]: recoveryShortcut }
     });
-    const shortcut = JSON.parse(shortcutReadback.stdout) as {
+    const shortcutEnvelope = shortcutReadback.stdout.trim();
+    invariant(
+      shortcutEnvelope.length > 0
+        && shortcutEnvelope.length <= 16 * 1024
+        && /^[A-Za-z0-9+/]+={0,2}$/u.test(shortcutEnvelope),
+      "Windows shortcut readback의 UTF-8 envelope가 올바르지 않습니다."
+    );
+    const shortcut = JSON.parse(
+      Buffer.from(shortcutEnvelope, "base64").toString("utf8")
+    ) as {
       targetPath?: unknown;
       arguments?: unknown;
       workingDirectory?: unknown;
