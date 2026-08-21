@@ -39,26 +39,6 @@ const CASES: readonly Readonly<{
     ffmpegVersion: "n8.1.2"
   },
   {
-    target: "linux-arm64",
-    platform: "linux",
-    arch: "arm64",
-    resourcesRoot: "/opt/Kirinuki-arm64/resources",
-    ytDlpAsset: "yt-dlp_linux_aarch64",
-    ffmpegAsset: "ffmpeg-linux-arm64",
-    ffprobeAsset: "ffprobe-linux-arm64",
-    ffmpegVersion: "n8.1.2"
-  },
-  {
-    target: "darwin-x64",
-    platform: "darwin",
-    arch: "x64",
-    resourcesRoot: "/Applications/Kirinuki x64.app/Contents/Resources",
-    ytDlpAsset: "yt-dlp_macos",
-    ffmpegAsset: "ffmpeg-osx-x64",
-    ffprobeAsset: "ffprobe-osx-x64",
-    ffmpegVersion: "n8.1.2"
-  },
-  {
     target: "darwin-arm64",
     platform: "darwin",
     arch: "arm64",
@@ -164,6 +144,8 @@ test("desktop tool manifest pins every packaged target and matches runtime paths
 test("desktop tool manifest fails closed for unpinned targets", () => {
   for (const target of [
     "win32-arm64",
+    "linux-arm64",
+    "darwin-x64",
     "darwin-ia32",
     "freebsd-x64",
     "",

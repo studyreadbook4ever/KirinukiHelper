@@ -1,13 +1,15 @@
-# Kirinuki app browser-assets third-party notices
+# Kirinuki public web editor third-party notices
 
-이 문서는 **Kirinuki Linux 소스 앱의 `web/` browser assets에 실제로 포함되는
-구성요소만** 다룹니다. 공개 사이트의 shell-only ZIP에는 이 editor bundle과
-아래 제3자 구성요소가 들어가지 않습니다.
-Kirinuki 앱 setup이 나중에 내려받는 실행 파일·모델, 운영체제가 제공하는 도구,
-앱 내부 엔진 실행용·개발 전용 npm 패키지는 이 패키지의 일부가 아닙니다.
-전체 개발·앱 runtime
+이 문서는 `kirinuki.eff0rtchung.kr`의 정적 웹 편집기 배포물에 실제로 포함되는
+구성요소만 다룹니다. 운영체제별로 한 번 설치하는 로컬 미디어 엔진과 그 실행
+파일·도구, 운영체제가 제공하는 구성요소, 개발 전용 npm 패키지는 이 웹 ZIP의
+일부가 아닙니다. 전체 개발·로컬 엔진 runtime
 인벤토리는 저장소의 `legal/OPEN_SOURCE_INVENTORY.md`와
 `legal/RUNTIME_DEPENDENCIES.md`를 확인하세요.
+
+공개 서버는 로그인·쿠키·분석 도구를 사용하지 않으며 사용자 세션·프로젝트·편집
+이력을 받거나 저장하지 않습니다. 프로젝트와 명시적 저장본은 사용자의 브라우저에,
+선택 구간 미디어는 설치된 로컬 엔진의 사용자 전용 캐시에만 남습니다.
 
 Kirinuki 프로젝트가 직접 작성한 코드는 패키지의 `UNLICENSE`를 따릅니다. 아래
 제3자 구성요소와 별도 라이선스 소스는 그 퍼블릭 도메인 헌정 대상이 아니며
@@ -87,13 +89,15 @@ AudSeg 이름·버전·MIT 고지가 보존됩니다.
 
 ## External service runtime boundary
 
-Kirinuki 앱의 YouTube 원본 확인 화면은 YouTube 주소를 연 경우에만 브라우저가
+Kirinuki 웹 편집기의 원본 확인 화면은 해당 주소를 연 경우에만 브라우저가
 Google의 공식 `https://www.youtube-nocookie.com` embed에 직접 연결합니다.
 원격 JavaScript를 프로젝트·파일 권한이 있는 Kirinuki parent 문서에서 실행하지
-않으며, 앱에 포함된 격리 Player Bridge가 iframe 내부의 최소 시계·탐색·배속
-동작만 exact origin/source 계약으로 전달합니다. YouTube의 현재 서비스 약관·
+않습니다. CHZZK와 SOOP도 사용자가 해당 공개 VOD 주소를 입력했을 때만 각 공식
+재생 페이지를 격리된 iframe으로 엽니다. YouTube의 현재 서비스 약관·
 개발자 정책과 콘텐츠 권리는 위 오픈소스 라이선스와 별도로 적용됩니다.
-Kirinuki는 이 연결을 서버에서 proxy하지 않습니다.
+Kirinuki 서버는 플레이어나 VOD를 proxy하지 않습니다. 사용자가 편집 영상 준비를
+요청하면 설치된 로컬 엔진이 공개 원본에서 선택 범위에 필요한 부분만 이 기기로
+직접 받습니다.
 
 ## Corresponding source and scope
 

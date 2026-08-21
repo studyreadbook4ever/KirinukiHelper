@@ -257,6 +257,7 @@ function assertTrustedDownloadUrl(value: string): URL {
     || url.password
     || ![
       "github.com",
+      "raw.githubusercontent.com",
       "release-assets.githubusercontent.com"
     ].includes(url.hostname)
   ) {
@@ -288,6 +289,9 @@ async function downloadArtifact(
   const requestUrl = assertTrustedDownloadUrl(artifact.url);
   const response = await fetch(requestUrl, {
     redirect: "follow",
+    headers: Object.freeze({
+      "Accept-Encoding": "identity"
+    }),
     signal: AbortSignal.timeout(10 * 60_000)
   });
   if (!response.ok || !response.body) {

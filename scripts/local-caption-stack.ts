@@ -78,6 +78,10 @@ import {
   readVodRuntimeConfig,
   resolveVodRuntimePaths
 } from "./local-vod-runtime-core.js";
+import {
+  LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA
+} from "../src/lib/local-media-engine-contract.js";
 import type {
   LocalVodRuntimeConfig,
   LocalVodRuntimePaths
@@ -95,9 +99,9 @@ const STARTUP_TIMEOUT_MS = 4 * 60 * 1_000;
 const SHUTDOWN_TIMEOUT_MS = 25_000;
 const FOREGROUND_PID_SCHEMA = "kirinuki-caption-foreground/v2";
 const CAPTION_REQUEST_SCHEMA =
-  "chzzk-kirinuki-caption-request/v1";
+  LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL;
 const CAPTION_HEALTH_SCHEMA =
-  "chzzk-kirinuki-caption-agent/health-v1";
+  LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA;
 const MAX_HEALTH_RESPONSE_BYTES = 64 * 1024;
 
 function vodRuntimePaths(

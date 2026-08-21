@@ -9,6 +9,9 @@ import type {
 } from "esbuild";
 
 import { GENERATED_JAVASCRIPT_BANNER } from "./generated-javascript.js";
+import {
+  parseLocalMediaEngineReleaseChannel
+} from "../src/editor/local-media-engine-release.js";
 
 interface WebJavaScriptTarget {
   readonly sourcePath: string;
@@ -38,6 +41,7 @@ export interface WebJavaScriptBuildOptions {
   readonly rootDirectory: string;
   readonly write?: boolean;
   readonly logLevel?: LogLevel;
+  readonly engineRelease?: unknown;
 }
 
 export interface WebJavaScriptBuildResult {
@@ -111,10 +115,7 @@ function assertWebRuntimePurity(
         );
       }
     }
-    if (
-      outputPath !== "studio.js"
-      && /chrome-extension:\\?\/\\?\//u.test(source)
-    ) {
+    if (/chrome-extension:\\?\/\\?\//u.test(source)) {
       throw new Error(
         `localhost web JavaScript에 legacy origin URL이 남았습니다: ${outputPath}`
       );
@@ -125,13 +126,22 @@ function assertWebRuntimePurity(
 export async function buildWebJavaScript({
   rootDirectory,
   write = true,
-  logLevel = write ? "info" : "silent"
+  logLevel = write ? "info" : "silent",
+  engineRelease = null
 }: WebJavaScriptBuildOptions): Promise<WebJavaScriptBuildResult> {
   const webRoot = path.join(rootDirectory, "web");
   const subtitleSyncSkill = await readFile(
     path.join(rootDirectory, "skills/align-song-subtitles-60fps/SKILL.md"),
     "utf8"
   );
+  const verifiedEngineRelease = parseLocalMediaEngineReleaseChannel(
+    engineRelease
+  );
+  if (engineRelease !== null && !verifiedEngineRelease) {
+    throw new Error(
+      "웹 빌드에 전달된 local media engine release channel이 검증 형식과 다릅니다."
+    );
+  }
   const common = {
     absWorkingDir: rootDirectory,
     bundle: true,
@@ -146,7 +156,10 @@ export async function buildWebJavaScript({
     legalComments: "eof",
     banner: { js: GENERATED_JAVASCRIPT_BANNER },
     define: {
-      __KIRINUKI_SUBTITLE_SYNC_SKILL_MARKDOWN__: JSON.stringify(subtitleSyncSkill)
+      __KIRINUKI_SUBTITLE_SYNC_SKILL_MARKDOWN__: JSON.stringify(subtitleSyncSkill),
+      __KIRINUKI_LOCAL_MEDIA_ENGINE_RELEASE__: JSON.stringify(
+        verifiedEngineRelease
+      )
     },
     logLevel,
     metafile: true,

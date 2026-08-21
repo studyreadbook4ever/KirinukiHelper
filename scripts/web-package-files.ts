@@ -1,7 +1,9 @@
 import { WEB_JAVASCRIPT_PATHS } from "./web-javascript-build.js";
 
 export const WEB_PACKAGE_FILES = Object.freeze([
+  ".popovic-hosts",
   "THIRD_PARTY_NOTICES.md",
+  "_headers",
   "editor.html",
   "editor/editor.css",
   "editor/fonts/Paperlogy-8ExtraBold.woff2",
@@ -24,28 +26,8 @@ export interface PublicWebPackageFile {
 }
 
 export const PUBLIC_WEB_PACKAGE_FILES = Object.freeze([
-  {
-    sourcePath: "public-shell/index.html",
-    archivePath: "index.html"
-  },
-  {
-    sourcePath: "public-shell/public.css",
-    archivePath: "public.css"
-  },
-  {
-    sourcePath: "public-shell/THIRD_PARTY_NOTICES.md",
-    archivePath: "THIRD_PARTY_NOTICES.md"
-  },
-  {
-    sourcePath: "public-shell/licenses/UNLICENSE.txt",
-    archivePath: "licenses/UNLICENSE.txt"
-  },
-  {
-    sourcePath: "public-shell/.popovic-hosts",
-    archivePath: ".popovic-hosts"
-  },
-  {
-    sourcePath: "public-shell/_headers",
-    archivePath: "_headers"
-  }
+  ...WEB_PACKAGE_FILES.map((relativePath) => ({
+    sourcePath: `web/${relativePath}`,
+    archivePath: relativePath
+  }))
 ] satisfies readonly PublicWebPackageFile[]);

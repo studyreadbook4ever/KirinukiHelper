@@ -200,10 +200,14 @@ test("로컬 대용량 미디어는 Chromium stream reader를 피하고 제한�
   assert.equal(Object.isFrozen(LOCAL_MEDIA_BLOB_SOURCE_OPTIONS), true);
 });
 
-test("materialized companion 미디어는 loopback MP4 URL과 불변 파일 메타데이터만 허용한다", () => {
+test("materialized engine 미디어는 exact loopback capability URL과 불변 파일 메타데이터만 허용한다", () => {
+  const mediaUrl = (
+    "http://127.0.0.1:4319/v1/vod/media/job-0123456789abcdef"
+    + `?access=${"A".repeat(43)}`
+  );
   const materialized = normalizeMaterializedLoopbackMediaSource({
     kind: "local-url",
-    url: "http://127.0.0.1:4319/v1/chzzk-vod/media/job?access=ephemeral",
+    url: mediaUrl,
     name: "CHZZK-선택-구간.mp4",
     size: 1_024,
     type: "video/mp4",
@@ -211,7 +215,7 @@ test("materialized companion 미디어는 loopback MP4 URL과 불변 파일 메�
   });
   assert.deepEqual(materialized, {
     kind: "local-url",
-    url: "http://127.0.0.1:4319/v1/chzzk-vod/media/job?access=ephemeral",
+    url: mediaUrl,
     name: "CHZZK-선택-구간.mp4",
     size: 1_024,
     type: "video/mp4",
@@ -242,6 +246,22 @@ test("materialized companion 미디어는 loopback MP4 URL과 불변 파일 메�
     type: "video/mp4",
     lastModified: 1
   }), /보안 범위/);
+  for (const url of [
+    `http://localhost:4319/v1/vod/media/job-0123456789abcdef?access=${"A".repeat(43)}`,
+    `http://127.0.0.1:9999/v1/vod/media/job-0123456789abcdef?access=${"A".repeat(43)}`,
+    `http://127.0.0.1:4319/v1/chzzk-vod/media/job-0123456789abcdef?access=${"A".repeat(43)}`,
+    `http://127.0.0.1:4319/v1/vod/media/job-0123456789abcdef?access=${"A".repeat(42)}`,
+    `http://127.0.0.1:4319/v1/vod/media/job-0123456789abcdef?access=${"A".repeat(43)}&extra=1`
+  ]) {
+    assert.throws(() => normalizeMaterializedLoopbackMediaSource({
+      kind: "local-url",
+      url,
+      name: "wrong.mp4",
+      size: 1,
+      type: "video/mp4",
+      lastModified: 1
+    }), /보안 범위/);
+  }
   assert.throws(() => normalizeMaterializedLoopbackMediaSource({
     kind: "local-url",
     url: "http://127.0.0.1:4319/video.mp4",

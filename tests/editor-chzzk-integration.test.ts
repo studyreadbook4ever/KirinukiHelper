@@ -457,6 +457,11 @@ test("CHZZK VOD 자동 준비 UI는 긴 원본 부분 읽기 대신 compact 편�
     assert.match(button, /\bhidden\b/u);
   }
   assert.match(html, /id="pick-media-empty"[^>]*>내 파일 직접 연결<\/button>/u);
+  assert.match(
+    html,
+    /id="local-media-engine-cancel"[^>]*>내 파일 직접 연결 사용<\/button>/u
+  );
+  assert.match(html, /Apple Silicon macOS 15 이상/u);
 
   const headerStrings = new Set(
     descendants(namedFunction(sourceFile, "renderHeader"))
@@ -494,6 +499,17 @@ test("CHZZK VOD 자동 준비 UI는 긴 원본 부분 읽기 대신 compact 편�
       `${elementName}는 CHZZK VOD 준비 함수를 정확히 한 번 호출해야 합니다.`
     );
   }
+  const prepareBody = namedFunction(sourceFile, "prepareChzzkVodMedia")
+    .getText(sourceFile);
+  assert.match(
+    prepareBody,
+    /engineReady === "manual-file"[\s\S]*manualFileRequested = true/u
+  );
+  assert.match(
+    prepareBody,
+    /finally[\s\S]*unlockProjectMutations\(\)[\s\S]*manualFileRequested[\s\S]*chooseMediaFile\(\)/u,
+    "installer dialog의 수동 파일 선택은 mutation lock 해제 뒤 실제 picker로 이어져야 합니다."
+  );
 });
 
 test("CHZZK compact media는 수동 파일 핸들 부재로 안전 핫 리로드를 막지 않는다", async () => {
@@ -1456,11 +1472,11 @@ test("fresh editor-new만 지원 VOD 최초 ±10초 준비를 한 번 자동 시
   );
   assert.match(
     initialize,
-    /!resumeSavedSession[\s\S]*shouldAutoPrepareInitialVod\(project\)[\s\S]*project = applyMediaAlignmentOffset\(project, 0\)/u
+    /entry\.kind === "fresh-capture"[\s\S]*shouldAutoPrepareInitialVod\(project\)[\s\S]*project = applyMediaAlignmentOffset\(project, 0\)/u
   );
   assert.match(
     initialize,
-    /if \(storedProject\)[\s\S]*if \(resumeSavedSession\)[\s\S]*normalizeMaterializedProjectSourceClock\(storedProject\)[\s\S]*새 편집 ID가 이 기기의 저장 프로젝트와 충돌했습니다/u,
+    /resolveStudioEditorEntry\(\{[\s\S]*checkpointBaselineHasProject: checkpoint\.baseline\.project !== null[\s\S]*"new-project-collision":[\s\S]*새 편집 ID가 이 기기의 저장 프로젝트와 충돌했습니다/u,
     "editor-new ID 충돌은 기존 CURRENT와 병합하지 않고 거부해야 합니다."
   );
   assert.doesNotMatch(
@@ -1558,6 +1574,50 @@ test("fresh VOD 자동 준비는 실제 호출을 한 번만 하고 상세 실�
     prepareCalls,
     1,
     "저장본 resume와 수동 media project에는 최초 VOD 요청을 적용하면 안 됩니다."
+  );
+});
+
+test("저장된 VOD의 수동 재연결 가능한 복구 실패는 오류 toast를 중복 표시하지 않는다", async () => {
+  const sourceFile = await editorMainAstPromise;
+  const restoreSource = namedFunction(sourceFile, "restoreMedia")
+    .getText(sourceFile);
+  const prepareSource = namedFunction(sourceFile, "prepareChzzkVodMedia")
+    .getText(sourceFile);
+  assert.match(prepareSource, /if \(!restore\) \{[\s\S]*showToast\(/u);
+  assert.doesNotMatch(prepareSource, /!restore\s*\|\|\s*!cancelled/u);
+
+  const javascriptSource = ts.transpileModule(restoreSource, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.None
+    }
+  }).outputText;
+  const toasts: string[] = [];
+  const restoreCalls: unknown[] = [];
+  const dependencies: Record<string, unknown> = {
+    project: { id: "saved-vod", mediaAsset: { kind: "materialized" } },
+    projectUsesChzzkMaterializedMedia: () => true,
+    projectMaterialization: () => ({ schema: "materialization" }),
+    chzzkVodRightsConfirmation: () => ({ contentId: "vod" }),
+    prepareChzzkVodMedia: async (options: unknown) => {
+      restoreCalls.push(options);
+      return false;
+    },
+    showToast: (message: string) => toasts.push(message)
+  };
+  const factory = Function(
+    ...Object.keys(dependencies),
+    `${javascriptSource}\nreturn restoreMedia;`
+  ) as (...values: unknown[]) => () => Promise<void>;
+  const restoreMedia = factory(...Object.values(dependencies));
+
+  await restoreMedia();
+
+  assert.deepEqual(restoreCalls, [{ restore: true }]);
+  assert.deepEqual(
+    toasts,
+    [],
+    "백그라운드 복구 실패는 프로젝트 손상처럼 보이지 않고 명시적 재준비 버튼에 맡겨야 합니다."
   );
 });
 

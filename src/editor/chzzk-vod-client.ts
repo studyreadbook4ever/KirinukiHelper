@@ -1,4 +1,5 @@
 import {
+  localEngineDocumentClientNonce,
   normalizeCaptionAgentEndpoint
 } from "./caption-agent.js";
 import {
@@ -15,6 +16,9 @@ import {
 import type {
   SoopVodSourceClockIdentity
 } from "../lib/soop-vod-source-clock.js";
+import {
+  localMediaEngineTransportFetch
+} from "./local-media-engine-transport.js";
 
 export const CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA =
   "chzzk-kirinuki-vod-materialization-request/v3";
@@ -167,12 +171,16 @@ function normalizedRequestSourceClockIdentity(
     return undefined;
   }
   const identity = normalizeSoopVodSourceClockIdentity(value);
-  if (!identity || identity.contentId !== source.contentId) {
+  if (value !== undefined && value !== null && (
+    !identity || identity.contentId !== source.contentId
+  )) {
     throw new Error(
-      "SOOP 공식 VOD part 시계 증명이 없거나 현재 원본과 맞지 않습니다."
+      "SOOP 공식 VOD part 시계 증명이 현재 원본과 맞지 않습니다."
     );
   }
-  return identity;
+  // The installed engine derives the complete official part clock itself.
+  // A legacy player-derived identity is only an additional exact assertion.
+  return identity ?? undefined;
 }
 
 export interface WaitForChzzkVodMaterializationOptions
@@ -831,6 +839,7 @@ function requestHeaders(
   return {
     Authorization: `Bearer ${normalizeToken(token)}`,
     "Content-Type": "application/json",
+    "X-Kirinuki-Client-Nonce": localEngineDocumentClientNonce(),
     "X-Kirinuki-Protocol": protocol
   };
 }
@@ -871,7 +880,8 @@ export async function startChzzkVodMaterialization({
     editableRanges,
     normalizedClips
   );
-  const response = await fetchImpl(chzzkVodMaterializationEndpoint(endpoint), {
+  const response = await localMediaEngineTransportFetch(
+    chzzkVodMaterializationEndpoint(endpoint), {
     method: "POST",
     headers: requestHeaders(token),
     body: JSON.stringify({
@@ -897,7 +907,7 @@ export async function startChzzkVodMaterialization({
     cache: "no-store",
     credentials: "omit",
     redirect: "error"
-  });
+    }, fetchImpl);
   return parseStatusResponse(response, endpoint);
 }
 
@@ -910,14 +920,18 @@ export async function getChzzkVodMaterializationStatus({
 }: MaterializationConnectionOptions & {
   jobId: unknown;
 }): Promise<ChzzkVodMaterializationStatus> {
-  const response = await fetchImpl(chzzkVodJobEndpoint(endpoint, jobId), {
-    method: "GET",
+  const response = await localMediaEngineTransportFetch(
+    chzzkVodJobEndpoint(endpoint, jobId), {
+    // Encrypted loopback control requests carry an authenticated envelope in
+    // the request body. Browsers reject bodies on GET, so status polling uses
+    // POST just like the encrypted session-status route.
+    method: "POST",
     headers: requestHeaders(token),
     ...(signal === undefined ? {} : { signal }),
     cache: "no-store",
     credentials: "omit",
     redirect: "error"
-  });
+    }, fetchImpl);
   return parseStatusResponse(response, endpoint);
 }
 
@@ -930,14 +944,15 @@ export async function cancelChzzkVodMaterialization({
 }: MaterializationConnectionOptions & {
   jobId: unknown;
 }): Promise<ChzzkVodMaterializationStatus> {
-  const response = await fetchImpl(chzzkVodJobEndpoint(endpoint, jobId), {
+  const response = await localMediaEngineTransportFetch(
+    chzzkVodJobEndpoint(endpoint, jobId), {
     method: "DELETE",
     headers: requestHeaders(token),
     ...(signal === undefined ? {} : { signal }),
     cache: "no-store",
     credentials: "omit",
     redirect: "error"
-  });
+    }, fetchImpl);
   return parseStatusResponse(response, endpoint);
 }
 
@@ -959,7 +974,7 @@ export async function purgeChzzkVodMaterializedCache({
     mediaUrl,
     materialization
   );
-  const response = await fetchImpl(
+  const response = await localMediaEngineTransportFetch(
     chzzkVodCachePurgeEndpoint(endpoint, target.jobId),
     {
       method: "DELETE",
@@ -972,7 +987,8 @@ export async function purgeChzzkVodMaterializedCache({
       cache: "no-store",
       credentials: "omit",
       redirect: "error"
-    }
+    },
+    fetchImpl
   );
   const result = await parseCachePurgeResponse(response);
   if (result.jobId !== target.jobId) {
@@ -1017,7 +1033,7 @@ export async function purgeChzzkVodConsumerSessionCache({
     materialization,
     consumerId
   );
-  const response = await fetchImpl(
+  const response = await localMediaEngineTransportFetch(
     chzzkVodConsumerCachePurgeEndpoint(endpoint, target.jobId),
     {
       method: "DELETE",
@@ -1033,7 +1049,8 @@ export async function purgeChzzkVodConsumerSessionCache({
       cache: "no-store",
       credentials: "omit",
       redirect: "error"
-    }
+    },
+    fetchImpl
   );
   const result = await parseConsumerCachePurgeResponse(response);
   const requestMaterialization = target.body.materialization as Record<

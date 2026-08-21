@@ -37,7 +37,7 @@ test("편집기 HTML은 검증 중 경고를 숨기고 실제 작업공간도 �
   );
 });
 
-test("공개 origin의 편집기는 앱 설치 안내만 보이고 로컬 기능을 시작하지 않는다", async () => {
+test("고정된 공개 origin은 전체 웹 편집기를 열고 알 수 없는 origin만 차단한다", async () => {
   const [html, source] = await Promise.all([
     readFile(new URL("../web/editor.html", import.meta.url), "utf8"),
     readFile(new URL("../src/editor/main.ts", import.meta.url), "utf8")
@@ -50,19 +50,15 @@ test("공개 origin의 편집기는 앱 설치 안내만 보이고 로컬 기능
   );
 
   assert.match(appGateStart, /\bhidden\b/u);
-  assert.match(html, /Kirinuki 앱에서만 편집할 수 있습니다/u);
-  assert.match(html, /공개 페이지에서는 편집기와 VOD 처리 기능을 시작하지 않습니다/u);
+  assert.match(html, /이 주소에서는 편집기를 열 수 없습니다/u);
+  assert.match(html, /정식 Kirinuki 웹사이트에서 다시 시작해 주세요/u);
   assert.match(
     html,
-    /href="kirinuki:\/\/open"[^>]*>Kirinuki 앱에서 열기/u
-  );
-  assert.match(
-    html,
-    /href="https:\/\/github\.com\/studyreadbook4ever\/KirinukiHelper#설치"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/u
+    /href="https:\/\/kirinuki\.eff0rtchung\.kr\/"[^>]*>Kirinuki로 이동/u
   );
   assert.match(
     initialize,
-    /^async function initialize\(\) \{\s*if \(!isKirinukiLocalStudioOrigin\(location\.origin\)\) \{\s*showEditorAppGate\(\);\s*return;\s*\}/u
+    /^async function initialize\(\) \{\s*if \(!isKirinukiStudioOrigin\(location\.origin\)\) \{\s*showEditorAppGate\(\);\s*return;\s*\}/u
   );
   assert.ok(
     initialize.indexOf("showEditorAppGate()")
@@ -72,7 +68,9 @@ test("공개 origin의 편집기는 앱 설치 안내만 보이고 로컬 기능
   const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/u
     .exec(html)?.[1] ?? "";
   assert.ok(csp);
-  assert.doesNotMatch(csp, /127\.0\.0\.1|localhost|4319/u);
+  assert.match(csp, /connect-src 'self' http:\/\/127\.0\.0\.1:4319/u);
+  assert.match(csp, /media-src 'self' blob: http:\/\/127\.0\.0\.1:4319/u);
+  assert.doesNotMatch(csp, /localhost|127\.0\.0\.1:(?!4319\b)\d+/u);
 });
 
 test("편집기는 내장 미디어 엔진 주소를 사용자 설정으로 노출하지 않는다", async () => {
@@ -81,8 +79,13 @@ test("편집기는 내장 미디어 엔진 주소를 사용자 설정으로 노�
     readFile(new URL("../src/editor/main.ts", import.meta.url), "utf8")
   ]);
 
-  assert.doesNotMatch(html, /caption-agent-endpoint|PC 도우미|companion|gateway|localhost|127\.0\.0\.1|4319|caption-stack:setup|caption-stack:start/iu);
-  assert.match(html, /id="test-caption-agent"[\s\S]*내장 Whisper 다시 확인/u);
+  assert.doesNotMatch(
+    html,
+    /caption-agent-endpoint|PC 도우미|companion|gateway|caption-stack:setup|caption-stack:start/iu
+  );
+  assert.doesNotMatch(html, /<(?:input|select)[^>]+(?:localhost|127\.0\.0\.1|4319)/iu);
+  assert.match(html, /id="whisper-provider-tab"[^>]*aria-hidden="true"[^>]*hidden[^>]*disabled/u);
+  assert.match(html, /id="test-caption-agent"[^>]*disabled[^>]*>Whisper 미지원/u);
   assert.match(
     source,
     /function readCaptionAgentConfig\(\)[\s\S]*endpoint: DEFAULT_CAPTION_AGENT_SETTINGS\.endpoint/u
@@ -118,11 +121,27 @@ test("편집기 스크립트는 정책 검증 성공 전 프로젝트·미디어
     "async function restoreSelectedLocalDraft()",
     "function startLocalDraftAutosave()"
   );
-  assert.match(
-    initialize,
-    /const verifiedProjectId = await verifyEditorUsagePolicyGate\(\);[\s\S]*bindActions\(\);[\s\S]*await loadSeed\(\)/u
+  const verifyIndex = initialize.indexOf(
+    "await verifyEditorUsagePolicyGate()"
   );
-  assert.match(initialize, /projectId !== verifiedProjectId/u);
+  const writerIndex = initialize.indexOf(
+    "await acquireStudioProjectWriter(projectId)"
+  );
+  const checkpointIndex = initialize.indexOf(
+    "await beginEditingSessionCheckpoint("
+  );
+  const currentIndex = initialize.indexOf("loadProject(projectId)");
+  const seedIndex = initialize.indexOf("loadSeed()");
+  const resolutionIndex = initialize.indexOf("resolveStudioEditorEntry({");
+  const bindIndex = initialize.indexOf("bindActions()");
+  assert.ok(verifyIndex >= 0);
+  assert.ok(writerIndex > verifyIndex);
+  assert.ok(checkpointIndex > writerIndex);
+  assert.ok(currentIndex > checkpointIndex);
+  assert.ok(seedIndex > checkpointIndex);
+  assert.ok(resolutionIndex > currentIndex && resolutionIndex > seedIndex);
+  assert.ok(bindIndex > resolutionIndex);
+  assert.match(initialize, /loadedSeed\.projectId !== verifiedProjectId/u);
   assert.match(
     verify,
     /verifyStudioUsagePolicyGate\(\{[\s\S]*projectId,[\s\S]*gateToken/u
@@ -134,7 +153,7 @@ test("편집기 스크립트는 정책 검증 성공 전 프로젝트·미디어
   assert.doesNotMatch(studioRuntime, /chrome\.|KIRINUKI_VERIFY_USAGE_POLICY_GATE/u);
   assert.match(
     verify,
-    /!isRecord\(response\) \|\| response\.ok !== true[\s\S]*Kirinuki 앱[\s\S]*완전히 종료/u
+    /!isRecord\(response\) \|\| response\.ok !== true[\s\S]*이 탭에서 이번 사용 확인[\s\S]*시작 화면에서 편집기를 다시 열어/u
   );
   assert.doesNotMatch(verify, /chrome:\/\/extensions|새로고침/u);
   assert.match(verify, /normalizeActiveUsagePolicySession\(/u);
@@ -146,10 +165,29 @@ test("편집기 스크립트는 정책 검증 성공 전 프로젝트·미디어
   assert.match(restoreDraft, /requireRecoveryUsagePolicySession\(\)/u);
   assert.doesNotMatch(source, /function scheduleUsagePolicyExpiry/u);
   assert.doesNotMatch(source, /\.expiresAt|expiresAtMs/u);
-  assert.match(source, /event\.persisted[\s\S]*reverifyUsagePolicyLeaseAfterPageRestore/u);
   assert.match(
     source,
-    /usagePolicyRevalidationPending = true;[\s\S]*editor_shell\.inert = true;[\s\S]*reverifyUsagePolicyLeaseAfterPageRestore\(previousSession\)/u
+    /event\.persisted[\s\S]*refreshUsagePolicyLease\(expected\)[\s\S]*resumeEditorAfterPageShow\(\);[\s\S]*return;/u
+  );
+  assert.match(
+    source,
+    /class ReplacedUsagePolicyLeaseError[\s\S]*function handleUsagePolicyLeaseRefreshFailure[\s\S]*error instanceof ReplacedUsagePolicyLeaseError[\s\S]*leaveReplacedUsagePolicySession/u
+  );
+  assert.match(
+    source,
+    /function leaveReplacedUsagePolicySession[\s\S]*discardPendingProjectSave\(\)[\s\S]*advanceProjectSessionGeneration\(\)[\s\S]*location\.replace/u
+  );
+  assert.match(
+    source,
+    /function markEditorUrlReloadable\(\)[\s\S]*searchParams\.set\("session", RECOVERY_SESSION_MODE\)[\s\S]*history\.replaceState/u
+  );
+  assert.match(
+    initialize,
+    /await saveActiveWorkspaceImmediately\(\);[\s\S]*markEditorUrlReloadable\(\);/u
+  );
+  assert.doesNotMatch(
+    source,
+    /reverifyUsagePolicyLeaseAfterPageRestore|lockEditorForUsagePolicy|편집기를 잠갔습니다/u
   );
   assert.match(
     source,
@@ -213,7 +251,9 @@ test("웹 편집 종료는 진입 baseline을 먼저 잡고 명시적 저장·�
   const checkpointIndex = initialize.indexOf(
     "await beginEditingSessionCheckpoint("
   );
-  const firstLoadIndex = initialize.indexOf("await loadProject(projectId)");
+  const firstLoadIndex = initialize.indexOf("loadProject(projectId)");
+  const firstSeedIndex = initialize.indexOf("loadSeed()");
+  const resolutionIndex = initialize.indexOf("resolveStudioEditorEntry({");
 
   assert.match(
     html,
@@ -230,9 +270,11 @@ test("웹 편집 종료는 진입 baseline을 먼저 잡고 명시적 저장·�
     checkpointIndex > writerLockIndex,
     "편집 baseline은 writer lock을 얻은 뒤 시작해야 합니다."
   );
+  assert.ok(firstLoadIndex > checkpointIndex);
+  assert.ok(firstSeedIndex > checkpointIndex);
   assert.ok(
-    firstLoadIndex > checkpointIndex,
-    "CURRENT를 읽거나 쓰기 전에 편집 baseline을 먼저 저장해야 합니다."
+    resolutionIndex > firstLoadIndex && resolutionIndex > firstSeedIndex,
+    "CURRENT와 seed를 읽기 전에 편집 baseline을 먼저 저장하고 그 뒤 진입 모드를 판정해야 합니다."
   );
   assert.match(
     finish,

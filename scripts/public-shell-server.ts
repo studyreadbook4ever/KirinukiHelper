@@ -162,7 +162,7 @@ async function listen(
 
 export async function runPublicShellServer(
   options: PublicShellServerCliOptions,
-  publicShellRoot = path.join(packageRoot, "public-shell")
+  publicShellRoot = path.join(packageRoot, "web")
 ): Promise<void> {
   const server = await createPublicShellHttpServer({ publicShellRoot });
   await listen(server, options);

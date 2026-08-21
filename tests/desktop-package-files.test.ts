@@ -9,7 +9,6 @@ import { createPackage } from "@electron/asar";
 import {
   DESKTOP_ASAR_PACKAGE_FILES,
   DESKTOP_LEGAL_PACKAGE_FILES,
-  DESKTOP_STREAMING_COMPANION_FILES,
   assertExactRegularFileTree,
   assertExactRegularFileTreeSnapshot,
   copyExactRegularFileTree,
@@ -18,7 +17,6 @@ import {
   snapshotExactRegularFileTree,
   verifyDesktopAsar
 } from "../scripts/desktop-package-files.js";
-import { WEB_PACKAGE_FILES } from "../scripts/web-package-files.js";
 
 test("ASAR canonical 경로는 조회 시에만 대상 OS 구분자로 바뀐다", () => {
   assert.equal(
@@ -52,16 +50,14 @@ async function fixture(): Promise<Readonly<{
 }
 
 test("desktop package allowlists stay explicit and compose the ASAR set", () => {
-  assert.deepEqual(DESKTOP_STREAMING_COMPANION_FILES, [
-    "manifest.json",
-    "soop-streaming-companion.js",
-    "streaming-companion.js",
-    "studio-streaming-relay.js"
-  ]);
   assert.equal(DESKTOP_LEGAL_PACKAGE_FILES.length, 8);
   assert.deepEqual(
     DESKTOP_ASAR_PACKAGE_FILES.filter((entry) => entry.startsWith("web/")),
-    WEB_PACKAGE_FILES.map((entry) => `web/${entry}`).sort()
+    []
+  );
+  assert.equal(
+    DESKTOP_ASAR_PACKAGE_FILES.some((entry) => entry.includes("companion")),
+    false
   );
   assert.deepEqual(
     DESKTOP_ASAR_PACKAGE_FILES.filter((entry) => entry.startsWith("legal/")),

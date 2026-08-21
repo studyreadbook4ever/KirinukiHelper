@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 
-import { buildWebDistribution } from "./build-web.js";
 import {
   DESKTOP_ASAR_PACKAGE_FILES,
   DESKTOP_LEGAL_PACKAGE_FILES,
@@ -12,7 +11,7 @@ import {
   snapshotExactRegularFileTree
 } from "./desktop-package-files.js";
 import { readPackageSourceFile } from "./package-source-reader.js";
-import { WEB_PACKAGE_FILES } from "./web-package-files.js";
+import { normalizeDesktopBuildChannel } from "../src/desktop/build-channel.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 export const DESKTOP_STAGE_ROOT = path.join(
@@ -22,7 +21,9 @@ export const DESKTOP_STAGE_ROOT = path.join(
 );
 
 export async function buildDesktopApplication(): Promise<string> {
-  await buildWebDistribution();
+  const buildChannel = normalizeDesktopBuildChannel(
+    process.env.KIRINUKI_INSTALLER_CHANNEL
+  );
   await rm(DESKTOP_STAGE_ROOT, { recursive: true, force: true });
   await mkdir(DESKTOP_STAGE_ROOT, { recursive: true, mode: 0o700 });
   await build({
@@ -34,6 +35,9 @@ export async function buildDesktopApplication(): Promise<string> {
     format: "esm",
     target: "node24",
     external: ["electron"],
+    define: {
+      __KIRINUKI_DESKTOP_BUILD_CHANNEL__: JSON.stringify(buildChannel)
+    },
     sourcemap: false,
     minify: false,
     legalComments: "eof",
@@ -62,16 +66,6 @@ export async function buildDesktopApplication(): Promise<string> {
     repositoryPath: "UNLICENSE"
   });
   await Promise.all([
-    copyExactRegularFileTree({
-      sourceRoot: path.join(root, "web"),
-      destinationRoot: path.join(DESKTOP_STAGE_ROOT, "web"),
-      expectedFiles: WEB_PACKAGE_FILES,
-      label: "desktop web",
-      // Historical local runs can leave empty directories in web/. They carry
-      // no bytes and are never copied; every file and every symlink still fails
-      // closed against WEB_PACKAGE_FILES.
-      sourceOptions: { rejectUnexpectedDirectories: false }
-    }),
     copyExactRegularFileTree({
       sourceRoot: path.join(root, "legal"),
       destinationRoot: path.join(DESKTOP_STAGE_ROOT, "legal"),

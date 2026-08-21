@@ -1,0 +1,543 @@
+name: Signed desktop installer release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag, exactly v<package.json version>
+        required: true
+        type: string
+      confirmation:
+        description: Type PUBLISH_SIGNED_INSTALLERS
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    name: Authorize exact tagged source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      commit: ${{ steps.contract.outputs.commit }}
+      tag: ${{ steps.contract.outputs.tag }}
+      version: ${{ steps.contract.outputs.version }}
+    steps:
+      - name: Check out the complete tagged history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.17.0"
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Verify signed upstream downloader checksums
+        run: npm run verify:upstream-tool-provenance
+
+      - name: Fail closed unless dispatch ref, tag, version, and commit are exact
+        id: contract
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = "PUBLISH_SIGNED_INSTALLERS"
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF_NAME" = "$REQUESTED_TAG"
+          version="$(node -p "require('./package.json').version")"
+          test "$REQUESTED_TAG" = "v$version"
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "$REQUESTED_TAG")" = "$commit"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$commit" refs/remotes/origin/main
+          quality_json="$(gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/typescript-quality.yml/runs" \
+            -f branch=main \
+            -f event=push \
+            -f head_sha="$commit" \
+            -f per_page=100)"
+          quality_successes="$(jq --arg commit "$commit" --arg repository "$GITHUB_REPOSITORY" \
+            '[.workflow_runs[] | select(
+              .head_sha == $commit
+              and .head_branch == "main"
+              and .event == "push"
+              and .status == "completed"
+              and .conclusion == "success"
+              and .head_repository.full_name == $repository
+            )] | length' <<<"$quality_json")"
+          test "$quality_successes" -ge 1
+          printf 'commit=%s\ntag=%s\nversion=%s\n' "$commit" "$REQUESTED_TAG" "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Prove fresh CHZZK, YouTube, and SOOP public VOD partial acquisition
+        run: npm run test:liveness:live-vod
+
+  windows:
+    name: Signed Windows x64 installer
+    needs: authorize
+    runs-on: windows-2025
+    timeout-minutes: 60
+    environment: installer-release
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.17.0"
+          cache: npm
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Install matching Chrome and ChromeDriver for the signed installed-engine proof
+        id: setup-release-chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+
+      - name: Download, hash, and safely extract the reviewed provenance bundle
+        run: npm run prepare:desktop:release-provenance
+        env:
+          KIRINUKI_RELEASE_PROVENANCE_ARCHIVE_SHA256: ${{ secrets.KIRINUKI_RELEASE_PROVENANCE_ARCHIVE_SHA256 }}
+          KIRINUKI_RELEASE_PROVENANCE_URL: ${{ secrets.KIRINUKI_RELEASE_PROVENANCE_URL }}
+
+      - name: Import and read back the exact Authenticode certificate
+        shell: pwsh
+        env:
+          CERTIFICATE_SHA1: ${{ secrets.KIRINUKI_WINDOWS_CERTIFICATE_SHA1 }}
+          PFX_BASE64: ${{ secrets.KIRINUKI_WINDOWS_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.KIRINUKI_WINDOWS_PFX_PASSWORD }}
+          PUBLISHER_SUBJECT: ${{ secrets.KIRINUKI_WINDOWS_PUBLISHER_SUBJECT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @('CERTIFICATE_SHA1','PFX_BASE64','PFX_PASSWORD','PUBLISHER_SUBJECT')) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) { throw "missing $name" }
+          }
+          if ($env:CERTIFICATE_SHA1 -cnotmatch '^[0-9A-F]{40}$') { throw 'invalid certificate thumbprint' }
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'kirinuki-release.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:PFX_BASE64))
+          $securePassword = ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force
+          $imported = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword -Exportable:$false
+          if ($imported.Count -ne 1) { throw 'PFX must import exactly one certificate' }
+          $certificate = Get-Item -LiteralPath ("Cert:\CurrentUser\My\" + $env:CERTIFICATE_SHA1)
+          if (-not $certificate.HasPrivateKey) { throw 'certificate has no private key' }
+          if ($certificate.Thumbprint -cne $env:CERTIFICATE_SHA1) { throw 'certificate thumbprint mismatch' }
+          if ($certificate.Subject -cne $env:PUBLISHER_SUBJECT) { throw 'certificate subject mismatch' }
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $signTool = Get-ChildItem -LiteralPath $kits -Filter signtool.exe -File -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signTool) { throw 'x64 signtool.exe not found' }
+          "KIRINUKI_WINDOWS_SIGNTOOL=$($signTool.FullName)" >> $env:GITHUB_ENV
+          "WIN_CSC_LINK=$pfxPath" >> $env:GITHUB_ENV
+
+      - name: Typecheck and build the signed public-release installer
+        run: npm run typecheck && npm run desktop:icons:check && npm run package:desktop:installer
+        env:
+          KIRINUKI_INSTALLER_CHANNEL: public-release
+          KIRINUKI_RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          KIRINUKI_RELEASE_COMMIT: ${{ needs.authorize.outputs.commit }}
+          KIRINUKI_WINDOWS_CERTIFICATE_SHA1: ${{ secrets.KIRINUKI_WINDOWS_CERTIFICATE_SHA1 }}
+          KIRINUKI_WINDOWS_PUBLISHER_SUBJECT: ${{ secrets.KIRINUKI_WINDOWS_PUBLISHER_SUBJECT }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.KIRINUKI_WINDOWS_PFX_PASSWORD }}
+
+      - name: Prove signed Job Object launcher lifetime and descendant cleanup
+        run: npm run test:windows:job-launcher
+
+      - name: Silent-install, prove HKCU autostart, read back Start Menu, and uninstall
+        run: npm run test:package:desktop:installer
+        env:
+          CHROMIUM_BINARY: ${{ steps.setup-release-chrome.outputs.chrome-path }}
+          CHROMEDRIVER_BINARY: ${{ steps.setup-release-chrome.outputs.chromedriver-path }}
+          KIRINUKI_INSTALLER_CHANNEL: public-release
+          KIRINUKI_INSTALLED_BROWSER_SMOKE: "1"
+          KIRINUKI_INSTALLER_SYSTEM_SMOKE: "1"
+
+      - name: Upload only verified signed Windows release inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-release-win32-x64-${{ needs.authorize.outputs.commit }}
+          path: dist/installers/win32-x64/
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+
+      - name: Remove imported Windows signing material
+        if: always()
+        shell: pwsh
+        env:
+          CERTIFICATE_SHA1: ${{ secrets.KIRINUKI_WINDOWS_CERTIFICATE_SHA1 }}
+        run: |
+          if ($env:CERTIFICATE_SHA1 -cmatch '^[0-9A-F]{40}$') {
+            Remove-Item -LiteralPath ("Cert:\CurrentUser\My\" + $env:CERTIFICATE_SHA1) -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'kirinuki-release.pfx') -Force -ErrorAction SilentlyContinue
+
+  macos:
+    name: Signed and notarized macOS ARM64 installer
+    needs: authorize
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment: installer-release
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.17.0"
+          cache: npm
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Install matching Chrome and ChromeDriver for the signed installed-engine proof
+        id: setup-release-chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+
+      - name: Download, hash, and safely extract the reviewed provenance bundle
+        run: npm run prepare:desktop:release-provenance
+        env:
+          KIRINUKI_RELEASE_PROVENANCE_ARCHIVE_SHA256: ${{ secrets.KIRINUKI_RELEASE_PROVENANCE_ARCHIVE_SHA256 }}
+          KIRINUKI_RELEASE_PROVENANCE_URL: ${{ secrets.KIRINUKI_RELEASE_PROVENANCE_URL }}
+
+      - name: Import and read back Developer ID and notarization credentials
+        shell: bash
+        env:
+          API_ISSUER: ${{ secrets.KIRINUKI_APPLE_API_ISSUER }}
+          API_KEY_BASE64: ${{ secrets.KIRINUKI_APPLE_API_KEY_BASE64 }}
+          API_KEY_ID: ${{ secrets.KIRINUKI_APPLE_API_KEY_ID }}
+          P12_BASE64: ${{ secrets.KIRINUKI_MACOS_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.KIRINUKI_MACOS_P12_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.KIRINUKI_MACOS_SIGNING_IDENTITY }}
+          TEAM_ID: ${{ secrets.KIRINUKI_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          : "${API_ISSUER:?}" "${API_KEY_BASE64:?}" "${API_KEY_ID:?}" "${P12_BASE64:?}" "${P12_PASSWORD:?}" "${SIGNING_IDENTITY:?}" "${TEAM_ID:?}"
+          [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+          [[ "$API_KEY_ID" =~ ^[A-Z0-9]{10}$ ]]
+          [[ "$API_ISSUER" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+          test "$SIGNING_IDENTITY" != "${SIGNING_IDENTITY% ($TEAM_ID)}"
+          p12_path="$RUNNER_TEMP/kirinuki-release.p12"
+          api_key_path="$RUNNER_TEMP/AuthKey_${API_KEY_ID}.p8"
+          keychain_path="$RUNNER_TEMP/kirinuki-release.keychain-db"
+          keychain_password="$(uuidgen)$(uuidgen)"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$p12_path"
+          printf '%s' "$API_KEY_BASE64" | base64 --decode > "$api_key_path"
+          chmod 600 "$p12_path" "$api_key_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$p12_path" -k "$keychain_path" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security find-identity -v -p codesigning "$keychain_path" | grep -F -- "$SIGNING_IDENTITY"
+          printf 'CSC_LINK=%s\nCSC_KEYCHAIN=%s\nAPPLE_API_KEY=%s\n' "$p12_path" "$keychain_path" "$api_key_path" >> "$GITHUB_ENV"
+
+      - name: Typecheck and build the signed, notarized public-release DMG
+        run: npm run typecheck && npm run desktop:icons:check && npm run package:desktop:installer
+        env:
+          APPLE_API_ISSUER: ${{ secrets.KIRINUKI_APPLE_API_ISSUER }}
+          APPLE_API_KEY_ID: ${{ secrets.KIRINUKI_APPLE_API_KEY_ID }}
+          APPLE_TEAM_ID: ${{ secrets.KIRINUKI_APPLE_TEAM_ID }}
+          CSC_KEY_PASSWORD: ${{ secrets.KIRINUKI_MACOS_P12_PASSWORD }}
+          CSC_NAME: ${{ secrets.KIRINUKI_MACOS_SIGNING_IDENTITY }}
+          KIRINUKI_INSTALLER_CHANNEL: public-release
+          KIRINUKI_RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          KIRINUKI_RELEASE_COMMIT: ${{ needs.authorize.outputs.commit }}
+
+      - name: Mount the signed DMG read-only, run in place, and detach
+        run: npm run test:package:desktop:installer
+        env:
+          CHROMIUM_BINARY: ${{ steps.setup-release-chrome.outputs.chrome-path }}
+          CHROMEDRIVER_BINARY: ${{ steps.setup-release-chrome.outputs.chromedriver-path }}
+          KIRINUKI_INSTALLER_CHANNEL: public-release
+          KIRINUKI_INSTALLED_BROWSER_SMOKE: "1"
+          KIRINUKI_INSTALLER_SYSTEM_SMOKE: "1"
+
+      - name: Upload only verified signed macOS release inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-release-darwin-arm64-${{ needs.authorize.outputs.commit }}
+          path: dist/installers/darwin-arm64/
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+
+      - name: Remove imported Apple signing material
+        if: always()
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/kirinuki-release.keychain-db" 2>/dev/null || true
+          rm -f -- "$RUNNER_TEMP/kirinuki-release.p12" "$RUNNER_TEMP"/AuthKey_*.p8
+
+  linux:
+    name: Signed Linux x64 installer
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: installer-release
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.17.0"
+          cache: npm
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Install matching Chrome and ChromeDriver for the signed installed-engine proof
+        id: setup-release-chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+
+      - name: Download, hash, and safely extract the reviewed provenance bundle
+        run: npm run prepare:desktop:release-provenance
+        env:
+          KIRINUKI_RELEASE_PROVENANCE_ARCHIVE_SHA256: ${{ secrets.KIRINUKI_RELEASE_PROVENANCE_ARCHIVE_SHA256 }}
+          KIRINUKI_RELEASE_PROVENANCE_URL: ${{ secrets.KIRINUKI_RELEASE_PROVENANCE_URL }}
+
+      - name: Import and read back the exact Linux release key
+        shell: bash
+        env:
+          GPG_FINGERPRINT: ${{ secrets.KIRINUKI_LINUX_GPG_FINGERPRINT }}
+          GPG_PRIVATE_KEY_BASE64: ${{ secrets.KIRINUKI_LINUX_GPG_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          : "${GPG_FINGERPRINT:?}" "${GPG_PRIVATE_KEY_BASE64:?}"
+          [[ "$GPG_FINGERPRINT" =~ ^[0-9A-F]{40}$ ]]
+          gnupg_home="$RUNNER_TEMP/kirinuki-gnupg"
+          key_path="$RUNNER_TEMP/kirinuki-release-key.asc"
+          mkdir -m 700 -- "$gnupg_home"
+          printf '%s' "$GPG_PRIVATE_KEY_BASE64" | base64 --decode > "$key_path"
+          chmod 600 "$key_path"
+          printf 'GNUPGHOME=%s\n' "$gnupg_home" >> "$GITHUB_ENV"
+          GNUPGHOME="$gnupg_home" gpg --batch --import "$key_path"
+          GNUPGHOME="$gnupg_home" gpg --batch --with-colons --fingerprint --list-secret-keys "$GPG_FINGERPRINT" | grep -F -- "fpr:::::::::$GPG_FINGERPRINT:"
+          rm -f -- "$key_path"
+
+      - name: Typecheck and build the signed public-release Debian package
+        run: npm run typecheck && npm run desktop:icons:check && npm run package:desktop:installer
+        env:
+          KIRINUKI_INSTALLER_CHANNEL: public-release
+          KIRINUKI_LINUX_SIGNING_FINGERPRINT: ${{ secrets.KIRINUKI_LINUX_GPG_FINGERPRINT }}
+          KIRINUKI_LINUX_SIGNING_PASSPHRASE: ${{ secrets.KIRINUKI_LINUX_GPG_PASSPHRASE }}
+          KIRINUKI_RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          KIRINUKI_RELEASE_COMMIT: ${{ needs.authorize.outputs.commit }}
+
+      - name: Install the deb, prove XDG autostart, probe, purge, and check package-owned paths
+        run: xvfb-run -a npm run test:package:desktop:installer
+        env:
+          CHROMIUM_BINARY: ${{ steps.setup-release-chrome.outputs.chrome-path }}
+          CHROMEDRIVER_BINARY: ${{ steps.setup-release-chrome.outputs.chromedriver-path }}
+          KIRINUKI_INSTALLER_CHANNEL: public-release
+          KIRINUKI_INSTALLED_BROWSER_SMOKE: "1"
+          KIRINUKI_INSTALLER_SYSTEM_SMOKE: "1"
+
+      - name: Upload only verified signed Linux release inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-release-linux-x64-${{ needs.authorize.outputs.commit }}
+          path: dist/installers/linux-x64/
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+
+      - name: Remove imported Linux signing material
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/kirinuki-gnupg" "$RUNNER_TEMP/kirinuki-release-key.asc"
+
+  publish:
+    name: Exact release assembly, draft readback, and publication
+    needs:
+      - authorize
+      - windows
+      - macos
+      - linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: installer-release
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out exact tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.17.0"
+          cache: npm
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Download, hash, and safely extract the reviewed provenance bundle
+        run: npm run prepare:desktop:release-provenance
+        env:
+          KIRINUKI_RELEASE_PROVENANCE_ARCHIVE_SHA256: ${{ secrets.KIRINUKI_RELEASE_PROVENANCE_ARCHIVE_SHA256 }}
+          KIRINUKI_RELEASE_PROVENANCE_URL: ${{ secrets.KIRINUKI_RELEASE_PROVENANCE_URL }}
+
+      - name: Import the exact release-integrity key
+        shell: bash
+        env:
+          GPG_FINGERPRINT: ${{ secrets.KIRINUKI_LINUX_GPG_FINGERPRINT }}
+          GPG_PRIVATE_KEY_BASE64: ${{ secrets.KIRINUKI_LINUX_GPG_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          : "${GPG_FINGERPRINT:?}" "${GPG_PRIVATE_KEY_BASE64:?}"
+          [[ "$GPG_FINGERPRINT" =~ ^[0-9A-F]{40}$ ]]
+          gnupg_home="$RUNNER_TEMP/kirinuki-gnupg"
+          key_path="$RUNNER_TEMP/kirinuki-release-key.asc"
+          mkdir -m 700 -- "$gnupg_home"
+          printf '%s' "$GPG_PRIVATE_KEY_BASE64" | base64 --decode > "$key_path"
+          chmod 600 "$key_path"
+          printf 'GNUPGHOME=%s\n' "$gnupg_home" >> "$GITHUB_ENV"
+          GNUPGHOME="$gnupg_home" gpg --batch --import "$key_path"
+          GNUPGHOME="$gnupg_home" gpg --batch --with-colons --fingerprint --list-secret-keys "$GPG_FINGERPRINT" | grep -F -- "fpr:::::::::$GPG_FINGERPRINT:"
+          rm -f -- "$key_path"
+
+      - name: Download exact platform release inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: signed-release-*-${{ needs.authorize.outputs.commit }}
+          path: dist/release-inputs
+
+      - name: Normalize artifact directories to exact target names
+        shell: bash
+        run: |
+          set -euo pipefail
+          mv -- "dist/release-inputs/signed-release-win32-x64-${{ needs.authorize.outputs.commit }}" dist/release-inputs/win32-x64
+          mv -- "dist/release-inputs/signed-release-darwin-arm64-${{ needs.authorize.outputs.commit }}" dist/release-inputs/darwin-arm64
+          mv -- "dist/release-inputs/signed-release-linux-x64-${{ needs.authorize.outputs.commit }}" dist/release-inputs/linux-x64
+          test "$(find dist/release-inputs -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 3
+
+      - name: Assemble and verify the exact signed release asset set
+        run: npm run package:desktop:release-assets
+        env:
+          APPLE_TEAM_ID: ${{ secrets.KIRINUKI_APPLE_TEAM_ID }}
+          CSC_NAME: ${{ secrets.KIRINUKI_MACOS_SIGNING_IDENTITY }}
+          KIRINUKI_LINUX_SIGNING_FINGERPRINT: ${{ secrets.KIRINUKI_LINUX_GPG_FINGERPRINT }}
+          KIRINUKI_LINUX_SIGNING_PASSPHRASE: ${{ secrets.KIRINUKI_LINUX_GPG_PASSPHRASE }}
+          KIRINUKI_RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          KIRINUKI_RELEASE_COMMIT: ${{ needs.authorize.outputs.commit }}
+          KIRINUKI_WINDOWS_CERTIFICATE_SHA1: ${{ secrets.KIRINUKI_WINDOWS_CERTIFICATE_SHA1 }}
+
+      - name: Attest every release asset before GitHub Release mutation
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: dist/installer-release/*
+
+      - name: Create draft, verify remote bytes, publish, and verify latest URLs
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.KIRINUKI_APPLE_TEAM_ID }}
+          CSC_NAME: ${{ secrets.KIRINUKI_MACOS_SIGNING_IDENTITY }}
+          GH_TOKEN: ${{ github.token }}
+          KIRINUKI_LINUX_SIGNING_FINGERPRINT: ${{ secrets.KIRINUKI_LINUX_GPG_FINGERPRINT }}
+          KIRINUKI_RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          KIRINUKI_RELEASE_COMMIT: ${{ needs.authorize.outputs.commit }}
+          KIRINUKI_WINDOWS_CERTIFICATE_SHA1: ${{ secrets.KIRINUKI_WINDOWS_CERTIFICATE_SHA1 }}
+        run: |
+          set -euo pipefail
+          tag="$KIRINUKI_RELEASE_TAG"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release already exists: $tag" >&2
+            exit 1
+          fi
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "Kirinuki Engine $tag" \
+            --notes "Signed one-time local media engine installers for Windows x64, macOS ARM64, and Linux x64. See the signed SHA-256 manifest before installation."
+          draft_created=1
+          published=0
+          rollback() {
+            status=$?
+            if [ "$published" -eq 1 ]; then
+              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=true >/dev/null 2>&1 || true
+            elif [ "$draft_created" -eq 1 ]; then
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+            fi
+            exit "$status"
+          }
+          trap rollback ERR
+          gh release upload "$tag" dist/installer-release/* --repo "$GITHUB_REPOSITORY"
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")"
+          test "$(jq -r '.draft' <<<"$release_json")" = true
+          test "$(jq -r '.prerelease' <<<"$release_json")" = false
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$tag"
+          mapfile -t remote_assets < <(jq -r '.assets[].name' <<<"$release_json" | sort)
+          mapfile -t local_assets < <(find dist/installer-release -maxdepth 1 -type f -printf '%f\n' | sort)
+          test "${remote_assets[*]}" = "${local_assets[*]}"
+          rm -rf -- dist/installer-release-readback
+          mkdir -m 700 -- dist/installer-release-readback
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir dist/installer-release-readback
+          npm run test:package:desktop:release-readback
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          published=1
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")"
+          test "$(jq -r '.draft' <<<"$release_json")" = false
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')" = "$tag"
+          for asset in \
+            Kirinuki-Engine-windows-x64-setup.exe \
+            Kirinuki-Engine-macos-arm64.dmg \
+            Kirinuki-Engine-linux-x64.deb
+          do
+            curl --fail --silent --show-error --location --head --max-redirs 5 \
+              "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/$asset" >/dev/null
+          done
+          trap - ERR
+
+      - name: Remove imported release-integrity key
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/kirinuki-gnupg" "$RUNNER_TEMP/kirinuki-release-key.asc"

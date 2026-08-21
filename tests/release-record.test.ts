@@ -23,12 +23,6 @@ import {
   sha256Bytes,
   writeKirinukiReleaseRecord
 } from "../scripts/release-record.js";
-import {
-  createVerificationEnvironment,
-  decodeBufferedProcessOutput,
-  validateLinuxArchiveMemberPaths,
-  verifyLinuxAppPackage
-} from "../scripts/verify-linux-app-package.js";
 import { runReleaseCommand } from "../scripts/release-command-runner.js";
 
 const VERSION = "1.2.3";
@@ -136,15 +130,8 @@ test("release record 직렬화는 고정 순서와 LF로 결정적이다", () =>
     file: `kirinuki-web-v${VERSION}.zip`,
     sha256: "c".repeat(64)
   };
-  const linux = {
-    bytes: 20,
-    checksumFile: `kirinuki-linux-v${VERSION}.tar.gz.sha256`,
-    file: `kirinuki-linux-v${VERSION}.tar.gz`,
-    sha256: "d".repeat(64)
-  };
   const record = buildKirinukiReleaseRecord({
     identity: { name: "kirinuki-app", version: VERSION },
-    linux,
     packageLockSha256: "e".repeat(64),
     sourceRevision: SOURCE_REVISION,
     web
@@ -152,7 +139,6 @@ test("release record 직렬화는 고정 순서와 LF로 결정적이다", () =>
   const first = serializeKirinukiReleaseRecord(record);
   const second = serializeKirinukiReleaseRecord(buildKirinukiReleaseRecord({
     identity: { name: "kirinuki-app", version: VERSION },
-    linux,
     packageLockSha256: "e".repeat(64),
     sourceRevision: SOURCE_REVISION,
     web
@@ -164,7 +150,6 @@ test("release record 직렬화는 고정 순서와 LF로 결정적이다", () =>
   assert.throws(
     () => buildKirinukiReleaseRecord({
       identity: { name: "kirinuki-app", version: VERSION },
-      linux,
       packageLockSha256: "e".repeat(64),
       sourceRevision: "short",
       web
@@ -173,8 +158,7 @@ test("release record 직렬화는 고정 순서와 LF로 결정적이다", () =>
   );
 });
 
-// This integration asserts the Linux release's exact 0644 artifact modes;
-// platform-neutral manifest serialization stays enabled on Windows above.
+// This integration asserts the web release manifest's exact 0644 file modes.
 test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 readback한다", {
   skip: process.platform === "win32"
 }, async () => {
@@ -197,12 +181,9 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
     git(repositoryRoot, ["commit", "-q", "-m", "fixture"]);
     const sourceRevision = git(repositoryRoot, ["rev-parse", "HEAD"]);
     const webFilename = `kirinuki-web-v${VERSION}.zip`;
-    const linuxFilename = `kirinuki-linux-v${VERSION}.tar.gz`;
     const webDigest = await writeArtifact(distDirectory, webFilename, "web archive\n");
-    const linuxDigest = await writeArtifact(distDirectory, linuxFilename, "linux archive\n");
 
     const webArtifact = await inspectChecksummedArtifact(distDirectory, webFilename);
-    const linuxArtifact = await inspectChecksummedArtifact(distDirectory, linuxFilename);
     assert.deepEqual(webArtifact, {
       bytes: Buffer.byteLength("web archive\n"),
       checksumFile: `${webFilename}.sha256`,
@@ -212,7 +193,6 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
     const first = await writeKirinukiReleaseRecord({
       distDirectory,
       expectedArtifacts: {
-        linux: linuxArtifact,
         web: webArtifact
       },
       expectedPackageLockSha256: sha256Bytes(lockContent),
@@ -233,9 +213,7 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
     assert.equal(first.record.source.gitCommit, sourceRevision);
     assert.equal(first.record.source.packageLockSha256, sha256Bytes(lockContent));
     assert.equal(first.record.artifacts.web.sha256, webDigest);
-    assert.equal(first.record.artifacts.linux.sha256, linuxDigest);
     assert.equal(first.record.artifacts.web.bytes, Buffer.byteLength("web archive\n"));
-    assert.equal(first.record.artifacts.linux.bytes, Buffer.byteLength("linux archive\n"));
 
     const previousUmask = process.umask(0o077);
     let second;
@@ -243,7 +221,6 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
       second = await writeKirinukiReleaseRecord({
         distDirectory,
         expectedArtifacts: {
-          linux: linuxArtifact,
           web: webArtifact
         },
         expectedPackageLockSha256: sha256Bytes(lockContent),
@@ -266,7 +243,6 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
     const commitBound = await writeKirinukiReleaseRecord({
       distDirectory,
       expectedArtifacts: {
-        linux: linuxArtifact,
         web: webArtifact
       },
       expectedPackageLockSha256: sha256Bytes(lockContent),
@@ -278,7 +254,6 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
       writeKirinukiReleaseRecord({
         distDirectory,
         expectedArtifacts: {
-          linux: linuxArtifact,
           web: webArtifact
         },
         expectedPackageLockSha256: "0".repeat(64),
@@ -294,7 +269,6 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
       writeKirinukiReleaseRecord({
         distDirectory,
         expectedArtifacts: {
-          linux: linuxArtifact,
           web: webArtifact
         },
         expectedPackageLockSha256: sha256Bytes(lockContent),
@@ -309,11 +283,10 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
       writeKirinukiReleaseRecord({
         distDirectory,
         expectedArtifacts: {
-          linux: {
-            ...linuxArtifact,
-            sha256: webDigest
-          },
-          web: webArtifact
+          web: {
+            ...webArtifact,
+            sha256: "f".repeat(64)
+          }
         },
         expectedPackageLockSha256: sha256Bytes(lockContent),
         repositoryRoot,
@@ -323,14 +296,13 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
     );
 
     await writeFile(
-      path.join(distDirectory, `${linuxFilename}.sha256`),
-      `${webDigest}  ${linuxFilename}\n`
+      path.join(distDirectory, `${webFilename}.sha256`),
+      `${"f".repeat(64)}  ${webFilename}\n`
     );
     await assert.rejects(
       writeKirinukiReleaseRecord({
         distDirectory,
         expectedArtifacts: {
-          linux: linuxArtifact,
           web: webArtifact
         },
         expectedPackageLockSha256: sha256Bytes(lockContent),
@@ -342,82 +314,6 @@ test("실제 artifact와 sidecar를 읽어 결정적 release manifest를 쓰고 
   } finally {
     await rm(repositoryRoot, { recursive: true, force: true });
   }
-});
-
-test("Linux verifier는 packager SHA와 다른 archive를 tar 또는 npm 실행 전에 거절한다", async () => {
-  const root = await realpath(await mkdtemp(path.join(
-    os.tmpdir(),
-    "kirinuki-release-verify-test-"
-  )));
-  try {
-    const filename = `kirinuki-linux-v${VERSION}.tar.gz`;
-    const archivePath = path.join(root, filename);
-    const content = "not even a tar archive\n";
-    const actualDigest = sha256Bytes(content);
-    await writeFile(archivePath, content);
-    await writeFile(
-      `${archivePath}.sha256`,
-      `${actualDigest}  ${filename}\n`
-    );
-    await assert.rejects(
-      verifyLinuxAppPackage({
-        archivePath,
-        expectedArchiveBytes: Buffer.byteLength(content),
-        expectedArchiveSha256: "f".repeat(64),
-        expectedPackageLockSha256: "e".repeat(64),
-        expectedVersion: VERSION
-      }),
-      /packager가 보고한 bytes\/SHA-256/u
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("archive 검증 환경은 실행 주입 변수를 버리고 전용 HOME/npm config만 사용한다", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-release-env-test-"));
-  try {
-    const environment = await createVerificationEnvironment(root, {
-      PATH: "/usr/bin:/bin",
-      HTTPS_PROXY: "http://proxy.example.invalid:8080",
-      GIT_DIR: "/tmp/other.git",
-      KIRINUKI_LIVE_VOD_SMOKE: "1",
-      NODE_OPTIONS: "--import=/tmp/inject.mjs",
-      NODE_PATH: "/tmp/injected-modules",
-      npm_config_userconfig: "/tmp/host-npmrc",
-      TAR_OPTIONS: "--checkpoint-action=exec=sh payload"
-    });
-    assert.equal(environment.PATH, "/usr/bin:/bin");
-    assert.equal(environment.HTTPS_PROXY, "http://proxy.example.invalid:8080");
-    assert.equal(environment.HOME, path.join(root, "home"));
-    assert.equal(environment.NODE_OPTIONS, undefined);
-    assert.equal(environment.NODE_PATH, undefined);
-    assert.equal(environment.GIT_DIR, undefined);
-    assert.equal(environment.KIRINUKI_LIVE_VOD_SMOKE, undefined);
-    assert.equal(environment.TAR_OPTIONS, undefined);
-    assert.equal(environment.npm_config_userconfig, path.join(root, "config", "npm-user.conf"));
-    assert.equal(
-      await readFile(environment.npm_config_userconfig!, "utf8"),
-      "\n"
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("Linux verifier 출력은 잘린 UTF-8 chunk를 모두 모은 뒤 한 번만 decode한다", () => {
-  const expected = "준비 완료 😀 자막";
-  const encoded = Buffer.from(expected, "utf8");
-  const emojiStart = encoded.indexOf(Buffer.from("😀", "utf8"));
-  assert.notEqual(emojiStart, -1);
-  assert.equal(
-    decodeBufferedProcessOutput([
-      encoded.subarray(0, emojiStart + 1),
-      encoded.subarray(emojiStart + 1, emojiStart + 3),
-      encoded.subarray(emojiStart + 3)
-    ]),
-    expected
-  );
 });
 
 test("릴리스 명령은 signal 실패와 close 부재에도 최종 기한 안에 한 번만 거절한다", async () => {
@@ -471,24 +367,5 @@ test("릴리스 명령은 signal 실패와 close 부재에도 최종 기한 안�
         new Promise<void>((resolve) => setTimeout(resolve, 1_000))
       ]);
     }
-  }
-});
-
-test("Linux archive 사전검증은 단일 최상위 폴더와 유일한 안전 경로만 허용한다", () => {
-  assert.deepEqual(validateLinuxArchiveMemberPaths([
-    "KirinukiHelper/src/main.ts",
-    "KirinukiHelper/package.json"
-  ]), [
-    "KirinukiHelper/package.json",
-    "KirinukiHelper/src/main.ts"
-  ]);
-  for (const entries of [
-    ["package.json"],
-    ["KirinukiHelper/../outside"],
-    ["KirinukiHelper/src\\main.ts"],
-    ["/KirinukiHelper/package.json"],
-    ["KirinukiHelper/package.json", "KirinukiHelper/package.json"]
-  ]) {
-    assert.throws(() => validateLinuxArchiveMemberPaths(entries));
   }
 });

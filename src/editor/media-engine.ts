@@ -38,6 +38,13 @@ import type {
 } from "mediabunny";
 
 import {
+  localMediaEngineLoopbackRequestInit
+} from "../lib/local-media-engine-contract.js";
+import {
+  exactBase64UrlBytes
+} from "../lib/local-media-engine-auth.js";
+
+import {
   AdaptiveVideoScaler
 } from "./adaptive-video-scaler.js";
 import type {
@@ -515,13 +522,21 @@ export function normalizeMaterializedLoopbackMediaSource(
   const size = Math.round(Number(source.size));
   const lastModified = Math.round(Number(source.lastModified));
   const name = String(source.name || "").trim();
+  const mediaPath = /^\/v1\/vod\/media\/[A-Za-z0-9_-]{16,128}$/u.test(
+    url.pathname
+  );
+  const accessValues = url.searchParams.getAll("access");
   if (
     source.kind !== "local-url"
-    || url.protocol !== "http:"
-    || (url.hostname !== "127.0.0.1" && url.hostname !== "localhost")
+    || source.url !== url.toString()
+    || url.origin !== "http://127.0.0.1:4319"
+    || !mediaPath
     || url.username
     || url.password
     || url.hash
+    || [...url.searchParams.keys()].some((key) => key !== "access")
+    || accessValues.length !== 1
+    || !exactBase64UrlBytes(accessValues[0], 32)
     || !name
     || name.length > 240
     || /[\\/\u0000-\u001f\u007f]/u.test(name)
@@ -573,12 +588,12 @@ function createInput(source: EditorMediaSource): Input {
       source: new UrlSource(local.url, {
         maxCacheSize: 16 * 1024 * 1024,
         parallelism: 2,
-        requestInit: {
+        requestInit: localMediaEngineLoopbackRequestInit({
           cache: "no-store",
           credentials: "omit",
           mode: "cors",
           redirect: "error"
-        },
+        }),
         getRetryDelay: (previousAttempts) => (
           previousAttempts >= 3
             ? null

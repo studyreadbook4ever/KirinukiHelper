@@ -1,6 +1,7 @@
 import { lstatSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ENGINE_OWNED_UNINSTALL_ARGUMENT } from "./instance-lifecycle.js";
 
 export const DESKTOP_NATIVE_SMOKE_ARGUMENT =
   "--kirinuki-internal-native-smoke" as const;
@@ -8,12 +9,21 @@ export const DESKTOP_NATIVE_SMOKE_ROOT_ENV =
   "KIRINUKI_DESKTOP_SMOKE_ROOT" as const;
 export const DESKTOP_NATIVE_SMOKE_TOKEN_ENV =
   "KIRINUKI_DESKTOP_SMOKE_TOKEN" as const;
+export const DESKTOP_NATIVE_SMOKE_AUTOSTART_MODE_ENV =
+  "KIRINUKI_DESKTOP_SMOKE_AUTOSTART_MODE" as const;
 export const DESKTOP_NATIVE_SMOKE_ROOT_PREFIX =
   "kirinuki-desktop-native-smoke-" as const;
 export const DESKTOP_NATIVE_SMOKE_IPC_SCHEMA =
   "kirinuki-desktop-native-smoke/ipc-v1" as const;
 
+export const DESKTOP_NATIVE_SMOKE_USER_DATA_DIRECTORY =
+  "user data-사용자" as const;
+const NATIVE_SMOKE_CRASH_DUMPS_DIRECTORY = "crash dumps-사용자" as const;
+const NATIVE_SMOKE_LOGS_DIRECTORY = "logs-사용자" as const;
+const NATIVE_SMOKE_TEMP_DIRECTORY = "runtime temp-사용자" as const;
+
 export interface DesktopNativeSmokeContract {
+  readonly autostartMode: "isolated" | "production";
   readonly root: string;
   readonly userDataRoot: string;
   readonly crashDumpsRoot: string;
@@ -23,10 +33,23 @@ export interface DesktopNativeSmokeContract {
 }
 
 export interface DesktopNativeSmokeReadyMessage {
+  readonly autostart: {
+    readonly argument: "--engine-background";
+    readonly method: "electron-login-item" | "xdg-autostart" | "isolated-smoke";
+    readonly readBack: true;
+    readonly registered: true;
+    readonly schema: "kirinuki-engine-autostart/v1";
+  };
+  readonly gateway: {
+    readonly allowedOrigin: "https://kirinuki.eff0rtchung.kr";
+    readonly port: 4319;
+    readonly reusedExisting: false;
+  };
   readonly processCount: number;
   readonly schema: typeof DESKTOP_NATIVE_SMOKE_IPC_SCHEMA;
   readonly type: "ready";
   readonly token: string;
+  readonly windowCount: 0;
 }
 
 export interface DesktopNativeSmokeQuitMessage {
@@ -97,10 +120,15 @@ export function resolveDesktopNativeSmokeContract({
   const occurrences = argv.filter(
     (argument) => argument === DESKTOP_NATIVE_SMOKE_ARGUMENT
   ).length;
-  if (occurrences === 0) {
+  const inheritedOwnedUninstall = occurrences === 0
+    && argv.filter((argument) => argument === ENGINE_OWNED_UNINSTALL_ARGUMENT)
+      .length === 1
+    && env[DESKTOP_NATIVE_SMOKE_ROOT_ENV] !== undefined
+    && env[DESKTOP_NATIVE_SMOKE_TOKEN_ENV] !== undefined;
+  if (occurrences === 0 && !inheritedOwnedUninstall) {
     return null;
   }
-  if (occurrences !== 1) {
+  if (occurrences !== 1 && !inheritedOwnedUninstall) {
     throw new TypeError("데스크톱 native smoke 실행 플래그가 중복됐습니다.");
   }
   const root = exactDirectTemporaryChild(
@@ -112,28 +140,91 @@ export function resolveDesktopNativeSmokeContract({
       `${DESKTOP_NATIVE_SMOKE_TOKEN_ENV}은 32-byte base64url token이어야 합니다.`
     );
   }
+  const autostartModeValue = env[DESKTOP_NATIVE_SMOKE_AUTOSTART_MODE_ENV];
+  if (
+    autostartModeValue !== undefined
+    && autostartModeValue !== "isolated"
+    && autostartModeValue !== "production"
+  ) {
+    throw new TypeError(
+      `${DESKTOP_NATIVE_SMOKE_AUTOSTART_MODE_ENV} 값이 올바르지 않습니다.`
+    );
+  }
   return Object.freeze({
+    autostartMode: autostartModeValue ?? "isolated",
     root,
-    userDataRoot: path.join(root, "user-data"),
-    crashDumpsRoot: path.join(root, "crash-dumps"),
-    logsRoot: path.join(root, "logs"),
-    tempRoot: path.join(root, "runtime-temp"),
+    userDataRoot: path.join(root, DESKTOP_NATIVE_SMOKE_USER_DATA_DIRECTORY),
+    crashDumpsRoot: path.join(root, NATIVE_SMOKE_CRASH_DUMPS_DIRECTORY),
+    logsRoot: path.join(root, NATIVE_SMOKE_LOGS_DIRECTORY),
+    tempRoot: path.join(root, NATIVE_SMOKE_TEMP_DIRECTORY),
     token
   });
 }
 
 export function desktopNativeSmokeReadyMessage(
   contract: Readonly<DesktopNativeSmokeContract>,
-  processCount: number
+  evidence: {
+    readonly processCount: number;
+    readonly windowCount: number;
+    readonly gateway: {
+      readonly allowedOrigin: string;
+      readonly port: number;
+      readonly reusedExisting: boolean;
+    };
+    readonly autostart: {
+      readonly schema: string;
+      readonly method: string;
+      readonly registered: boolean;
+      readonly readBack: boolean;
+      readonly arguments: readonly string[];
+    };
+  }
 ): Readonly<DesktopNativeSmokeReadyMessage> {
-  if (!Number.isSafeInteger(processCount) || processCount < 2 || processCount > 64) {
+  if (
+    !Number.isSafeInteger(evidence.processCount)
+    || evidence.processCount < 1
+    || evidence.processCount > 64
+  ) {
     throw new TypeError("데스크톱 native smoke process 수가 올바르지 않습니다.");
   }
+  if (
+    evidence.windowCount !== 0
+    || evidence.gateway.allowedOrigin !== "https://kirinuki.eff0rtchung.kr"
+    || evidence.gateway.port !== 4319
+    || evidence.gateway.reusedExisting !== false
+    || evidence.autostart.schema !== "kirinuki-engine-autostart/v1"
+    || (
+      contract.autostartMode === "isolated"
+        ? evidence.autostart.method !== "isolated-smoke"
+        : evidence.autostart.method !== (
+          process.platform === "linux" ? "xdg-autostart" : "electron-login-item"
+        )
+    )
+    || evidence.autostart.registered !== true
+    || evidence.autostart.readBack !== true
+    || JSON.stringify(evidence.autostart.arguments)
+      !== JSON.stringify(["--engine-background"])
+  ) {
+    throw new TypeError("데스크톱 native smoke headless evidence가 올바르지 않습니다.");
+  }
   return Object.freeze({
-    processCount,
+    autostart: Object.freeze({
+      argument: "--engine-background",
+      method: evidence.autostart.method as DesktopNativeSmokeReadyMessage["autostart"]["method"],
+      readBack: true,
+      registered: true,
+      schema: "kirinuki-engine-autostart/v1"
+    }),
+    gateway: Object.freeze({
+      allowedOrigin: "https://kirinuki.eff0rtchung.kr",
+      port: 4319,
+      reusedExisting: false
+    }),
+    processCount: evidence.processCount,
     schema: DESKTOP_NATIVE_SMOKE_IPC_SCHEMA,
     type: "ready",
-    token: contract.token
+    token: contract.token,
+    windowCount: 0
   });
 }
 

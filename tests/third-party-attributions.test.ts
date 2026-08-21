@@ -111,12 +111,12 @@ test("boundary pseudo-license IDs stay in non-product attribution kinds", () => 
     if (
       entry.kind === "development-only"
       || entry.kind === "ci-only"
-      || entry.kind === "desktop-preview-bundle"
+      || entry.kind === "desktop-local-engine-bundle"
     ) {
       assert.equal(entry.license, "mixed-see-packages");
       assert.equal(
         entry.redistributed,
-        entry.kind === "desktop-preview-bundle"
+        entry.kind === "desktop-local-engine-bundle"
       );
       continue;
     }
@@ -214,14 +214,14 @@ test("system tools and external service names cannot look bundled", () => {
   }
 });
 
-test("local companion runtime is distinct from build-only tooling", () => {
-  const companion = thirdPartyAttributionById("tsx-runtime");
-  assert.equal(companion?.kind, "local-companion-runtime");
-  if (companion?.kind === "local-companion-runtime") {
-    assert.equal(companion.redistributed, false);
-    assert.equal(companion.executionScope, "repository-local-node-modules");
+test("repository-local engine runtime is distinct from build-only tooling", () => {
+  const engineRuntime = thirdPartyAttributionById("tsx-runtime");
+  assert.equal(engineRuntime?.kind, "local-engine-repository-runtime");
+  if (engineRuntime?.kind === "local-engine-repository-runtime") {
+    assert.equal(engineRuntime.redistributed, false);
+    assert.equal(engineRuntime.executionScope, "repository-local-node-modules");
     assert.deepEqual(
-      companion.packages,
+      engineRuntime.packages,
       [
         "tsx@4.23.1 (MIT)",
         "esbuild@0.28.1 and platform packages (MIT)",
@@ -238,6 +238,22 @@ test("local companion runtime is distinct from build-only tooling", () => {
       !entry.startsWith("tsx@") && !entry.startsWith("esbuild@")
     )));
   }
+});
+
+test("desktop attribution describes the windowless installer and stays release-blocked", () => {
+  const engine = thirdPartyAttributionById("desktop-local-engine-runtime");
+  assert.equal(engine?.kind, "desktop-local-engine-bundle");
+  if (engine?.kind !== "desktop-local-engine-bundle") {
+    return;
+  }
+  assert.equal(engine.redistributed, true);
+  assert.equal(engine.publicReleaseBlocked, true);
+  assert.equal(engine.releaseGate, "legal/DESKTOP_BINARY_RELEASE_GATE.md");
+  assert.match(engine.name, /background local media engine installer/u);
+  assert.doesNotMatch(`${engine.name} ${engine.purpose}`, /preview|editor window/iu);
+  assert.ok(engine.packages.some((entry) => (
+    entry.includes("electron-builder@26.15.3")
+  )));
 });
 
 test("CI actions are non-distributed and pinned by full commit SHA", () => {

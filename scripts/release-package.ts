@@ -245,8 +245,6 @@ async function assertNoStaleReleaseOutputs(version: string): Promise<void> {
   const allowedFiles = new Set([
     `kirinuki-web-v${version}.zip`,
     `kirinuki-web-v${version}.zip.sha256`,
-    `kirinuki-linux-v${version}.tar.gz`,
-    `kirinuki-linux-v${version}.tar.gz.sha256`,
     `kirinuki-release-v${version}.json`,
     `kirinuki-release-v${version}.json.sha256`
   ]);
@@ -316,7 +314,6 @@ async function main() {
   await assertRepositoryClean(sourceRevision);
 
   const webFilename = `kirinuki-web-v${identity.version}.zip`;
-  const linuxFilename = `kirinuki-linux-v${identity.version}.tar.gz`;
   const webPackageEnvironment: NodeJS.ProcessEnv = {
     ...childEnvironment,
     KIRINUKI_RELEASE_SOURCE_REVISION: sourceRevision
@@ -348,37 +345,9 @@ async function main() {
   await assertReportedArtifactMatchesDisk(webArtifact, "공개 web browser smoke 이후");
   await assertRepositoryClean(sourceRevision);
 
-  const linuxReport = await run(process.execPath, typescriptCommandArgs(
-    path.join(root, "scripts", "package-linux-app.ts")
-  ), { capture: true, timeoutMs: 5 * 60_000 });
-  const linuxArtifact = parsePackagerArtifactReport(linuxReport, {
-    expectedFilename: linuxFilename,
-    expectedSourceRevision: sourceRevision,
-    label: "Linux"
-  });
-  await assertReportedArtifactMatchesDisk(linuxArtifact, "Linux");
-  await assertRepositoryClean(sourceRevision);
-
-  const linuxArchivePath = path.join(
-    root,
-    "dist",
-    linuxFilename
-  );
-  await run(process.execPath, typescriptCommandArgs(
-    path.join(root, "scripts", "verify-linux-app-package.ts"),
-    linuxArchivePath,
-    identity.version,
-    packageLockSha256,
-    linuxArtifact.sha256,
-    String(linuxArtifact.bytes),
-    sourceRevision
-  ), { timeoutMs: 30 * 60_000 });
-  await assertRepositoryClean(sourceRevision);
-
   const releaseRecord = await writeKirinukiReleaseRecord({
     distDirectory: path.join(root, "dist"),
     expectedArtifacts: {
-      linux: linuxArtifact,
       web: webArtifact
     },
     expectedPackageLockSha256: packageLockSha256,

@@ -282,7 +282,7 @@ test("편집 세션은 진입 baseline 뒤 작업 사본을 저장하고 명시�
   assert.match(html, /탭을 그냥 닫으면 이번 변경은 저장되지 않습니다/u);
   assert.match(
     source,
-    /feature === "Whisper"[\s\S]*현재 작업을 ‘지금 저장’한 뒤 설치 안내의 ‘Whisper로 설치’를 완료하고 Kirinuki를 다시 열어 같은 버튼을 눌러 주세요\.[\s\S]*현재 작업을 저장한 뒤 Kirinuki 앱을 완전히 종료하고 다시 열어 같은 버튼을 눌러 주세요\./u
+    /feature === "Whisper"[\s\S]*현재 공개 설치판은 Whisper를 제공하지 않습니다\.[\s\S]*설치 안내가 보이면 이 PC용 영상 준비 도구를 한 번 설치한 뒤 같은 버튼을 다시 눌러 주세요\./u
   );
   assert.match(
     source,

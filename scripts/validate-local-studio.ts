@@ -5,13 +5,6 @@ import { fileURLToPath } from "node:url";
 import {
   WEB_JAVASCRIPT_PATHS
 } from "./web-javascript-build.js";
-import {
-  SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
-  STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH,
-  STREAMING_COMPANION_JAVASCRIPT_PATH,
-  STREAMING_COMPANION_MANIFEST_PATH,
-  buildStreamingCompanion
-} from "./build-streaming-companion.js";
 import { WEB_PACKAGE_FILES } from "./web-package-files.js";
 import {
   DEFAULT_STUDIO_PORT,
@@ -20,11 +13,6 @@ import {
   studioSecurityHeaders
 } from "./local-studio-server-core.js";
 import { KIRINUKI_LOCAL_STUDIO_ORIGIN } from "../src/lib/local-runtime-origin.js";
-import { STREAMING_BRIDGE_PROTOCOL } from "../src/web/streaming-bridge-protocol.js";
-import {
-  STREAMING_COMPANION_PROTOCOL_OPTION,
-  browserLaunchArgs
-} from "./linux-helper.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -43,8 +31,8 @@ const [
   editorHtml,
   studioCss,
   packageManifest,
-  agentsDocument,
-  buildWebSource
+  buildWebSource,
+  browserSmokeSource
 ] = await Promise.all([
   read("web/index.html"),
   read("web/editor.html"),
@@ -54,150 +42,9 @@ const [
     readonly version?: string;
     readonly scripts?: Readonly<Record<string, string>>;
   }),
-  read("AGENTS.md"),
-  read("scripts/build-web.ts")
+  read("scripts/build-web.ts"),
+  read("scripts/local-studio-browser-smoke.ts")
 ]);
-
-const companionBuild = await buildStreamingCompanion({
-  rootDirectory: root,
-  write: false,
-  logLevel: "silent"
-});
-for (const relativePath of [
-  STREAMING_COMPANION_JAVASCRIPT_PATH,
-  SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH,
-  STREAMING_COMPANION_MANIFEST_PATH
-]) {
-  const expected = companionBuild.outputs.get(relativePath);
-  const actual = await readFile(
-    path.join(root, "streaming-companion", relativePath)
-  );
-  assert(
-    expected && Buffer.compare(actual, Buffer.from(expected)) === 0,
-    `최소 스트리밍 companion 생성물이 현재 build-time 설정과 다릅니다: ${relativePath}`
-  );
-}
-const companionManifest = JSON.parse(await read(
-  `streaming-companion/${STREAMING_COMPANION_MANIFEST_PATH}`
-)) as {
-  readonly manifest_version?: number;
-  readonly version?: string;
-  readonly background?: unknown;
-  readonly action?: unknown;
-  readonly side_panel?: unknown;
-  readonly permissions?: readonly string[];
-  readonly host_permissions?: readonly string[];
-  readonly content_scripts?: ReadonlyArray<{
-    readonly matches?: readonly string[];
-    readonly include_globs?: readonly string[];
-    readonly js?: readonly string[];
-    readonly all_frames?: boolean;
-    readonly run_at?: string;
-    readonly world?: string;
-  }>;
-};
-const [studioRelayContentScript, companionContentScript, soopCompanionContentScript] =
-  companionManifest.content_scripts || [];
-assert(
-  companionManifest.manifest_version === 3
-    && companionManifest.version === packageManifest.version
-    && companionManifest.background === undefined
-    && companionManifest.action === undefined
-    && companionManifest.side_panel === undefined
-    && JSON.stringify(companionManifest.permissions) === JSON.stringify(["storage"])
-    && companionManifest.host_permissions === undefined
-    && companionManifest.content_scripts?.length === 3
-    && studioRelayContentScript?.all_frames === false
-    && studioRelayContentScript.run_at === "document_start"
-    && studioRelayContentScript.world === undefined
-    && JSON.stringify(studioRelayContentScript.js)
-      === JSON.stringify([STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH])
-    && JSON.stringify(studioRelayContentScript.matches) === JSON.stringify([
-      "http://127.0.0.1/*"
-    ])
-    && JSON.stringify(studioRelayContentScript.include_globs) === JSON.stringify([
-      "http://127.0.0.1:4320/*"
-    ])
-    && companionContentScript?.all_frames === true
-    && companionContentScript.run_at === "document_start"
-    && JSON.stringify(companionContentScript.js)
-      === JSON.stringify([STREAMING_COMPANION_JAVASCRIPT_PATH])
-    && JSON.stringify(companionContentScript.matches) === JSON.stringify([
-      "https://chzzk.naver.com/*",
-      "https://www.youtube-nocookie.com/*"
-    ])
-    && companionContentScript.world === undefined
-    && soopCompanionContentScript?.all_frames === true
-    && soopCompanionContentScript.run_at === "document_start"
-    && soopCompanionContentScript.world === "MAIN"
-    && JSON.stringify(soopCompanionContentScript.js)
-      === JSON.stringify([SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH])
-    && JSON.stringify(soopCompanionContentScript.matches) === JSON.stringify([
-      "https://vod.sooplive.com/*"
-    ]),
-  "최소 스트리밍 companion manifest가 storage 전용 권한, exact top-frame Studio relay, SOOP MAIN-world 브리지와 두 generic frame origin만 허용해야 합니다."
-);
-const studioRelayJavaScript = await read(
-  `streaming-companion/${STUDIO_STREAMING_RELAY_JAVASCRIPT_PATH}`
-);
-const companionJavaScript = await read(
-  `streaming-companion/${STREAMING_COMPANION_JAVASCRIPT_PATH}`
-);
-const soopCompanionJavaScript = await read(
-  `streaming-companion/${SOOP_STREAMING_COMPANION_JAVASCRIPT_PATH}`
-);
-assert(
-  studioRelayJavaScript.includes(KIRINUKI_LOCAL_STUDIO_ORIGIN)
-    && studioRelayJavaScript.includes("KIRINUKI_STREAMING_BRIDGE_STUDIO_DELIVERY"),
-  "top-frame Studio relay 생성물이 exact 앱 Origin과 인증 전달 프로토콜을 포함해야 합니다."
-);
-
-const companionRoot = path.join(root, "streaming-companion");
-const launchArgs = browserLaunchArgs({
-  profileRoot: path.join(root, ".validator-browser-profile"),
-  streamingCompanionRoot: companionRoot
-});
-assert(
-  launchArgs.includes(`--disable-extensions-except=${companionRoot}`)
-    && launchArgs.includes(`--load-extension=${companionRoot}`)
-    && launchArgs.includes(
-      `${STREAMING_COMPANION_PROTOCOL_OPTION}=${STREAMING_BRIDGE_PROTOCOL}`
-    )
-    && launchArgs.filter((argument) => (
-      argument.startsWith("--disable-extensions-except=")
-      || argument.startsWith("--load-extension=")
-    )).length === 2
-    && !launchArgs.some((argument) => (
-      argument.includes(`${path.sep}extension`)
-      && !argument.includes(`${path.sep}streaming-companion`)
-    )),
-  "전용 Chromium은 exact 최소 companion 두 argv만 사용해야 합니다."
-);
-assert(
-  agentsDocument.includes("streaming-companion/")
-    && agentsDocument.includes("--load-extension")
-    && agentsDocument.includes("--disable-extensions-except"),
-  "운영 문서가 최소 companion의 exact load 경계를 설명하지 않습니다."
-);
-for (const javascript of [companionJavaScript, soopCompanionJavaScript]) {
-  assert(
-    javascript.startsWith(
-      "// Generated from TypeScript sources. Do not edit directly."
-    )
-      && companionBuild.allowedStudioOrigins.every((origin) => (
-        javascript.includes(origin)
-      ))
-      && javascript.includes(STREAMING_BRIDGE_PROTOCOL)
-      && !javascript.includes("chrome.runtime")
-      && !javascript.includes("sidePanel")
-      && !javascript.includes("service-worker"),
-    "최소 스트리밍 companion 번들이 exact Studio origin과 DOM-only 경계를 지키지 않습니다."
-  );
-}
-assert(
-  soopCompanionJavaScript.includes("vodCore"),
-  "SOOP MAIN-world companion이 공식 vodCore 전역 시계를 검증하지 않습니다."
-);
 
 assert(
   packageManifest.name === "kirinuki-app",
@@ -209,14 +56,18 @@ assert(
     && packageScripts.validate === "node --import tsx scripts/validate-local-studio.ts"
     && packageScripts.package === "node --import tsx scripts/release-package.ts"
     && packageScripts["dev:editor"] === "node --import tsx scripts/dev-web.ts"
-    && packageScripts["streaming:companion:build"]
-      === "node --import tsx scripts/build-streaming-companion.ts"
-    && buildWebSource.includes("buildStreamingCompanion({ rootDirectory: root })"),
+    && packageScripts["streaming:companion:build"] === undefined
+    && !buildWebSource.includes("buildStreamingCompanion")
+    && !buildWebSource.includes("build-streaming-companion")
+    && !browserSmokeSource.includes("`--load-extension=")
+    && !browserSmokeSource.includes("`--disable-extensions-except=")
+    && !browserSmokeSource.includes("buildStreamingCompanion"),
   "기본 build/validate/package 명령이 localhost web 경로로 고정되지 않았습니다."
 );
 for (const [name, command] of Object.entries(packageScripts)) {
   assert(
     !name.startsWith("legacy:extension:")
+      && !/streaming[-:]companion/iu.test(`${name} ${command}`)
       && !/scripts\/(?:browser-smoke|dev-extension|build-extension-legacy|validate-extension|package-extension)\.ts|sidepanel/iu.test(command),
     `삭제된 전체 Extension 명령이 package scripts에 남았습니다: ${name}`
   );
@@ -259,14 +110,15 @@ assert(
   "localhost 시작 화면에 source·구간·per-use 정책·최근 편집 흐름이 없습니다."
 );
 assert(
-  indexHtml.includes(
-    "이 화면에서는 영상을 내려받지 않습니다. 선택한 구간은 편집기를 열 때 이 PC에 준비합니다."
-  )
+  indexHtml.includes("편집기를 열 때 선택한 구간만 이 PC에 준비합니다.")
     && indexHtml.includes("확인했습니다")
     && indexHtml.includes("100%")
     && indexHtml.includes('id="import-session-archive"')
     && indexHtml.includes('id="session-archive-input"')
-    && indexHtml.includes('id="stream-cut-console"')
+    && indexHtml.includes("원본을 보며 가져올 시작과 끝 시각을 직접 입력하세요.")
+    && !indexHtml.includes('id="stream-cut-console"')
+    && !indexHtml.includes('id="capture-start"')
+    && !indexHtml.includes('id="capture-end"')
     && !indexHtml.includes('id="local-preview-video"')
     && !indexHtml.includes('id="prepare-local-preview"'),
   "localhost 시작 화면의 streaming-only 컷 경계 또는 사용자 책임 고지가 없습니다."
@@ -342,21 +194,11 @@ for (const relativePath of WEB_JAVASCRIPT_PATHS) {
     !/\bchrome\s*\./u.test(contents),
     `localhost web 번들에 Extension API/origin이 섞였습니다: web/${relativePath}`
   );
-  if (relativePath !== "studio.js") {
-    assert(
-      !contents.includes("chrome-extension://")
-        && !contents.includes("chrome-extension:\\/\\/"),
-      `localhost runtime 번들에 legacy Extension origin이 섞였습니다: web/${relativePath}`
-    );
-  } else {
-    const legacyOriginMarkers = contents.match(/chrome-extension:(?:\/\/|\\\/\\\/)/gu) || [];
-    assert(
-      legacyOriginMarkers.length === 1
-        && contents.includes("origin-storage-migration")
-        && contents.includes("ORIGIN_STORAGE_MIGRATION_SCHEMA"),
-      "studio.js의 legacy Extension origin은 one-shot storage migration 경계 하나에만 있어야 합니다."
-    );
-  }
+  assert(
+    !contents.includes("chrome-extension://")
+      && !contents.includes("chrome-extension:\\/\\/"),
+    `localhost runtime 번들에 legacy Extension origin이 섞였습니다: web/${relativePath}`
+  );
 }
 
 const webEditorBundle = await read("web/editor/editor.js");

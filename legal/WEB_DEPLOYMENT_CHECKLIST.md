@@ -1,297 +1,229 @@
-# Kirinuki 공개 웹·데스크톱 앱 출시 체크리스트
+# Kirinuki 웹·로컬 엔진 출시 체크리스트
 
-이 문서는 `kirinuki.eff0rtchung.kr`의 공개 시작 페이지, 사용자 지원 Linux 소스
-설치판과 Linux·Windows·macOS Electron 앱을 서로 다른 보안·배포 산출물로
-검증하기 위한 release gate입니다. 공개 사이트는 소개·설치·엄격한 앱 링크만
-제공하고, 실제 편집은 설치된 앱이 소유한 창에서만 실행합니다.
+이 문서는 `https://kirinuki.eff0rtchung.kr`의 **전체 웹 편집기**와 사용자가 한 번
+설치하는 **화면 없는 로컬 미디어 엔진**을 함께 출시하는 hard gate입니다.
+브라우저 확장, Electron 편집기 창, 서버 VOD proxy는 제품 구조가 아닙니다.
 
-법률 자문이나 무위험 보증이 아닙니다. 출시 지역, 수익 모델, 플랫폼 약관과
-콘텐츠 권리는 실제 산출물을 기준으로 별도 검토해야 합니다.
+법률 자문이나 무위험 보증이 아닙니다. 체크 표시는 같은 release candidate의
+실제 산출물과 readback 증거가 있을 때만 합니다.
 
-## 0. 출시 경계 동결
+## 1. 제품 경계 동결
 
-- [ ] 공개 shell, Linux 앱 소스/설치 진입점, 앱 내부 편집 bundle, 설치 중
-  다운로드 artifact, 시스템 provision 도구를 각각 별도 manifest로 동결했다.
-- [ ] `legal/FIRST_PARTY_RIGHTS_REVIEW.md`에서 기여자 권리와 명시적 Unlicense
-  동의를 실제 release 기준으로 다시 확인했다.
-- [ ] 공개 shell을 “브라우저 편집기”나 “설치 없이 전체 기능 사용”으로 표시하지
+- [ ] 웹 ZIP에는 시작 화면, full editor, worker, font, license만 있고 로컬
+  executable·server secret·사용자 데이터가 없다.
+- [ ] 설치 파일에는 창 없는 range engine과 target sidecar만 있고 웹 편집기 창,
+  browser extension, auto-updater가 없다.
+- [ ] 공개 서버는 정적 파일만 제공하며 VOD, 프로젝트, 로그인, 사용자 session,
+  analytics, telemetry를 받거나 저장하지 않는다.
+- [ ] Windows x64, macOS arm64, Linux x64 이외의 설치 파일을 자동 추천하지 않는다.
+- [ ] [`legal/FIRST_PARTY_RIGHTS_REVIEW.md`](FIRST_PARTY_RIGHTS_REVIEW.md)에서 기여자
+  권리와 명시적 Unlicense 동의를 release commit 기준으로 재확인했다.
+- [ ] [`legal/DESKTOP_BINARY_RELEASE_GATE.md`](DESKTOP_BINARY_RELEASE_GATE.md)의
+  SBOM·provenance·signing·notarization 조건이 하나라도 남으면 installer 공개를
+  차단한다.
+- [ ] 공개 웹 digest, 세 installer digest, lockfile, build log, test log를 같은
+  release record에 고정했다.
+
+## 2. 일반 웹사이트 같은 사용자 흐름
+
+- [ ] 사용자는 사이트 → URL·구간 입력 → 편집기 → **편집 영상 준비**만 수행한다.
+- [ ] 엔진이 없을 때만 OS에 맞는 installer와 1회 설치 안내를 보여 준다.
+- [ ] 설치 뒤 같은 페이지가 자동으로 재탐지하며 사용자가 port, endpoint, token,
+  process, 시작·종료 상태를 입력하거나 관리하지 않는다.
+- [ ] Chrome Local Network Access prompt는 최초 연결 안내에 포함하고, 허용·거절·
+  재시도·브라우저 정책 차단을 실제 Chrome에서 검증했다.
+- [ ] 설치 완료, 엔진 이미 실행 중, 엔진 재시작, protocol 불일치, port 충돌이
+  각각 이해 가능한 한 문장과 단일 다음 행동으로 복구된다.
+- [ ] 모바일에서는 편집을 시작하지 않고 데스크톱에서 다시 열도록 안내한다.
+- [ ] 자동 준비가 불가능한 권한 있는 원본에는 **내 파일 직접 연결**을 제공한다.
+- [ ] UI와 사용자 문서에 companion, extension, localhost 주소, Electron editor
+  또는 별도 관리 CLI를 현재 제품 단계처럼 표시하지 않는다.
+
+## 3. 공개 정적 웹 배포
+
+- [ ] `npm run build` 뒤 `npm run package:web`으로 만든 검증 ZIP만 배포한다.
+- [ ] 서명된 엔진 Release 전의 일반 build에는 installer URL이 없고 **설치 파일
+  준비 중**으로 표시된다.
+- [ ] installer 링크를 여는 배포는 published remote asset 전체의 exact
+  size·SHA-256 digest readback 뒤 `npm run build:web:release`로 별도 생성했으며,
+  tag-pinned 세 URL만 포함하고 runtime GitHub API/`latest` 조회가 없다.
+- [ ] `web/`은 full editor allowlist와 고지 파일만 포함하고 source map, test fixture,
+  cache, key, `.env`, 설치 executable을 포함하지 않는다.
+- [ ] 시작 화면과 `editor.html` deep link가 모두 exact HTTPS origin에서 직접
+  동작하며 새로고침이 프로젝트를 잠그거나 다른 프로젝트로 바꾸지 않는다.
+- [ ] CSP는 `'self'`와 필요한 공식 embed, exact `http://127.0.0.1:4319`만
+  허용하며 wildcard LAN, `localhost`, 임의 port, remote script를 허용하지 않는다.
+- [ ] `X-Content-Type-Options: nosniff`, `frame-ancestors 'none'`, 최소
+  `Permissions-Policy`, 적절한 COOP/CORP와 HSTS를 실제 HTTPS 응답에서 확인했다.
+- [ ] Cloudflare Tunnel은 public static origin으로만 ingress하고 사용자 PC의
+  loopback, LAN 또는 engine port를 tunnel에 연결하지 않는다.
+- [ ] Cloudflare Auto Minify, Rocket Loader, HTML rewriting, Email Address
+  Obfuscation과 NEL/Report-To를 꺼 release bytes와 실제 응답을 대조할 수 있다.
+- [ ] analytics, telemetry, fingerprinting, session replay, 광고 식별자, login,
+  cookie와 서버 저장 project가 없다.
+- [ ] 정적 host나 Tunnel이 access log/metric을 보존한다면 사용자 무수집 정책과
+  맞게 비활성화·최소화하고 운영 evidence를 남겼다.
+- [ ] 광고를 도입할 경우 source URL, project, capability, local media metadata를
+  광고 SDK에 전달하지 않고 개인정보·동의·라이선스를 별도 승인한다.
+
+## 4. HTTPS 웹↔loopback 보안
+
+- [ ] engine listener는 `127.0.0.1`에만 bind하고 IPv6/LAN/공인 interface로
+  노출되지 않는다.
+- [ ] 정확한 `https://kirinuki.eff0rtchung.kr` Origin, exact Host와 protocol
+  header만 허용하고 missing/`null`/lookalike Origin을 거절한다.
+- [ ] `Forwarded`, `X-Forwarded-Host` 등 proxy header로 Host 검사를 우회할 수 없다.
+- [ ] 편집기 문서마다 32-byte memory-only nonce와 짧은 bearer capability를
+  발급하고 disk, IndexedDB, URL, log에 저장하지 않는다.
+- [ ] capability는 project ID, canonical source URL, `vod`/`captions`/
+  `cache-delete` action에 묶이며 scope 확대·재사용·만료 후 사용을 거절한다.
+- [ ] POST/JSON route는 Content-Type, body size, schema, unknown field와 method를
+  fail closed한다.
+- [ ] `<video>` media GET/HEAD는 exact Origin과 job별 추측 불가능한 access value,
+  exact range·ownership을 확인한다.
+- [ ] DNS rebinding, CSRF, 다른 탭 nonce, 다른 project/source/action, malformed
+  bearer, OPTIONS preflight, redirect와 timing race를 negative test했다.
+- [ ] 엔진 재시작 뒤 웹은 새 capability를 자동 발급받고 사용자가 다시 설치하거나
+  연결 설정을 열지 않는다.
+
+## 5. 프로젝트·세션·캐시 의미
+
+- [ ] 로그인 또는 서버 session이 없고 탭을 닫으면 저장하지 않은 작업 폐기가
+  기본이다.
+- [ ] 사용자가 **지금 저장** 또는 복구를 명시적으로 선택한 경우에만 브라우저
+  origin storage에 작업이 남는다.
+- [ ] 새로고침은 같은 project/workspace를 다시 열며 “편집기를 잠갔습니다” 같은
+  일회성 잠금이 없다.
+- [ ] A 작업을 닫고 B 작업을 열면 project generation, source binding, capability,
+  pending async response가 원자적으로 교체되고 A의 media가 B에 섞이지 않는다.
+- [ ] 같은 롱폼의 여러 쇼츠는 독립 ID·저장·media ownership을 가지며 사용자가
+  이름과 source/range로 구분할 수 있다.
+- [ ] stale recovery는 자동 적용하지 않고 exact project/source/workspace를
+  보여 준 뒤 사용자가 선택하게 한다.
+- [ ] cache 목록에서 source, range, size, last-used와 owner를 이해할 수 있고 다른
+  project 또는 사용자 원본을 삭제하지 않는다.
+- [ ] token, signed CDN URL, cookie, authorization header를 project, receipt,
+  recovery, log 또는 telemetry에 저장하지 않는다.
+
+## 6. 세 플랫폼 VOD·시간축 검증
+
+- [ ] CHZZK·YouTube·SOOP의 공개 완료 VOD를 각각 URL → 구간 → 웹 편집기 → 설치
+  엔진의 실제 경로로 준비했다.
+- [ ] 로그인 필요, private, DRM, 지역 제한, live 원본을 우회하지 않고 안전하게
+  거절한다.
+- [ ] 요청 범위 앞뒤 decode margin을 받아도 편집기의 원본 시각은 사용자가 입력한
+  start/end를 그대로 유지한다.
+- [ ] 0초가 아닌 시작, 매우 긴 VOD, part 경계, 겹친 range, 앞/뒤 확장, 재사용,
+  취소·재시도를 검증한다.
+- [ ] playlist/part identity는 pre/post로 비교하고 실제 원본 교체는 publish 전에
+  차단하되 제목·timestamp·signed URL의 무해한 변화는 원본 교체로 오인하지 않는다.
+- [ ] 완성 media의 byte, hash, duration, stream, timestamp mapping을 검증한 뒤에만
+  project binding을 원자적으로 교체한다.
+- [ ] 요청 중 project/source가 바뀌면 stale result를 폐기하고 캐시·UI를 오염시키지
   않는다.
-- [ ] Linux v1은 아직 자체 Node·Chromium·Python·FFmpeg를 포함한 AppImage가
-  아니라는 사실과 시스템 요구사항을 다운로드 페이지에 표시했다.
-- [ ] Electron 프리뷰는 unsigned·unnotarized unpacked 개발 디렉터리이고 공개
-  다운로드나 Linux 소스 설치판의 대체물이 아니라는 사실을 표시했다.
-- [ ] `legal/DESKTOP_BINARY_RELEASE_GATE.md`의 Electron archive provenance,
-  SBOM·notice, FFmpeg buildconf·대응 소스, yt-dlp standalone 고지와 OS signing
-  조건이 하나라도 미완료이면 native package 업로드·release를 차단한다.
-- [ ] 사용자는 `./setup.sh`를 한 번 실행한 뒤 앱 아이콘 또는 `kirinuki`만
-  사용한다. 별도 내부 프로세스·브라우저 확장·연결 주소를 시작하거나 구성하는
-  절차가 사용자 문서와 UI에 없다.
-- [ ] 앱 내부에서 여러 프로세스를 쓰더라도 설치·시작·상태 확인·업데이트·복구·
-  종료의 소유자는 하나의 Kirinuki 앱이다.
-- [ ] 배포 후보 commit과 공개 shell digest, 앱 source archive digest, lockfile,
-  build log를 같은 release record에 고정했다.
+- [ ] 자막은 자유롭게 이동·분할할 수 있고 전역 4초 상한이 없다. 4초는 AudSeg의
+  초기 segmentation 규칙일 뿐이다.
+- [ ] 컷 순서·z-order·visibility·crop·audio가 preview와 최종 export에서 동일하다.
 
-## 1. 공개 사이트 기능 경계 — hard gate
+## 7. 엔진 설치·자동 시작·제거
 
-- [ ] 정적 호스트의 배포 루트는 tracked `public-shell/` 또는 검증된
-  `kirinuki-web-v*.zip`이며, 앱 내부 `web/` 디렉터리를 직접 mount·Git deploy하지
-  않는다.
-- [ ] `kirinuki.eff0rtchung.kr`은 제품 소개, 시스템 요구사항, 설치 안내,
-  **Kirinuki에서 열기**와 라이선스/문의 링크만 제공한다.
-- [ ] 공개 HTML·CSS·JavaScript가 `editor.html`을 열거나 편집 프로젝트·IndexedDB·
-  worker·미디어 엔진·자막 엔진을 초기화하지 않는다.
-- [ ] 공개 산출물의 HTML, CSS, JavaScript, source map, manifest와 CSP에 loopback
-  host, 내부 port, 내부 API route, WebSocket, localhost media URL 또는 앱 내부
-  health probe가 없다.
-- [ ] 공개 CSP의 `connect-src`, `media-src`, `worker-src`가 앱 내부 서비스를
-  허용하지 않는다. `default-src 'self'`에서 꼭 필요한 HTTPS 리소스만 최소로
-  추가했다.
-- [ ] 공개 페이지는 브라우저의 Local Network Access 권한을 요청하지 않고,
-  방문자 PC의 내부 서비스 존재 여부를 탐지·fingerprint하지 않는다.
-- [ ] 공개 페이지에서 앱 실행 실패를 편집 오류로 표현하지 않는다. 앱이 없거나
-  외부 앱 열기를 거절한 경우 설치 안내와 수동 **앱 열기** 폴백을 계속
-  제공한다.
-- [ ] 앱 실행 전 자동 redirect loop, 숨은 iframe, 반복 custom-scheme 호출 또는
-  사용자 gesture 없는 무한 재시도를 사용하지 않는다.
-- [ ] JavaScript가 비활성화되어도 앱 설치 요구사항, 직접 실행 방법과 문의처를
-  읽을 수 있다.
-- [ ] 모바일에서는 편집을 시작하지 않으며 지원되는 데스크톱 설치판이 필요하다는
-  설명과 설치 가능한 기기에서 다시 여는 방법만 제공한다. 공개 전인 Windows·
-  macOS 프리뷰를 다운로드 가능한 제품처럼 안내하지 않는다.
+- [ ] Windows x64 NSIS, macOS arm64 DMG, Linux x64 deb를 각 native runner에서
+  실제 설치한다.
+- [ ] 첫 실행이 자동 시작을 등록하고 readback하며, 두 번째 실행은 중복 engine을
+  만들지 않는다.
+- [ ] 실행 중 Electron BrowserWindow/webContents가 0이고 foreground UI가 없다.
+- [ ] port를 다른 process가 차지하면 그 process를 종료하거나 takeover하지 않고
+  명확히 fail closed한다.
+- [ ] 정상 종료·취소·timeout·crash 뒤 gateway와 child process, temp directory가
+  남지 않는다.
+- [ ] uninstall이 autostart·engine process·앱 전용 data를 제거하고 다른 앱이나
+  사용자 원본은 보존한다.
+- [ ] Windows Job Object, POSIX process group과 PID identity로 descendant orphan과
+  PID 재사용 오종료가 없음을 실제 OS에서 검사한다.
+- [ ] 자동 업데이트나 숨은 poll이 없고 protocol upgrade는 사용자의 명시적
+  installer 재실행으로만 수행한다.
 
-## 2. 엄격한 앱 링크
-
-- [ ] 공개 shell과 desktop 등록이 canonical `kirinuki://open`만 사용한다.
-- [ ] 원본 전달은 선택적인
-  `kirinuki://open?source=<URLSearchParams encoded HTTPS URL>` 하나로 제한한다.
-- [ ] parser가 scheme과 `open` host를 exact 비교하고 username, password, 임의
-  port, fragment, 추가 path, 알 수 없는 key, 중복 `source`, 제어 문자와 길이
-  초과를 거절한다.
-- [ ] `source`는 CHZZK·YouTube·SOOP의 명시적 HTTPS host allowlist와 지원 path
-  검증을 통과해야 하며 `youtube.com.evil.example`, URL userinfo, encoded
-  delimiter 혼동과 redirector를 통과시키지 않는다.
-- [ ] 앱 링크는 원본 입력만 채우며 프로젝트 생성, 컷 시각, 파일 권한, 저장본
-  복구 또는 권리 확인을 자동 승인하지 않는다.
-- [ ] 설치되지 않은 앱, 브라우저 거절, malformed link, 앱이 이미 열린 경우와
-  중복 클릭을 실제 Chromium에서 검증했다.
-- [ ] 같은 링크를 여러 번 받아도 내부 구성요소를 중복 시작하거나 서로 다른
-  프로젝트 상태를 혼합하지 않는다.
-
-## 3. 공개 호스팅과 개인정보
-
-- [ ] Cloudflare Tunnel은 `kirinuki.eff0rtchung.kr`의 공개 정적 listener 하나에만
-  연결하고 앱 내부 listener, LAN 주소 또는 사용자 PC로 ingress하지 않는다.
-- [ ] 응답에 `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
-  `frame-ancestors 'none'`, 최소 `Permissions-Policy`, 적절한 COOP/CORP를
-  적용했다. `public-shell/_headers`를 무시하는 origin이라면 동등한 server
-  설정을 적용하고 실제 HTTPS 응답을 다시 probe한다.
-- [ ] HTTPS edge에 HSTS를 적용했다. 부모 도메인 전체 정책을 확인하기 전에는
-  `includeSubDomains`나 `preload`를 넣지 않는다.
-- [ ] immutable asset에는 content/version 기반 cache key를 쓰고 HTML은 새 앱
-  링크·설치 요구사항을 안정적으로 갱신할 정책을 사용한다.
-- [ ] analytics, telemetry, fingerprinting, advertising identifier, session replay,
-  로그인, 계정 또는 사용자별 서버 저장소가 없다.
-- [ ] Cloudflare zone의 Network Error Logging을 꺼 실제 응답에 `NEL`과
-  `Report-To`가 없고, Scrape Shield Email Address Obfuscation을 꺼
-  `email-decode.min.js`가 주입되지 않는다. 공개 HTML의 메일 링크에도
-  Cloudflare 공식 `email_off` 범위를 유지한다.
-- [ ] 검증된 공개 ZIP과 실제 응답을 바이트 단위로 대조할 수 있도록 Cloudflare
-  Auto Minify, Rocket Loader와 HTML·CSS를 다시 쓰는 Transform Rule을 끈다.
-  압축 전송은 허용하되 브라우저가 해제한 응답 본문은 릴리스 artifact와 정확히
-  같아야 한다.
-- [ ] 정적 호스트가 자동 RED/request metric을 영속화한다면 완전히 비활성화하고
-  기존 metric bucket을 비운 뒤 새 요청으로 기록이 생기지 않음을 검증했다.
-- [ ] 앱 링크의 `source`를 서버 log, analytics URL, referrer용 외부 링크 또는
-  광고 요청에 전달하지 않는다.
-- [ ] 광고를 붙일 경우 편집 내용·원본 URL·로컬 capability를 광고 SDK에
-  전달하지 않고, 개인정보·쿠키 동의·상업 라이선스 검토를 별도 완료했다.
-
-## 4. Kirinuki 앱 생명주기
-
-- [ ] Linux 소스 설치판과 Electron package의 요구사항·캐시 위치·종료 소유권을
-  섞지 않고 채널별 manifest로 고정했다.
-- [ ] `./setup.sh`가 현재 저장소를 식별해 사용자 명령과 desktop entry를
-  원자적으로 설치·갱신하고, Kirinuki marker가 없는 기존 파일은 덮어쓰지 않는다.
-- [ ] 앱 아이콘과 인자 없는 `kirinuki`는 같은 bootstrap 경로로 들어가며 첫
-  실행·두 번째 실행·업데이트 뒤 첫 실행이 모두 멱등적이다.
-- [ ] 앱이 저장소 관리 npm 구성요소, web/editor build, 고정 runtime artifact와
-  선택한 자막 구성을 스스로 확인하고 필요한 항목만 준비한다.
-- [ ] 시스템 Node.js 22.17.0+, npm, Chromium 120+, Python 3.11+, FFmpeg, ffprobe가
-  없으면 정확한 항목을 안내하고 fail closed한다. `sudo`, `curl | sh`, 임의
-  package-manager 설치를 자동 실행하지 않는다.
-- [ ] 앱 내부 프로세스는 이 기기에서만 접근 가능하고 임의 LAN interface나 공개
-  host에 bind하지 않는다. 사용자는 해당 주소나 process를 알거나 관리할 필요가
-  없다.
-- [ ] 기존 Kirinuki 인스턴스의 PID, 실행 파일, 시작 시각, profile과 protocol을
-  모두 검증한 경우에만 재사용·정상 종료한다. 이름이나 port만 보고 다른
-  프로세스에 신호를 보내지 않는다.
-- [ ] 앱 창 종료, 재실행, crash recovery, update, 충돌 프로세스, stale PID와
-  부분 설치를 각각 검증했다.
-- [ ] 일반 사용자 문서에서 저수준 내부 명령은 제거하고 `doctor`, `status`,
-  `stop`만 개발자·관리자 진단 폴백으로 분리했다.
-- [ ] Electron 앱은 native single-instance/deep-link 경로로 시작하고 마지막 창
-  종료 시 자신이 소유한 loopback server와 child process를 정상 종료한다.
-
-## 5. 프로젝트·캐시·세션 불변조건
-
-- [ ] 로그인·서버 세션·방문자 재식별이 없고, 앱을 다시 열 때 과거 작업을 새
-  프로젝트에 자동 혼합하지 않는다.
-- [ ] 저장하지 않은 프로젝트는 창을 닫으면 폐기하는 것이 기본이며, 이어서
-  작업하려면 사용자가 **지금 저장** 또는 복구본을 명시적으로 선택한다.
-- [ ] 비정상 종료 복구 후보는 기존 프로젝트 ID·원본·workspace를 검증한 뒤
-  제안만 하고, 선택 전에는 현재 프로젝트로 적용하지 않는다.
-- [ ] 같은 원본의 여러 프로젝트와 한 롱폼의 여러 쇼츠가 서로 다른 명시적 ID와
-  소유권을 가지며 캐시·컷·자막을 섞지 않는다.
-- [ ] A 작업을 닫고 B 작업을 열 때 URL, project, workspace와 미디어 binding
-  전환이 멱등적이며 stale 비동기 응답이 B에 적용되지 않는다.
-- [ ] 내보내기와 모든 sidecar의 크기·SHA-256·복원 무결성이 확인된 경우에만
-  **세션 완료·로컬 재료 삭제**를 허용한다.
-- [ ] 정리는 해당 프로젝트가 단독 소유한 준비 조각·compact 영상·영수증·저장본·
-  이미지·파일 핸들만 대상으로 한다. 사용자 원본과 다른 프로젝트 자료는
-  삭제하지 않는다.
-- [ ] 일반 다운로드 폴백, 검증 실패, 중복 열린 작업공간, 취소와 crash 중에는
-  캐시를 삭제하지 않는다.
-- [ ] 원본 전송 주소, access token, pairing token과 platform cookie를 프로젝트,
-  복구본, log 또는 telemetry에 저장하지 않는다.
-
-## 6. 실제 편집·미디어 검증
-
-- [ ] 사용자가 확정한 컷 경계와 순서를 AI 또는 자동 준비가 변경하지 않는다.
-- [ ] 최초 준비 범위, 앞/뒤 확장, 겹치는 컷, 원본 0초가 아닌 구간과 매우 긴 VOD를
-  실제 시간축으로 검증한다. container PTS를 원본 페이지 시각으로 오인하지
-  않는다.
-- [ ] 새 미디어의 원본 version, 범위, byte, decode 가능성, timestamp mapping과
-  저장이 모두 성공한 뒤에만 현재 편집 미디어를 원자적으로 교체한다.
-- [ ] 준비 중 원본 정보가 달라지면 제한된 재조회와 일관된 snapshot으로 다시
-  시도하고, 실제 원본 불일치와 일시적 signed URL 변화는 구분한다.
-- [ ] 자동 준비 실패는 권한 있는 **내 파일 직접 연결**로 복구할 수 있으며 다른
-  프로젝트의 로컬 파일 핸들을 자동 연결하지 않는다.
-- [ ] 자막은 자유롭게 이동·분할할 수 있고 전역 4초 제한이 없다. AudSeg의
-  segmentation 조건을 편집 계약으로 오인하지 않는다.
-- [ ] 쇼츠 다중 영상의 source clock, crop, destination, z-order, visibility,
-  opacity와 음성 포함 여부가 저장·미리보기·최종 출력에서 일치한다.
-- [ ] 적응형 GPU 경로 실패 시 부분 출력은 폐기하고 같은 canonical 좌표의 안전한
-  경로로 처음부터 한 번만 재시작한다. 한 파일에 backend를 섞지 않는다.
-- [ ] GPU vendor/renderer와 성능 계측을 사용자 식별, analytics 또는 세션 밖
-  저장에 사용하지 않는다.
-
-## 7. 웹·앱 번들 라이선스
+## 8. 웹 bundle 라이선스
 
 <!-- attribution-id: mediabunny -->
-- [ ] Mediabunny 1.51.0 MPL-2.0 고지, 전체 license, 수정 여부와 exact
-  corresponding source 접근 경로를 실제 포함 산출물과 함께 제공한다.
+- [ ] Mediabunny 1.51.0 MPL-2.0 원문, 수정 여부, exact corresponding source를
+  웹 ZIP과 함께 제공한다.
 <!-- attribution-id: audseg -->
-- [ ] AudSeg 0.1.0 MIT 원문과 저작권 고지를 유지하고 esbuild 결과의 `@license`
-  주석을 보존한다.
+- [ ] AudSeg 0.1.0 MIT 원문과 compiled editor/worker의 `@license`를 보존한다.
 <!-- attribution-id: pretendard -->
-- [ ] Pretendard 1.3.9 WOFF2, OFL-1.1 원문과 Reserved Font Name 고지를 함께
-  제공한다.
+- [ ] Pretendard 1.3.9 WOFF2, OFL-1.1 원문과 Reserved Font Name을 제공한다.
 <!-- attribution-id: paperlogy -->
-- [ ] Paperlogy 1.001 pinned WOFF2와 OFL-1.1 원문을 함께 제공한다.
-- [ ] 공개 shell과 앱 편집 bundle 중 실제로 파일을 포함한 산출물에만 해당
-  고지를 넣되, 둘을 합쳐 누락을 숨기지 않는다.
-- [ ] `licenses.html`과 고지 링크를 키보드·스크린리더로 열 수 있고 모든 local
-  license 링크가 최종 package에 실제로 있다.
-- [ ] minifier/banner 변경 뒤에도 license comment, source map 경계와 notice
-  파일을 검사한다.
+- [ ] Paperlogy 1.001 pinned WOFF2와 OFL-1.1 원문을 제공한다.
+- [ ] `web/THIRD_PARTY_NOTICES.md`가 canonical
+  `legal/WEB_THIRD_PARTY_NOTICES.md`와 byte-for-byte 일치한다.
 
-## 8. 설치 시 다운로드·시스템 도구 라이선스
+## 9. 엔진·도구 라이선스
 
-<!-- attribution-id: desktop-preview-runtime -->
-- [ ] Electron `43.4.0` 플랫폼 archive의 URL·크기·SHA-256과 upstream checksum,
-  Electron `LICENSE`, `LICENSES.chromium.html`, Chromium·Node 포함 SBOM을 target별
-  release evidence에 기록했다.
-- [ ] `@electron/packager@20.3.0`, `@electron/fuses@2.1.3`와 모든 transitive
-  build dependency의 exact lock artifact·라이선스를 canonical registry에서
-  검토했다.
-
-<!-- attribution-id: whisper-cpp -->
-- [ ] whisper.cpp source commit, archive byte/hash와 MIT 원문을 보존했다. binary를
-  배포한다면 compile flags와 실제 linked component를 다시 조사했다.
-<!-- attribution-id: openai-whisper-models -->
-- [ ] OpenAI Whisper model lineage, converted repository revision, 선택 model의
-  exact size/hash와 MIT 고지를 기록했다.
-<!-- attribution-id: silero-vad -->
-- [ ] Silero VAD 원본, conversion revision, exact size/hash와 MIT 고지를
-  기록했다.
+<!-- attribution-id: desktop-local-engine-runtime -->
+- [ ] Electron `43.4.1` archive URL·size·SHA-256, `LICENSE`,
+  `LICENSES.chromium.html`, Chromium·Node SBOM을 target별로 기록했다.
+- [ ] electron-builder `26.15.3`, asar, packager, fuses와 모든 transitive build
+  package의 exact artifact/license 및 최종 비포함 여부를 검사했다.
 <!-- attribution-id: yt-dlp -->
-- [ ] yt-dlp 2026.07.04 exact artifact, Unlicense와 embedded yt-dlp-ejs,
-  Meriyah, Astring header를 보존했다.
-- [ ] Electron package의 target별 yt-dlp standalone에 포함된 Python/EJS/기타
-  component를 실제 바이너리 기준으로 다시 inventory하고 최종 고지에 포함했다.
+- [ ] source-run Unix zipimport와 installer target standalone을 구분하고 각각
+  yt-dlp·Python·EJS·Meriyah·Astring 등의 실제 고지를 제공했다.
 <!-- attribution-id: ffmpeg -->
-- [ ] FFmpeg를 산출물에 포함하면 최종 `ffmpeg -version`과 `-buildconf`를
-  증거로 남기고 `--enable-nonfree`가 있으면 자동 배포를 **차단**한다.
+- [ ] target별 `ffmpeg -version`·`-buildconf`·linked components를 기록하고
+  `--enable-nonfree`가 있으면 자동 배포를 **차단**한다.
 <!-- attribution-id: ffprobe -->
-- [ ] ffprobe의 실제 binary·build family·외부 library와 고지 의무를 FFmpeg와
-  함께 검사한다.
+- [ ] ffprobe가 FFmpeg와 동일한 검증된 build family인지 확인했다.
+<!-- attribution-id: whisper-cpp -->
+- [ ] whisper.cpp source·hash·MIT 원문을 보존하고 binary 배포 시 실제 linked
+  ggml·cpp-httplib·nlohmann/json·stb_vorbis·miniaudio를 다시 조사했다.
+<!-- attribution-id: openai-whisper-models -->
+- [ ] Whisper model lineage·revision·size·hash·MIT 고지를 기록했다.
+<!-- attribution-id: silero-vad -->
+- [ ] Silero VAD 원본·conversion revision·size·hash·MIT 고지를 기록했다.
 <!-- attribution-id: nodejs -->
-- [ ] Node.js/npm을 installer나 archive에 넣으면 해당 배포본의 full license와
-  bundled component notices를 포함한다.
+- [ ] Node를 새 산출물에 넣으면 해당 binary의 full license/notices를 제공한다.
 <!-- attribution-id: python -->
-- [ ] Python을 넣으면 해당 배포본의 PSF license와 bundled component notices를
-  포함한다.
+- [ ] Python을 새 산출물에 넣으면 PSF 및 bundled notices를 제공한다.
 <!-- attribution-id: chromium -->
-- [ ] Chromium/Chrome/ChromeDriver를 넣으면 provider/build별 라이선스와
-  redistribution 조건을 확인한다. 현재 시스템 provision 전제와 혼동하지 않는다.
+- [ ] system browser와 Electron bundled Chromium을 구분해 각각 inventory한다.
 <!-- attribution-id: tsx-runtime -->
-- [ ] 현재 소스 설치가 실행하는 tsx·esbuild·OS platform package를 provision
-  manifest에 포함하고 MIT 고지를 유지한다. 미리 컴파일했다면 최종 package에
-  정말 남지 않았는지 스캔한다.
+- [ ] repository-local tsx·esbuild·platform package의 exact MIT 고지를 유지한다.
 <!-- attribution-id: typescript-toolchain -->
-- [ ] TypeScript와 types package가 build-only인지 최종 package에 포함됐는지
-  SBOM으로 구분한다.
+- [ ] TypeScript/types package가 build-only인지 최종 artifact scan으로 확인한다.
 
-## 9. 상업 이용과 외부 서비스
+## 10. 상업 이용·외부 서비스·CI
 
 - [ ] [`legal/COMMERCIAL_USE_POLICY.md`](COMMERCIAL_USE_POLICY.md)의 positive
-  allowlist를 release 기준으로 다시 실행했다.
-- [ ] NonCommercial, Commons Clause, PolyForm, SSPL, BUSL, Elastic License,
-  field-of-use 제한, `LicenseRef-*`, `NOASSERTION`, unknown 또는 원문 누락이
-  있으면 배포를 차단한다.
-- [ ] 광고 SDK, consent manager, 결제·analytics package를 도입했다면 모든
-  transitive dependency와 원격 script를 registry/SBOM에 추가했다.
+  allowlist를 실행하고 NonCommercial, Commons Clause, PolyForm, SSPL, BUSL,
+  Elastic License, Prosperity, LicenseRef, NOASSERTION, unknown을 fail closed한다.
+- [ ] 광고 SDK, consent manager, 결제 또는 analytics dependency를 추가했다면
+  모든 transitive package·remote script를 registry와 SBOM에 먼저 등록했다.
 <!-- attribution-id: chzzk-service -->
-- [ ] CHZZK 명칭·URL·아이콘이 공식 제휴나 승인을 암시하지 않으며 현재 플랫폼
-  약관과 기술적 접근 방식을 출시 시점에 다시 확인했다.
+- [ ] CHZZK 이름·링크가 공식 제휴를 암시하지 않고 현재 약관·접근 조건을 확인했다.
 <!-- attribution-id: youtube-service -->
-- [ ] YouTube 원본 보기는 공식 privacy-enhanced embed와 앱에 포함된 격리
-  Player Bridge만 사용하고 로그인·cookie·DRM을 우회하지 않는다.
+- [ ] YouTube 이름·embed·접근 방식이 공식 제휴를 암시하지 않고 login/cookie/DRM을
+  우회하지 않는다.
 <!-- attribution-id: soop-service -->
-- [ ] SOOP 명칭·URL·아이콘이 공식 제휴나 승인을 암시하지 않으며 지원되는 공개
-  VOD 방식만 사용한다.
-- [ ] 공개 페이지 접근 가능성을 다운로드·편집·게시 허가로 간주하지 않고,
-  매 작업 권리 확인과 게시 전 human review를 유지한다.
-
-## 10. 출시 증거와 승인
-
+- [ ] SOOP 이름·링크가 공식 제휴를 암시하지 않고 공개 완료 VOD만 지원한다.
+- [ ] 접근 가능성을 다운로드·편집·게시 허가로 간주하지 않고 사용자 권리 확인과
+  게시 전 human review를 유지한다.
 <!-- attribution-id: github-actions-ci -->
-- [ ] GitHub Actions full commit SHA 세 개를 다시 확인하고, 각 action을 full
-  commit SHA로 고정해 대응 소스·MIT 원문, 최소 권한과 runner image를 release
-  evidence에 기록했다.
-- [ ] whisper.cpp를 빌드한 C/C++ compiler, CMake, CUDA toolkit과 실제 linked
-  native library의 버전·라이선스·build manifest를 보관했다.
-- [ ] `npm ci --ignore-scripts`, `npm run license:check`, `npm run build`,
-  `npm run validate`, unit tests, browser tests와 release artifact scan을 같은
-  commit에서 통과했다.
-- [ ] GitHub Actions native matrix가 Linux x64, Windows x64와 macOS arm64 각각의
-  실제 host에서 `npm run typecheck`, `npm test`, `npm run package:desktop`을
-  통과했고 예상한 `process.platform-process.arch`와 일치했다.
-- [ ] unsigned CI package는 업로드하지 않으며, 공개 후보는 별도 보호된 release
-  job에서만 signing secret을 사용해 생성했다.
-- [ ] macOS 앱과 모든 nested executable·dylib·FFmpeg·ffprobe·yt-dlp를 Developer
-  ID로 서명하고 hardened runtime·최소 entitlement·Apple notarization·ticket
-  staple 뒤 `codesign`, `spctl`, `stapler` 검증을 통과했다.
-- [ ] Windows 앱과 native sidecar를 Authenticode 서명·timestamp하고 최종
-  signature와 새 사용자 환경의 실행 경고를 검사했다.
-- [ ] 공개 artifact를 별도로 풀어 loopback 문자열, 내부 route, editor 초기화,
-  내부 CSP 허용과 source map 비밀이 없음을 검사했다.
-- [ ] 깨끗한 Linux 계정에서 최초 설치, 첫 실행, 두 번째 실행, deep link, 앱 미설치
-  fallback, 업데이트, crash recovery와 제거 후 재설치를 검증했다.
-- [ ] 지원 플랫폼의 실제 공개 VOD로 부분 준비·범위 확장·내보내기를 수행하되
-  테스트 계정·cookie·비공개 콘텐츠를 release log에 남기지 않았다.
-- [ ] 생성한 SBOM, dependency/license scan, notice, 대응 소스 URL, exact hash,
-  FFmpeg buildconf와 공개/app artifact digest를 release record에 보관했다.
-- [ ] 보안·개인정보·데이터 보존 검토를 라이선스 검토와 별도로 완료했다.
-- [ ] 출시 승인자는 이 체크리스트가 법적 보증이 아니라 evidence checklist임을
-  이해하고 실제 산출물 기준으로 승인했다.
+- [ ] GitHub Actions 세 항목을 mutable tag가 아닌 full commit SHA로 고정하고 MIT
+  대응 소스·runner image·최소 권한을 release evidence에 기록했다.
+- [ ] C/C++ compiler, CMake, CUDA toolkit과 linked native library를 사용했다면
+  재현 가능한 build manifest를 보관했다.
+
+## 11. 최종 승인
+
+- [ ] `npm ci --ignore-scripts`, typecheck, build, validate, license check, unit,
+  browser, package, installer, security, live VOD smoke를 같은 commit에서 통과했다.
+- [ ] 웹 ZIP과 실제 HTTPS 응답을 대조하고 cookie/session/reporting header가 없음을
+  확인했다.
+- [ ] Linux x64·Windows x64·macOS arm64에서 실제 install→autostart→웹 자동 감지→
+  3플랫폼 부분 준비→편집→export→uninstall을 검증했다.
+- [ ] Electron/Chromium/Node, FFmpeg, yt-dlp를 포함한 target별 SBOM·notice·
+  corresponding source·digest를 보관했다.
+- [ ] Windows 서명/timestamp와 macOS 서명/notarization/staple readback을 완료했다.
+- [ ] 보안·개인정보·데이터 보존·플랫폼 약관 검토를 라이선스 검토와 별도로
+  완료했다.
+- [ ] 승인자는 이 체크리스트가 법적 보증이 아니라 evidence gate임을 이해하고
+  실제 산출물 기준으로 서명했다.

@@ -13,20 +13,27 @@ import type {
 } from "node:http";
 import path from "node:path";
 
+import {
+  canonicalSupportedVodSourceUrl
+} from "../src/lib/source-embed.js";
+import {
+  PUBLIC_WEB_PACKAGE_FILES
+} from "./web-package-files.js";
+
 export const PUBLIC_SHELL_BIND_HOST = "127.0.0.1";
 export const DEFAULT_PUBLIC_SHELL_PORT = 4330;
 export const PUBLIC_SHELL_CANONICAL_HOST = "kirinuki.eff0rtchung.kr";
 export const PUBLIC_SHELL_CANONICAL_URL =
   `https://${PUBLIC_SHELL_CANONICAL_HOST}/`;
-export const MAX_PUBLIC_SHELL_ASSET_BYTES = 2 * 1024 * 1024;
+export const MAX_PUBLIC_SHELL_ASSET_BYTES = 16 * 1024 * 1024;
 export const MAX_PUBLIC_SHELL_HEADERS_BYTES = 16 * 1024;
 
 export const PUBLIC_SHELL_SECURITY_HEADERS = Object.freeze({
   "Content-Security-Policy":
-    "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'none'; style-src 'self'; font-src 'none'; img-src 'self' data:; media-src 'none'; connect-src 'none'",
+    "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src https://chzzk.naver.com https://www.youtube-nocookie.com https://vod.sooplive.com; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: http://127.0.0.1:4319; worker-src 'self' blob:; connect-src 'self' http://127.0.0.1:4319",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
-  "Referrer-Policy": "no-referrer",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
   "Permissions-Policy":
     "accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()",
   "Cross-Origin-Opener-Policy": "same-origin",
@@ -48,43 +55,35 @@ interface LoadedPublicShellAsset extends PublicShellStaticAsset {
   readonly bytes: Buffer;
 }
 
-const PUBLIC_SHELL_ROUTES = Object.freeze(new Map<string, PublicShellStaticAsset>([
-  [
-    "/",
-    {
-      relativePath: "index.html",
-      contentType: "text/html; charset=utf-8"
-    }
-  ],
-  [
-    "/index.html",
-    {
-      relativePath: "index.html",
-      contentType: "text/html; charset=utf-8"
-    }
-  ],
-  [
-    "/public.css",
-    {
-      relativePath: "public.css",
-      contentType: "text/css; charset=utf-8"
-    }
-  ],
-  [
-    "/THIRD_PARTY_NOTICES.md",
-    {
-      relativePath: "THIRD_PARTY_NOTICES.md",
-      contentType: "text/markdown; charset=utf-8"
-    }
-  ],
-  [
-    "/licenses/UNLICENSE.txt",
-    {
-      relativePath: "licenses/UNLICENSE.txt",
-      contentType: "text/plain; charset=utf-8"
-    }
-  ]
+const PUBLIC_WEB_MIME_TYPES = Object.freeze(new Map<string, string>([
+  [".css", "text/css; charset=utf-8"],
+  [".html", "text/html; charset=utf-8"],
+  [".js", "text/javascript; charset=utf-8"],
+  [".md", "text/markdown; charset=utf-8"],
+  [".txt", "text/plain; charset=utf-8"],
+  [".wasm", "application/wasm"],
+  [".woff2", "font/woff2"]
 ]));
+
+const PUBLIC_SHELL_ROUTES = (() => {
+  const routes = new Map<string, PublicShellStaticAsset>();
+  for (const { archivePath } of PUBLIC_WEB_PACKAGE_FILES) {
+    if (archivePath === "_headers" || archivePath === ".popovic-hosts") {
+      continue;
+    }
+    const contentType = PUBLIC_WEB_MIME_TYPES.get(path.posix.extname(archivePath));
+    if (!contentType) {
+      throw new Error(`공개 웹 파일 MIME 형식을 확인하지 못했습니다: ${archivePath}`);
+    }
+    routes.set(`/${archivePath}`, { relativePath: archivePath, contentType });
+  }
+  const index = routes.get("/index.html");
+  if (!index) {
+    throw new Error("공개 웹 편집기 index.html allowlist가 없습니다.");
+  }
+  routes.set("/", index);
+  return Object.freeze(routes);
+})();
 
 function requiredAbsolutePath(value: unknown, label: string): string {
   const raw = String(value || "");
@@ -335,13 +334,86 @@ export function hasExactPublicShellHost(
     && request.headers.host === PUBLIC_SHELL_CANONICAL_HOST;
 }
 
+function validPublicEditorQuery(query: string): boolean {
+  if (
+    query.length < 1
+    || query.length > 2_048
+    || /[\\#[\0-\x20\x7f]/u.test(query)
+  ) {
+    return false;
+  }
+  const parameters = new URLSearchParams(query);
+  if (parameters.toString() !== query) {
+    return false;
+  }
+  const entries = [...parameters.entries()];
+  const allowedKeys = new Set([
+    "project",
+    "usageGate",
+    "session",
+    "recovery",
+    "short",
+    "workspace"
+  ]);
+  if (
+    entries.some(([key]) => !allowedKeys.has(key))
+    || new Set(entries.map(([key]) => key)).size !== entries.length
+  ) {
+    return false;
+  }
+  const projectId = parameters.get("project") || "";
+  const usageGate = parameters.get("usageGate");
+  const session = parameters.get("session");
+  const recovery = parameters.get("recovery");
+  const shortWorkspaceId = parameters.get("short");
+  const workspace = parameters.get("workspace");
+  return projectId.length >= 1
+    && projectId.length <= 256
+    && projectId.trim() === projectId
+    && !/[\0-\x1f\x7f]/u.test(projectId)
+    && (usageGate === null || /^[a-f0-9]{64}$/u.test(usageGate))
+    && (session === null || session === "resume")
+    && (recovery === null || (recovery === "drafts" && session === "resume"))
+    && (workspace === null || workspace === "short-form")
+    && (
+      shortWorkspaceId === null
+        ? true
+        : workspace === "short-form"
+          && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(shortWorkspaceId)
+    );
+}
+
+function validPublicLaunchQuery(query: string): boolean {
+  if (
+    query.length < 1
+    || query.length > 2_048
+    || /[\\#[\0-\x20\x7f]/u.test(query)
+  ) {
+    return false;
+  }
+  const parameters = new URLSearchParams(query);
+  if (parameters.toString() !== query) {
+    return false;
+  }
+  const entries = [...parameters.entries()];
+  if (
+    entries.length !== 1
+    || entries[0]?.[0] !== "source"
+  ) {
+    return false;
+  }
+  const source = parameters.get("source") || "";
+  return source.length <= 1_024
+    && canonicalSupportedVodSourceUrl(source) !== null;
+}
+
 export function publicShellRequestPath(rawTarget: unknown): string | null {
   const target = String(rawTarget || "");
   if (
     !target.startsWith("/")
     || target.length > 4_096
     || target.startsWith("//")
-    || /[%\\#[\0-\x20\x7f]/u.test(target)
+    || /[\\#[\0-\x20\x7f]/u.test(target)
   ) {
     return null;
   }
@@ -349,12 +421,19 @@ export function publicShellRequestPath(rawTarget: unknown): string | null {
   const pathname = queryIndex < 0 ? target : target.slice(0, queryIndex);
   const query = queryIndex < 0 ? null : target.slice(queryIndex + 1);
   if (
-    pathname.split("/").some((segment) => segment === "." || segment === "..")
+    /[%\\#[\0-\x20\x7f]/u.test(pathname)
+    || pathname.split("/").some((segment) => segment === "." || segment === "..")
     || (
       query !== null
       && (
-        pathname !== "/public.css"
-        || !/^v=(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/u.test(query)
+        pathname === "/" || pathname === "/index.html"
+          ? !validPublicLaunchQuery(query)
+          : pathname === "/editor.html"
+          ? !validPublicEditorQuery(query)
+          : (
+            !/\.(?:css|js)$/u.test(pathname)
+            || !/^v=(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/u.test(query)
+          )
       )
     )
   ) {
@@ -408,23 +487,33 @@ async function validatePublicShellIdentityFiles(
   if (hosts?.toString("utf8") !== `${PUBLIC_SHELL_CANONICAL_HOST}\n`) {
     throw new Error("public-shell/.popovic-hosts가 canonical 공개 Host와 다릅니다.");
   }
-  const html = loadedAssets.get("/")?.bytes.toString("utf8") || "";
-  const cspMatches = [...html.matchAll(
-    /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/gu
-  )];
-  if (
-    cspMatches.length !== 1
-    || cspMatches[0]?.[1] !== securityHeaders["Content-Security-Policy"]
-  ) {
-    throw new Error(
-      "public-shell/index.html의 CSP meta가 HTTP 보안 헤더와 정확히 일치하지 않습니다."
-    );
+  const htmlDocuments = ["/", "/editor.html"].map((requestPath) => ({
+    requestPath,
+    html: loadedAssets.get(requestPath)?.bytes.toString("utf8") || ""
+  }));
+  for (const { requestPath, html } of htmlDocuments) {
+    const cspMatches = [...html.matchAll(
+      /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/gu
+    )];
+    if (
+      cspMatches.length !== 1
+      || cspMatches[0]?.[1] !== securityHeaders["Content-Security-Policy"]
+    ) {
+      throw new Error(
+        `${requestPath}의 CSP meta가 HTTP 보안 헤더와 정확히 일치하지 않습니다.`
+      );
+    }
   }
+  const indexHtml = htmlDocuments[0]!.html;
+  const editorHtml = htmlDocuments[1]!.html;
   if (
-    /<script\b/iu.test(html)
-    || !/href="\/public\.css\?v=\d+\.\d+\.\d+"/u.test(html)
+    !/href="\/studio\.css\?v=\d+\.\d+\.\d+"/u.test(indexHtml)
+    || !/src="\/studio\.js\?v=\d+\.\d+\.\d+"/u.test(indexHtml)
+    || !indexHtml.includes('id="local-app-surface"')
+    || !/src="editor\/editor\.js\?v=\d+\.\d+\.\d+"/u.test(editorHtml)
+    || /kirinuki:\/\/open/iu.test(`${indexHtml}\n${editorHtml}`)
   ) {
-    throw new Error("public-shell/index.html이 무스크립트 고정 CSS 계약과 다릅니다.");
+    throw new Error("공개 배포물이 전체 브라우저 편집기 진입점과 다릅니다.");
   }
 }
 

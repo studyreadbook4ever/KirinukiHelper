@@ -6,9 +6,66 @@ import {
   acquireStudioProjectWriter,
   createFreshEditorProjectId,
   leaveCompletedStudioEditor,
+  resolveStudioEditorEntry,
   runWithExclusiveStudioProjectAccess,
   runWithExclusiveStudioProjectCollectionAccess
 } from "../src/editor/studio-runtime-web.js";
+
+test("editor-new CURRENT는 같은 세션의 빈 baseline일 때만 새로고침으로 복구한다", () => {
+  assert.deepEqual(resolveStudioEditorEntry({
+    purpose: "editor-new",
+    hasCaptureSeed: false,
+    hasCurrentProject: true,
+    checkpointBaselineHasProject: false
+  }), { kind: "same-session-current" });
+  assert.deepEqual(resolveStudioEditorEntry({
+    purpose: "editor-new",
+    hasCaptureSeed: true,
+    hasCurrentProject: true,
+    checkpointBaselineHasProject: false
+  }), { kind: "same-session-current" });
+  assert.deepEqual(resolveStudioEditorEntry({
+    purpose: "editor-new",
+    hasCaptureSeed: true,
+    hasCurrentProject: false,
+    checkpointBaselineHasProject: false
+  }), { kind: "fresh-capture" });
+  assert.deepEqual(resolveStudioEditorEntry({
+    purpose: "editor-new",
+    hasCaptureSeed: false,
+    hasCurrentProject: true,
+    checkpointBaselineHasProject: true
+  }), { kind: "error", reason: "new-project-collision" });
+  assert.deepEqual(resolveStudioEditorEntry({
+    purpose: "editor-new",
+    hasCaptureSeed: true,
+    hasCurrentProject: false,
+    checkpointBaselineHasProject: true
+  }), { kind: "error", reason: "new-project-collision" });
+  assert.deepEqual(resolveStudioEditorEntry({
+    purpose: "editor-new",
+    hasCaptureSeed: false,
+    hasCurrentProject: false,
+    checkpointBaselineHasProject: false
+  }), { kind: "error", reason: "missing-capture-seed" });
+});
+
+test("명시적 저장본 복원은 CURRENT를 요구하고 capture seed와 섞지 않는다", () => {
+  for (const purpose of ["editor-resume", "editor-recovery"] as const) {
+    assert.deepEqual(resolveStudioEditorEntry({
+      purpose,
+      hasCaptureSeed: true,
+      hasCurrentProject: true,
+      checkpointBaselineHasProject: true
+    }), { kind: "saved-current" });
+    assert.deepEqual(resolveStudioEditorEntry({
+      purpose,
+      hasCaptureSeed: true,
+      hasCurrentProject: false,
+      checkpointBaselineHasProject: false
+    }), { kind: "error", reason: "missing-saved-project" });
+  }
+});
 
 test("새 localhost 편집 ID는 VOD identity와 무관한 UUID다", () => {
   const first = createFreshEditorProjectId();

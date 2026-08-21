@@ -49,6 +49,10 @@ export interface ExternalVodSourceClockProof {
   contentIdentitySha256: string;
   metadataIdentityId: string;
   sourceDurationMs: number;
+  /**
+   * Legacy receipt key retained for v1 compatibility. New SOOP proofs hash
+   * the local engine's official yt-dlp root+entries identity here.
+   */
   browserClockIdentitySha256: string | null;
   parts: readonly ExternalVodSourceClockProofPart[];
 }
@@ -177,7 +181,7 @@ function normalizedSoopIdentity(
     })
   ) {
     fail(
-      "브라우저 SOOP 플레이어와 추출기의 전체 파트 시간축이 다릅니다.",
+      "SOOP 공식 root·entries 시간축과 선택 미디어 파트가 다릅니다.",
       "SOURCE_CLOCK_MISMATCH"
     );
   }
@@ -204,8 +208,9 @@ export function externalVodSourceVersionId({
 
 /**
  * Resolves the whole player clock. CHZZK HLS and YouTube direct media are the
- * single-part authority; SOOP's official browser/controller vector is the
- * multipart authority and must exactly match extractor metadata.
+ * single-part authority; SOOP's complete official yt-dlp root+entries vector
+ * is the multipart authority. An older browser/controller vector may be
+ * supplied only as a compatibility assertion and must match exactly.
  */
 export function createExternalVodSourceClockProof({
   platform,
@@ -384,9 +389,9 @@ export function parseExternalVodSourceClockProof(
   }
   const browserClockIdentitySha256 = value.browserClockIdentitySha256 === null
     ? null
-    : checkedSha(value.browserClockIdentitySha256, "브라우저 시간축 identity");
+    : checkedSha(value.browserClockIdentitySha256, "SOOP 시간축 identity");
   if ((platform === "SOOP") !== (browserClockIdentitySha256 !== null)) {
-    fail("플랫폼과 브라우저 시간축 identity가 다릅니다.", "INVALID_SOURCE_CLOCK_PROOF");
+    fail("플랫폼과 SOOP 시간축 identity가 다릅니다.", "INVALID_SOURCE_CLOCK_PROOF");
   }
   const withoutId: Omit<ExternalVodSourceClockProof, "sourceClockProofId"> = {
     schemaId: EXTERNAL_VOD_SOURCE_CLOCK_PROOF_SCHEMA,
@@ -405,7 +410,7 @@ export function parseExternalVodSourceClockProof(
 }
 
 /**
- * Cross-binds the whole browser/player clock to a plan-scoped acquisition
+ * Cross-binds the whole source/player clock to a plan-scoped acquisition
  * proof set. SOOP may acquire a sparse subset of its complete part vector;
  * every acquired part must still name the exact whole-clock part. CHZZK and
  * YouTube use the selected media's floored microsecond duration as authority,

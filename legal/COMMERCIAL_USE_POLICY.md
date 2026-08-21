@@ -9,7 +9,7 @@ KirinukiHelper는 장래의 광고, 유료 배포·구독과 SaaS/호스팅을 �
 ## Exact positive allowlist
 
 현재 canonical registry가 제품·로컬 runtime에 승인하는 license ID는 아래
-여덟 개뿐입니다.
+열 개뿐입니다.
 
 - `Apache-2.0`
 - `BlueOak-1.0.0`
@@ -75,20 +75,20 @@ https://opensource.org/osd
   막지 않더라도 각 저작권·허가 고지, Apache notice/patent 조건, 제3자 embedded
   component를 산출물 단위로 계속 확인합니다.
 
-Linux 소스 설치판에서 FFmpeg·ffprobe, Node.js, Python, Chromium은 시스템
+개발/source-run 경로의 FFmpeg·ffprobe, Node.js, Python, Chromium은 시스템
 제공·비재배포 경계이고 `build-dependent`는 허가가 아니라 경계 표식입니다.
-installer/container/server image에 하나라도 포함하는 순간 실제 binary와 linked
-component를 새로 감사해야 합니다. Electron 개발 프리뷰는 Electron의
-Chromium·Node와 FFmpeg·ffprobe를 포함하므로 이미 이 경계를 넘었으며 현재
-positive allowlist에 의한 공개 바이너리 승인을 받지 않았습니다.
+화면 없는 로컬 엔진 installer는 Electron의 Chromium·Node와 target별
+FFmpeg·ffprobe·yt-dlp를 포함하므로 이 system-provided 분류를 재사용하지 않습니다.
+실제 binary와 linked component를 별도 감사해야 하며 현재 공개 바이너리 승인을
+받지 않았습니다.
 
-Electron `43.4.0`, `@electron/asar@4.2.1`, `@electron/packager@20.3.0`,
-`@electron/fuses@2.1.3`,
+Electron `43.4.1`, `electron-builder@26.15.3`, `@electron/asar@4.2.1`,
+`@electron/packager@20.3.0`, `@electron/fuses@2.1.3`,
 FFmpeg/ffprobe `n8.1.2`(Shaka build `n8.1.2-1`)와 yt-dlp `2026.07.04`를 핀했다는 사실은
 라이선스 승인과 다릅니다. Electron/Chromium/Node 전체 SBOM, packaging
 dependency의 BSD-2-Clause 등 새 license ID 검토, FFmpeg의 실제 LGPL/GPL
 조건·대응 소스, yt-dlp standalone embedded component 고지가 완료될 때까지
-프리뷰 산출물은 외부에 배포하지 않습니다. 세부 gate는
+unsigned·unnotarized installer 산출물은 외부에 배포하지 않습니다. 세부 gate는
 [`DESKTOP_BINARY_RELEASE_GATE.md`](DESKTOP_BINARY_RELEASE_GATE.md)를 따릅니다.
 
 `external-terms`와 `mixed-see-packages`도 상업 이용 승인 ID가 아니며 각각
@@ -115,10 +115,11 @@ CHZZK·YouTube·SOOP의 서비스 약관, 상표와 사용자가 편집하는 �
 2. 현재 positive allowlist ID가 아니거나 addendum·custom terms가 있으면 build에
    넣지 않고 사람의 검토를 거칩니다. 검토 결과를 코드·고지·테스트와 함께
    남기기 전에는 임시 예외 환경 변수로 우회하지 않습니다.
-3. `npm run license:check`와 negative fixture를 통과시키고, web bundle,
-   최소 streaming companion, source map, server/container SBOM을 실제 산출물
-   기준으로 다시 검사합니다.
+3. `npm run license:check`와 negative fixture를 통과시키고, full web ZIP,
+   Windows/macOS/Linux 로컬 엔진 installer, source map, server/container SBOM을
+   실제 산출물 기준으로 다시 검사합니다.
 4. 광고·유료·SaaS 출시 시점의 라이선스 원문과 플랫폼·SDK 약관은 변경될 수
    있으므로 release evidence에 보관하고 사람이 승인합니다.
-5. Electron 데스크톱 package는 license/SBOM gate와 Windows 서명 또는 macOS
-   서명·공증을 모두 통과하기 전에는 CI 산출물을 release에 업로드하지 않습니다.
+5. 화면 없는 Electron 로컬 엔진 package는 license/SBOM gate와 Windows 서명
+   또는 macOS 서명·공증을 모두 통과하기 전에는 CI 산출물을 release에
+   업로드하지 않습니다.

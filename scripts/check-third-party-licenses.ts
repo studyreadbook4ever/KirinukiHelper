@@ -27,12 +27,11 @@ import { PRETENDARD_FONT } from "./pretendard-font.js";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const embeddedAudSegRoot = path.join(root, "AudSeg");
 const webRoot = path.join(root, "web");
-const publicShellRoot = path.join(root, "public-shell");
 if (process.argv.slice(2).length > 0) {
   throw new TypeError("사용법: check-third-party-licenses.ts");
 }
 const EXPECTED_NPM_INVENTORY_SHA256 =
-  "48dee2a9d866ee2150a2c9359bd782f42c88b35c3b127927970eb343b0cd5f7a";
+  "ece0d062afa69f625fa4171a00faad395341bafc34281398a0c8f68f3fd2e529";
 const EXPECTED_PROJECT_UNLICENSE_SIZE = 1_212;
 const EXPECTED_PROJECT_UNLICENSE_SHA256 =
   "b5065838cbac452dfc855ba6e6e031481ad2c68406f70d21ead9321374653e6c";
@@ -127,8 +126,21 @@ function assertLockPackage(packagePath: string, metadata: LockPackage) {
   const version = String(metadata?.version || "");
   const license = String(metadata?.license || "");
   const commercialUseRejection = commercialUseLicenseRejectionReason(license);
+  const installerBuildOnlyLicenseExpressions = new Set([
+    "(MIT OR CC0-1.0)",
+    "(WTFPL OR MIT)",
+    "0BSD",
+    "BSD-3-Clause",
+    "Python-2.0",
+    "WTFPL",
+    "WTFPL OR ISC"
+  ]);
   assert(
-    commercialUseRejection === null,
+    commercialUseRejection === null
+      || (
+        metadata.dev === true
+        && installerBuildOnlyLicenseExpressions.has(license)
+      ),
     `${packagePath}의 라이선스가 상업 이용 positive allowlist를 통과하지 못했습니다: ${commercialUseRejection}`
   );
   assertRegistryArtifact(packagePath, metadata);
@@ -143,7 +155,7 @@ function assertLockPackage(packagePath: string, metadata: LockPackage) {
     assert(license === "MIT", "esbuild 라이선스가 MIT가 아닙니다.");
     assert(
       metadata.dev !== true && metadata.hasInstallScript === true,
-      "esbuild는 설치 스크립트가 명시된 production companion dependency여야 합니다."
+      "esbuild는 설치 스크립트가 명시된 repository-local engine dependency여야 합니다."
     );
     return;
   }
@@ -152,7 +164,7 @@ function assertLockPackage(packagePath: string, metadata: LockPackage) {
     assert(license === "MIT", `${packagePath} 라이선스가 MIT가 아닙니다.`);
     assert(
       metadata.dev !== true && metadata.optional === true,
-      `${packagePath}는 optional production companion binary여야 합니다.`
+      `${packagePath}는 optional repository-local engine binary여야 합니다.`
     );
     return;
   }
@@ -215,7 +227,7 @@ function assertLockPackage(packagePath: string, metadata: LockPackage) {
     );
     return;
   }
-  // Desktop preview tooling is an exact root devDependency closure. Every
+  // Desktop installer tooling is an exact root devDependency closure. Every
   // artifact is still registry+integrity checked above and the complete
   // version/license/flag set is pinned by EXPECTED_NPM_INVENTORY_SHA256.
   if (metadata.dev === true) {
@@ -234,7 +246,7 @@ assert(
   packageJson.name === "kirinuki-app"
     && packageLock.name === "kirinuki-app"
     && packageLock.packages?.[""]?.name === "kirinuki-app",
-  "root package metadata가 localhost web studio를 가리키지 않습니다."
+  "root package metadata가 Kirinuki web editor/local engine 프로젝트와 다릅니다."
 );
 assert(
   packageJson.license === "Unlicense",
@@ -284,9 +296,12 @@ assertExactObject(
   {
     "@electron/asar": "4.2.1",
     "@electron/fuses": "2.1.3",
+    "@electron/osx-sign": "2.6.0",
     "@electron/packager": "20.3.0",
     "@types/node": "20.19.43",
-    electron: "43.4.0",
+    electron: "43.4.1",
+    "electron-builder": "26.15.3",
+    tar: "7.5.22",
     typescript: "5.9.3"
   },
   "development dependency"
@@ -354,9 +369,7 @@ const [
   compiledEditor,
   compiledAudSegWorker,
   localCaptionStackSource,
-  typescriptQualityWorkflow,
-  publicShellNotice,
-  publicShellProjectLicense
+  typescriptQualityWorkflow
 ] = await Promise.all([
   bytes("UNLICENSE"),
   bytes("licenses/UNLICENSE.txt", webRoot),
@@ -378,17 +391,11 @@ const [
   bytes("editor/editor.js", webRoot),
   bytes("editor/audseg-worker.js", webRoot),
   bytes("scripts/local-caption-stack.ts"),
-  bytes(".github/workflows/typescript-quality.yml"),
-  bytes("THIRD_PARTY_NOTICES.md", publicShellRoot),
-  bytes("licenses/UNLICENSE.txt", publicShellRoot)
+  bytes(".github/workflows/typescript-quality.yml")
 ]);
 assert(
   projectLicense.equals(distributedProjectLicense),
   "KirinukiHelper Unlicense 원문과 web 배포 사본이 다릅니다."
-);
-assert(
-  projectLicense.equals(publicShellProjectLicense),
-  "KirinukiHelper Unlicense 원문과 공개 shell 사본이 다릅니다."
 );
 assert(
   projectLicense.toString("utf8").startsWith(
@@ -528,7 +535,7 @@ const expectedAttributionIds = [
   "python",
   "chromium",
   "tsx-runtime",
-  "desktop-preview-runtime",
+  "desktop-local-engine-runtime",
   "typescript-toolchain",
   "github-actions-ci",
   "chzzk-service",
@@ -570,14 +577,14 @@ for (const entry of THIRD_PARTY_ATTRIBUTIONS) {
   } else if (
     entry.kind === "development-only"
     || entry.kind === "ci-only"
-    || entry.kind === "desktop-preview-bundle"
+    || entry.kind === "desktop-local-engine-bundle"
   ) {
     assert(
       entry.license === "mixed-see-packages"
-        && (entry.kind === "desktop-preview-bundle"
+        && (entry.kind === "desktop-local-engine-bundle"
           ? entry.redistributed === true && entry.publicReleaseBlocked === true
           : entry.redistributed === false),
-      `${entry.id}의 mixed-see-packages 표식 또는 preview 배포 경계가 올바르지 않습니다.`
+      `${entry.id}의 mixed-see-packages 표식 또는 installer 배포 경계가 올바르지 않습니다.`
     );
   } else {
     const commercialUseRejection = commercialUseLicenseRejectionReason(
@@ -705,7 +712,7 @@ for (const entry of THIRD_PARTY_ATTRIBUTIONS) {
     continue;
   }
 
-  if (entry.kind === "desktop-preview-bundle") {
+  if (entry.kind === "desktop-local-engine-bundle") {
     assert(
       entry.redistributed === true
         && entry.publicReleaseBlocked === true
@@ -713,19 +720,19 @@ for (const entry of THIRD_PARTY_ATTRIBUTIONS) {
         && entry.packages.length > 0
         && entry.releaseGate === "legal/DESKTOP_BINARY_RELEASE_GATE.md"
         && runtimeDependenciesText.includes(marker),
-      `${entry.id} desktop preview 공개 차단 경계가 불완전합니다.`
+      `${entry.id} desktop local engine 공개 차단 경계가 불완전합니다.`
     );
     continue;
   }
 
-  if (entry.kind === "local-companion-runtime") {
+  if (entry.kind === "local-engine-repository-runtime") {
     assert(
       entry.redistributed === false
         && entry.lockfile === "package-lock.json"
         && entry.executionScope === "repository-local-node-modules"
         && entry.packages.length > 0
         && runtimeDependenciesText.includes(marker),
-      `${entry.id} local companion runtime 경계가 불완전합니다.`
+      `${entry.id} repository-local engine runtime 경계가 불완전합니다.`
     );
     continue;
   }
@@ -829,24 +836,12 @@ assert(
 );
 
 assert(
-  webNoticeText.includes("Kirinuki Linux 소스 앱의 `web/` browser assets에 실제로 포함되는")
+  webNoticeText.includes("Kirinuki public web editor third-party notices")
     && !webNoticeText.includes(PINNED_YT_DLP.sha256)
     && !webNoticeText.includes(PINNED_WHISPER_CPP.archive.sha256)
     && !webNoticeText.includes("ffmpeg -buildconf")
     && !webNoticeText.includes("TypeScript 5.9.3"),
   "web 고지가 runtime/system/development 범위를 포함하고 있습니다."
-);
-const publicShellNoticeText = publicShellNotice.toString("utf8");
-assert(
-  publicShellNoticeText.includes("Kirinuki public launch shell notices")
-    && publicShellNoticeText.includes("제3자 JavaScript, 글꼴")
-    && !publicShellNoticeText.includes("<!-- attribution-id:")
-    && !/(?:Mediabunny|AudSeg|Pretendard|Paperlogy|iframe_api|127\.0\.0\.1|localhost)/u.test(
-      publicShellNoticeText
-    )
-    && !publicShellNoticeText.includes(PINNED_YT_DLP.sha256)
-    && !publicShellNoticeText.includes(PINNED_WHISPER_CPP.archive.sha256),
-  "공개 launch shell 고지가 앱 내부·runtime 제3자 범위를 포함하고 있습니다."
 );
 assert(
   runtimeNoticeText.includes("법률 자문")
@@ -859,7 +854,9 @@ assert(
     && runtimeDependenciesText.includes("nlohmann/json")
     && runtimeDependenciesText.includes("stb_vorbis")
     && runtimeDependenciesText.includes("miniaudio")
-    && runtimeDependenciesText.includes("ggml"),
+    && runtimeDependenciesText.includes("ggml")
+    && runtimeDependenciesText.includes("electron-builder@26.15.3")
+    && webChecklistText.includes("electron-builder `26.15.3`"),
   "법적 한계·FFmpeg nonfree gate·whisper-server embedded 의무 문서가 불완전합니다."
 );
 assert(
@@ -884,8 +881,8 @@ assert(
     && commercialUsePolicyText.includes("MPL-2.0")
     && commercialUsePolicyText.includes("OFL-1.1")
     && commercialUsePolicyText.includes("광고 SDK")
-    && webChecklistText.includes("legal/COMMERCIAL_USE_POLICY.md")
-    && inventoryText.includes("legal/COMMERCIAL_USE_POLICY.md"),
+    && webChecklistText.includes("COMMERCIAL_USE_POLICY.md")
+    && inventoryText.includes("COMMERCIAL_USE_POLICY.md"),
   "광고·유료·SaaS 상업 이용 라이선스 정책과 release gate 문서가 불완전합니다."
 );
 for (const approvedLicense of COMMERCIAL_USE_APPROVED_LICENSE_IDS) {
@@ -895,12 +892,11 @@ for (const approvedLicense of COMMERCIAL_USE_APPROVED_LICENSE_IDS) {
   );
 }
 assert(
-  inventoryText.includes("저장소 전용 Python·CI 도구의 미고정 경계")
+  inventoryText.includes("저장소 전용 native/Python build 도구")
     && inventoryText.includes("재현 가능한 배포")
     && inventoryText.includes("인벤토리로 간주하지 않습니다")
-    && inventoryText.includes("full commit")
-    && inventoryText.includes("SHA와 MIT 대응 소스를 고정")
-    && webChecklistText.includes("GitHub Actions full commit SHA 세 개")
+    && inventoryText.includes("full commit SHA와 MIT 대응 소스를 고정")
+    && webChecklistText.includes("GitHub Actions 세 항목")
     && webChecklistText.includes("full commit SHA")
     && webChecklistText.includes("C/C++ compiler, CMake, CUDA toolkit"),
   "Python/CI/native build tool의 향후 배포 provenance gate가 불완전합니다."
@@ -942,7 +938,7 @@ console.log(JSON.stringify({
   npmPackages: Object.keys(packageLock.packages).length - 1,
   runtimeDependencies: packageJson.dependencies,
   buildDependencies: packageJson.devDependencies,
-  localCompanionRuntime: [
+  repositoryLocalEngineRuntime: [
     "tsx 4.23.1 MIT",
     "esbuild 0.28.1 + platform package MIT"
   ],

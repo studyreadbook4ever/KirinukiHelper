@@ -22,13 +22,183 @@ import {
   waitForChzzkVodMaterialization
 } from "../src/editor/chzzk-vod-client.js";
 import {
+  localEngineDocumentClientNonce
+} from "../src/editor/caption-agent.js";
+import {
+  establishLocalMediaEngineTransport,
+  forgetLocalMediaEngineTransport
+} from "../src/editor/local-media-engine-transport.js";
+import {
+  decodeBase64Url,
+  encodeBase64Url
+} from "../src/lib/local-media-engine-auth.js";
+import {
+  LOCAL_MEDIA_ENGINE_TRANSPORT_COUNTER_HEADER,
+  LOCAL_MEDIA_ENGINE_TRANSPORT_ID_HEADER,
+  LOCAL_MEDIA_ENGINE_TRANSPORT_RESPONSE_SCHEMA,
+  localMediaEngineTransportAad,
+  parseLocalMediaEngineTransportRequest
+} from "../src/lib/local-media-engine-transport.js";
+import {
   SOOP_VOD_SOURCE_CLOCK_IDENTITY_SCHEMA
 } from "../src/lib/soop-vod-source-clock.js";
 
 const ENDPOINT = "http://127.0.0.1:4319/v1/captions";
-const TOKEN = "local-process-token";
+const TOKEN = encodeBase64Url(new Uint8Array(32).fill(0x31));
+const TRANSPORT_ID = encodeBase64Url(new Uint8Array(32).fill(0x32));
+const TRANSPORT_KEY = new Uint8Array(32).fill(0x33);
 const JOB_ID = "job_0123456789abcdef";
 const CONSUMER_ID = "project-client-test";
+
+type PlaintextFetch = (
+  input: URL | RequestInfo,
+  init?: RequestInit
+) => Promise<Response>;
+
+function ownedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return Uint8Array.from(bytes).buffer;
+}
+
+async function encryptedTransportFixture(
+  plaintextFetch: PlaintextFetch
+): Promise<typeof fetch> {
+  const clientNonce = localEngineDocumentClientNonce();
+  await establishLocalMediaEngineTransport({
+    transportId: TRANSPORT_ID,
+    clientNonce,
+    sharedKey: TRANSPORT_KEY
+  });
+  const key = await globalThis.crypto.subtle.importKey(
+    "raw",
+    ownedArrayBuffer(TRANSPORT_KEY),
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+  return (async (
+    input: URL | RequestInfo,
+    init: RequestInit = {}
+  ): Promise<Response> => {
+    const url = new URL(String(input));
+    assert.equal(url.origin, "http://127.0.0.1:4319");
+    const method = String(init.method || "GET").toUpperCase();
+    const path = `${url.pathname}${url.search}`;
+    const headers = new Headers(init.headers);
+    const protocol = headers.get("X-Kirinuki-Protocol") || "";
+    assert.equal(headers.get("X-Kirinuki-Client-Nonce"), clientNonce);
+    assert.equal(headers.get("Authorization"), null);
+    assert.equal(headers.get("X-Kirinuki-Media-Access"), null);
+    assert.equal(headers.get(LOCAL_MEDIA_ENGINE_TRANSPORT_ID_HEADER), TRANSPORT_ID);
+    const requestBody = String(init.body || "");
+    assert.doesNotMatch(requestBody, new RegExp(TOKEN, "u"));
+    const encrypted = parseLocalMediaEngineTransportRequest(
+      JSON.parse(requestBody)
+    );
+    assert.ok(encrypted);
+    assert.equal(encrypted.transportId, TRANSPORT_ID);
+    assert.equal(
+      headers.get(LOCAL_MEDIA_ENGINE_TRANSPORT_COUNTER_HEADER),
+      String(encrypted.counter)
+    );
+    const requestIv = decodeBase64Url(encrypted.iv);
+    assert.ok(requestIv);
+    const plaintextBytes = await globalThis.crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: ownedArrayBuffer(requestIv),
+        additionalData: ownedArrayBuffer(localMediaEngineTransportAad({
+          direction: "request",
+          transportId: TRANSPORT_ID,
+          counter: encrypted.counter,
+          method,
+          path,
+          protocol,
+          clientNonce,
+          iv: encrypted.iv
+        })),
+        tagLength: 128
+      },
+      key,
+      ownedArrayBuffer(decodeBase64Url(encrypted.ciphertext) || new Uint8Array())
+    );
+    const plaintext = JSON.parse(
+      new TextDecoder().decode(plaintextBytes)
+    ) as Record<string, unknown>;
+    assert.deepEqual(
+      Object.keys(plaintext).sort(),
+      ["bodyText", "mediaAccess", "token"]
+    );
+    assert.equal(plaintext.token, TOKEN);
+    assert.ok(
+      plaintext.mediaAccess === null
+        || typeof plaintext.mediaAccess === "string"
+    );
+    assert.ok(
+      plaintext.bodyText === null || typeof plaintext.bodyText === "string"
+    );
+    const plaintextHeaders = new Headers(headers);
+    plaintextHeaders.delete(LOCAL_MEDIA_ENGINE_TRANSPORT_ID_HEADER);
+    plaintextHeaders.delete(LOCAL_MEDIA_ENGINE_TRANSPORT_COUNTER_HEADER);
+    plaintextHeaders.set("Authorization", `Bearer ${TOKEN}`);
+    if (typeof plaintext.mediaAccess === "string") {
+      plaintextHeaders.set("X-Kirinuki-Media-Access", plaintext.mediaAccess);
+    }
+    const plaintextInit: RequestInit = {
+      ...init,
+      method,
+      headers: plaintextHeaders
+    };
+    delete plaintextInit.body;
+    if (typeof plaintext.bodyText === "string") {
+      plaintextInit.body = plaintext.bodyText;
+    }
+    const plaintextResponse = await plaintextFetch(input, plaintextInit);
+    const responseText = await plaintextResponse.text();
+    const responseIvBytes = new Uint8Array(12);
+    globalThis.crypto.getRandomValues(responseIvBytes);
+    const responseIv = encodeBase64Url(responseIvBytes);
+    const responseCiphertext = new Uint8Array(
+      await globalThis.crypto.subtle.encrypt(
+        {
+          name: "AES-GCM",
+          iv: ownedArrayBuffer(responseIvBytes),
+          additionalData: ownedArrayBuffer(localMediaEngineTransportAad({
+            direction: "response",
+            transportId: TRANSPORT_ID,
+            counter: encrypted.counter,
+            method,
+            path,
+            protocol,
+            clientNonce,
+            iv: responseIv,
+            status: plaintextResponse.status
+          })),
+          tagLength: 128
+        },
+        key,
+        ownedArrayBuffer(new TextEncoder().encode(responseText))
+      )
+    );
+    const responseBody = JSON.stringify({
+      schema: LOCAL_MEDIA_ENGINE_TRANSPORT_RESPONSE_SCHEMA,
+      transportId: TRANSPORT_ID,
+      counter: encrypted.counter,
+      iv: responseIv,
+      ciphertext: encodeBase64Url(responseCiphertext)
+    });
+    assert.doesNotMatch(responseBody, new RegExp(TOKEN, "u"));
+    assert.equal(responseBody.includes(responseText), false);
+    return new Response(responseBody, {
+      status: plaintextResponse.status,
+      statusText: plaintextResponse.statusText,
+      headers: { "content-type": "application/json; charset=utf-8" }
+    });
+  }) as typeof fetch;
+}
+
+test.afterEach(() => {
+  forgetLocalMediaEngineTransport();
+});
 
 const SOOP_SOURCE_CLOCK_IDENTITY = Object.freeze({
   schema: SOOP_VOD_SOURCE_CLOCK_IDENTITY_SCHEMA,
@@ -139,17 +309,21 @@ test("시작 요청은 고정 ±10초와 권리 확인, 원본 좌표만 전송�
     sourceUrl: "https://chzzk.naver.com/video/14252987",
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
     rightsConfirmed: true,
-    fetchImpl: async (input, init) => {
+    fetchImpl: await encryptedTransportFixture(async (input, init) => {
       requestUrl = String(input);
       requestInit = init;
       return jsonResponse(statusPayload("queued"));
-    }
+    })
   });
 
   assert.equal(requestUrl, chzzkVodMaterializationEndpoint(ENDPOINT));
   assert.equal(requestInit?.method, "POST");
   const headers = new Headers(requestInit?.headers);
   assert.equal(headers.get("authorization"), `Bearer ${TOKEN}`);
+  assert.equal(
+    headers.get("x-kirinuki-client-nonce"),
+    localEngineDocumentClientNonce()
+  );
   assert.equal(
     headers.get("x-kirinuki-protocol"),
     CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
@@ -182,17 +356,17 @@ test("저장된 materialization 참조는 비밀 경로 없이 로컬 재개 힌
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
     rightsConfirmed: true,
     resume,
-    fetchImpl: async (_input, init) => {
+    fetchImpl: await encryptedTransportFixture(async (_input, init) => {
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return jsonResponse(statusPayload("queued"));
-    }
+    })
   });
   assert.deepEqual(body.resume, resume);
   assert.equal(JSON.stringify(body).includes("artifactPath"), false);
   assert.equal(JSON.stringify(body).includes("access"), false);
 });
 
-test("SOOP 준비 요청은 공식 part 시계 vector를 필수로 묶고 비밀 필드를 허용하지 않는다", async () => {
+test("SOOP 준비 요청은 legacy part 시계를 선택 검증값으로만 보내고 로컬 엔진 유도를 허용한다", async () => {
   let body: Record<string, unknown> = {};
   await startChzzkVodMaterialization({
     endpoint: ENDPOINT,
@@ -202,28 +376,40 @@ test("SOOP 준비 요청은 공식 part 시계 vector를 필수로 묶고 비밀
     sourceClockIdentity: SOOP_SOURCE_CLOCK_IDENTITY,
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
     rightsConfirmed: true,
-    fetchImpl: async (_input, init) => {
+    fetchImpl: await encryptedTransportFixture(async (_input, init) => {
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return jsonResponse(statusPayload("queued"));
-    }
+    })
   });
   assert.deepEqual(body.sourceClockIdentity, SOOP_SOURCE_CLOCK_IDENTITY);
   assert.doesNotMatch(
     JSON.stringify(body.sourceClockIdentity),
     /https?:|cookie|authorization|token|signature|hmac/iu
   );
-  await assert.rejects(
-    startChzzkVodMaterialization({
-      endpoint: ENDPOINT,
-      token: TOKEN,
-      consumerId: CONSUMER_ID,
-      sourceUrl: "https://vod.sooplive.com/player/169475287",
-      clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
-      rightsConfirmed: true,
-      fetchImpl: async () => jsonResponse(statusPayload("queued"))
-    }),
-    /part 시계 증명/u
-  );
+  let extensionFreeBody: Record<string, unknown> = {};
+  await startChzzkVodMaterialization({
+    endpoint: ENDPOINT,
+    token: TOKEN,
+    consumerId: CONSUMER_ID,
+    sourceUrl: "https://vod.sooplive.com/player/169475287",
+    clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
+    rightsConfirmed: true,
+    fetchImpl: await encryptedTransportFixture(async (_input, init) => {
+      extensionFreeBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse(statusPayload("queued"));
+    })
+  });
+  assert.equal(Object.hasOwn(extensionFreeBody, "sourceClockIdentity"), false);
+  await assert.rejects(startChzzkVodMaterialization({
+    endpoint: ENDPOINT,
+    token: TOKEN,
+    consumerId: CONSUMER_ID,
+    sourceUrl: "https://vod.sooplive.com/player/169475287",
+    sourceClockIdentity: { ...SOOP_SOURCE_CLOCK_IDENTITY, contentId: "wrong" },
+    clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
+    rightsConfirmed: true,
+    fetchImpl: async () => jsonResponse(statusPayload("queued"))
+  }), /part 시계 증명/u);
 });
 
 test("hot-load 요청은 clip별 확장 범위와 비밀 없는 base identity만 전송한다", async () => {
@@ -242,10 +428,10 @@ test("hot-load 요청은 clip별 확장 범위와 비밀 없는 base identity만
     editableRanges: [{ id: "clip-1", startMs: 30_000, endMs: 120_000 }],
     rightsConfirmed: true,
     base,
-    fetchImpl: async (_input, init) => {
+    fetchImpl: await encryptedTransportFixture(async (_input, init) => {
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return jsonResponse(statusPayload("queued"));
-    }
+    })
   });
   assert.deepEqual(body.editableRanges, [
     { id: "clip-1", startMs: 30_000, endMs: 120_000 }
@@ -374,16 +560,18 @@ test("poll은 완료까지 진행 상태를 전달하고, 취소는 DELETE를 �
   const states = [statusPayload("downloading"), statusPayload("completed")];
   const observed: string[] = [];
   const polledUrls: string[] = [];
+  const polledMethods: string[] = [];
   const completed = await waitForChzzkVodMaterialization({
     endpoint: ENDPOINT,
     token: TOKEN,
     jobId: JOB_ID,
     pollIntervalMs: 1,
     onProgress: (status) => observed.push(status.state),
-    fetchImpl: async (input) => {
+    fetchImpl: await encryptedTransportFixture(async (input, init) => {
       polledUrls.push(String(input));
+      polledMethods.push(String(init?.method));
       return jsonResponse(states.shift());
-    }
+    })
   });
   assert.equal(completed.state, "completed");
   assert.deepEqual(observed, ["downloading", "completed"]);
@@ -391,6 +579,7 @@ test("poll은 완료까지 진행 상태를 전달하고, 취소는 DELETE를 �
     `http://127.0.0.1:4319/v1/vod/materializations/${JOB_ID}`,
     `http://127.0.0.1:4319/v1/vod/materializations/${JOB_ID}`
   ]);
+  assert.deepEqual(polledMethods, ["POST", "POST"]);
 
   let method = "";
   let cancelledUrl = "";
@@ -398,11 +587,11 @@ test("poll은 완료까지 진행 상태를 전달하고, 취소는 DELETE를 �
     endpoint: ENDPOINT,
     token: TOKEN,
     jobId: JOB_ID,
-    fetchImpl: async (input, init) => {
+    fetchImpl: await encryptedTransportFixture(async (input, init) => {
       cancelledUrl = String(input);
       method = String(init?.method);
       return jsonResponse(statusPayload("cancelled"));
-    }
+    })
   });
   assert.equal(method, "DELETE");
   assert.equal(
@@ -421,12 +610,12 @@ test("poll은 terminal 실패의 semantic 공개 오류 코드를 예외에 보�
       jobId: JOB_ID,
       pollIntervalMs: 1,
       onProgress: (status) => observed.push(status.error?.code || ""),
-      fetchImpl: async () => jsonResponse(statusPayload("failed", {
+      fetchImpl: await encryptedTransportFixture(async () => jsonResponse(statusPayload("failed", {
         error: {
           code: "SOURCE_CLOCK_VERIFICATION_FAILED",
           message: "원본 VOD의 정확한 재생 시간축을 확인하지 못했습니다."
         }
-      }))
+      })))
     }),
     (error: unknown) => Boolean(
       error instanceof ChzzkVodMaterializationClientError
@@ -445,12 +634,12 @@ test("poll HTTP 실패도 안전한 내부 엔진 오류 코드와 상태를 보
       token: TOKEN,
       jobId: JOB_ID,
       pollIntervalMs: 1,
-      fetchImpl: async () => jsonResponse({
+      fetchImpl: await encryptedTransportFixture(async () => jsonResponse({
         error: {
           code: "SOURCE_CHANGED",
           message: "원본 VOD 재생 정보가 변경되었습니다."
         }
-      }, 409)
+      }, 409))
     }),
     (error: unknown) => Boolean(
       error instanceof ChzzkVodMaterializationClientError
@@ -469,7 +658,7 @@ test("완료 VOD cache purge는 media access와 exact v2 source identity를 별�
     token: TOKEN,
     mediaUrl: `http://127.0.0.1:4319/v1/vod/media/${JOB_ID}?access=media-secret`,
     materialization,
-    fetchImpl: async (input, init) => {
+    fetchImpl: await encryptedTransportFixture(async (input, init) => {
       requestUrl = String(input);
       requestInit = init;
       return jsonResponse({
@@ -488,7 +677,7 @@ test("완료 VOD cache purge는 media access와 exact v2 source identity를 별�
           sourceVersionId: materialization.source.sourceVersionId
         }
       });
-    }
+    })
   });
   assert.equal(
     requestUrl,
@@ -530,7 +719,7 @@ test("consumer session cache purge는 consumer와 exact source capability를 별
     consumerId: CONSUMER_ID,
     mediaUrl: `http://127.0.0.1:4319/v1/vod/media/${JOB_ID}?access=media-secret`,
     materialization,
-    fetchImpl: async (input, init) => {
+    fetchImpl: await encryptedTransportFixture(async (input, init) => {
       requestUrl = String(input);
       requestInit = init;
       return jsonResponse({
@@ -551,7 +740,7 @@ test("consumer session cache purge는 consumer와 exact source capability를 별
           sourceVersionId: materialization.source.sourceVersionId
         }
       });
-    }
+    })
   });
   assert.equal(
     requestUrl,

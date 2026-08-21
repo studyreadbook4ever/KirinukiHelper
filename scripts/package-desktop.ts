@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 import { packager } from "@electron/packager";
 import {
@@ -34,7 +35,6 @@ import {
 } from "./build-desktop.js";
 import {
   DESKTOP_ASAR_PACKAGE_FILES,
-  DESKTOP_STREAMING_COMPANION_FILES,
   assertExactRegularFileTreeSnapshot,
   copyExactRegularFileTree,
   snapshotRegularFileTree,
@@ -50,10 +50,25 @@ import {
   prepareDesktopTools
 } from "./prepare-desktop-tools.js";
 import type { DesktopToolArtifactRole } from "./prepare-desktop-tools.js";
+import {
+  prepareWindowsJobLauncher
+} from "./prepare-windows-job-launcher.js";
+import {
+  WINDOWS_JOB_LAUNCHER_FILE_NAME,
+  WINDOWS_JOB_LAUNCHER_MANIFEST_FILE_NAME,
+  verifyPackagedWindowsJobLauncher
+} from "../src/desktop/windows-job-object.js";
+import { pinnedElectronArchiveChecksums } from "./electron-archive-checksums.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const ELECTRON_VERSION = "43.4.0";
+const require = createRequire(import.meta.url);
+const ELECTRON_VERSION = "43.4.1";
 export const DESKTOP_DARWIN_MINIMUM_SYSTEM_VERSION = "15.0";
+const DESKTOP_ICON_PATHS = Object.freeze({
+  darwin: path.join(root, "build", "icon.icns"),
+  linux: path.join(root, "build", "icon.svg"),
+  win32: path.join(root, "build", "icon.ico")
+});
 
 const DESKTOP_FUSE_CONFIG = Object.freeze({
   version: FuseVersion.V1,
@@ -97,6 +112,44 @@ function currentTarget(): DesktopBundleTarget {
     );
   }
   return target as DesktopBundleTarget;
+}
+
+async function desktopBrandAssetIdentity(
+  filePath: string,
+  relativePath: string
+): Promise<Readonly<DesktopPackageFileIdentity>> {
+  const pathMetadata = await lstat(filePath);
+  if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) {
+    throw new Error(`데스크톱 상표 파일이 regular file이 아닙니다: ${filePath}`);
+  }
+  const handle = await open(
+    filePath,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0)
+  );
+  try {
+    const before = await handle.stat();
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    if (
+      !before.isFile()
+      || before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || before.size !== bytes.byteLength
+    ) {
+      throw new Error(`데스크톱 상표 파일이 검증 중 바뀌었습니다: ${filePath}`);
+    }
+    return Object.freeze({
+      relativePath,
+      size: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      executable: (before.mode & 0o111) !== 0
+    });
+  } finally {
+    await handle.close();
+  }
 }
 
 function packagedExecutable(
@@ -228,19 +281,21 @@ async function verifyPackagedToolArtifact(
 
 async function isolatedDesktopResources(
   toolsDirectory: string,
-  target: DesktopBundleTarget
+  target: DesktopBundleTarget,
+  windowsNativeDirectory?: string
 ): Promise<Readonly<{
   parent: string;
-  companionRoot: string;
-  companionIdentities: readonly DesktopPackageFileIdentity[];
   toolsRoot: string;
   toolIdentities: readonly DesktopPackageFileIdentity[];
+  nativeRoot?: string;
+  nativeIdentities?: readonly DesktopPackageFileIdentity[];
 }>> {
   const manifest = desktopToolTargetManifest(target);
   const parent = await mkdtemp(path.join(os.tmpdir(), "kirinuki-desktop-package-"));
   const toolsRoot = path.join(parent, "desktop-tools");
   const targetRoot = path.join(toolsRoot, target);
-  const companionRoot = path.join(parent, "streaming-companion");
+  const nativeRoot = path.join(parent, "desktop-native");
+  const nativeTargetRoot = path.join(nativeRoot, target);
   const fileNames = [
     manifest.ffmpeg.fileName,
     manifest.ffprobe.fileName,
@@ -249,25 +304,23 @@ async function isolatedDesktopResources(
     "manifest.json"
   ];
   try {
+    if (target === "win32-x64" && !windowsNativeDirectory) {
+      throw new Error("Windows Job Object launcher resource가 준비되지 않았습니다.");
+    }
+    if (target !== "win32-x64" && windowsNativeDirectory !== undefined) {
+      throw new Error("Windows가 아닌 package에 Job Object launcher가 결합되었습니다.");
+    }
     await assertDesktopToolDirectoryModes(
       toolsDirectory,
       target,
       `desktop tools ${target} source`
     );
-    const [toolIdentities, companionIdentities] = await Promise.all([
-      copyExactRegularFileTree({
-        sourceRoot: toolsDirectory,
-        destinationRoot: targetRoot,
-        expectedFiles: fileNames,
-        label: `desktop tools ${target}`
-      }),
-      copyExactRegularFileTree({
-        sourceRoot: path.join(root, "streaming-companion"),
-        destinationRoot: companionRoot,
-        expectedFiles: DESKTOP_STREAMING_COMPANION_FILES,
-        label: "desktop streaming companion"
-      })
-    ]);
+    const toolIdentities = await copyExactRegularFileTree({
+      sourceRoot: toolsDirectory,
+      destinationRoot: targetRoot,
+      expectedFiles: fileNames,
+      label: `desktop tools ${target}`
+    });
     await assertDesktopToolDirectoryModes(
       targetRoot,
       target,
@@ -275,12 +328,32 @@ async function isolatedDesktopResources(
     );
     await assertExactDirectoryEntries(toolsRoot, [target]);
     await assertExactDirectoryEntries(targetRoot, fileNames);
+    const nativeFiles = [
+      WINDOWS_JOB_LAUNCHER_FILE_NAME,
+      WINDOWS_JOB_LAUNCHER_MANIFEST_FILE_NAME
+    ];
+    const nativeIdentities = target === "win32-x64"
+      ? await copyExactRegularFileTree({
+        sourceRoot: windowsNativeDirectory!,
+        destinationRoot: nativeTargetRoot,
+        expectedFiles: nativeFiles,
+        label: "Windows Job Object launcher"
+      })
+      : undefined;
+    if (target === "win32-x64") {
+      if (!nativeIdentities) {
+        throw new Error("Windows Job Object launcher copy가 완료되지 않았습니다.");
+      }
+      await assertExactDirectoryEntries(nativeRoot, [target]);
+      await assertExactDirectoryEntries(nativeTargetRoot, nativeFiles);
+    }
     return Object.freeze({
       parent,
-      companionRoot,
-      companionIdentities,
       toolsRoot,
-      toolIdentities
+      toolIdentities,
+      ...(nativeIdentities
+        ? { nativeRoot, nativeIdentities }
+        : {})
     });
   } catch (error) {
     await rm(parent, { recursive: true, force: true });
@@ -288,34 +361,7 @@ async function isolatedDesktopResources(
   }
 }
 
-async function verifyPackagedStreamingCompanion(
-  resourcesRoot: string,
-  expectedIdentities: readonly DesktopPackageFileIdentity[]
-): Promise<void> {
-  const companionRoot = path.join(resourcesRoot, "streaming-companion");
-  const actualIdentities = await snapshotExactRegularFileTree(
-    companionRoot,
-    DESKTOP_STREAMING_COMPANION_FILES,
-    "packaged streaming companion"
-  );
-  if (JSON.stringify(actualIdentities) !== JSON.stringify(expectedIdentities)) {
-    throw new Error(
-      "패키지의 Player Bridge 파일 identity가 격리된 resource와 다릅니다."
-    );
-  }
-  const extensionManifest = await readFile(
-    path.join(companionRoot, "manifest.json"),
-    "utf8"
-  );
-  if (
-    (JSON.parse(extensionManifest) as { name?: unknown }).name
-      !== "Kirinuki Player Bridge"
-  ) {
-    throw new Error("패키지의 Player Bridge identity가 다릅니다.");
-  }
-}
-
-async function verifyPackagedDesktopTools(
+export async function verifyPackagedDesktopTools(
   resourcesRoot: string,
   target: DesktopBundleTarget
 ): Promise<void> {
@@ -361,14 +407,32 @@ export async function packageDesktopApplication(): Promise<Readonly<{
     "linux" | "darwin" | "win32",
     "x64" | "arm64"
   ];
+  const iconPath = DESKTOP_ICON_PATHS[platform];
+  const brandAssetIdentity = await desktopBrandAssetIdentity(
+    iconPath,
+    platform === "darwin" ? "Kirinuki.icns" : path.basename(iconPath)
+  );
   const toolsDirectory = await prepareDesktopTools(target);
+  const windowsJobLauncher = target === "win32-x64"
+    ? await prepareWindowsJobLauncher(target)
+    : undefined;
+  const electronArchiveChecksums = await pinnedElectronArchiveChecksums({
+    electronPackageRoot: path.dirname(require.resolve("electron/package.json")),
+    version: ELECTRON_VERSION,
+    platform,
+    arch
+  });
   await buildDesktopApplication();
   const asarIdentities = await snapshotExactRegularFileTree(
     DESKTOP_STAGE_ROOT,
     DESKTOP_ASAR_PACKAGE_FILES,
     "desktop application stage"
   );
-  const isolatedResources = await isolatedDesktopResources(toolsDirectory, target);
+  const isolatedResources = await isolatedDesktopResources(
+    toolsDirectory,
+    target,
+    windowsJobLauncher?.targetDirectory
+  );
   const runtimeResourceBaseline: {
     snapshot?: Readonly<DesktopPackageTreeSnapshot>;
   } = {};
@@ -382,26 +446,33 @@ export async function packageDesktopApplication(): Promise<Readonly<{
       name: "Kirinuki",
       executableName: "Kirinuki",
       electronVersion: ELECTRON_VERSION,
+      download: { checksums: electronArchiveChecksums },
       platform,
       arch,
       overwrite: false,
       asar: true,
       appBundleId: "kr.eff0rtchung.kirinuki",
       appCategoryType: "public.app-category.video",
+      ...(platform === "darwin" || platform === "win32"
+        ? { icon: iconPath }
+        : {}),
       ...(platform === "darwin"
         ? {
           extendInfo: {
-            LSMinimumSystemVersion: DESKTOP_DARWIN_MINIMUM_SYSTEM_VERSION
+            CFBundleIconFile: "Kirinuki.icns",
+            CFBundleURLTypes: [{
+              CFBundleTypeRole: "Viewer",
+              CFBundleURLName: "Kirinuki Local Engine Pairing",
+              CFBundleURLSchemes: ["kirinuki-engine"]
+            }],
+            LSMinimumSystemVersion: DESKTOP_DARWIN_MINIMUM_SYSTEM_VERSION,
+            LSUIElement: true
           }
         }
         : {}),
-      protocols: [{
-        name: "Kirinuki app link",
-        schemes: ["kirinuki"]
-      }],
       extraResource: [
-        isolatedResources.companionRoot,
-        isolatedResources.toolsRoot
+        isolatedResources.toolsRoot,
+        ...(isolatedResources.nativeRoot ? [isolatedResources.nativeRoot] : [])
       ],
       afterInitialize: [async ({
         buildPath,
@@ -429,10 +500,10 @@ export async function packageDesktopApplication(): Promise<Readonly<{
         const reservedResource = (relativePath: string): boolean => (
           relativePath === "default_app"
           || relativePath.startsWith("default_app/")
-          || relativePath === "streaming-companion"
-          || relativePath.startsWith("streaming-companion/")
           || relativePath === "desktop-tools"
           || relativePath.startsWith("desktop-tools/")
+          || relativePath === "desktop-native"
+          || relativePath.startsWith("desktop-native/")
         );
         if (
           paths.filter((relativePath) => relativePath === "app.asar").length !== 1
@@ -451,7 +522,7 @@ export async function packageDesktopApplication(): Promise<Readonly<{
       prune: true,
       win32metadata: {
         CompanyName: "Kirinuki",
-        FileDescription: "Kirinuki local-first VOD editor",
+        FileDescription: "Kirinuki local VOD engine",
         InternalName: "Kirinuki",
         OriginalFilename: "Kirinuki.exe",
         ProductName: "Kirinuki"
@@ -471,6 +542,15 @@ export async function packageDesktopApplication(): Promise<Readonly<{
       const minimumVersionEntries = infoPlist.match(
         /<key>LSMinimumSystemVersion<\/key>/gu
       ) ?? [];
+      const uiElementEntries = infoPlist.match(
+        /<key>LSUIElement<\/key>/gu
+      ) ?? [];
+      const iconEntries = infoPlist.match(
+        /<key>CFBundleIconFile<\/key>/gu
+      ) ?? [];
+      const protocolEntries = infoPlist.match(
+        /<key>CFBundleURLTypes<\/key>/gu
+      ) ?? [];
       if (
         minimumVersionEntries.length !== 1
         || !new RegExp(
@@ -479,6 +559,25 @@ export async function packageDesktopApplication(): Promise<Readonly<{
         ).test(infoPlist)
       ) {
         throw new Error("macOS 최소 버전 package metadata가 올바르지 않습니다.");
+      }
+      if (
+        uiElementEntries.length !== 1
+        || !/<key>LSUIElement<\/key>\s*<true\s*\/>/u.test(infoPlist)
+      ) {
+        throw new Error("macOS package가 Dock 없는 background agent로 표시되지 않습니다.");
+      }
+      if (
+        iconEntries.length !== 1
+        || !/<key>CFBundleIconFile<\/key>\s*<string>Kirinuki\.icns<\/string>/u.test(infoPlist)
+      ) {
+        throw new Error("macOS package 상표 icon metadata가 올바르지 않습니다.");
+      }
+      if (
+        protocolEntries.length !== 1
+        || !/<key>CFBundleURLSchemes<\/key>[\s\S]*?<string>kirinuki-engine<\/string>/u.test(infoPlist)
+        || !/<key>CFBundleTypeRole<\/key>\s*<string>Viewer<\/string>/u.test(infoPlist)
+      ) {
+        throw new Error("macOS package의 Kirinuki pairing protocol metadata가 올바르지 않습니다.");
       }
     }
     const executable = packagedExecutable(packageRoot, process.platform);
@@ -507,30 +606,34 @@ export async function packageDesktopApplication(): Promise<Readonly<{
       {
         files: [
           ...pinnedRuntimeResources.files,
-          ...prefixIdentities(
-            "streaming-companion",
-            isolatedResources.companionIdentities
-          ),
+          ...(platform === "darwin" ? [brandAssetIdentity] : []),
           ...prefixIdentities(
             `desktop-tools/${target}`,
             isolatedResources.toolIdentities
-          )
+          ),
+          ...(isolatedResources.nativeIdentities
+            ? prefixIdentities(
+              `desktop-native/${target}`,
+              isolatedResources.nativeIdentities
+            )
+            : [])
         ],
         directories: [
           ...pinnedRuntimeResources.directories,
           "desktop-tools",
           `desktop-tools/${target}`,
-          "streaming-companion"
+          ...(isolatedResources.nativeIdentities
+            ? ["desktop-native", `desktop-native/${target}`]
+            : [])
         ].sort()
       },
       "packaged desktop resources"
     );
     verifyDesktopAsar(path.join(resourcesRoot, "app.asar"), asarIdentities);
-    await verifyPackagedStreamingCompanion(
-      resourcesRoot,
-      isolatedResources.companionIdentities
-    );
     await verifyPackagedDesktopTools(resourcesRoot, target);
+    if (target === "win32-x64") {
+      await verifyPackagedWindowsJobLauncher(resourcesRoot, target);
+    }
     return Object.freeze({
       target,
       outputDirectory: packageRoot,

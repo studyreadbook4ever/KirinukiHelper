@@ -25,11 +25,6 @@ import {
 import type {
   KirinukiStudioOrigin
 } from "../src/lib/local-runtime-origin.js";
-import {
-  LocalStudioMigrationStage,
-  handleLocalStudioMigrationRequest,
-  legacyExtensionOriginForRepo
-} from "./local-studio-migration-stage.js";
 
 export const LOCAL_STUDIO_SERVER_SCHEMA =
   "kirinuki-local-studio-server/v1";
@@ -162,8 +157,6 @@ export interface StudioServerOptions {
   instanceNonce: string;
   port?: number;
   studioOrigin?: KirinukiStudioOrigin;
-  enableLegacyMigration?: boolean;
-  migrationNonce?: string;
 }
 
 export interface StudioStaticAsset {
@@ -860,32 +853,11 @@ export function createLocalStudioHttpServer({
   repoRoot,
   instanceNonce,
   port = DEFAULT_STUDIO_PORT,
-  studioOrigin = KIRINUKI_LOCAL_STUDIO_ORIGIN,
-  enableLegacyMigration = false,
-  migrationNonce
+  studioOrigin = KIRINUKI_LOCAL_STUDIO_ORIGIN
 }: StudioServerOptions): Server {
   const root = requiredAbsolutePath(repoRoot, "레포지토리");
   const configuredOrigin = resolveKirinukiAppOrigin(studioOrigin);
   const health = studioHealthPayload(instanceNonce, port, configuredOrigin);
-  if (!enableLegacyMigration && migrationNonce !== undefined) {
-    throw new TypeError(
-      "legacy migration nonce는 migration을 명시적으로 켠 경우에만 사용할 수 있습니다."
-    );
-  }
-  const resolvedMigrationNonce = enableLegacyMigration
-    ? migrationNonce ?? createStudioInstanceNonce()
-    : null;
-  if (resolvedMigrationNonce === instanceNonce) {
-    throw new TypeError(
-      "legacy migration nonce는 server 관리 nonce와 분리되어야 합니다."
-    );
-  }
-  const migrationStage = resolvedMigrationNonce === null
-    ? null
-    : new LocalStudioMigrationStage({
-      instanceNonce: resolvedMigrationNonce,
-      expectedExtensionOrigin: legacyExtensionOriginForRepo(root)
-    });
   return createServer((request, response) => {
     void (async () => {
       if (!hasExactStudioHost(request, port, configuredOrigin)) {
@@ -897,17 +869,6 @@ export function createLocalStudioHttpServer({
         port,
         KIRINUKI_LOCAL_STUDIO_ORIGIN
       );
-      if (
-        migrationStage
-        && directLoopbackRequest
-        && await handleLocalStudioMigrationRequest({
-          request,
-          response,
-          stage: migrationStage
-        })
-      ) {
-        return;
-      }
       const rawTarget = request.url || "";
       if (request.method !== "GET" && request.method !== "HEAD") {
         sendText(response, 405, "Method Not Allowed\n", {
