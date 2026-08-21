@@ -14,7 +14,8 @@ import {
   isManagedLinuxEngineAutostartContent,
   linuxEngineAutostartContent,
   linuxEngineAutostartLaunch,
-  removeEngineAutostart
+  removeEngineAutostart,
+  windowsLoginItemReadbackPath
 } from "../src/desktop/login-autostart.js";
 import type {
   EngineAutostartFileSystemSemantics
@@ -32,6 +33,15 @@ function mappedStateStorage(
     enforcePosixPermissions: process.platform !== "win32"
   });
 }
+
+test("Windows login-item readback은 공백·Unicode 실행 경로를 하나의 명령으로 조회한다", () => {
+  assert.equal(
+    windowsLoginItemReadbackPath(
+      "C:\\Users\\홍길동\\키리누키 NSIS smoke\\installed\\Kirinuki.exe"
+    ),
+    "\"C:\\Users\\홍길동\\키리누키 NSIS smoke\\installed\\Kirinuki.exe\""
+  );
+});
 
 test("Linux XDG 자동실행은 정확한 background 명령을 원자적으로 기록하고 멱등 readback한다", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "키리누키 자동실행 test "));

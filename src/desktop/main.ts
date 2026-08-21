@@ -7,7 +7,8 @@ import { app, powerMonitor, safeStorage, webContents } from "electron";
 import {
   ENGINE_BACKGROUND_ARGUMENT,
   ensureEngineAutostart,
-  removeEngineAutostart
+  removeEngineAutostart,
+  windowsLoginItemReadbackPath
 } from "./login-autostart.js";
 import type {
   EngineAutostartRegistration,
@@ -242,7 +243,11 @@ function loginItemAdapter(): Readonly<LoginItemAdapter> {
     }),
     get: (settings: Readonly<LoginItemSettings>) => {
       const state = app.getLoginItemSettings({
-        ...(settings.path === undefined ? {} : { path: settings.path }),
+        ...(settings.path === undefined ? {} : {
+          path: process.platform === "win32"
+            ? windowsLoginItemReadbackPath(settings.path)
+            : settings.path
+        }),
         ...(settings.args === undefined ? {} : { args: [...settings.args] })
       });
       return Object.freeze({

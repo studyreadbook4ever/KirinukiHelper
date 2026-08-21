@@ -22,6 +22,15 @@ export const WINDOWS_ENGINE_LOGIN_ITEM_NAME =
 export const ENGINE_AUTOSTART_SCHEMA =
   "kirinuki-engine-autostart/v1" as const;
 
+/**
+ * Electron parses the Windows login-item lookup `path` as a command line.
+ * Quoting is therefore required for an executable path containing spaces,
+ * even though setLoginItemSettings accepts the same path unquoted.
+ */
+export function windowsLoginItemReadbackPath(executablePath: string): string {
+  return `"${exactExecutablePath(executablePath, "win32")}"`;
+}
+
 export interface LoginItemSettings {
   readonly openAtLogin: boolean;
   readonly openAsHidden?: boolean;
