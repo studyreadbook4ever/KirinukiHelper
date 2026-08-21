@@ -53,6 +53,131 @@ const INSTALLED_BROWSER_SMOKE_ENV = "KIRINUKI_INSTALLED_BROWSER_SMOKE";
 const WINDOWS_JUNCTION_PATH_ENV = "KIRINUKI_WINDOWS_JUNCTION_PATH";
 const WINDOWS_JUNCTION_TARGET_ENV = "KIRINUKI_WINDOWS_JUNCTION_TARGET";
 const WINDOWS_SHORTCUT_PATH_ENV = "KIRINUKI_WINDOWS_SHORTCUT_PATH";
+const WINDOWS_SHELL_LINK_READBACK_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$path = [Environment]::GetEnvironmentVariable('KIRINUKI_WINDOWS_SHORTCUT_PATH', 'Process')
+if ([string]::IsNullOrWhiteSpace($path)) { throw 'missing shortcut path' }
+$source = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+using System.Text;
+
+[ComImport]
+[Guid("00021401-0000-0000-C000-000000000046")]
+internal class NativeShellLink
+{
+}
+
+[ComImport]
+[Guid("000214F9-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IShellLinkW
+{
+    [PreserveSig]
+    int GetPath(
+        [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder file,
+        int capacity,
+        IntPtr findData,
+        uint flags);
+
+    [PreserveSig]
+    int GetIDList(out IntPtr itemIdList);
+
+    [PreserveSig]
+    int SetIDList(IntPtr itemIdList);
+
+    [PreserveSig]
+    int GetDescription(
+        [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder description,
+        int capacity);
+
+    [PreserveSig]
+    int SetDescription([MarshalAs(UnmanagedType.LPWStr)] string description);
+
+    [PreserveSig]
+    int GetWorkingDirectory(
+        [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder directory,
+        int capacity);
+
+    [PreserveSig]
+    int SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string directory);
+
+    [PreserveSig]
+    int GetArguments(
+        [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder arguments,
+        int capacity);
+}
+
+public sealed class ShellLinkSnapshot
+{
+    public ShellLinkSnapshot(string targetPath, string arguments, string workingDirectory)
+    {
+        TargetPath = targetPath;
+        Arguments = arguments;
+        WorkingDirectory = workingDirectory;
+    }
+
+    public string TargetPath { get; private set; }
+    public string Arguments { get; private set; }
+    public string WorkingDirectory { get; private set; }
+}
+
+public static class KirinukiShellLinkReader
+{
+    private const int BufferCapacity = 32768;
+
+    private static void RequireSOk(int result, string operation)
+    {
+        if (result != 0)
+        {
+            throw new COMException(
+                operation + " returned HRESULT 0x" + result.ToString("X8"),
+                result);
+        }
+    }
+
+    public static ShellLinkSnapshot Read(string path)
+    {
+        object instance = new NativeShellLink();
+        try
+        {
+            ((IPersistFile)instance).Load(path, 0);
+            IShellLinkW link = (IShellLinkW)instance;
+            StringBuilder targetPath = new StringBuilder(BufferCapacity);
+            StringBuilder arguments = new StringBuilder(BufferCapacity);
+            StringBuilder workingDirectory = new StringBuilder(BufferCapacity);
+            RequireSOk(link.GetPath(targetPath, targetPath.Capacity, IntPtr.Zero, 0), "IShellLinkW.GetPath");
+            RequireSOk(link.GetArguments(arguments, arguments.Capacity), "IShellLinkW.GetArguments");
+            RequireSOk(link.GetWorkingDirectory(workingDirectory, workingDirectory.Capacity), "IShellLinkW.GetWorkingDirectory");
+            if (targetPath.Length == 0)
+            {
+                throw new InvalidOperationException("IShellLinkW.GetPath returned an empty target");
+            }
+            return new ShellLinkSnapshot(
+                targetPath.ToString(),
+                arguments.ToString(),
+                workingDirectory.ToString());
+        }
+        finally
+        {
+            if (Marshal.IsComObject(instance))
+            {
+                Marshal.FinalReleaseComObject(instance);
+            }
+        }
+    }
+}
+'@
+Add-Type -TypeDefinition $source -Language CSharp -ErrorAction Stop
+$shortcut = [KirinukiShellLinkReader]::Read($path)
+$json = [ordered]@{
+  targetPath = $shortcut.TargetPath
+  arguments = $shortcut.Arguments
+  workingDirectory = $shortcut.WorkingDirectory
+} | ConvertTo-Json -Compress
+[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))
+`;
 
 function installedBrowserSmoke() {
   if (process.env[INSTALLED_BROWSER_SMOKE_ENV] !== "1") {
@@ -808,13 +933,7 @@ async function windowsNsisSmoke(
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      [
-        `$path=[Environment]::GetEnvironmentVariable('${WINDOWS_SHORTCUT_PATH_ENV}','Process')`,
-        "if([string]::IsNullOrWhiteSpace($path)){throw 'missing shortcut path'}",
-        "$shortcut=(New-Object -ComObject WScript.Shell).CreateShortcut($path)",
-        "$json=[ordered]@{targetPath=$shortcut.TargetPath;arguments=$shortcut.Arguments;workingDirectory=$shortcut.WorkingDirectory}|ConvertTo-Json -Compress",
-        "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))"
-      ].join(";")
+      WINDOWS_SHELL_LINK_READBACK_SCRIPT
     ], {
       env: { ...process.env, [WINDOWS_SHORTCUT_PATH_ENV]: recoveryShortcut }
     });

@@ -118,7 +118,10 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
   assert.match(packageScript, /LSUIElement/u);
   assert.match(packageScript, /telemetry: false/u);
   assert.match(installerSmoke, /Kirinuki\.lnk/u);
-  assert.match(installerSmoke, /WScript\.Shell/u);
+  assert.match(installerSmoke, /IShellLinkW/u);
+  assert.match(installerSmoke, /\(\(IPersistFile\)instance\)\.Load\(path, 0\)/u);
+  assert.match(installerSmoke, /link\.GetPath\(targetPath, targetPath\.Capacity, IntPtr\.Zero, 0\)/u);
+  assert.doesNotMatch(installerSmoke, /link\.Resolve\(/u);
   assert.match(installerSmoke, /Start Menu recovery launcher/u);
   assert.match(installerSmoke, /autostartMode: "production"/u);
   assert.match(installerSmoke, /CurrentVersion/u);
