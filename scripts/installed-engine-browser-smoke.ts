@@ -492,7 +492,10 @@ export async function runInstalledEngineBrowserSmoke({
       capabilities: {
         alwaysMatch: {
           browserName: "chrome",
-          pageLoadStrategy: "normal",
+          // ChromeDriver's blocking NavigationTracker can race the first
+          // renderer target swap on macOS. The smoke owns the stronger waits
+          // below, so navigation itself must be non-blocking.
+          pageLoadStrategy: "none",
           "goog:loggingPrefs": { browser: "ALL" },
           "goog:chromeOptions": {
             binary: chromePath,
@@ -544,6 +547,7 @@ export async function runInstalledEngineBrowserSmoke({
     ): Promise<BrowserProbeState> => {
       const startedAt = Date.now();
       let latest: BrowserProbeState = { error: "", pairingUrl: "", result: null };
+      let latestNavigationError = "";
       while (Date.now() - startedAt < timeoutMs) {
         try {
           latest = await sample();
@@ -558,10 +562,16 @@ export async function runInstalledEngineBrowserSmoke({
             throw error;
           }
           // Navigation 중 교체된 execution context만 재시도한다.
+          latestNavigationError = errorMessage(error).slice(0, 2_000);
         }
         await delay(100);
       }
-      throw new Error(`${label} 시간 제한을 초과했습니다: ${JSON.stringify(latest)}`);
+      throw new Error(
+        `${label} 시간 제한을 초과했습니다: ${JSON.stringify(latest)}`
+          + (latestNavigationError
+            ? `; 마지막 navigation 오류: ${latestNavigationError}`
+            : "")
+      );
     };
 
     const grantedPermissions: string[] = [];
@@ -594,14 +604,14 @@ export async function runInstalledEngineBrowserSmoke({
     );
     await launchPairingUrl(exactPairingUrl(requested.pairingUrl));
     const first = await waitFor(
-      (state) => state.result?.status === "ok",
+      (state) => state.result?.status === "ok" && state.result.phase === "paired",
       "첫 설치 signed pairing/encrypted session"
     );
     const keyId = assertProbeResult(first.result, "paired");
 
     await webdriver("POST", `/session/${sessionId}/refresh`, {});
     const second = await waitFor(
-      (state) => state.result?.status === "ok",
+      (state) => state.result?.status === "ok" && state.result.phase === "reconnected",
       "새로고침 뒤 무재페어링 재연결"
     );
     assertProbeResult(second.result, "reconnected", keyId);

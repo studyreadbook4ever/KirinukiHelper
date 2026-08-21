@@ -27,12 +27,15 @@ test("installed-browser runner는 public origin·LNA·pair-once·reload를 exact
   );
   assert.match(source, /KIRINUKI_PUBLIC_STUDIO_ORIGIN/u);
   assert.match(source, /--host-resolver-rules=MAP/u);
+  assert.match(source, /pageLoadStrategy:\s*"none"/u);
   assert.match(source, /Browser\.setPermission/u);
   assert.match(source, /local-network-access/u);
   assert.match(source, /loopback-network/u);
   assert.match(source, /launchPairingUrl\(exactPairingUrl/u);
   assert.match(source, /\/session\/\$\{sessionId\}\/refresh/u);
   assert.match(source, /assertProbeResult\(second\.result, "reconnected", keyId\)/u);
+  assert.match(source, /state\.result\.phase === "paired"/u);
+  assert.match(source, /state\.result\.phase === "reconnected"/u);
   assert.match(source, /second\.pairingUrl === ""/u);
   assert.match(source, /sessionCapabilityBytes === 43/u);
   assert.match(source, /result\.sessionRenewed === \(phase === "reconnected"\)/u);

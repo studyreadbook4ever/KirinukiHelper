@@ -87,6 +87,13 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
   assert.match(packageScript, /QUARANTINED-NOT-FOR-PUBLISH-/u);
   assert.match(packageScript, /await rename\(artifactPath, publishedArtifactPath\)/u);
   assert.match(packageScript, /Get-AuthenticodeSignature/u);
+  assert.match(packageScript, /KIRINUKI_WINDOWS_AUTHENTICODE_PATH/u);
+  assert.match(packageScript, /KIRINUKI_WINDOWS_CERTIFICATE_THUMBPRINT/u);
+  assert.match(installerSmoke, /KIRINUKI_WINDOWS_SHORTCUT_PATH/u);
+  assert.match(installerSmoke, /KIRINUKI_WINDOWS_JUNCTION_PATH/u);
+  assert.match(installerSmoke, /KIRINUKI_WINDOWS_JUNCTION_TARGET/u);
+  assert.doesNotMatch(packageScript, /\$args\[/u);
+  assert.doesNotMatch(installerSmoke, /\$args\[/u);
   assert.match(packageScript, /VALIDSIG/u);
   assert.match(packageScript, /plutil/u);
   assert.match(packageScript, /LSUIElement/u);

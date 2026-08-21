@@ -230,6 +230,97 @@ export async function assertDesktopToolDirectoryModes(
   }
 }
 
+function expectedPackagedDesktopToolArtifactMode(
+  target: DesktopBundleTarget,
+  role: DesktopToolArtifactRole
+): number | undefined {
+  if (target === "linux-x64") {
+    return role === "ffmpegLicense" ? 0o644 : 0o755;
+  }
+  return expectedDesktopToolArtifactMode(target, role);
+}
+
+async function setExactOpenPathMode(
+  filePath: string,
+  type: "file" | "directory",
+  mode: number,
+  label: string
+): Promise<void> {
+  const handle = await open(
+    filePath,
+    fsConstants.O_RDONLY
+      | (fsConstants.O_NOFOLLOW || 0)
+      | (type === "directory" ? fsConstants.O_DIRECTORY : 0)
+  );
+  try {
+    const before = await handle.stat();
+    if (type === "file" ? !before.isFile() : !before.isDirectory()) {
+      throw new Error(`${label} 형식이 올바르지 않습니다.`);
+    }
+    await handle.chmod(mode);
+    const after = await handle.stat();
+    if (
+      before.dev !== after.dev
+      || before.ino !== after.ino
+      || (after.mode & 0o777) !== mode
+    ) {
+      throw new Error(`${label} POSIX mode를 exact하게 고정하지 못했습니다.`);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * A deb is installed root-owned under /opt, so its immutable application tree
+ * must be traversable/readable by the desktop user. The private download cache
+ * remains 0700/0600; only the copied Linux package input is normalized here.
+ */
+export async function normalizeLinuxPackagedApplicationModes(
+  packageRoot: string
+): Promise<void> {
+  const target = "linux-x64" as const;
+  const resourcesRoot = packagedResourcesRoot(packageRoot, "linux");
+  const toolsRoot = path.join(resourcesRoot, "desktop-tools");
+  const targetRoot = path.join(toolsRoot, target);
+  const manifest = desktopToolTargetManifest(target);
+  await Promise.all([
+    setExactOpenPathMode(packageRoot, "directory", 0o755, "Linux package root"),
+    setExactOpenPathMode(toolsRoot, "directory", 0o755, "Linux tools root"),
+    setExactOpenPathMode(targetRoot, "directory", 0o755, "Linux target tools root"),
+    setExactOpenPathMode(
+      path.join(targetRoot, manifest.ffmpeg.fileName),
+      "file",
+      0o755,
+      "Linux ffmpeg"
+    ),
+    setExactOpenPathMode(
+      path.join(targetRoot, manifest.ffprobe.fileName),
+      "file",
+      0o755,
+      "Linux ffprobe"
+    ),
+    setExactOpenPathMode(
+      path.join(targetRoot, manifest.ytDlp.fileName),
+      "file",
+      0o755,
+      "Linux yt-dlp"
+    ),
+    setExactOpenPathMode(
+      path.join(targetRoot, manifest.ffmpegLicense.fileName),
+      "file",
+      0o644,
+      "Linux ffmpeg license"
+    ),
+    setExactOpenPathMode(
+      path.join(targetRoot, "manifest.json"),
+      "file",
+      0o644,
+      "Linux tool manifest"
+    )
+  ]);
+}
+
 async function verifyPackagedToolArtifact(
   filePath: string,
   expectedSize: number,
@@ -389,11 +480,31 @@ export async function verifyPackagedDesktopTools(
   if (JSON.stringify(recorded) !== JSON.stringify(manifest)) {
     throw new Error("패키지 미디어 도구 manifest가 현재 target과 다릅니다.");
   }
+  if (target === "linux-x64") {
+    const [toolsMode, targetMode, manifestMode] = await Promise.all([
+      lstat(toolsRoot),
+      lstat(targetRoot),
+      lstat(path.join(targetRoot, "manifest.json"))
+    ]);
+    if (
+      !toolsMode.isDirectory()
+      || toolsMode.isSymbolicLink()
+      || (toolsMode.mode & 0o777) !== 0o755
+      || !targetMode.isDirectory()
+      || targetMode.isSymbolicLink()
+      || (targetMode.mode & 0o777) !== 0o755
+      || !manifestMode.isFile()
+      || manifestMode.isSymbolicLink()
+      || (manifestMode.mode & 0o777) !== 0o644
+    ) {
+      throw new Error("Linux 설치형 미디어 도구의 공개 read/execute mode가 올바르지 않습니다.");
+    }
+  }
   await Promise.all(artifacts.map(({ role, artifact }) => verifyPackagedToolArtifact(
     path.join(targetRoot, artifact.fileName),
     artifact.size,
     artifact.sha256,
-    expectedDesktopToolArtifactMode(target, role)
+    expectedPackagedDesktopToolArtifactMode(target, role)
   )));
 }
 
@@ -585,6 +696,9 @@ export async function packageDesktopApplication(): Promise<Readonly<{
       executable,
       platform === "darwin" && arch === "arm64"
     );
+    if (target === "linux-x64") {
+      await normalizeLinuxPackagedApplicationModes(packageRoot);
+    }
     const executableMetadata = await lstat(executable);
     if (!executableMetadata.isFile() || executableMetadata.isSymbolicLink()) {
       throw new Error("패키지의 Kirinuki 실행 파일이 올바르지 않습니다.");

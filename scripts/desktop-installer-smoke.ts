@@ -46,6 +46,9 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const COMMAND_TIMEOUT_MS = 3 * 60 * 1_000;
 const SYSTEM_SMOKE_ENV = "KIRINUKI_INSTALLER_SYSTEM_SMOKE";
 const INSTALLED_BROWSER_SMOKE_ENV = "KIRINUKI_INSTALLED_BROWSER_SMOKE";
+const WINDOWS_JUNCTION_PATH_ENV = "KIRINUKI_WINDOWS_JUNCTION_PATH";
+const WINDOWS_JUNCTION_TARGET_ENV = "KIRINUKI_WINDOWS_JUNCTION_TARGET";
+const WINDOWS_SHORTCUT_PATH_ENV = "KIRINUKI_WINDOWS_SHORTCUT_PATH";
 
 function installedBrowserSmoke() {
   return process.env[INSTALLED_BROWSER_SMOKE_ENV] === "1"
@@ -386,9 +389,10 @@ async function removeWindowsTestJunction(pathname: string): Promise<void> {
     "-NoProfile",
     "-NonInteractive",
     "-Command",
-    "[IO.Directory]::Delete($args[0])",
-    pathname
-  ]);
+    `$path=[Environment]::GetEnvironmentVariable('${WINDOWS_JUNCTION_PATH_ENV}','Process');if([string]::IsNullOrWhiteSpace($path)){throw 'missing junction path'};[IO.Directory]::Delete($path)`
+  ], {
+    env: { ...process.env, [WINDOWS_JUNCTION_PATH_ENV]: pathname }
+  });
   await assertPathAbsent(pathname);
 }
 
@@ -470,6 +474,13 @@ async function linuxSystemInstallSmoke(
     verifyLinuxDesktopEntryProtocol(desktopEntry);
     const resourcesRoot = path.dirname(appAsar);
     const packageRoot = path.dirname(resourcesRoot);
+    const packageRootMetadata = await lstat(packageRoot);
+    invariant(
+      packageRootMetadata.isDirectory()
+        && !packageRootMetadata.isSymbolicLink()
+        && (packageRootMetadata.mode & 0o777) === 0o755,
+      "설치된 Linux package root가 일반 사용자의 exact read/execute mode가 아닙니다."
+    );
     const executableCandidates = managedPaths.filter((entry) => (
       path.dirname(entry) === packageRoot
         && ["kirinuki", "Kirinuki"].includes(path.basename(entry))
@@ -722,11 +733,14 @@ async function windowsNsisSmoke(
       "-NonInteractive",
       "-Command",
       [
-        "$shortcut=(New-Object -ComObject WScript.Shell).CreateShortcut($args[0])",
+        `$path=[Environment]::GetEnvironmentVariable('${WINDOWS_SHORTCUT_PATH_ENV}','Process')`,
+        "if([string]::IsNullOrWhiteSpace($path)){throw 'missing shortcut path'}",
+        "$shortcut=(New-Object -ComObject WScript.Shell).CreateShortcut($path)",
         "[ordered]@{targetPath=$shortcut.TargetPath;arguments=$shortcut.Arguments;workingDirectory=$shortcut.WorkingDirectory}|ConvertTo-Json -Compress"
-      ].join(";"),
-      recoveryShortcut
-    ]);
+      ].join(";")
+    ], {
+      env: { ...process.env, [WINDOWS_SHORTCUT_PATH_ENV]: recoveryShortcut }
+    });
     const shortcut = JSON.parse(shortcutReadback.stdout) as {
       targetPath?: unknown;
       arguments?: unknown;
@@ -756,10 +770,14 @@ async function windowsNsisSmoke(
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "New-Item -ItemType Junction -Path $args[0] -Target $args[1] -ErrorAction Stop | Out-Null",
-      junctionPath,
-      junctionTarget
-    ]);
+      `$path=[Environment]::GetEnvironmentVariable('${WINDOWS_JUNCTION_PATH_ENV}','Process');$target=[Environment]::GetEnvironmentVariable('${WINDOWS_JUNCTION_TARGET_ENV}','Process');if([string]::IsNullOrWhiteSpace($path) -or [string]::IsNullOrWhiteSpace($target)){throw 'missing junction binding'};New-Item -ItemType Junction -Path $path -Target $target -ErrorAction Stop | Out-Null`
+    ], {
+      env: {
+        ...process.env,
+        [WINDOWS_JUNCTION_PATH_ENV]: junctionPath,
+        [WINDOWS_JUNCTION_TARGET_ENV]: junctionTarget
+      }
+    });
     const junctionMetadata = await lstat(junctionPath);
     invariant(
       junctionMetadata.isSymbolicLink(),

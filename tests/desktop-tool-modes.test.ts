@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   chmod,
   lstat,
+  mkdir,
   mkdtemp,
   readFile,
   rm,
@@ -12,13 +13,17 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { assertDesktopToolDirectoryModes } from "../scripts/package-desktop.js";
+import {
+  assertDesktopToolDirectoryModes,
+  normalizeLinuxPackagedApplicationModes
+} from "../scripts/package-desktop.js";
 import {
   desktopToolArtifactModeIsReady,
   ensureDesktopToolCacheReady
 } from "../scripts/prepare-desktop-tools.js";
 import {
-  DESKTOP_TOOL_MANIFEST_SCHEMA
+  DESKTOP_TOOL_MANIFEST_SCHEMA,
+  desktopToolTargetManifest
 } from "../src/desktop/tool-manifest.js";
 import type {
   DesktopToolArtifact,
@@ -183,5 +188,51 @@ test("desktop package copy gate는 POSIX 과권한 mode를 거절하고 Windows 
     );
   } finally {
     await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("Linux deb 입력은 private cache와 분리해 root-owned 설치용 mode로 정규화한다", {
+  skip: process.platform === "win32"
+}, async () => {
+  const temporaryRoot = await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-linux-package-mode-test-"
+  ));
+  const packageRoot = path.join(temporaryRoot, "Kirinuki-linux-x64");
+  const targetRoot = path.join(
+    packageRoot,
+    "resources",
+    "desktop-tools",
+    "linux-x64"
+  );
+  const manifest = desktopToolTargetManifest("linux-x64");
+  try {
+    await mkdir(targetRoot, { recursive: true, mode: 0o700 });
+    await Promise.all([
+      writeFile(path.join(targetRoot, manifest.ffmpeg.fileName), "ffmpeg", { mode: 0o700 }),
+      writeFile(path.join(targetRoot, manifest.ffprobe.fileName), "ffprobe", { mode: 0o700 }),
+      writeFile(path.join(targetRoot, manifest.ytDlp.fileName), "yt-dlp", { mode: 0o700 }),
+      writeFile(path.join(targetRoot, manifest.ffmpegLicense.fileName), "license", { mode: 0o600 }),
+      writeFile(path.join(targetRoot, "manifest.json"), "{}\n", { mode: 0o600 })
+    ]);
+
+    await normalizeLinuxPackagedApplicationModes(packageRoot);
+
+    const modes = await Promise.all([
+      lstat(packageRoot),
+      lstat(path.join(packageRoot, "resources", "desktop-tools")),
+      lstat(targetRoot),
+      lstat(path.join(targetRoot, manifest.ffmpeg.fileName)),
+      lstat(path.join(targetRoot, manifest.ffprobe.fileName)),
+      lstat(path.join(targetRoot, manifest.ytDlp.fileName)),
+      lstat(path.join(targetRoot, manifest.ffmpegLicense.fileName)),
+      lstat(path.join(targetRoot, "manifest.json"))
+    ]);
+    assert.deepEqual(
+      modes.map((entry) => entry.mode & 0o777),
+      [0o755, 0o755, 0o755, 0o755, 0o755, 0o755, 0o644, 0o644]
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
   }
 });
