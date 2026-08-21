@@ -614,13 +614,17 @@ function loginItemEnabled(
   // Electron's legacy Windows openAtLogin readback checks only the default
   // AppUserModelID registry value. Kirinuki deliberately owns a named Run
   // value. getLoginItemSettings({ path, args }) already filters launchItems by
-  // the requested executable path, so the named item is the exact readback.
+  // the requested executable path, so the named item is the exact executable
+  // readback. Electron builds launchItems.args with Chromium's GetArgs(), which
+  // omits `--` switches such as ENGINE_BACKGROUND_ARGUMENT. An empty args list
+  // is therefore the exact expected native representation; any positional
+  // argument remains visible and is rejected.
   return state.executableWillLaunchAtLogin === true
     && launchItems.some((item) => (
       item.name === WINDOWS_ENGINE_LOGIN_ITEM_NAME
       && item.scope === "user"
       && item.enabled === true
-      && JSON.stringify(item.args) === JSON.stringify([ENGINE_BACKGROUND_ARGUMENT])
+      && item.args.length === 0
     ));
 }
 

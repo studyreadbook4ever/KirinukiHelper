@@ -217,7 +217,7 @@ test("Windows와 macOS는 Electron login-item API 설정값을 정확히 readbac
             launchItems: [{
               name: WINDOWS_ENGINE_LOGIN_ITEM_NAME,
               path: fixture.executablePath,
-              args: [ENGINE_BACKGROUND_ARGUMENT],
+              args: [],
               scope: "user" as const,
               enabled: true
             }]
@@ -353,7 +353,7 @@ test("지원하지 않는 desktop target과 부정 readback은 거부한다", as
   assert.equal(approvalPending.approvalRequired, true);
 });
 
-test("Windows 자동실행은 exact named user Run launch-item args·enabled readback을 요구한다", async () => {
+test("Windows 자동실행은 Electron이 switch를 제외한 exact named user launch-item을 요구한다", async () => {
   const executablePath = "C:\\Users\\홍길동\\Kirinuki 편집기\\Kirinuki.exe";
   for (const launchItems of [
     undefined,
@@ -361,7 +361,7 @@ test("Windows 자동실행은 exact named user Run launch-item args·enabled rea
     [{
       name: WINDOWS_ENGINE_LOGIN_ITEM_NAME,
       path: executablePath,
-      args: [],
+      args: ["unexpected-positional-argument"],
       scope: "user" as const,
       enabled: true
     }],
@@ -408,7 +408,7 @@ test("Windows 자동실행은 exact named user Run launch-item args·enabled rea
         launchItems: [{
           name: WINDOWS_ENGINE_LOGIN_ITEM_NAME,
       path: "c:\\users\\홍길동\\kirinuki 편집기\\KIRINUKI.EXE",
-          args: [ENGINE_BACKGROUND_ARGUMENT],
+          args: [],
           scope: "user",
           enabled: true
         }]
@@ -556,7 +556,9 @@ test("Windows/macOS managed marker는 이동한 실행 경로를 교체하고 un
             launchItems: [...enabled].map((executablePath) => ({
               name: WINDOWS_ENGINE_LOGIN_ITEM_NAME,
               path: executablePath,
-              args: [ENGINE_BACKGROUND_ARGUMENT],
+              args: fixture.target === "win32-x64"
+                ? []
+                : [ENGINE_BACKGROUND_ARGUMENT],
               scope: "user" as const,
               enabled: true
             }))
