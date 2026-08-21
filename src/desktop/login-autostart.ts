@@ -593,8 +593,7 @@ function parseLoginItemManagedState(
 
 function loginItemEnabled(
   platform: "darwin" | "win32",
-  state: Readonly<LoginItemState>,
-  executablePath: string
+  state: Readonly<LoginItemState>
 ): boolean {
   if (platform === "darwin") {
     return state.openAtLogin === true && state.status === "enabled";
@@ -603,14 +602,15 @@ function loginItemEnabled(
   if (!Array.isArray(launchItems)) {
     return false;
   }
-  const expectedPath = path.win32.normalize(executablePath).toLowerCase();
-  return state.openAtLogin === true
-    && state.executableWillLaunchAtLogin === true
+  // Electron's legacy Windows openAtLogin readback checks only the default
+  // AppUserModelID registry value. Kirinuki deliberately owns a named Run
+  // value. getLoginItemSettings({ path, args }) already filters launchItems by
+  // the requested executable path, so the named item is the exact readback.
+  return state.executableWillLaunchAtLogin === true
     && launchItems.some((item) => (
       item.name === WINDOWS_ENGINE_LOGIN_ITEM_NAME
       && item.scope === "user"
       && item.enabled === true
-      && path.win32.normalize(item.path).toLowerCase() === expectedPath
       && JSON.stringify(item.args) === JSON.stringify([ENGINE_BACKGROUND_ARGUMENT])
     ));
 }
@@ -624,9 +624,7 @@ function loginItemDisabled(
       && state.status !== "enabled"
       && state.status !== "requires-approval";
   }
-  return state.openAtLogin === false
-    && state.executableWillLaunchAtLogin !== true
-    && Array.isArray(state.launchItems)
+  return Array.isArray(state.launchItems)
     && !state.launchItems.some((item) => (
       item.name === WINDOWS_ENGINE_LOGIN_ITEM_NAME
       && item.scope === "user"
@@ -761,7 +759,7 @@ export async function ensureEngineAutostart({
   const state = loginItem.get(settings);
   const approvalRequired = platform === "darwin"
     && state.status === "requires-approval";
-  if (!approvalRequired && !loginItemEnabled(platform, state, executablePath)) {
+  if (!approvalRequired && !loginItemEnabled(platform, state)) {
     throw new Error(`${platform} 로그인 자동실행 readback이 등록 상태가 아닙니다.`);
   }
   if (managedStoragePath) {

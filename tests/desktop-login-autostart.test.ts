@@ -175,7 +175,7 @@ test("Windows와 macOS는 Electron login-item API 설정값을 정확히 readbac
           recorded = settings;
         },
         get: () => ({
-          openAtLogin: true,
+          openAtLogin: fixture.target === "win32-x64" ? false : true,
           executableWillLaunchAtLogin: true,
           ...(fixture.target === "win32-x64" ? {
             launchItems: [{
@@ -317,7 +317,7 @@ test("지원하지 않는 desktop target과 부정 readback은 거부한다", as
   assert.equal(approvalPending.approvalRequired, true);
 });
 
-test("Windows 자동실행은 exact user Run launch-item path·args·enabled readback을 요구한다", async () => {
+test("Windows 자동실행은 exact named user Run launch-item args·enabled readback을 요구한다", async () => {
   const executablePath = "C:\\Users\\홍길동\\Kirinuki 편집기\\Kirinuki.exe";
   for (const launchItems of [
     undefined,
@@ -326,13 +326,6 @@ test("Windows 자동실행은 exact user Run launch-item path·args·enabled rea
       name: WINDOWS_ENGINE_LOGIN_ITEM_NAME,
       path: executablePath,
       args: [],
-      scope: "user" as const,
-      enabled: true
-    }],
-    [{
-      name: WINDOWS_ENGINE_LOGIN_ITEM_NAME,
-      path: "C:\\Program Files\\Other\\Other.exe",
-      args: [ENGINE_BACKGROUND_ARGUMENT],
       scope: "user" as const,
       enabled: true
     }],
@@ -374,7 +367,7 @@ test("Windows 자동실행은 exact user Run launch-item path·args·enabled rea
     loginItem: {
       set: () => undefined,
       get: () => ({
-        openAtLogin: true,
+        openAtLogin: false,
         executableWillLaunchAtLogin: true,
         launchItems: [{
           name: WINDOWS_ENGINE_LOGIN_ITEM_NAME,
