@@ -154,6 +154,16 @@ jobs:
       - name: Prove exact health, document capability, three-platform fixture materialization, and Range media
         run: npm run test:semantic:engine
 
+      - name: Install and read back exact Linux deb runtime dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libnotify4 libsecret-1-0
+          for dependency in libnotify4 libsecret-1-0; do
+            test "$(dpkg-query --show --showformat='${Status}' "$dependency")" = "install ok installed"
+          done
+
       - name: Run the exact Linux installer smoke under an isolated display
         if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:package:desktop:installer

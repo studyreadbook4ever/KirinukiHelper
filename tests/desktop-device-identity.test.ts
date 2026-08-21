@@ -21,8 +21,10 @@ import type {
 import {
   verifyLocalMediaEngineSignature
 } from "../src/lib/local-media-engine-auth.js";
+import type { DesktopPlatform } from "../src/desktop/runtime-spec.js";
 
 const IDENTITY_FILE = "device-identity-v1.json";
+const hostPlatform = process.platform as DesktopPlatform;
 
 function xorProtector(observed?: {
   protectOutput?: Uint8Array;
@@ -63,7 +65,7 @@ test("device identity는 생성·재로드·서명되고 임시 보호 byte를 �
   const protector = xorProtector(observed);
   const created = await loadOrCreateDesktopDeviceIdentity({
     stateRoot,
-    platform: "linux",
+    platform: hostPlatform,
     protector
   });
   assert.ok(observed.protectOutput?.every((byte) => byte === 0));
@@ -77,7 +79,7 @@ test("device identity는 생성·재로드·서명되고 임시 보호 byte를 �
 
   const reloaded = await loadOrCreateDesktopDeviceIdentity({
     stateRoot,
-    platform: "linux",
+    platform: hostPlatform,
     protector
   });
   assert.equal(reloaded.keyId, created.keyId);
@@ -93,7 +95,7 @@ test("device identity는 corrupt·public/private mismatch·symlink·directory를
   await assert.rejects(
     loadOrCreateDesktopDeviceIdentity({
       stateRoot: corruptRoot,
-      platform: "linux",
+      platform: hostPlatform,
       protector
     }),
     /손상/u
@@ -103,12 +105,12 @@ test("device identity는 corrupt·public/private mismatch·symlink·directory를
   const secondRoot = await temporaryState(t);
   await loadOrCreateDesktopDeviceIdentity({
     stateRoot: firstRoot,
-    platform: "linux",
+    platform: hostPlatform,
     protector
   });
   await loadOrCreateDesktopDeviceIdentity({
     stateRoot: secondRoot,
-    platform: "linux",
+    platform: hostPlatform,
     protector
   });
   const firstPath = path.join(firstRoot, IDENTITY_FILE);
@@ -121,7 +123,7 @@ test("device identity는 corrupt·public/private mismatch·symlink·directory를
   await assert.rejects(
     loadOrCreateDesktopDeviceIdentity({
       stateRoot: firstRoot,
-      platform: "linux",
+      platform: hostPlatform,
       protector
     }),
     /개인키와 공개키/u
@@ -132,7 +134,7 @@ test("device identity는 corrupt·public/private mismatch·symlink·directory를
   await assert.rejects(
     loadOrCreateDesktopDeviceIdentity({
       stateRoot: symlinkRoot,
-      platform: "linux",
+      platform: hostPlatform,
       protector
     }),
     /regular file/u
@@ -143,7 +145,7 @@ test("device identity는 corrupt·public/private mismatch·symlink·directory를
   await assert.rejects(
     loadOrCreateDesktopDeviceIdentity({
       stateRoot: directoryRoot,
-      platform: "linux",
+      platform: hostPlatform,
       protector
     }),
     /regular file/u
@@ -156,7 +158,7 @@ test("device identity publication은 경쟁 파일을 덮어쓰지 않고 EEXIST
   const protector = xorProtector();
   const winner = await loadOrCreateDesktopDeviceIdentity({
     stateRoot: winnerRoot,
-    platform: "linux",
+    platform: hostPlatform,
     protector
   });
   const winnerBytes = await readFile(path.join(winnerRoot, IDENTITY_FILE));
@@ -164,7 +166,7 @@ test("device identity publication은 경쟁 파일을 덮어쓰지 않고 EEXIST
   await assert.rejects(
     loadOrCreateDesktopDeviceIdentity({
       stateRoot: contenderRoot,
-      platform: "linux",
+      platform: hostPlatform,
       protector,
       fileHooks: {
         beforePublish: async (filePath) => {
@@ -180,7 +182,7 @@ test("device identity publication은 경쟁 파일을 덮어쓰지 않고 EEXIST
   assert.deepEqual(await readFile(contenderPath), winnerBytes);
   const loadedWinner = await loadOrCreateDesktopDeviceIdentity({
     stateRoot: contenderRoot,
-    platform: "linux",
+    platform: hostPlatform,
     protector
   });
   assert.equal(loadedWinner.keyId, winner.keyId);
@@ -191,7 +193,7 @@ test("device identity read는 lstat/open과 read/restat TOCTOU를 결정적으�
   const stateRoot = await temporaryState(t);
   await loadOrCreateDesktopDeviceIdentity({
     stateRoot,
-    platform: "linux",
+    platform: hostPlatform,
     protector
   });
   const identityPath = path.join(stateRoot, IDENTITY_FILE);
@@ -200,7 +202,7 @@ test("device identity read는 lstat/open과 read/restat TOCTOU를 결정적으�
   await assert.rejects(
     loadOrCreateDesktopDeviceIdentity({
       stateRoot,
-      platform: "linux",
+      platform: hostPlatform,
       protector,
       fileHooks: {
         afterInitialLstat: async () => {
@@ -217,7 +219,7 @@ test("device identity read는 lstat/open과 read/restat TOCTOU를 결정적으�
   await assert.rejects(
     loadOrCreateDesktopDeviceIdentity({
       stateRoot,
-      platform: "linux",
+      platform: hostPlatform,
       protector,
       fileHooks: {
         afterReadBeforeRestat: async (filePath) => {

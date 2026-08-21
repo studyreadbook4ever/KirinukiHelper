@@ -367,6 +367,15 @@ jobs:
           KIRINUKI_RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
           KIRINUKI_RELEASE_COMMIT: ${{ needs.authorize.outputs.commit }}
 
+      - name: Install and read back exact Linux deb runtime dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libnotify4 libsecret-1-0
+          for dependency in libnotify4 libsecret-1-0; do
+            test "$(dpkg-query --show --showformat='${Status}' "$dependency")" = "install ok installed"
+          done
+
       - name: Install the deb, prove XDG autostart, probe, purge, and check package-owned paths
         run: xvfb-run -a npm run test:package:desktop:installer
         env:

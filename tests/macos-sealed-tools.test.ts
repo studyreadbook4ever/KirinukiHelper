@@ -16,12 +16,14 @@ import {
   MACOS_CODESIGN_EXECUTABLE,
   MACOS_CODESIGN_TIMEOUT_MS,
   createMacosSealedToolManifest,
+  macosAppBundlePathFromResourcesRoot,
   verifyMacosOuterCodeSeal,
   verifyMacosSealedDesktopTools,
   writeMacosSealedToolManifest
 } from "../src/desktop/macos-sealed-tools.js";
 import type {
-  MacosCodeSealEvidence
+  MacosCodeSealEvidence,
+  MacosSealedToolFileSystemSemantics
 } from "../src/desktop/macos-sealed-tools.js";
 import { desktopToolTargetManifest } from "../src/desktop/tool-manifest.js";
 
@@ -34,6 +36,12 @@ const SEAL = Object.freeze({
   hardenedRuntime: true,
   timestamped: true
 } satisfies MacosCodeSealEvidence);
+const fixtureFileSystemSemantics = Object.freeze({
+  paths: process.platform === "win32" ? path.win32 : path.posix,
+  executableMode: process.platform === "win32"
+    ? "unavailable-on-windows"
+    : "required"
+}) satisfies MacosSealedToolFileSystemSemantics;
 
 async function fixture(): Promise<Readonly<{
   root: string;
@@ -71,9 +79,14 @@ async function fixture(): Promise<Readonly<{
   const sealed = await createMacosSealedToolManifest({
     resourcesRoot,
     authority: AUTHORITY,
-    teamIdentifier: TEAM_IDENTIFIER
+    teamIdentifier: TEAM_IDENTIFIER,
+    fileSystemSemantics: fixtureFileSystemSemantics
   });
-  await writeMacosSealedToolManifest(resourcesRoot, sealed);
+  await writeMacosSealedToolManifest(
+    resourcesRoot,
+    sealed,
+    fixtureFileSystemSemantics
+  );
   return Object.freeze({ root, resourcesRoot, toolsRoot });
 }
 
@@ -119,12 +132,28 @@ test("codesign verifier는 절대 binary·배열 인자·bounded timeout으로 o
   ]);
 });
 
+test("macOS production 경로 의미는 foreign Windows 경로를 계속 fail-closed한다", () => {
+  assert.equal(
+    macosAppBundlePathFromResourcesRoot(
+      "/Applications/Kirinuki.app/Contents/Resources"
+    ),
+    "/Applications/Kirinuki.app"
+  );
+  assert.throws(
+    () => macosAppBundlePathFromResourcesRoot(
+      "C:\\Applications\\Kirinuki.app\\Contents\\Resources"
+    ),
+    /안전한 절대 경로/u
+  );
+});
+
 test("outer seal로 봉인된 signed 도구만 성공하고 seal을 앞뒤로 검증한다", async () => {
   const current = await fixture();
   let sealChecks = 0;
   try {
     const verified = await verifyMacosSealedDesktopTools({
       resourcesRoot: current.resourcesRoot,
+      fileSystemSemantics: fixtureFileSystemSemantics,
       verifyOuterSeal: async () => {
         sealChecks += 1;
         return SEAL;
@@ -155,6 +184,7 @@ test("봉인 manifest 변조는 outer identity와 맞지 않아 거절한다", a
     await assert.rejects(
       verifyMacosSealedDesktopTools({
         resourcesRoot: current.resourcesRoot,
+        fileSystemSemantics: fixtureFileSystemSemantics,
         verifyOuterSeal: async () => SEAL
       }),
       /signing identity/u
@@ -171,6 +201,7 @@ test("봉인 뒤 도구 byte 변조는 signed hash 불일치로 거절한다", a
     await assert.rejects(
       verifyMacosSealedDesktopTools({
         resourcesRoot: current.resourcesRoot,
+        fileSystemSemantics: fixtureFileSystemSemantics,
         verifyOuterSeal: async () => SEAL
       }),
       /무결성 검증 실패/u
@@ -187,6 +218,7 @@ test("outer codesign 검증 실패는 manifest를 신뢰하지 않고 fail-close
     await assert.rejects(
       verifyMacosSealedDesktopTools({
         resourcesRoot: current.resourcesRoot,
+        fileSystemSemantics: fixtureFileSystemSemantics,
         verifyOuterSeal: async () => {
           sealChecks += 1;
           throw new Error("codesign --verify failed");

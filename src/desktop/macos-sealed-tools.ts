@@ -73,6 +73,21 @@ export interface MacosSealedToolVerification {
   readonly ytDlp: string;
 }
 
+type MacosSealedToolPaths = Pick<
+  typeof path.posix,
+  "isAbsolute" | "normalize" | "basename" | "dirname" | "join"
+>;
+
+/**
+ * Explicit host-filesystem seam for the cross-platform verification suite.
+ * Signed macOS production calls omit it and therefore always require POSIX
+ * paths and executable permission bits.
+ */
+export interface MacosSealedToolFileSystemSemantics {
+  readonly paths: MacosSealedToolPaths;
+  readonly executableMode: "required" | "unavailable-on-windows";
+}
+
 export type MacosCodesignCommandRunner = (
   command: typeof MACOS_CODESIGN_EXECUTABLE,
   args: readonly string[],
@@ -83,6 +98,38 @@ function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+const macosProductionFileSystemSemantics = Object.freeze({
+  paths: path.posix,
+  executableMode: "required"
+}) satisfies MacosSealedToolFileSystemSemantics;
+
+function exactFileSystemSemantics(
+  value: Readonly<MacosSealedToolFileSystemSemantics> | undefined
+): Readonly<MacosSealedToolFileSystemSemantics> {
+  const semantics = value ?? macosProductionFileSystemSemantics;
+  invariant(
+    semantics !== null
+      && typeof semantics.paths?.isAbsolute === "function"
+      && typeof semantics.paths.normalize === "function"
+      && typeof semantics.paths.basename === "function"
+      && typeof semantics.paths.dirname === "function"
+      && typeof semantics.paths.join === "function"
+      && (
+        (
+          semantics.executableMode === "required"
+          && semantics.paths === path.posix
+        )
+        || (
+          semantics.executableMode === "unavailable-on-windows"
+          && process.platform === "win32"
+          && semantics.paths === path.win32
+        )
+      ),
+    "macOS 봉인 도구 파일시스템 의미가 올바르지 않습니다."
+  );
+  return semantics;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -111,19 +158,23 @@ export function macosDesktopToolManifestCanonicalSha256(): string {
   return canonicalManifestSha256(desktopToolTargetManifest("darwin-arm64"));
 }
 
-function safeResourcesRoot(resourcesRoot: string): string {
+function safeResourcesRoot(
+  resourcesRoot: string,
+  fileSystemSemantics: Readonly<MacosSealedToolFileSystemSemantics>
+): string {
+  const paths = fileSystemSemantics.paths;
   invariant(
     typeof resourcesRoot === "string"
       && resourcesRoot.trim() === resourcesRoot
-      && path.posix.isAbsolute(resourcesRoot)
+      && paths.isAbsolute(resourcesRoot)
       && !/[\u0000-\u001f\u007f]/u.test(resourcesRoot),
     "macOS Resources root는 안전한 절대 경로여야 합니다."
   );
-  const normalized = path.posix.normalize(resourcesRoot);
+  const normalized = paths.normalize(resourcesRoot);
   invariant(
-    path.posix.basename(normalized) === "Resources"
-      && path.posix.basename(path.posix.dirname(normalized)) === "Contents"
-      && path.posix.basename(path.posix.dirname(path.posix.dirname(normalized)))
+    paths.basename(normalized) === "Resources"
+      && paths.basename(paths.dirname(normalized)) === "Contents"
+      && paths.basename(paths.dirname(paths.dirname(normalized)))
         .endsWith(".app"),
     "macOS Resources root가 .app/Contents/Resources 구조가 아닙니다."
   );
@@ -131,14 +182,28 @@ function safeResourcesRoot(resourcesRoot: string): string {
 }
 
 export function macosAppBundlePathFromResourcesRoot(
-  resourcesRoot: string
+  resourcesRoot: string,
+  fileSystemSemanticsInput?: Readonly<MacosSealedToolFileSystemSemantics>
 ): string {
-  return path.posix.dirname(path.posix.dirname(safeResourcesRoot(resourcesRoot)));
+  const fileSystemSemantics = exactFileSystemSemantics(
+    fileSystemSemanticsInput
+  );
+  return fileSystemSemantics.paths.dirname(
+    fileSystemSemantics.paths.dirname(
+      safeResourcesRoot(resourcesRoot, fileSystemSemantics)
+    )
+  );
 }
 
-export function macosSealedToolManifestPath(resourcesRoot: string): string {
-  return path.posix.join(
-    safeResourcesRoot(resourcesRoot),
+export function macosSealedToolManifestPath(
+  resourcesRoot: string,
+  fileSystemSemanticsInput?: Readonly<MacosSealedToolFileSystemSemantics>
+): string {
+  const fileSystemSemantics = exactFileSystemSemantics(
+    fileSystemSemanticsInput
+  );
+  return fileSystemSemantics.paths.join(
+    safeResourcesRoot(resourcesRoot, fileSystemSemantics),
     "desktop-tools",
     "darwin-arm64",
     MACOS_SEALED_TOOL_MANIFEST_FILE_NAME
@@ -180,14 +245,20 @@ async function stableRegularFileBytes(
   }
 }
 
-async function stableRegularFileIdentity(filePath: string): Promise<FileIdentity> {
+async function stableRegularFileIdentity(
+  filePath: string,
+  fileSystemSemantics: Readonly<MacosSealedToolFileSystemSemantics>
+): Promise<FileIdentity> {
   const metadata = await lstat(filePath, { bigint: true });
   invariant(
     metadata.isFile()
       && !metadata.isSymbolicLink()
       && metadata.size >= 100_000n
       && metadata.size <= 512n * 1_024n * 1_024n
-      && (metadata.mode & 0o111n) !== 0n,
+      && (
+        fileSystemSemantics.executableMode === "unavailable-on-windows"
+        || (metadata.mode & 0o111n) !== 0n
+      ),
     `macOS 서명 도구가 bounded regular file이 아닙니다: ${filePath}`
   );
   const handle = await open(
@@ -432,21 +503,30 @@ export async function verifyMacosOuterCodeSeal(
 export async function createMacosSealedToolManifest({
   resourcesRoot,
   authority,
-  teamIdentifier
+  teamIdentifier,
+  fileSystemSemantics: fileSystemSemanticsInput
 }: {
   readonly resourcesRoot: string;
   readonly authority: string;
   readonly teamIdentifier: string;
+  readonly fileSystemSemantics?: Readonly<MacosSealedToolFileSystemSemantics>;
 }): Promise<Readonly<MacosSealedToolManifest>> {
-  const normalizedResourcesRoot = safeResourcesRoot(resourcesRoot);
+  const fileSystemSemantics = exactFileSystemSemantics(
+    fileSystemSemanticsInput
+  );
+  const paths = fileSystemSemantics.paths;
+  const normalizedResourcesRoot = safeResourcesRoot(
+    resourcesRoot,
+    fileSystemSemantics
+  );
   const expectedManifest = desktopToolTargetManifest("darwin-arm64");
-  const toolsRoot = path.posix.join(
+  const toolsRoot = paths.join(
     normalizedResourcesRoot,
     "desktop-tools",
     "darwin-arm64"
   );
   const recordedManifest = JSON.parse((await stableRegularFileBytes(
-    path.posix.join(toolsRoot, "manifest.json"),
+    paths.join(toolsRoot, "manifest.json"),
     1024 * 1024
   )).toString("utf8")) as unknown;
   invariant(
@@ -457,7 +537,8 @@ export async function createMacosSealedToolManifest({
   const identities = await Promise.all(MACOS_TOOL_ROLES.map(async (role) => ({
     role,
     identity: await stableRegularFileIdentity(
-      path.posix.join(toolsRoot, expected[role].fileName)
+      paths.join(toolsRoot, expected[role].fileName),
+      fileSystemSemantics
     )
   })));
   const signedArtifact = (
@@ -498,10 +579,14 @@ export async function createMacosSealedToolManifest({
 
 export async function writeMacosSealedToolManifest(
   resourcesRoot: string,
-  manifest: Readonly<MacosSealedToolManifest>
+  manifest: Readonly<MacosSealedToolManifest>,
+  fileSystemSemantics?: Readonly<MacosSealedToolFileSystemSemantics>
 ): Promise<string> {
   const verified = parseMacosSealedToolManifest(manifest);
-  const manifestPath = macosSealedToolManifestPath(resourcesRoot);
+  const manifestPath = macosSealedToolManifestPath(
+    resourcesRoot,
+    fileSystemSemantics
+  );
   await writeFile(manifestPath, `${JSON.stringify(verified, null, 2)}\n`, {
     encoding: "utf8",
     flag: "wx",
@@ -512,10 +597,14 @@ export async function writeMacosSealedToolManifest(
 }
 
 export async function hasMacosSealedToolManifest(
-  resourcesRoot: string
+  resourcesRoot: string,
+  fileSystemSemantics?: Readonly<MacosSealedToolFileSystemSemantics>
 ): Promise<boolean> {
   try {
-    await lstat(macosSealedToolManifestPath(resourcesRoot));
+    await lstat(macosSealedToolManifestPath(
+      resourcesRoot,
+      fileSystemSemantics
+    ));
     return true;
   } catch (error) {
     if (
@@ -531,16 +620,26 @@ export async function hasMacosSealedToolManifest(
 
 export async function verifyMacosSealedDesktopTools({
   resourcesRoot,
-  verifyOuterSeal = verifyMacosOuterCodeSeal
+  verifyOuterSeal = verifyMacosOuterCodeSeal,
+  fileSystemSemantics: fileSystemSemanticsInput
 }: {
   readonly resourcesRoot: string;
   readonly verifyOuterSeal?: (
     appBundlePath: string
   ) => Promise<Readonly<MacosCodeSealEvidence>>;
+  readonly fileSystemSemantics?: Readonly<MacosSealedToolFileSystemSemantics>;
 }): Promise<Readonly<MacosSealedToolVerification>> {
-  const normalizedResourcesRoot = safeResourcesRoot(resourcesRoot);
+  const fileSystemSemantics = exactFileSystemSemantics(
+    fileSystemSemanticsInput
+  );
+  const pathApi = fileSystemSemantics.paths;
+  const normalizedResourcesRoot = safeResourcesRoot(
+    resourcesRoot,
+    fileSystemSemantics
+  );
   const appBundlePath = macosAppBundlePathFromResourcesRoot(
-    normalizedResourcesRoot
+    normalizedResourcesRoot,
+    fileSystemSemantics
   );
 
   // A mutable sidecar is never a trust root. The outer bundle seal is checked
@@ -548,7 +647,10 @@ export async function verifyMacosSealedDesktopTools({
   const beforeSeal = await verifyOuterSeal(appBundlePath);
   const manifest = parseMacosSealedToolManifest(JSON.parse(
     (await stableRegularFileBytes(
-      macosSealedToolManifestPath(normalizedResourcesRoot),
+      macosSealedToolManifestPath(
+        normalizedResourcesRoot,
+        fileSystemSemantics
+      ),
       1024 * 1024
     )).toString("utf8")
   ) as unknown);
@@ -558,13 +660,13 @@ export async function verifyMacosSealedDesktopTools({
   );
 
   const expectedManifest = desktopToolTargetManifest("darwin-arm64");
-  const toolsRoot = path.posix.join(
+  const toolsRoot = pathApi.join(
     normalizedResourcesRoot,
     "desktop-tools",
     "darwin-arm64"
   );
   const recordedManifest = JSON.parse((await stableRegularFileBytes(
-    path.posix.join(toolsRoot, "manifest.json"),
+    pathApi.join(toolsRoot, "manifest.json"),
     1024 * 1024
   )).toString("utf8")) as unknown;
   invariant(
@@ -573,8 +675,11 @@ export async function verifyMacosSealedDesktopTools({
   );
   const entries = await Promise.all(MACOS_TOOL_ROLES.map(async (role) => {
     const artifact = manifest.artifacts[role];
-    const filePath = path.posix.join(toolsRoot, artifact.fileName);
-    const actual = await stableRegularFileIdentity(filePath);
+    const filePath = pathApi.join(toolsRoot, artifact.fileName);
+    const actual = await stableRegularFileIdentity(
+      filePath,
+      fileSystemSemantics
+    );
     invariant(
       JSON.stringify(actual) === JSON.stringify(artifact.signed),
       `macOS 봉인 도구 무결성 검증 실패: ${artifact.fileName}`

@@ -49,6 +49,16 @@ export interface LoginItemAdapter {
   readonly get: (settings: Readonly<LoginItemSettings>) => Readonly<LoginItemState>;
 }
 
+/**
+ * Keeps target-platform paths in the persisted contract while allowing a
+ * cross-platform verifier to store that contract on its native filesystem.
+ * Production uses the identity mapping and native permission capabilities.
+ */
+export interface EngineAutostartFileSystemSemantics {
+  readonly resolveStatePath: (targetPath: string) => string;
+  readonly enforcePosixPermissions: boolean;
+}
+
 export interface EngineAutostartRegistration {
   readonly schema: typeof ENGINE_AUTOSTART_SCHEMA;
   readonly target: DesktopBundleTarget;
@@ -74,6 +84,55 @@ function isMissingPath(error: unknown): boolean {
   return error instanceof Error
     && "code" in error
     && error.code === "ENOENT";
+}
+
+const nativeFileSystemSemantics = Object.freeze({
+  resolveStatePath: (targetPath: string) => targetPath,
+  enforcePosixPermissions: process.platform !== "win32"
+}) satisfies EngineAutostartFileSystemSemantics;
+
+function exactFileSystemSemantics(
+  value: Readonly<EngineAutostartFileSystemSemantics> | undefined
+): Readonly<EngineAutostartFileSystemSemantics> {
+  const semantics = value ?? nativeFileSystemSemantics;
+  if (
+    typeof semantics.resolveStatePath !== "function"
+    || typeof semantics.enforcePosixPermissions !== "boolean"
+    || (
+      !semantics.enforcePosixPermissions
+      && process.platform !== "win32"
+    )
+  ) {
+    throw new TypeError("자동실행 파일시스템 의미가 올바르지 않습니다.");
+  }
+  return semantics;
+}
+
+function targetPathImplementation(
+  platform: DesktopPlatform
+): typeof path.posix {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+function resolvedStatePath(
+  targetPath: string,
+  semantics: Readonly<EngineAutostartFileSystemSemantics>
+): string {
+  const resolved = semantics.resolveStatePath(targetPath);
+  if (
+    typeof resolved !== "string"
+    || resolved.length === 0
+    || resolved.trim() !== resolved
+    || /[\u0000-\u001f\u007f]/u.test(resolved)
+    || !path.isAbsolute(resolved)
+  ) {
+    throw new TypeError("자동실행 상태의 실제 저장 경로가 올바르지 않습니다.");
+  }
+  const normalized = path.normalize(resolved);
+  if (normalized === path.parse(normalized).root) {
+    throw new TypeError("자동실행 상태를 파일시스템 루트에 저장할 수 없습니다.");
+  }
+  return normalized;
 }
 
 function targetPlatform(target: DesktopBundleTarget): DesktopPlatform {
@@ -340,13 +399,14 @@ async function readExactRegularFile(pathname: string): Promise<string> {
 
 async function writeRegularFileAtomically(
   pathname: string,
-  body: string
+  body: string,
+  enforcePosixPermissions: boolean
 ): Promise<void> {
   const directory = path.dirname(pathname);
   await ensureRegularDirectory(directory);
   const before = await existingRegularFile(pathname);
   if (before && await readExactRegularFile(pathname) === body) {
-    if (process.platform !== "win32") {
+    if (enforcePosixPermissions) {
       await chmod(pathname, 0o600);
     }
     return;
@@ -385,7 +445,7 @@ async function writeRegularFileAtomically(
     }
     await rename(temporaryPath, pathname);
     temporaryExists = false;
-    if (process.platform !== "win32") {
+    if (enforcePosixPermissions) {
       await chmod(pathname, 0o600);
     }
   } finally {
@@ -397,7 +457,7 @@ async function writeRegularFileAtomically(
   if (!metadata || await readExactRegularFile(pathname) !== body) {
     throw new Error("자동실행 상태 readback이 기록값과 다릅니다.");
   }
-  if (process.platform !== "win32" && (metadata.mode & 0o7777) !== 0o600) {
+  if (enforcePosixPermissions && (metadata.mode & 0o7777) !== 0o600) {
     throw new Error("자동실행 상태 권한을 0600으로 제한하지 못했습니다.");
   }
 }
@@ -579,7 +639,8 @@ export async function ensureEngineAutostart({
   linuxConfigRoot,
   loginItem,
   isolatedStateRoot,
-  stateRoot
+  stateRoot,
+  fileSystemSemantics: fileSystemSemanticsInput
 }: {
   readonly target: DesktopBundleTarget | string;
   readonly executablePath: string;
@@ -587,9 +648,14 @@ export async function ensureEngineAutostart({
   readonly loginItem?: Readonly<LoginItemAdapter>;
   readonly isolatedStateRoot?: string;
   readonly stateRoot?: string;
+  readonly fileSystemSemantics?: Readonly<EngineAutostartFileSystemSemantics>;
 }): Promise<Readonly<EngineAutostartRegistration>> {
   const target = exactSupportedTarget(targetInput);
   const platform = targetPlatform(target);
+  const targetPaths = targetPathImplementation(platform);
+  const fileSystemSemantics = exactFileSystemSemantics(
+    fileSystemSemanticsInput
+  );
   const executablePath = exactExecutablePath(executablePathInput, platform);
 
   if (isolatedStateRoot !== undefined) {
@@ -597,7 +663,8 @@ export async function ensureEngineAutostart({
       platform,
       label: "격리 자동실행 상태"
     });
-    const statePath = path.join(root, `autostart-${target}.json`);
+    const statePath = targetPaths.join(root, `autostart-${target}.json`);
+    const storagePath = resolvedStatePath(statePath, fileSystemSemantics);
     const body = `${JSON.stringify({
       schema: ENGINE_AUTOSTART_SCHEMA,
       target,
@@ -606,11 +673,15 @@ export async function ensureEngineAutostart({
       registered: true
     }, null, 2)}\n`;
     await assertAbsentOrManagedFile(
-      statePath,
+      storagePath,
       (existing) => parseLoginItemManagedState(existing, target) !== null
     );
-    await writeRegularFileAtomically(statePath, body);
-    if (await readExactRegularFile(statePath) !== body) {
+    await writeRegularFileAtomically(
+      storagePath,
+      body,
+      fileSystemSemantics.enforcePosixPermissions
+    );
+    if (await readExactRegularFile(storagePath) !== body) {
       throw new Error("격리 자동실행 상태 readback에 실패했습니다.");
     }
     return registration(target, "isolated-smoke", executablePath, statePath);
@@ -624,18 +695,23 @@ export async function ensureEngineAutostart({
       platform,
       label: "Linux XDG config"
     });
-    const statePath = path.join(
+    const statePath = targetPaths.join(
       configRoot,
       "autostart",
       LINUX_ENGINE_AUTOSTART_FILE
     );
+    const storagePath = resolvedStatePath(statePath, fileSystemSemantics);
     const body = linuxEngineAutostartContent(executablePath, statePath);
     await assertAbsentOrManagedFile(
-      statePath,
+      storagePath,
       isManagedLinuxEngineAutostartContent
     );
-    await writeRegularFileAtomically(statePath, body);
-    if (await readExactRegularFile(statePath) !== body) {
+    await writeRegularFileAtomically(
+      storagePath,
+      body,
+      fileSystemSemantics.enforcePosixPermissions
+    );
+    if (await readExactRegularFile(storagePath) !== body) {
       throw new Error("Linux XDG 자동실행 readback에 실패했습니다.");
     }
     return registration(target, "xdg-autostart", executablePath, statePath);
@@ -646,19 +722,22 @@ export async function ensureEngineAutostart({
   }
   const managedStatePath = stateRoot === undefined
     ? null
-    : path.join(validateDesktopAbsolutePath(stateRoot, {
+    : targetPaths.join(validateDesktopAbsolutePath(stateRoot, {
       platform,
       label: "자동실행 관리 상태"
     }), `engine-autostart-${target}.json`);
+  const managedStoragePath = managedStatePath === null
+    ? null
+    : resolvedStatePath(managedStatePath, fileSystemSemantics);
   let priorState: Readonly<LoginItemManagedState> | null = null;
-  if (managedStatePath) {
+  if (managedStoragePath) {
     await assertAbsentOrManagedFile(
-      managedStatePath,
+      managedStoragePath,
       (body) => parseLoginItemManagedState(body, target) !== null
     );
-    if (await existingRegularFile(managedStatePath)) {
+    if (await existingRegularFile(managedStoragePath)) {
       priorState = parseLoginItemManagedState(
-        await readExactRegularFile(managedStatePath),
+        await readExactRegularFile(managedStoragePath),
         target
       );
     }
@@ -685,13 +764,17 @@ export async function ensureEngineAutostart({
   if (!approvalRequired && !loginItemEnabled(platform, state, executablePath)) {
     throw new Error(`${platform} 로그인 자동실행 readback이 등록 상태가 아닙니다.`);
   }
-  if (managedStatePath) {
+  if (managedStoragePath) {
     const body = `${JSON.stringify(
       loginItemManagedState(target, executablePath),
       null,
       2
     )}\n`;
-    await writeRegularFileAtomically(managedStatePath, body);
+    await writeRegularFileAtomically(
+      managedStoragePath,
+      body,
+      fileSystemSemantics.enforcePosixPermissions
+    );
   }
   return registration(
     target,
@@ -725,7 +808,8 @@ export async function removeEngineAutostart({
   linuxConfigRoot,
   loginItem,
   isolatedStateRoot,
-  stateRoot
+  stateRoot,
+  fileSystemSemantics: fileSystemSemanticsInput
 }: {
   readonly target: DesktopBundleTarget | string;
   readonly executablePath: string;
@@ -733,9 +817,14 @@ export async function removeEngineAutostart({
   readonly loginItem?: Readonly<LoginItemAdapter>;
   readonly isolatedStateRoot?: string;
   readonly stateRoot?: string;
+  readonly fileSystemSemantics?: Readonly<EngineAutostartFileSystemSemantics>;
 }): Promise<Readonly<EngineAutostartRemoval>> {
   const target = exactSupportedTarget(targetInput);
   const platform = targetPlatform(target);
+  const targetPaths = targetPathImplementation(platform);
+  const fileSystemSemantics = exactFileSystemSemantics(
+    fileSystemSemanticsInput
+  );
   const executablePath = exactExecutablePath(executablePathInput, platform);
 
   if (isolatedStateRoot !== undefined) {
@@ -743,9 +832,10 @@ export async function removeEngineAutostart({
       platform,
       label: "격리 자동실행 상태"
     });
-    const statePath = path.join(root, `autostart-${target}.json`);
+    const statePath = targetPaths.join(root, `autostart-${target}.json`);
+    const storagePath = resolvedStatePath(statePath, fileSystemSemantics);
     await removeManagedRegularFile(
-      statePath,
+      storagePath,
       (body) => parseLoginItemManagedState(body, target) !== null
     );
     return removal(target, "isolated-smoke", statePath);
@@ -759,13 +849,14 @@ export async function removeEngineAutostart({
       platform,
       label: "Linux XDG config"
     });
-    const statePath = path.join(
+    const statePath = targetPaths.join(
       configRoot,
       "autostart",
       LINUX_ENGINE_AUTOSTART_FILE
     );
+    const storagePath = resolvedStatePath(statePath, fileSystemSemantics);
     await removeManagedRegularFile(
-      statePath,
+      storagePath,
       isManagedLinuxEngineAutostartContent
     );
     return removal(target, "xdg-autostart", statePath);
@@ -776,14 +867,17 @@ export async function removeEngineAutostart({
   }
   const managedStatePath = stateRoot === undefined
     ? null
-    : path.join(validateDesktopAbsolutePath(stateRoot, {
+    : targetPaths.join(validateDesktopAbsolutePath(stateRoot, {
       platform,
       label: "자동실행 관리 상태"
     }), `engine-autostart-${target}.json`);
+  const managedStoragePath = managedStatePath === null
+    ? null
+    : resolvedStatePath(managedStatePath, fileSystemSemantics);
   let priorExecutablePath: string | null = null;
-  if (managedStatePath && await existingRegularFile(managedStatePath)) {
+  if (managedStoragePath && await existingRegularFile(managedStoragePath)) {
     const prior = parseLoginItemManagedState(
-      await readExactRegularFile(managedStatePath),
+      await readExactRegularFile(managedStoragePath),
       target
     );
     if (!prior) {
@@ -801,9 +895,9 @@ export async function removeEngineAutostart({
       throw new Error(`${platform} 로그인 자동실행 제거 readback에 실패했습니다.`);
     }
   }
-  if (managedStatePath) {
+  if (managedStoragePath) {
     await removeManagedRegularFile(
-      managedStatePath,
+      managedStoragePath,
       (body) => parseLoginItemManagedState(body, target) !== null
     );
   }

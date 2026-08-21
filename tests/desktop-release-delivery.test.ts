@@ -22,6 +22,10 @@ test("ordinary CI persists only unsigned JSON evidence and never installer bytes
     /path:\s*dist\/installers\/\$\{\{ matrix\.target \}\}\/[ \t]*$/mu
   );
   assert.match(workflow, /retention-days:\s*7/u);
+  assert.match(
+    workflow,
+    /Install and read back exact Linux deb runtime dependencies[\s\S]*apt-get install --yes --no-install-recommends libnotify4 libsecret-1-0[\s\S]*dpkg-query --show --showformat='\$\{Status\}'/u
+  );
   assert.doesNotMatch(workflow, /gh release (?:create|upload|edit)/u);
   assert.doesNotMatch(workflow, /contents:\s*write/u);
 });
@@ -74,6 +78,10 @@ test("public installer release는 explicit manual/tag confirmation과 protected 
     3
   );
   assert.equal(workflow.match(/npm run test:liveness:live-vod/gu)?.length, 1);
+  assert.match(
+    workflow,
+    /Install and read back exact Linux deb runtime dependencies[\s\S]*apt-get install --yes --no-install-recommends libnotify4 libsecret-1-0[\s\S]*dpkg-query --show --showformat='\$\{Status\}'/u
+  );
 });
 
 test("release assembler는 exact remote set, native evidence, hashes, GPG readback을 모두 강제한다", async () => {
@@ -133,6 +141,7 @@ test("세 OS 설치기는 웹 상표와 Linux desktop identity를 명시한다",
   );
   for (const config of [testConfig, releaseConfig]) {
     assert.match(config, /mac:[\s\S]*icon: build\/icon\.icns/u);
+    assert.match(config, /^dmg:\n(?:  .*\n)*  writeUpdateInfo: false$/mu);
     assert.match(config, /win:[\s\S]*icon: build\/icon\.ico/u);
     assert.match(config, /linux:[\s\S]*icon: build\/icon\.svg/u);
     assert.match(config, /linux:[\s\S]*syncDesktopName: true/u);

@@ -32,6 +32,9 @@ mac:
   artifactName: UNSIGNED-TEST-ONLY-Kirinuki-Engine-macos-arm64.dmg
 dmg:
   sign: false
+  # Kirinuki has no auto-updater; emitting update blockmaps would violate the
+  # installer's exact, fail-closed output allowlist.
+  writeUpdateInfo: false
 win:
   icon: build/icon.ico
   target:

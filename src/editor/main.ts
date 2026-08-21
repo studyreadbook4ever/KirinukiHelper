@@ -4120,6 +4120,9 @@ function renderHeader() {
     || !project.clips.some((clip) => clip.enabled !== false)
     || Boolean(clipOutsideMedia(project))
     || Boolean(shortSourcePickerReturnState)
+    || Boolean(activeJobController)
+    || projectMutationLockCount > 0
+    || exportRequestPending
   );
   elements.open_short_form.disabled = (
     Boolean(activeJobController)

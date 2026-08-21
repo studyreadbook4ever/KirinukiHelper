@@ -37,6 +37,9 @@ mac:
   artifactName: QUARANTINED-NOT-FOR-PUBLISH-Kirinuki-Engine-macos-arm64.dmg
 dmg:
   sign: true
+  # Replacement is an explicit signed installer, never an update feed.
+  # Keep the signed release output set free of updater blockmaps as well.
+  writeUpdateInfo: false
 win:
   icon: build/icon.ico
   target:

@@ -3098,6 +3098,19 @@ async function main(): Promise<void> {
     "A runner 회수 뒤 B가 로컬 MP4를 받아 편집기에 연결하지 못했습니다.",
     20_000
   );
+  await waitFor(
+    () => execute<boolean>(`
+      const exportButton = document.querySelector("#export-video");
+      const openShortFormButton = document.querySelector("#open-short-form");
+      return exportButton instanceof HTMLButtonElement
+        && !exportButton.disabled
+        && openShortFormButton instanceof HTMLButtonElement
+        && !openShortFormButton.disabled;
+    `),
+    (ready) => ready,
+    "VOD 준비 후 편집기 작업 잠금이 해제되지 않았습니다.",
+    10_000
+  );
   const editorChrome = await execute<{
     adWidth: number;
     adHeight: number;
@@ -3124,7 +3137,6 @@ async function main(): Promise<void> {
     const adRect = ad.getBoundingClientRect();
     const workspaceRect = workspace.getBoundingClientRect();
     const timelineRect = timeline.getBoundingClientRect();
-    exportButton.disabled = false;
     exportButton.click();
     const dialog = document.querySelector("#export-options-dialog");
     const title = document.querySelector("#export-file-title");
@@ -3144,7 +3156,6 @@ async function main(): Promise<void> {
     const sanitizedPreview = preview.textContent || "";
     const validTitleAccepted = !confirm.disabled && title.getAttribute("aria-invalid") === "false";
     document.querySelector("#cancel-export-options")?.click();
-    exportButton.disabled = true;
     return {
       adWidth: adRect.width,
       adHeight: adRect.height,

@@ -16,24 +16,49 @@ import {
   linuxEngineAutostartLaunch,
   removeEngineAutostart
 } from "../src/desktop/login-autostart.js";
+import type {
+  EngineAutostartFileSystemSemantics
+} from "../src/desktop/login-autostart.js";
+
+function mappedStateStorage(
+  targetStatePath: string,
+  nativeStatePath: string
+): Readonly<EngineAutostartFileSystemSemantics> {
+  return Object.freeze({
+    resolveStatePath: (candidate: string) => {
+      assert.equal(candidate, targetStatePath);
+      return nativeStatePath;
+    },
+    enforcePosixPermissions: process.platform !== "win32"
+  });
+}
 
 test("Linux XDG 자동실행은 정확한 background 명령을 원자적으로 기록하고 멱등 readback한다", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "키리누키 자동실행 test "));
   try {
-    const executable = path.join(root, "키리누키 Engine 실행 파일");
-    const configRoot = path.join(root, "사용자 config 경로");
-    await writeFile(executable, "engine", { mode: 0o700 });
-
-    const first = await ensureEngineAutostart({
-      target: "linux-x64",
-      executablePath: executable,
-      linuxConfigRoot: configRoot
-    });
-    const statePath = path.join(
+    const executable = "/opt/키리누키 Engine/키리누키";
+    const configRoot = "/home/테스트 사용자/.config";
+    const statePath = path.posix.join(
       configRoot,
       "autostart",
       LINUX_ENGINE_AUTOSTART_FILE
     );
+    const nativeStatePath = path.join(
+      root,
+      "autostart",
+      LINUX_ENGINE_AUTOSTART_FILE
+    );
+    const fileSystemSemantics = mappedStateStorage(
+      statePath,
+      nativeStatePath
+    );
+
+    const first = await ensureEngineAutostart({
+      target: "linux-x64",
+      executablePath: executable,
+      linuxConfigRoot: configRoot,
+      fileSystemSemantics
+    });
     assert.deepEqual(first, {
       schema: ENGINE_AUTOSTART_SCHEMA,
       target: "linux-x64",
@@ -46,26 +71,30 @@ test("Linux XDG 자동실행은 정확한 background 명령을 원자적으로 �
       statePath
     });
     assert.equal(
-      await readFile(statePath, "utf8"),
+      await readFile(nativeStatePath, "utf8"),
       linuxEngineAutostartContent(executable, statePath)
     );
     assert.match(
-      await readFile(statePath, "utf8"),
+      await readFile(nativeStatePath, "utf8"),
       /^TryExec=\/bin\/sh$/mu
     );
     assert.match(
-      await readFile(statePath, "utf8"),
+      await readFile(nativeStatePath, "utf8"),
       new RegExp(`^X-Kirinuki-Executable=${executable.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`, "mu")
     );
-    const before = await lstat(statePath);
-    assert.equal(before.mode & 0o777, 0o600);
+    const before = await lstat(nativeStatePath);
+    assert.equal(before.isFile(), true);
+    if (fileSystemSemantics.enforcePosixPermissions) {
+      assert.equal(before.mode & 0o777, 0o600);
+    }
 
     const second = await ensureEngineAutostart({
       target: "linux-x64",
       executablePath: executable,
-      linuxConfigRoot: configRoot
+      linuxConfigRoot: configRoot,
+      fileSystemSemantics
     });
-    const after = await lstat(statePath);
+    const after = await lstat(nativeStatePath);
     assert.deepEqual(second, first);
     assert.equal(after.dev, before.dev);
     assert.equal(after.ino, before.ino);
@@ -179,13 +208,23 @@ test("Windows와 macOS는 Electron login-item API 설정값을 정확히 readbac
 test("native smoke 자동실행 검증은 실제 OS 설정을 건드리지 않고 격리 상태만 남긴다", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-autostart-smoke-"));
   try {
-    const executable = path.join(root, "Kirinuki");
-    await writeFile(executable, "engine", { mode: 0o700 });
+    const executable = "/opt/Kirinuki/Kirinuki";
+    const isolatedStateRoot = "/var/lib/kirinuki-smoke";
+    const statePath = path.posix.join(
+      isolatedStateRoot,
+      "autostart-linux-x64.json"
+    );
+    const nativeStatePath = path.join(root, "autostart-linux-x64.json");
+    const fileSystemSemantics = mappedStateStorage(
+      statePath,
+      nativeStatePath
+    );
     let called = false;
     const result = await ensureEngineAutostart({
       target: "linux-x64",
       executablePath: executable,
-      isolatedStateRoot: root,
+      isolatedStateRoot,
+      fileSystemSemantics,
       loginItem: {
         set: () => {
           called = true;
@@ -195,8 +234,8 @@ test("native smoke 자동실행 검증은 실제 OS 설정을 건드리지 않�
     });
     assert.equal(called, false);
     assert.equal(result.method, "isolated-smoke");
-    assert.ok(result.statePath);
-    const record = JSON.parse(await readFile(result.statePath, "utf8"));
+    assert.equal(result.statePath, statePath);
+    const record = JSON.parse(await readFile(nativeStatePath, "utf8"));
     assert.deepEqual(record, {
       schema: ENGINE_AUTOSTART_SCHEMA,
       target: "linux-x64",
@@ -378,55 +417,77 @@ test("Windows 자동실행 제거는 owned user launch-item이 남으면 fail cl
 test("Linux 자동실행은 managed collision만 갱신하고 제거를 멱등 readback한다", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "kirinuki-autostart-remove-"));
   try {
-    const executable = path.join(root, "Kirinuki");
-    const movedExecutable = path.join(root, "Kirinuki New");
-    const configRoot = path.join(root, "config");
-    const statePath = path.join(configRoot, "autostart", LINUX_ENGINE_AUTOSTART_FILE);
-    await Promise.all([
-      writeFile(executable, "engine", { mode: 0o700 }),
-      writeFile(movedExecutable, "new-engine", { mode: 0o700 })
-    ]);
+    const executable = "/opt/Kirinuki/Kirinuki";
+    const movedExecutable = "/opt/Kirinuki New/Kirinuki";
+    const configRoot = "/home/kirinuki/.config";
+    const statePath = path.posix.join(
+      configRoot,
+      "autostart",
+      LINUX_ENGINE_AUTOSTART_FILE
+    );
+    const nativeStatePath = path.join(
+      root,
+      "autostart",
+      LINUX_ENGINE_AUTOSTART_FILE
+    );
+    const fileSystemSemantics = mappedStateStorage(
+      statePath,
+      nativeStatePath
+    );
     await ensureEngineAutostart({
       target: "linux-x64",
       executablePath: executable,
-      linuxConfigRoot: configRoot
+      linuxConfigRoot: configRoot,
+      fileSystemSemantics
     });
     assert.equal(
-      isManagedLinuxEngineAutostartContent(await readFile(statePath, "utf8")),
+      isManagedLinuxEngineAutostartContent(
+        await readFile(nativeStatePath, "utf8")
+      ),
       true
     );
     await ensureEngineAutostart({
       target: "linux-x64",
       executablePath: movedExecutable,
-      linuxConfigRoot: configRoot
+      linuxConfigRoot: configRoot,
+      fileSystemSemantics
     });
     assert.equal(
-      await readFile(statePath, "utf8"),
+      await readFile(nativeStatePath, "utf8"),
       linuxEngineAutostartContent(movedExecutable, statePath)
     );
     const removed = await removeEngineAutostart({
       target: "linux-x64",
       executablePath: movedExecutable,
-      linuxConfigRoot: configRoot
+      linuxConfigRoot: configRoot,
+      fileSystemSemantics
     });
     assert.equal(removed.removed, true);
-    await assert.rejects(readFile(statePath, "utf8"), /ENOENT/u);
+    await assert.rejects(readFile(nativeStatePath, "utf8"), /ENOENT/u);
     await removeEngineAutostart({
       target: "linux-x64",
       executablePath: movedExecutable,
-      linuxConfigRoot: configRoot
+      linuxConfigRoot: configRoot,
+      fileSystemSemantics
     });
 
-    await writeFile(statePath, "[Desktop Entry]\nName=Someone Else\n");
+    await writeFile(
+      nativeStatePath,
+      "[Desktop Entry]\nName=Someone Else\n"
+    );
     await assert.rejects(
       ensureEngineAutostart({
         target: "linux-x64",
         executablePath: executable,
-        linuxConfigRoot: configRoot
+        linuxConfigRoot: configRoot,
+        fileSystemSemantics
       }),
       /관리하지 않는/u
     );
-    assert.equal(await readFile(statePath, "utf8"), "[Desktop Entry]\nName=Someone Else\n");
+    assert.equal(
+      await readFile(nativeStatePath, "utf8"),
+      "[Desktop Entry]\nName=Someone Else\n"
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
