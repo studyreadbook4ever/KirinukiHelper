@@ -32,22 +32,9 @@ import {
   stringifySessionArchive
 } from "../src/lib/session-archive.js";
 import {
-  LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
-  LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
-  LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
-  freshLocalMediaEngineChallenge,
   localMediaEnginePairingUrl,
-  localMediaEngineProofTranscript,
-  pairingResponseUnsignedPayload,
-  parseLocalMediaEnginePairingRequest,
-  parseLocalMediaEnginePairingResponse,
-  verifyLocalMediaEngineSignature
+  parseLocalMediaEnginePairingRequest
 } from "../src/lib/local-media-engine-auth.js";
-import {
-  LOCAL_MEDIA_ENGINE_TRUST_DATABASE,
-  LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
-  LOCAL_MEDIA_ENGINE_TRUST_STORE
-} from "../src/editor/local-media-engine-trust.js";
 import {
   createLocalMediaEngineV2Fixture,
   type LocalMediaEngineV2Fixture,
@@ -893,6 +880,7 @@ interface LateMaterializationFixtureSnapshot {
 
 interface LateMaterializationFixtureInterception {
   readonly snapshot: () => LateMaterializationFixtureSnapshot;
+  readonly claimPairing: (pairingUrl: string) => void;
   readonly assertHealthy: () => void;
   readonly close: () => Promise<void>;
 }
@@ -967,6 +955,11 @@ async function installLateMaterializationV2Fixture({
   let bRequest: Record<string, unknown> | null = null;
   let aLeaseTimer: ReturnType<typeof setTimeout> | null = null;
   let aRunnerSettleTimer: ReturnType<typeof setTimeout> | null = null;
+  let claimedPairing: Readonly<{
+    challenge: string;
+    state: string;
+  }> | null = null;
+  let pairingResponseConsumed = false;
   let fixtureClosed = false;
   let fixtureError: Error | null = null;
 
@@ -1106,6 +1099,18 @@ async function installLateMaterializationV2Fixture({
   const fixtureErrors: string[] = [];
   const fixture = await createLocalMediaEngineV2Fixture({
     allowedOrigin: studioOrigin,
+    consumePairingResponse: ({ challenge, state: pairingState }) => {
+      if (
+        pairingResponseConsumed
+        || !claimedPairing
+        || claimedPairing.state !== pairingState
+        || claimedPairing.challenge !== challenge
+      ) {
+        return false;
+      }
+      pairingResponseConsumed = true;
+      return true;
+    },
     errors: fixtureErrors,
     originBinding: "exact-local-studio",
     records: fixtureRecords,
@@ -1334,6 +1339,19 @@ async function installLateMaterializationV2Fixture({
   };
   return {
     snapshot,
+    claimPairing: (pairingUrl: string) => {
+      if (claimedPairing) {
+        throw new Error("v2 fixture pairing은 한 번만 claim할 수 있습니다.");
+      }
+      const request = parseLocalMediaEnginePairingRequest(pairingUrl);
+      if (localMediaEnginePairingUrl(request) !== pairingUrl) {
+        throw new Error("v2 fixture pairing URL이 canonical form이 아닙니다.");
+      }
+      claimedPairing = Object.freeze({
+        challenge: request.challenge,
+        state: request.state
+      });
+    },
     assertHealthy: () => {
       if (fixtureErrors.length > 0) {
         throw new Error(fixtureErrors.join("\n"));
@@ -1392,16 +1410,24 @@ async function captureLocalMediaEngineProtocolAttempt(
   );
   await connection.send("Page.enable");
   let resolveAttempt: (url: string) => void = () => undefined;
-  const attempted = new Promise<string>((resolve) => {
+  let rejectAttempt: (error: Error) => void = () => undefined;
+  const attempted = new Promise<string>((resolve, reject) => {
     resolveAttempt = resolve;
+    rejectAttempt = reject;
   });
+  let navigationHandled = false;
   const unsubscribe = connection.on("Page.frameRequestedNavigation", (params) => {
     const url = String(params.url || "");
-    if (!url.startsWith("kirinuki-engine://pair?")) {
+    if (!url.startsWith("kirinuki-engine://pair?") || navigationHandled) {
       return;
     }
-    resolveAttempt(url);
-    void connection.send("Page.stopLoading").catch(() => undefined);
+    navigationHandled = true;
+    void connection.send("Page.stopLoading").then(
+      () => resolveAttempt(url),
+      (error: unknown) => rejectAttempt(
+        error instanceof Error ? error : new Error(String(error))
+      )
+    );
   });
   try {
     const prompt = await waitFor(
@@ -1450,134 +1476,6 @@ async function captureLocalMediaEngineProtocolAttempt(
     unsubscribe();
     connection.close();
   }
-}
-
-async function enrollLocalMediaEngineFixture(
-  fixture: Readonly<LocalMediaEngineV2Fixture>
-): Promise<void> {
-  const state = freshLocalMediaEngineChallenge();
-  const challenge = freshLocalMediaEngineChallenge();
-  await execute(`
-    globalThis.__kirinukiSmokePairing = null;
-    fetch("http://127.0.0.1:4319/v1/pairing", {
-      method: "GET",
-      mode: "cors",
-      credentials: "omit",
-      cache: "no-store",
-      redirect: "error",
-      targetAddressSpace: "loopback",
-      headers: {
-        "X-Kirinuki-Protocol": arguments[0],
-        [arguments[1]]: arguments[2],
-        [arguments[3]]: arguments[4]
-      }
-    }).then(async (response) => {
-      globalThis.__kirinukiSmokePairing = {
-        ok: response.ok,
-        status: response.status,
-        value: await response.json(),
-        error: ""
-      };
-    }, (error) => {
-      globalThis.__kirinukiSmokePairing = {
-        ok: false,
-        status: 0,
-        value: null,
-        error: String(error)
-      };
-    });
-    return true;
-  `, [
-    LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
-    LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
-    state,
-    LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
-    challenge
-  ]);
-  const pairingResult = await waitFor(
-    () => execute<{
-      ok: boolean;
-      status: number;
-      value: unknown;
-      error: string;
-    } | null>("return globalThis.__kirinukiSmokePairing || null;"),
-    (value) => value !== null,
-    "브라우저가 v2 signed pairing fixture 응답을 받지 못했습니다."
-  );
-  const pairing = parseLocalMediaEnginePairingResponse(pairingResult?.value);
-  assert(
-    pairingResult?.ok
-      && pairingResult.status === 200
-      && !pairingResult.error
-      && pairing
-      && pairing.state === state
-      && pairing.challenge === challenge
-      && pairing.keyId === fixture.keyId
-      && pairing.publicKeySpki === fixture.publicKeySpki
-      && await verifyLocalMediaEngineSignature({
-        publicKeySpki: pairing.publicKeySpki,
-        signature: pairing.signature,
-        transcript: localMediaEngineProofTranscript({
-          kind: "pairing",
-          challenge,
-          instanceNonce: "",
-          requestBinding: state,
-          payload: pairingResponseUnsignedPayload(pairing)
-        })
-      }),
-    `v2 fixture pairing identity 서명이 올바르지 않습니다: ${JSON.stringify(pairingResult)}`
-  );
-  await execute(`
-    globalThis.__kirinukiSmokePinWrite = null;
-    const open = indexedDB.open(arguments[0], 1);
-    open.onupgradeneeded = () => {
-      if (!open.result.objectStoreNames.contains(arguments[1])) {
-        open.result.createObjectStore(arguments[1]);
-      }
-    };
-    open.onerror = () => {
-      globalThis.__kirinukiSmokePinWrite = {
-        ready: false,
-        error: String(open.error || "open failed")
-      };
-    };
-    open.onsuccess = () => {
-      const database = open.result;
-      const transaction = database.transaction(arguments[1], "readwrite");
-      transaction.objectStore(arguments[1]).put(arguments[2], "active");
-      transaction.oncomplete = () => {
-        database.close();
-        globalThis.__kirinukiSmokePinWrite = { ready: true, error: "" };
-      };
-      transaction.onerror = () => {
-        globalThis.__kirinukiSmokePinWrite = {
-          ready: false,
-          error: String(transaction.error || "pin write failed")
-        };
-      };
-    };
-    return true;
-  `, [
-    LOCAL_MEDIA_ENGINE_TRUST_DATABASE,
-    LOCAL_MEDIA_ENGINE_TRUST_STORE,
-    {
-      schema: LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
-      algorithm: pairing.algorithm,
-      keyId: pairing.keyId,
-      publicKeySpki: pairing.publicKeySpki,
-      enrolledAt: new Date().toISOString(),
-      maxSeenVersion: pairing.engineVersion
-    }
-  ]);
-  const stored = await waitFor(
-    () => execute<{ ready: boolean; error: string } | null>(
-      "return globalThis.__kirinukiSmokePinWrite || null;"
-    ),
-    (value) => Boolean(value?.ready || value?.error),
-    "검증된 v2 fixture pairing identity를 임시 브라우저 profile에 고정하지 못했습니다."
-  );
-  assert(stored?.ready && !stored.error, `v2 fixture pin 저장 실패: ${stored?.error || "unknown"}`);
-  process.stderr.write("[browser-smoke] signed pairing identity 임시 profile 고정 완료\n");
 }
 
 async function setSourceAndVerify({
@@ -3092,9 +2990,9 @@ async function main(): Promise<void> {
       && !firstEditor.clipTime.includes("00:01:45.000"),
     `편집기에 +10초가 다시 더해졌습니다: ${firstEditor.clipTime}`
   );
-  await captureLocalMediaEngineProtocolAttempt(debuggerAddress);
+  const pairingUrl = await captureLocalMediaEngineProtocolAttempt(debuggerAddress);
   assert(localMediaEngineFixture, "v2 local media engine fixture가 시작되지 않았습니다.");
-  await enrollLocalMediaEngineFixture(localMediaEngineFixture);
+  lateMaterializationFixture.claimPairing(pairingUrl);
   const lateAStarted = await waitFor(
     async () => lateMaterializationFixture.snapshot(),
     (value) => (

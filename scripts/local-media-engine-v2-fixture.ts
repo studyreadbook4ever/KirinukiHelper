@@ -11,6 +11,7 @@ import {
   LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL,
   LOCAL_MEDIA_ENGINE_DEVICE_PROOF_SCHEMA,
   LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_PAIRING_POLL_STATUS_SCHEMA,
   LOCAL_MEDIA_ENGINE_PAIRING_RESPONSE_SCHEMA,
   LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
   LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
@@ -100,6 +101,10 @@ export interface LocalMediaEngineV2MediaRequest {
 
 export interface LocalMediaEngineV2FixtureOptions {
   readonly allowedOrigin: string;
+  readonly consumePairingResponse?: (request: Readonly<{
+    readonly challenge: string;
+    readonly state: string;
+  }>) => boolean;
   readonly errors?: string[];
   readonly originBinding: "exact-local-studio" | "exact-public-studio";
   readonly onControlRequest: (
@@ -396,6 +401,16 @@ export async function createLocalMediaEngineV2Fixture(
       ) {
         sendJson(response, options.allowedOrigin, 400, {
           error: { code: "INVALID_PAIRING_POLL", message: "invalid pairing fixture request" }
+        });
+        return;
+      }
+      if (
+        options.consumePairingResponse
+        && !options.consumePairingResponse(Object.freeze({ challenge, state }))
+      ) {
+        sendJson(response, options.allowedOrigin, 202, {
+          schema: LOCAL_MEDIA_ENGINE_PAIRING_POLL_STATUS_SCHEMA,
+          status: "pending"
         });
         return;
       }
