@@ -11,6 +11,7 @@ import {
   invalidatePrimedLocalMediaEngineTrust,
   localMediaEnginePermissionState,
   localMediaEngineInstaller,
+  localMediaEngineReleaseMessage,
   primeLocalMediaEngineTrust,
   probeLocalMediaEngine
 } from "../src/editor/local-media-engine-onboarding.js";
@@ -39,7 +40,8 @@ import type {
 } from "../src/editor/local-media-engine-trust.js";
 import {
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
-  LOCAL_MEDIA_ENGINE_RELEASE_FILES
+  LOCAL_MEDIA_ENGINE_RELEASE_FILES,
+  LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE
 } from "../src/editor/local-media-engine-release.js";
 import type {
   LocalMediaEngineReleaseChannel
@@ -65,6 +67,31 @@ function verifiedReleaseChannel(): Readonly<LocalMediaEngineReleaseChannel> {
     commit: "b".repeat(40),
     aggregateManifestSha256: "c".repeat(64),
     installers
+  });
+}
+
+function linuxPreviewReleaseChannel(): Readonly<LocalMediaEngineReleaseChannel> {
+  const tag = "v3.0.4";
+  return Object.freeze({
+    schema: LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
+    status: "verified-linux-preview",
+    tag,
+    commit: "d".repeat(40),
+    aggregateManifestSha256: "e".repeat(64),
+    sourceOffer: Object.freeze({
+      bytes: 2048,
+      fileName: "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt",
+      sha256: "1".repeat(64),
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt`
+    }),
+    installers: Object.freeze({
+      "linux-x64": Object.freeze({
+        bytes: 1024,
+        fileName: LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE,
+        sha256: "f".repeat(64),
+        url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/${LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE}`
+      })
+    })
   });
 }
 
@@ -288,6 +315,20 @@ test("온보딩 installer는 verified channel이 있을 때만 고정된 세 파
   assert.equal(
     localMediaEngineInstaller("linux-x64", releaseChannel)?.label,
     "Linux용 도우미 다운로드"
+  );
+});
+
+test("Linux preview 온보딩은 Linux만 다운로드하고 다른 OS에 범위를 명확히 알린다", () => {
+  const releaseChannel = linuxPreviewReleaseChannel();
+  const linux = localMediaEngineInstaller("linux-x64", releaseChannel);
+  assert.equal(linux?.fileName, LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE);
+  assert.equal(linux?.label, "Linux x64 테스트용 도우미 다운로드");
+  assert.match(linux?.installInstruction || "", /다운로드를 시작[\s\S]*계속 확인/u);
+  assert.equal(localMediaEngineInstaller("windows-x64", releaseChannel), null);
+  assert.equal(localMediaEngineInstaller("macos-arm64", releaseChannel), null);
+  assert.match(
+    localMediaEngineReleaseMessage("windows-x64", releaseChannel),
+    /Debian\/Ubuntu[\s\S]*Windows와 macOS용 도우미는 아직 제공하지 않습니다/u
   );
 });
 
@@ -552,6 +593,7 @@ test("온보딩 재시도는 마지막 연결 오류가 요구할 때 click stac
     ["#local-media-engine-dialog", new RetryFixtureElement()],
     ["#local-media-engine-download", new RetryFixtureElement()],
     ["#local-media-engine-download-label", new RetryFixtureElement()],
+    ["#local-media-engine-source-offer", new RetryFixtureElement()],
     ["#local-media-engine-retry", new RetryFixtureElement()],
     ["#local-media-engine-reset", new RetryFixtureElement()],
     ["#local-media-engine-cancel", new RetryFixtureElement()],
@@ -705,6 +747,7 @@ test("첫 LNA 질문은 재다운로드보다 먼저 나오고 내 파일 선택
     ["#local-media-engine-dialog", new FakeElement()],
     ["#local-media-engine-download", new FakeElement()],
     ["#local-media-engine-download-label", new FakeElement()],
+    ["#local-media-engine-source-offer", new FakeElement()],
     ["#local-media-engine-retry", new FakeElement()],
     ["#local-media-engine-reset", new FakeElement()],
     ["#local-media-engine-cancel", new FakeElement()],

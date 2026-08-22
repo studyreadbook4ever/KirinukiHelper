@@ -40,6 +40,7 @@ import type {
 import {
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL,
   LOCAL_MEDIA_ENGINE_RELEASE_FILES,
+  LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE,
   LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE
 } from "./local-media-engine-release.js";
 import type {
@@ -91,6 +92,7 @@ interface EngineDialogElements {
   readonly dialog: HTMLDialogElement;
   readonly download: HTMLAnchorElement;
   readonly downloadLabel: HTMLElement;
+  readonly sourceOffer: HTMLAnchorElement;
   readonly retry: HTMLButtonElement;
   readonly reset: HTMLButtonElement;
   readonly cancel: HTMLButtonElement;
@@ -140,6 +142,7 @@ function dialogElements(): EngineDialogElements {
     dialog: requiredElement<HTMLDialogElement>("#local-media-engine-dialog"),
     download: requiredElement<HTMLAnchorElement>("#local-media-engine-download"),
     downloadLabel: requiredElement<HTMLElement>("#local-media-engine-download-label"),
+    sourceOffer: requiredElement<HTMLAnchorElement>("#local-media-engine-source-offer"),
     retry: requiredElement<HTMLButtonElement>("#local-media-engine-retry"),
     reset: requiredElement<HTMLButtonElement>("#local-media-engine-reset"),
     cancel: requiredElement<HTMLButtonElement>("#local-media-engine-cancel"),
@@ -832,9 +835,36 @@ export function localMediaEngineInstaller(
     return null;
   }
   const artifact = releaseChannel.installers[target];
-  return artifact.fileName === entry.fileName
-    ? { ...entry, url: artifact.url }
+  if (!artifact) {
+    return null;
+  }
+  const expectedFileName = releaseChannel.status === "verified-linux-preview"
+    ? LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE
+    : entry.fileName;
+  const releaseEntry = releaseChannel.status === "verified-linux-preview"
+    ? {
+        fileName: LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE,
+        installInstruction: "Linux x64 테스트용 도우미 다운로드를 시작했습니다. 브라우저의 다운로드가 끝나면 deb 파일을 열어 설치하세요. 이 화면은 설치와 연결 상태를 계속 확인합니다.",
+        label: "Linux x64 테스트용 도우미 다운로드"
+      }
+    : entry;
+  return artifact.fileName === expectedFileName
+    ? { ...releaseEntry, url: artifact.url }
     : null;
+}
+
+export function localMediaEngineReleaseMessage(
+  target: LocalMediaEngineTarget,
+  releaseChannel: Readonly<LocalMediaEngineReleaseChannel> | null =
+    LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL
+): string {
+  if (
+    releaseChannel?.status === "verified-linux-preview"
+    && target !== "linux-x64"
+  ) {
+    return "현재 공개 테스트는 Debian/Ubuntu 계열 Linux x64에서만 지원합니다. Windows와 macOS용 도우미는 아직 제공하지 않습니다.";
+  }
+  return LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE;
 }
 
 export type LocalMediaEngineOnboardingResult = "ready" | "manual-file";
@@ -977,11 +1007,12 @@ export async function ensureLocalMediaEngineReady(
     const target = await detectLocalMediaEngineTarget();
     const installer = localMediaEngineInstaller(target);
     const releaseUnavailable = target !== "unsupported" && !installer;
+    const releaseMessage = localMediaEngineReleaseMessage(target);
     const permissionMustBeResolved = permissionState === "prompt"
       || permissionState === "denied";
     elements.unsupported.hidden = Boolean(installer) && target !== "linux-x64";
     elements.unsupported.textContent = releaseUnavailable
-      ? LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE
+      ? releaseMessage
       : target === "linux-x64"
         ? "Linux 설치 파일은 현재 Debian/Ubuntu x64만 지원합니다. 다른 Linux 배포판에서는 자동 설치를 지원하지 않습니다."
         : "현재는 Windows 64비트, Apple Silicon macOS 15 이상, Debian/Ubuntu Linux 64비트만 지원합니다.";
@@ -993,6 +1024,16 @@ export async function ensureLocalMediaEngineReady(
     } else {
       elements.download.removeAttribute("href");
       elements.download.removeAttribute("download");
+    }
+    const sourceOffer = LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL?.status
+      === "verified-linux-preview"
+      ? LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL.sourceOffer
+      : undefined;
+    elements.sourceOffer.hidden = !sourceOffer;
+    if (sourceOffer) {
+      elements.sourceOffer.href = sourceOffer.url;
+    } else {
+      elements.sourceOffer.removeAttribute("href");
     }
     elements.retry.className = permissionMustBeResolved
       ? "button primary"
@@ -1021,7 +1062,7 @@ export async function ensureLocalMediaEngineReady(
             ? initialConnectionError.message
             : ENGINE_RECOVERY_MESSAGE
       : releaseUnavailable
-        ? LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE
+        ? releaseMessage
         : "현재 PC는 자동 설치 지원 대상이 아닙니다.";
     let lastConnectionError = initialConnectionError;
     let pollingTimer: number | null = null;
@@ -1114,7 +1155,7 @@ export async function ensureLocalMediaEngineReady(
               && error.code === "ENGINE_INCOMPATIBLE"
               ? error.message
               : releaseUnavailable
-                ? LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE
+                ? releaseMessage
                 : ENGINE_RECOVERY_MESSAGE;
         return false;
       } finally {

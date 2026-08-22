@@ -238,6 +238,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .local-media-engine-card .local-media-engine-status[data-state="ready"] { color: var(--accent); }
 .local-media-engine-card .local-media-engine-status[data-state="error"] { color: #ffadb3; }
 .local-media-engine-download-note { padding: 10px 12px; border-left: 2px solid #2b8d70; color: #9da9ae !important; background: rgb(0 230 163 / .045); font-size: 12px !important; line-height: 1.55 !important; }
+.local-media-engine-source-offer { width: fit-content; color: #8fb6aa; font-size: 11px; text-underline-offset: 3px; }
 .local-media-engine-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
 .local-media-engine-actions .button { min-height: 46px; display: inline-flex; align-items: center; justify-content: center; color: inherit; text-decoration: none; }
 .local-media-engine-card .local-media-engine-privacy { color: #829197; font-size: 10px; }

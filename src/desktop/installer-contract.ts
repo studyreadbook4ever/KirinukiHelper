@@ -21,6 +21,23 @@ export const DESKTOP_RELEASE_CHECKSUM_SIGNATURE_FILE =
 export const DESKTOP_RELEASE_PROVENANCE_ARCHIVE_FILE =
   "Kirinuki-Engine-source-provenance.tar.gz" as const;
 
+export const LINUX_PREVIEW_RELEASE_MANIFEST_SCHEMA =
+  "kirinuki-linux-preview-release/v2" as const;
+export const LINUX_PREVIEW_INSTALLER_FILE =
+  "Kirinuki-Engine-linux-x64-preview.deb" as const;
+export const LINUX_PREVIEW_SOURCE_OFFER_FILE =
+  "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt" as const;
+export const LINUX_PREVIEW_RELEASE_MANIFEST_FILE =
+  "Kirinuki-Engine-linux-preview-manifest.json" as const;
+export const LINUX_PREVIEW_RELEASE_CHECKSUM_FILE =
+  "Kirinuki-Engine-linux-preview-SHA256.txt" as const;
+export const LINUX_PREVIEW_RELEASE_ASSET_FILES = Object.freeze([
+  LINUX_PREVIEW_INSTALLER_FILE,
+  LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
+  LINUX_PREVIEW_RELEASE_MANIFEST_FILE,
+  LINUX_PREVIEW_SOURCE_OFFER_FILE
+].sort());
+
 export interface DesktopInstallerTarget {
   readonly target: DesktopBundleTarget;
   readonly platform: "linux" | "darwin" | "win32";
