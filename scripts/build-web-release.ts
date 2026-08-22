@@ -63,6 +63,10 @@ export async function buildVerifiedEngineReleaseWeb(): Promise<void> {
     );
   }
   invariant(
+    !channel.sourceOffer || editorBundle.includes(channel.sourceOffer.url),
+    "release web bundle에 verified source offer URL이 없습니다."
+  );
+  invariant(
     !editorBundle.includes("api.github.com")
       && !editorBundle.includes("/releases/latest/download/"),
     "release web runtime은 GitHub API/latest alias를 조회하거나 노출할 수 없습니다."

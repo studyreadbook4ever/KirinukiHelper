@@ -39,8 +39,9 @@ Apple Developer Program과 Windows 서명 준비가 끝나기 전의 제품 흐�
 green quality CI를 확인하고, GitHub-hosted Ubuntu에서 deb install, XDG autostart,
 실제 Chrome↔loopback 연결, 재실행, remove/purge를 모두 통과한 byte만
 `Kirinuki-Engine-linux-x64-preview.deb`로 승격합니다. release에는 exact preview
-manifest와 SHA-256을 함께 넣고 모든 asset에 GitHub build-provenance attestation을
-발급하며, release와 웹 UI 모두 **unsigned Linux preview**임을 표시합니다.
+manifest, SHA-256, tag/commit과 FFmpeg·linked component·yt-dlp·Electron source 위치를
+고정한 source/license offer를 함께 넣고 모든 asset에 GitHub build-provenance
+attestation을 발급하며, release와 웹 UI 모두 **unsigned Linux preview**임을 표시합니다.
 
 이 예외는 Debian/Ubuntu 계열 Linux x64 한정 공개 테스트이고 stable/latest release,
 자동 업데이트, Linux 배포 서명 완료, Windows/macOS 지원 또는 아래 정식 세 OS gate의

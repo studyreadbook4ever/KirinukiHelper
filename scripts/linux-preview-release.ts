@@ -25,6 +25,7 @@ import {
   LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
   LINUX_PREVIEW_RELEASE_MANIFEST_FILE,
   LINUX_PREVIEW_RELEASE_MANIFEST_SCHEMA,
+  LINUX_PREVIEW_SOURCE_OFFER_FILE,
   desktopInstallerArtifactFileName,
   desktopInstallerManifestFileName
 } from "../src/desktop/installer-contract.js";
@@ -55,6 +56,7 @@ export interface VerifiedLinuxPreviewRelease {
   readonly version: string;
   readonly installer: Readonly<FileIdentity>;
   readonly manifest: Readonly<FileIdentity>;
+  readonly sourceOffer: Readonly<FileIdentity>;
 }
 
 function invariant(condition: unknown, message: string): asserts condition {
@@ -124,12 +126,56 @@ async function stableFileIdentity(filePath: string): Promise<Readonly<FileIdenti
 
 async function canonicalDirectory(directory: string): Promise<string> {
   invariant(path.isAbsolute(directory), "Linux preview 경로는 절대 경로여야 합니다.");
-  const canonical = await realpath(directory);
+  const [metadata, canonical] = await Promise.all([
+    lstat(directory),
+    realpath(directory)
+  ]);
   invariant(
-    canonical === path.resolve(directory),
-    "Linux preview 경로에 symlink 또는 alias를 사용할 수 없습니다."
+    metadata.isDirectory() && !metadata.isSymbolicLink(),
+    "Linux preview 경로의 마지막 구성요소는 실제 directory여야 합니다."
   );
   return canonical;
+}
+
+export function linuxPreviewSourceOfferText(
+  tag: string,
+  commit: string,
+  version: string
+): string {
+  return `Kirinuki Engine Linux x64 Preview source and license access
+
+Release: ${tag}
+Version: ${version}
+Commit: ${commit}
+
+This Debian/Ubuntu x64 preview redistributes open-source runtime components.
+The exact Kirinuki source for this binary is available at:
+https://github.com/studyreadbook4ever/KirinukiHelper/tree/${tag}
+https://github.com/studyreadbook4ever/KirinukiHelper/archive/refs/tags/${tag}.tar.gz
+
+FFmpeg/ffprobe n8.1.2 corresponding source and the exact Shaka build scripts are available at:
+https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n8.1.2.tar.gz
+https://github.com/shaka-project/static-ffmpeg-binaries/tree/88caac417541f3bb678fa6670cb73f2d74c7aaf9
+https://github.com/shaka-project/static-ffmpeg-binaries/archive/88caac417541f3bb678fa6670cb73f2d74c7aaf9.tar.gz
+
+Linked source revisions recorded by the build provenance contract:
+libvpx v1.16.0 — https://chromium.googlesource.com/webm/libvpx/+/refs/tags/v1.16.0
+SVT-AV1 v4.1.0 — https://gitlab.com/AOMediaCodec/SVT-AV1/-/tree/v4.1.0
+x264 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee — https://code.videolan.org/videolan/x264/-/tree/0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+x265 4.2 — https://bitbucket.org/multicoreware/x265_git/src/4.2/
+LAME 3.100 — https://sourceforge.net/projects/lame/files/lame/3.100/
+Opus v1.6.1 — https://github.com/xiph/opus/tree/v1.6.1
+Mbed TLS v3.4.1 — https://github.com/Mbed-TLS/mbedtls/tree/v3.4.1
+
+Other redistributed runtime source and notices:
+yt-dlp 2026.07.04 — https://github.com/yt-dlp/yt-dlp/tree/2026.07.04
+Electron 43.4.1 — https://github.com/electron/electron/tree/v43.4.1
+The installed package also carries the applicable license texts and Electron Chromium notices.
+
+If a source link becomes unavailable, request the exact corresponding source and build material
+for this release at lostfragment@naver.com. This offer remains valid for at least three years
+after the last public distribution of this preview, at no charge beyond reasonable delivery cost.
+`;
 }
 
 async function exactRegularEntries(
@@ -153,6 +199,7 @@ function parsePreviewManifest(value: unknown): {
   readonly commit: string;
   readonly version: string;
   readonly artifact: Readonly<FileIdentity>;
+  readonly sourceOffer: Readonly<FileIdentity>;
 } {
   invariant(
     isRecord(value)
@@ -163,6 +210,7 @@ function parsePreviewManifest(value: unknown): {
         "distribution",
         "schema",
         "sourceEvidence",
+        "sourceOffer",
         "status",
         "tag",
         "target",
@@ -199,6 +247,13 @@ function parsePreviewManifest(value: unknown): {
       && typeof value.sourceEvidence.manifestSha256 === "string"
       && SHA256_PATTERN.test(value.sourceEvidence.manifestSha256)
       && value.sourceEvidence.status === "unsigned-ci-test-only-never-publish"
+      && isRecord(value.sourceOffer)
+      && exactKeys(value.sourceOffer, ["bytes", "fileName", "sha256"])
+      && value.sourceOffer.fileName === LINUX_PREVIEW_SOURCE_OFFER_FILE
+      && Number.isSafeInteger(value.sourceOffer.bytes)
+      && Number(value.sourceOffer.bytes) > 0
+      && typeof value.sourceOffer.sha256 === "string"
+      && SHA256_PATTERN.test(value.sourceOffer.sha256)
       && isRecord(value.distribution)
       && exactKeys(value.distribution, [
         "buildProvenance",
@@ -219,6 +274,10 @@ function parsePreviewManifest(value: unknown): {
     artifact: Object.freeze({
       bytes: Number(value.artifact.bytes),
       sha256: value.artifact.sha256
+    }),
+    sourceOffer: Object.freeze({
+      bytes: Number(value.sourceOffer.bytes),
+      sha256: value.sourceOffer.sha256
     })
   });
 }
@@ -238,12 +297,24 @@ export async function verifyLinuxPreviewReleaseAssets(
       && installerIdentity.sha256 === parsed.artifact.sha256,
     "Linux preview installer identity가 manifest와 다릅니다."
   );
+  const sourceOfferPath = path.join(canonical, LINUX_PREVIEW_SOURCE_OFFER_FILE);
+  const sourceOfferIdentity = await stableFileIdentity(sourceOfferPath);
+  invariant(
+    sourceOfferIdentity.bytes === parsed.sourceOffer.bytes
+      && sourceOfferIdentity.sha256 === parsed.sourceOffer.sha256
+      && await readFile(sourceOfferPath, "utf8") === linuxPreviewSourceOfferText(
+        parsed.tag,
+        parsed.commit,
+        parsed.version
+      ),
+    "Linux preview source offer identity 또는 내용이 manifest와 다릅니다."
+  );
   const checksum = await readFile(
     path.join(canonical, LINUX_PREVIEW_RELEASE_CHECKSUM_FILE),
     "utf8"
   );
   invariant(
-    checksum === `${installerIdentity.sha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n`,
+    checksum === `${installerIdentity.sha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${sourceOfferIdentity.sha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`,
     "Linux preview checksum sidecar가 installer와 다릅니다."
   );
   return Object.freeze({
@@ -252,7 +323,8 @@ export async function verifyLinuxPreviewReleaseAssets(
     commit: parsed.commit,
     version: parsed.version,
     installer: installerIdentity,
-    manifest: manifestIdentity
+    manifest: manifestIdentity,
+    sourceOffer: sourceOfferIdentity
   });
 }
 
@@ -318,6 +390,13 @@ async function assembleLinuxPreviewRelease(): Promise<Readonly<VerifiedLinuxPrev
   invariant((await readdir(outputDirectory)).length === 0, "Linux preview 출력 디렉터리가 비어 있지 않습니다.");
   const installerPath = path.join(outputDirectory, LINUX_PREVIEW_INSTALLER_FILE);
   await copyFile(sourceInstallerPath, installerPath, fsConstants.COPYFILE_EXCL);
+  const sourceOfferPath = path.join(outputDirectory, LINUX_PREVIEW_SOURCE_OFFER_FILE);
+  await writeFile(
+    sourceOfferPath,
+    linuxPreviewSourceOfferText(tag, commit, version),
+    { flag: "wx", mode: 0o644 }
+  );
+  const sourceOffer = await stableFileIdentity(sourceOfferPath);
   const manifest = Object.freeze({
     schema: LINUX_PREVIEW_RELEASE_MANIFEST_SCHEMA,
     status: "verified-linux-preview",
@@ -338,6 +417,11 @@ async function assembleLinuxPreviewRelease(): Promise<Readonly<VerifiedLinuxPrev
       manifestSha256: sourceManifest.sha256,
       status: "unsigned-ci-test-only-never-publish"
     }),
+    sourceOffer: Object.freeze({
+      fileName: LINUX_PREVIEW_SOURCE_OFFER_FILE,
+      bytes: sourceOffer.bytes,
+      sha256: sourceOffer.sha256
+    }),
     distribution: Object.freeze({
       support: "debian-ubuntu-linux-x64-preview",
       signedDeb: false,
@@ -352,7 +436,7 @@ async function assembleLinuxPreviewRelease(): Promise<Readonly<VerifiedLinuxPrev
   );
   await writeFile(
     path.join(outputDirectory, LINUX_PREVIEW_RELEASE_CHECKSUM_FILE),
-    `${sourceInstaller.sha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n`,
+    `${sourceInstaller.sha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${sourceOffer.sha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`,
     { flag: "wx", mode: 0o644 }
   );
   return verifyLinuxPreviewReleaseAssets(outputDirectory);

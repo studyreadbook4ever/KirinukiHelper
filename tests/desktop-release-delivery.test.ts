@@ -110,6 +110,7 @@ test("Linux preview release는 stable gate와 분리해 install E2E·prerelease�
   assert.match(workflow, /test:package:desktop:linux-preview/u);
   assert.match(workflow, /\.prerelease'[\s\S]*= true/u);
   assert.match(workflow, /not a stable signed release/u);
+  assert.match(workflow, /source\/license offer/u);
   assert.doesNotMatch(workflow, /--latest|releases\/latest\/download/u);
   assert.doesNotMatch(workflow, /KIRINUKI_(?:WINDOWS|APPLE|MACOS)_/u);
 });

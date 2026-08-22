@@ -92,6 +92,7 @@ interface EngineDialogElements {
   readonly dialog: HTMLDialogElement;
   readonly download: HTMLAnchorElement;
   readonly downloadLabel: HTMLElement;
+  readonly sourceOffer: HTMLAnchorElement;
   readonly retry: HTMLButtonElement;
   readonly reset: HTMLButtonElement;
   readonly cancel: HTMLButtonElement;
@@ -141,6 +142,7 @@ function dialogElements(): EngineDialogElements {
     dialog: requiredElement<HTMLDialogElement>("#local-media-engine-dialog"),
     download: requiredElement<HTMLAnchorElement>("#local-media-engine-download"),
     downloadLabel: requiredElement<HTMLElement>("#local-media-engine-download-label"),
+    sourceOffer: requiredElement<HTMLAnchorElement>("#local-media-engine-source-offer"),
     retry: requiredElement<HTMLButtonElement>("#local-media-engine-retry"),
     reset: requiredElement<HTMLButtonElement>("#local-media-engine-reset"),
     cancel: requiredElement<HTMLButtonElement>("#local-media-engine-cancel"),
@@ -1022,6 +1024,16 @@ export async function ensureLocalMediaEngineReady(
     } else {
       elements.download.removeAttribute("href");
       elements.download.removeAttribute("download");
+    }
+    const sourceOffer = LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL?.status
+      === "verified-linux-preview"
+      ? LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL.sourceOffer
+      : undefined;
+    elements.sourceOffer.hidden = !sourceOffer;
+    if (sourceOffer) {
+      elements.sourceOffer.href = sourceOffer.url;
+    } else {
+      elements.sourceOffer.removeAttribute("href");
     }
     elements.retry.className = permissionMustBeResolved
       ? "button primary"

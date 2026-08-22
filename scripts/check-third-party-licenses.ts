@@ -953,13 +953,19 @@ console.log(JSON.stringify({
     "Pretendard OFL-1.1",
     "Paperlogy OFL-1.1"
   ],
+  linuxPreviewRedistributedRuntime: [
+    "Electron 43.4.1 with bundled Chromium/Node notices",
+    "FFmpeg/ffprobe n8.1.2 GPL-3.0-or-later sidecars with exact source offer",
+    "yt-dlp 2026.07.04 standalone with pinned upstream source",
+    "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt"
+  ],
   runtimeDownloaded: [
     "whisper.cpp MIT",
     "OpenAI Whisper models MIT",
     "Silero VAD MIT",
     "yt-dlp 2026.07.04 Unlicense + ejs/ISC/MIT"
   ],
-  systemProvidedNotRedistributed: [
+  webAndSourceRunSystemProvidedNotRedistributed: [
     "FFmpeg/ffprobe",
     "Node.js/Python",
     "Chromium/ChromeDriver"

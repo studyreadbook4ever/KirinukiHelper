@@ -9,9 +9,11 @@ import {
   LINUX_PREVIEW_INSTALLER_FILE,
   LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
   LINUX_PREVIEW_RELEASE_MANIFEST_FILE,
-  LINUX_PREVIEW_RELEASE_MANIFEST_SCHEMA
+  LINUX_PREVIEW_RELEASE_MANIFEST_SCHEMA,
+  LINUX_PREVIEW_SOURCE_OFFER_FILE
 } from "../src/desktop/installer-contract.js";
 import {
+  linuxPreviewSourceOfferText,
   verifyLinuxPreviewReleaseAssets
 } from "../scripts/linux-preview-release.js";
 import {
@@ -22,10 +24,16 @@ function sha256(value: Uint8Array | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-test("Linux preview readback은 exact 3-file unsigned preview contract만 허용한다", async () => {
+test("Linux preview readback은 source offer를 포함한 exact unsigned preview contract만 허용한다", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-linux-preview-"));
   const installer = new TextEncoder().encode("linux preview deb fixture");
   const installerSha256 = sha256(installer);
+  const sourceOffer = linuxPreviewSourceOfferText(
+    "v3.0.4",
+    "a".repeat(40),
+    "3.0.4"
+  );
+  const sourceOfferSha256 = sha256(sourceOffer);
   const manifest = {
     schema: LINUX_PREVIEW_RELEASE_MANIFEST_SCHEMA,
     status: "verified-linux-preview",
@@ -46,6 +54,11 @@ test("Linux preview readback은 exact 3-file unsigned preview contract만 허용
       manifestSha256: "b".repeat(64),
       status: "unsigned-ci-test-only-never-publish"
     },
+    sourceOffer: {
+      fileName: LINUX_PREVIEW_SOURCE_OFFER_FILE,
+      bytes: Buffer.byteLength(sourceOffer),
+      sha256: sourceOfferSha256
+    },
     distribution: {
       support: "debian-ubuntu-linux-x64-preview",
       signedDeb: false,
@@ -62,8 +75,9 @@ test("Linux preview readback은 exact 3-file unsigned preview contract만 허용
       ),
       writeFile(
         path.join(directory, LINUX_PREVIEW_RELEASE_CHECKSUM_FILE),
-        `${installerSha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n`
-      )
+        `${installerSha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${sourceOfferSha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`
+      ),
+      writeFile(path.join(directory, LINUX_PREVIEW_SOURCE_OFFER_FILE), sourceOffer)
     ]);
     const verified = await verifyLinuxPreviewReleaseAssets(directory);
     assert.equal(verified.tag, "v3.0.4");
@@ -72,19 +86,21 @@ test("Linux preview readback은 exact 3-file unsigned preview contract만 허용
     const assetNames = [
       LINUX_PREVIEW_INSTALLER_FILE,
       LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
-      LINUX_PREVIEW_RELEASE_MANIFEST_FILE
+      LINUX_PREVIEW_RELEASE_MANIFEST_FILE,
+      LINUX_PREVIEW_SOURCE_OFFER_FILE
     ];
     const identities = new Map<string, { bytes: number; sha256: string }>();
     for (const [fileName, contents] of [
       [LINUX_PREVIEW_INSTALLER_FILE, installer],
       [
         LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
-        `${installerSha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n`
+        `${installerSha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${sourceOfferSha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`
       ],
       [
         LINUX_PREVIEW_RELEASE_MANIFEST_FILE,
         `${JSON.stringify(manifest, null, 2)}\n`
-      ]
+      ],
+      [LINUX_PREVIEW_SOURCE_OFFER_FILE, sourceOffer]
     ] as const) {
       const bytes = typeof contents === "string"
         ? new TextEncoder().encode(contents)
@@ -116,6 +132,7 @@ test("Linux preview readback은 exact 3-file unsigned preview contract만 허용
     });
     assert.equal(channel.status, "verified-linux-preview");
     assert.deepEqual(Object.keys(channel.installers), ["linux-x64"]);
+    assert.match(channel.sourceOffer?.url || "", /SOURCE-OFFER\.txt$/u);
     await assert.rejects(
       loadVerifiedWebEngineLinuxPreviewChannel({
         directory,

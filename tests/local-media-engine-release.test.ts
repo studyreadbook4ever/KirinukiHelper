@@ -44,6 +44,12 @@ function linuxPreviewChannelValue(): LocalMediaEngineReleaseChannel {
     tag,
     commit: "c".repeat(40),
     aggregateManifestSha256: "d".repeat(64),
+    sourceOffer: {
+      bytes: 2048,
+      fileName: "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt",
+      sha256: "f".repeat(64),
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt`
+    },
     installers: {
       "linux-x64": {
         bytes: 20_000_000,
@@ -87,6 +93,7 @@ test("Linux preview channel은 exact tag-pinned Linux x64 한 파일만 허용�
   assert.deepEqual(parseLocalMediaEngineReleaseChannel(fixture), fixture);
   for (const mutate of [
     (value: Record<string, unknown>) => { value.status = "verified-public-release"; },
+    (value: Record<string, unknown>) => { delete value.sourceOffer; },
     (value: Record<string, unknown>) => {
       const installers = value.installers as Record<string, unknown>;
       installers["windows-x64"] = {};
@@ -148,6 +155,7 @@ test("ordinary web build는 installer URL을 싣지 않고 verified build만 tag
   assert.ok(previewEditor.includes(
     linuxPreview.installers["linux-x64"]!.url
   ));
+  assert.ok(previewEditor.includes(linuxPreview.sourceOffer!.url));
   assert.doesNotMatch(
     previewEditor,
     /releases\/download\/v3\.0\.4\/Kirinuki-Engine-(?:windows|macos)/u

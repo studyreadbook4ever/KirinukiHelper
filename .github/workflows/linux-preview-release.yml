@@ -178,7 +178,7 @@ jobs:
             --draft \
             --prerelease \
             --title "Kirinuki Engine $tag · Linux x64 Preview" \
-            --notes "Temporary Debian/Ubuntu Linux x64 public test. The deb is not a stable signed release; verify the SHA-256 file and GitHub build-provenance attestation. Windows and macOS installers are not included."
+            --notes "Temporary Debian/Ubuntu Linux x64 public test. The deb is not a stable signed release; verify the SHA-256 file, source/license offer, and GitHub build-provenance attestation. Windows and macOS installers are not included."
           draft_created=1
           published=0
           rollback() {

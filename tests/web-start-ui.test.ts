@@ -128,6 +128,7 @@ test("첫 방문 도우미 안내는 다운로드·설치·연결과 진행 상�
     assert.match(html, /Linux 도우미 받기[\s\S]*다운로드가 끝나면 설치[\s\S]*이 화면에서 자동 연결/u);
     assert.match(html, /id="local-media-engine-status"[^>]*aria-live="polite"/u);
     assert.match(html, /id="local-media-engine-download-note"[\s\S]*실제 파일 진행률은 브라우저/u);
+    assert.match(html, /id="local-media-engine-source-offer"[^>]*hidden[^>]*>Linux 미리보기 소스·라이선스 안내/u);
     assert.doesNotMatch(html, /localhost|포트 번호|터미널에서/u);
   }
   assert.match(onboarding, /download[\s\S]*install[\s\S]*connect/iu);

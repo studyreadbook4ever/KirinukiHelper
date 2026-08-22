@@ -5,7 +5,8 @@ import path from "node:path";
 
 import {
   LINUX_PREVIEW_INSTALLER_FILE,
-  LINUX_PREVIEW_RELEASE_ASSET_FILES
+  LINUX_PREVIEW_RELEASE_ASSET_FILES,
+  LINUX_PREVIEW_SOURCE_OFFER_FILE
 } from "../src/desktop/installer-contract.js";
 import {
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
@@ -208,13 +209,21 @@ export async function loadVerifiedWebEngineLinuxPreviewChannel({
     );
   }
   const installer = localIdentities.get(LINUX_PREVIEW_INSTALLER_FILE);
+  const sourceOffer = localIdentities.get(LINUX_PREVIEW_SOURCE_OFFER_FILE);
   invariant(installer, "Linux preview installer readback이 없습니다.");
+  invariant(sourceOffer, "Linux preview source offer readback이 없습니다.");
   const channel = parseLocalMediaEngineReleaseChannel({
     schema: LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
     status: "verified-linux-preview",
     tag: verified.tag,
     commit: verified.commit,
     aggregateManifestSha256: verified.manifest.sha256,
+    sourceOffer: {
+      bytes: sourceOffer.bytes,
+      fileName: LINUX_PREVIEW_SOURCE_OFFER_FILE,
+      sha256: sourceOffer.sha256,
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${verified.tag}/${LINUX_PREVIEW_SOURCE_OFFER_FILE}`
+    },
     installers: {
       "linux-x64": {
         bytes: installer.bytes,

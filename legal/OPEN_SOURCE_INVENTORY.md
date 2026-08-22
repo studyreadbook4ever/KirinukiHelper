@@ -47,9 +47,11 @@ FFmpeg, yt-dlp, Electron, Whisper model 또는 npm build tool을 포함하지 �
 | yt-dlp standalone | `2026.07.04` | target별 binary 포함, embedded Python/EJS inventory 미완료 |
 
 지원 installer는 Windows x64 NSIS, macOS arm64 DMG, Linux x64 deb 세 개뿐입니다.
-현재 산출물은 unsigned이고 macOS는 unnotarized입니다. exact hash가 맞고 native
+정식 세 OS 산출물은 unsigned이고 macOS는 unnotarized입니다. exact hash가 맞고 native
 smoke가 통과해도 [`DESKTOP_BINARY_RELEASE_GATE.md`](DESKTOP_BINARY_RELEASE_GATE.md)의
-SBOM·provenance·signing 조건이 하나라도 남으면 공개 배포하지 않습니다.
+SBOM·provenance·signing 조건이 하나라도 남으면 공개 배포하지 않습니다. 문서에
+명시된 Linux x64 preview 예외는 exact source/license offer와 GitHub attestation을
+동반한 prerelease로만 제한하며 stable 또는 정식 서명 완료로 표시하지 않습니다.
 
 ## 저장소 전용 검증 다운로드
 

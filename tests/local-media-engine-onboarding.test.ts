@@ -78,6 +78,12 @@ function linuxPreviewReleaseChannel(): Readonly<LocalMediaEngineReleaseChannel> 
     tag,
     commit: "d".repeat(40),
     aggregateManifestSha256: "e".repeat(64),
+    sourceOffer: Object.freeze({
+      bytes: 2048,
+      fileName: "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt",
+      sha256: "1".repeat(64),
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt`
+    }),
     installers: Object.freeze({
       "linux-x64": Object.freeze({
         bytes: 1024,
@@ -587,6 +593,7 @@ test("온보딩 재시도는 마지막 연결 오류가 요구할 때 click stac
     ["#local-media-engine-dialog", new RetryFixtureElement()],
     ["#local-media-engine-download", new RetryFixtureElement()],
     ["#local-media-engine-download-label", new RetryFixtureElement()],
+    ["#local-media-engine-source-offer", new RetryFixtureElement()],
     ["#local-media-engine-retry", new RetryFixtureElement()],
     ["#local-media-engine-reset", new RetryFixtureElement()],
     ["#local-media-engine-cancel", new RetryFixtureElement()],
@@ -740,6 +747,7 @@ test("첫 LNA 질문은 재다운로드보다 먼저 나오고 내 파일 선택
     ["#local-media-engine-dialog", new FakeElement()],
     ["#local-media-engine-download", new FakeElement()],
     ["#local-media-engine-download-label", new FakeElement()],
+    ["#local-media-engine-source-offer", new FakeElement()],
     ["#local-media-engine-retry", new FakeElement()],
     ["#local-media-engine-reset", new FakeElement()],
     ["#local-media-engine-cancel", new FakeElement()],
