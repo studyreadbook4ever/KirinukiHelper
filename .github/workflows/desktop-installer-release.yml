@@ -86,8 +86,28 @@ jobs:
           test "$quality_successes" -ge 1
           printf 'commit=%s\ntag=%s\nversion=%s\n' "$commit" "$REQUESTED_TAG" "$version" >> "$GITHUB_OUTPUT"
 
-      - name: Prove fresh CHZZK, YouTube, and SOOP public VOD partial acquisition
-        run: npm run test:liveness:live-vod
+      - name: Prove hosted-runner public reachability and fresh VOD acquisition
+        shell: bash
+        run: |
+          set -euo pipefail
+          youtube_id="jNQXAC9IVRw"
+          youtube_oembed="$(curl --disable \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --max-redirs 3 \
+            --max-time 30 \
+            --proto '=https' \
+            --proto-redir '=https' \
+            'https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DjNQXAC9IVRw&format=json')"
+          jq -e --arg id "$youtube_id" '
+            type == "object"
+            and .provider_name == "YouTube"
+            and .type == "video"
+            and (.html | type == "string" and contains($id))
+          ' <<<"$youtube_oembed" >/dev/null
+          npm run test:liveness:live-vod -- CHZZK SOOP
 
   windows:
     name: Signed Windows x64 installer

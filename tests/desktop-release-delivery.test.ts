@@ -80,6 +80,11 @@ test("public installer release는 explicit manual/tag confirmation과 protected 
   assert.equal(workflow.match(/npm run test:liveness:live-vod/gu)?.length, 1);
   assert.match(
     workflow,
+    /youtube\.com\/oembed\?url=[^'\n]+jNQXAC9IVRw[^'\n]+[\s\S]*npm run test:liveness:live-vod -- CHZZK SOOP/u
+  );
+  assert.doesNotMatch(workflow, /--cookies(?:-from-browser)?/u);
+  assert.match(
+    workflow,
     /Install and read back exact Linux deb runtime dependencies[\s\S]*apt-get install --yes --no-install-recommends libnotify4 libsecret-1-0[\s\S]*dpkg-query --show --showformat='\$\{Status\}'/u
   );
 });

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   EXTERNAL_VOD_LIVE_FIXTURES,
+  selectExternalVodLiveFixtures,
   verifyFreshLiveVodMaterialization
 } from "../scripts/external-vod-liveness-smoke.js";
 import type {
@@ -113,6 +114,25 @@ test("live VOD fixture는 세 플랫폼 각각 공개 URL의 최대 1초 구간�
     assert.ok(fixture.clip.endMs - fixture.clip.startMs <= 1_000);
     assert.equal(fixture.clip.id, `fresh-${fixture.platform.toLowerCase()}`);
   }
+});
+
+test("live VOD smoke의 명시적 platform 선택은 exact allowlist와 canonical 순서를 보존한다", () => {
+  assert.deepEqual(
+    selectExternalVodLiveFixtures(["SOOP", "CHZZK"]).map(({ platform }) => platform),
+    ["CHZZK", "SOOP"]
+  );
+  assert.deepEqual(
+    selectExternalVodLiveFixtures([]),
+    EXTERNAL_VOD_LIVE_FIXTURES
+  );
+  assert.throws(
+    () => selectExternalVodLiveFixtures(["YOUTUBE", "YOUTUBE"]),
+    /중복/u
+  );
+  assert.throws(
+    () => selectExternalVodLiveFixtures(["youtube"]),
+    /지원하지 않는/u
+  );
 });
 
 test("live VOD verifier는 exact range, receipt bytes/hash, ffprobe A/V 시간축을 확정한다", () => {
