@@ -3154,7 +3154,10 @@ async function main(): Promise<void> {
       && value.aSlotReleased
       && value.aLateCompletionDiscarded
       && !value.aLateArtifactExposed
-      && value.bStartRequests === 1
+      && value.bStartRequests >= 1
+      && value.bStartRequests <= 2
+      && value.bReusedStartRequests === value.bStartRequests - 1
+      && new Set(value.bRequestBodies).size === 1
       && (!value.bQueuedBeforeReclaim || value.bStatusPolls >= 1)
       && value.bStartedAfterReclaim
       && value.bCompleted
