@@ -4,7 +4,30 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import {
+  windowsNsisDirectUninstallArguments
+} from "../scripts/desktop-installer-smoke.js";
+
 const root = fileURLToPath(new URL("..", import.meta.url));
+
+test("Windows NSIS direct uninstall은 Unicode·공백 경로를 raw 마지막 인자로 고정한다", () => {
+  const installRoot = "C:\\Users\\홍길동\\키리누키 NSIS smoke A\\installed";
+  const args = windowsNsisDirectUninstallArguments(installRoot);
+  assert.deepEqual(args, ["/S", "/currentuser", `_?=${installRoot}`]);
+  assert.equal(Object.isFrozen(args), true);
+  for (const unsafePath of [
+    "relative\\installed",
+    "C:\\unsafe\\\"quoted",
+    "C:\\unsafe\\line\rbreak",
+    "C:\\unsafe\\line\nbreak",
+    "C:\\unsafe\\nul\0byte"
+  ]) {
+    assert.throws(
+      () => windowsNsisDirectUninstallArguments(unsafePath),
+      /안전한 절대 경로/u
+    );
+  }
+});
 
 test("installed desktop main은 컷 전용 보안 창과 background 로컬 엔진을 분리한다", async () => {
   const [main, supervisor, packageFiles, packageScript] = await Promise.all([
@@ -146,6 +169,13 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
   assert.match(installerSmoke, /Windows uninstaller가 owned protocol\/Run\/StartupApproved 값을 제거하지 못했습니다/u);
   assert.match(installerSmoke, /production-xdg-autostart-readback-removal/u);
   assert.match(installerSmoke, /assertPathAbsent\(recoveryShortcut\)/u);
+  assert.match(installerSmoke, /stageWindowsUninstaller/u);
+  assert.match(installerSmoke, /COPYFILE_EXCL/u);
+  assert.match(installerSmoke, /sha256RegularFile\(uninstallerPath\)/u);
+  assert.match(installerSmoke, /installedEvidence\.sha256 === stagedEvidence\.sha256/u);
+  assert.match(installerSmoke, /windowsNsisDirectUninstallArguments\(installRoot\)/u);
+  assert.match(installerSmoke, /Object\.freeze\(\["\/S", "\/currentuser", `_\?=\$\{installRoot\}`\]\)/u);
+  assert.match(installerSmoke, /windowsVerbatimArguments: true/u);
   assert.match(installerSmoke, /ItemType Junction/u);
   assert.match(installerSmoke, /junction target sentinel/u);
   assert.match(nsisInclude, /customInit/u);

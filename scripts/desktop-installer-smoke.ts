@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import {
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
@@ -220,10 +221,12 @@ function run(
   args: readonly string[],
   {
     allowFailure = false,
-    env = process.env
+    env = process.env,
+    windowsVerbatimArguments = false
   }: {
     readonly allowFailure?: boolean;
     readonly env?: NodeJS.ProcessEnv;
+    readonly windowsVerbatimArguments?: boolean;
   } = {}
 ): Promise<Readonly<CommandResult>> {
   return new Promise((resolve, reject) => {
@@ -239,6 +242,7 @@ function run(
       env: childEnvironment,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      windowsVerbatimArguments,
       shell: false
     });
     let stdout = "";
@@ -336,6 +340,42 @@ async function assertPathAbsent(pathname: string): Promise<void> {
     throw error;
   }
   throw new Error(`installer uninstall 뒤 경로가 남았습니다: ${pathname}`);
+}
+
+export function windowsNsisDirectUninstallArguments(
+  installRoot: string
+): readonly string[] {
+  invariant(
+    path.win32.isAbsolute(installRoot)
+      && !/["\0\r\n]/u.test(installRoot),
+    "Windows NSIS direct uninstall 경로가 안전한 절대 경로가 아닙니다."
+  );
+  return Object.freeze(["/S", "/currentuser", `_?=${installRoot}`]);
+}
+
+async function stageWindowsUninstaller(
+  uninstallerPath: string,
+  temporaryRoot: string
+): Promise<string> {
+  const stagedUninstallerPath = path.join(
+    temporaryRoot,
+    "kirinuki-direct-uninstaller.exe"
+  );
+  await copyFile(
+    uninstallerPath,
+    stagedUninstallerPath,
+    fsConstants.COPYFILE_EXCL
+  );
+  const [installedEvidence, stagedEvidence] = await Promise.all([
+    sha256RegularFile(uninstallerPath),
+    sha256RegularFile(stagedUninstallerPath)
+  ]);
+  invariant(
+    installedEvidence.bytes === stagedEvidence.bytes
+      && installedEvidence.sha256 === stagedEvidence.sha256,
+    "Windows NSIS staged uninstaller가 설치본과 byte-identical하지 않습니다."
+  );
+  return stagedUninstallerPath;
 }
 
 export function verifyLinuxDesktopEntryProtocol(desktopEntry: string): void {
@@ -863,6 +903,7 @@ async function windowsNsisSmoke(
   await assertPathAbsent(recoveryShortcut);
   let installed = false;
   let uninstallerPath: string | null = null;
+  let stagedUninstallerPath: string | null = null;
   let appDataFixtureCreated = false;
   let junctionCreated = false;
   try {
@@ -885,6 +926,25 @@ async function windowsNsisSmoke(
       .filter((entry) => /^Uninstall.*\.exe$/iu.test(entry));
     invariant(uninstallers.length === 1, "NSIS uninstaller identity가 유일하지 않습니다.");
     uninstallerPath = path.join(installRoot, uninstallers[0]!);
+    const [canonicalTemporaryRoot, canonicalInstalledRoot] = await Promise.all([
+      realpath(temporaryRoot),
+      realpath(installRoot)
+    ]);
+    const relativeInstallRoot = path.win32.relative(
+      canonicalTemporaryRoot,
+      canonicalInstalledRoot
+    );
+    invariant(
+      relativeInstallRoot.length > 0
+        && !relativeInstallRoot.startsWith(`..${path.win32.sep}`)
+        && relativeInstallRoot !== ".."
+        && !path.win32.isAbsolute(relativeInstallRoot),
+      "Windows NSIS smoke install root가 test-owned 임시 경로 밖입니다."
+    );
+    stagedUninstallerPath = await stageWindowsUninstaller(
+      uninstallerPath,
+      temporaryRoot
+    );
     await verifyPackagedDesktopTools(
       path.join(installRoot, "resources"),
       target
@@ -1017,22 +1077,17 @@ async function windowsNsisSmoke(
           executablePath.toLowerCase() === executable.toLowerCase(),
           "Windows running-uninstall executable identity가 바뀌었습니다."
         );
-        await run(uninstallerPath!, ["/S"], {
-          env: { ...environment }
-        });
+        await run(
+          stagedUninstallerPath!,
+          windowsNsisDirectUninstallArguments(installRoot),
+          {
+            env: { ...environment },
+            windowsVerbatimArguments: true
+          }
+        );
         installed = false;
       }
     });
-    const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline) {
-      try {
-        await assertPathAbsent(installRoot);
-        await assertPathAbsent(recoveryShortcut);
-        break;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-    }
     await assertPathAbsent(installRoot);
     await assertPathAbsent(recoveryShortcut);
     invariant(
@@ -1057,8 +1112,19 @@ async function windowsNsisSmoke(
       "Windows uninstaller가 junction target sentinel을 변경하거나 삭제했습니다."
     );
   } finally {
-    if (installed && uninstallerPath) {
-      await run(uninstallerPath, ["/S"], { allowFailure: true });
+    if (installed && stagedUninstallerPath) {
+      await run(
+        stagedUninstallerPath,
+        windowsNsisDirectUninstallArguments(installRoot),
+        {
+          allowFailure: true,
+          windowsVerbatimArguments: true
+        }
+      );
+    } else if (installed && uninstallerPath) {
+      await run(uninstallerPath, ["/S", "/currentuser"], {
+        allowFailure: true
+      });
     }
     if (junctionCreated) {
       await removeWindowsTestJunction(junctionPath);
