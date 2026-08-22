@@ -2365,6 +2365,14 @@ async function main(): Promise<void> {
     (value) => value.frameUrl === chzzkUrl && !value.refreshDisabled,
     "CHZZK 원본 창이 준비되지 않았습니다."
   );
+  await waitFor(
+    () => execute<string | null>(`
+      return document.querySelector("#recent-section")?.getAttribute("aria-busy") ?? null;
+    `),
+    (ariaBusy) => ariaBusy === "false",
+    "초기 브라우저 저장 편집 정리가 끝나지 않았습니다.",
+    30_000
+  );
   await execute(`
     const manager = document.querySelector("#recent-section");
     const summary = document.querySelector("#local-projects-summary");
@@ -2397,7 +2405,8 @@ async function main(): Promise<void> {
       && value.emptyHidden === false
       && value.summary === "저장된 편집 없음 · 아래 입력은 항상 새 프로젝트로 시작합니다."
     ),
-    "Q 단축키가 이 기기의 최근 편집을 다시 읽지 않았습니다."
+    "Q 단축키가 이 기기의 최근 편집을 다시 읽지 않았습니다.",
+    30_000
   );
   process.stderr.write("[browser-smoke] 최근 편집 다시 읽기 검증 완료\n");
   const footerReload = await execute<{
