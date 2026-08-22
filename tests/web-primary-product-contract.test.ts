@@ -79,10 +79,11 @@ test("PR16·확장프로그램의 컷 단축키 열 개는 웹 문서에서 같�
 });
 
 test("세 설치 대상과 headless 자동 시작 계약은 그대로 고정된다", async () => {
-  const [installer, desktopMain, packageFiles] = await Promise.all([
+  const [installer, desktopMain, packageFiles, qualityWorkflow] = await Promise.all([
     source("src/desktop/installer-contract.ts"),
     source("src/desktop/main.ts"),
-    source("scripts/desktop-package-files.ts")
+    source("scripts/desktop-package-files.ts"),
+    source(".github/workflows/typescript-quality.yml")
   ]);
 
   for (const marker of [
@@ -96,4 +97,10 @@ test("세 설치 대상과 headless 자동 시작 계약은 그대로 고정된�
   assert.match(desktopMain, /startDesktopRuntimeSupervisor/u);
   assert.match(desktopMain, /webContents\.getAllWebContents\(\)\.length/u);
   assert.doesNotMatch(packageFiles, /preload\.cjs/u);
+  assert.doesNotMatch(
+    qualityWorkflow,
+    /test:electron:cut-window|sandboxed cut host/u
+  );
+  assert.match(qualityWorkflow, /Run the packaged desktop liveness smoke/u);
+  assert.match(qualityWorkflow, /test:semantic:engine/u);
 });
