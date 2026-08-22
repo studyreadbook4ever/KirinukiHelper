@@ -134,6 +134,31 @@ function invariant(condition: unknown, message: string): asserts condition {
   }
 }
 
+export function selectExternalVodLiveFixtures(
+  requestedPlatforms: readonly string[] = []
+): readonly Readonly<ExternalVodLiveFixture>[] {
+  if (requestedPlatforms.length === 0) {
+    return EXTERNAL_VOD_LIVE_FIXTURES;
+  }
+  const requested = new Set(requestedPlatforms);
+  invariant(
+    requested.size === requestedPlatforms.length,
+    "live VOD platform 인자는 중복될 수 없습니다."
+  );
+  const supported = new Set<ExternalVodPlatform>(
+    EXTERNAL_VOD_LIVE_FIXTURES.map(({ platform }) => platform)
+  );
+  for (const platform of requestedPlatforms) {
+    invariant(
+      supported.has(platform as ExternalVodPlatform),
+      `지원하지 않는 live VOD platform입니다: ${platform}`
+    );
+  }
+  return Object.freeze(EXTERNAL_VOD_LIVE_FIXTURES.filter(({ platform }) => (
+    requested.has(platform)
+  )));
+}
+
 function safeFixture(fixture: Readonly<ExternalVodLiveFixture>): void {
   invariant(
     fixture.clip.id === `fresh-${fixture.platform.toLowerCase()}`,
@@ -474,6 +499,7 @@ export async function runExternalVodLivenessSmoke(): Promise<void> {
     "CHZZK, YouTube, SOOP live fixture가 각각 정확히 하나여야 합니다."
   );
   EXTERNAL_VOD_LIVE_FIXTURES.forEach(safeFixture);
+  const selectedFixtures = selectExternalVodLiveFixtures(process.argv.slice(2));
 
   const { target, platform, arch } = currentDesktopTarget();
   const preparedToolsRoot = await prepareDesktopTools(target);
@@ -490,7 +516,7 @@ export async function runExternalVodLivenessSmoke(): Promise<void> {
   const allStartedAt = performance.now();
   try {
     const results = [];
-    for (const fixture of EXTERNAL_VOD_LIVE_FIXTURES) {
+    for (const fixture of selectedFixtures) {
       const fixtureRoot = path.join(runRoot, fixture.platform.toLowerCase());
       const stateDir = path.join(fixtureRoot, "fresh-vod-state");
       const processTemp = path.join(fixtureRoot, "process-temp");
@@ -584,6 +610,7 @@ export async function runExternalVodLivenessSmoke(): Promise<void> {
         consumer: "new-random-identity-per-platform",
         receiptReuseAccepted: false
       },
+      selectedPlatforms: selectedFixtures.map(({ platform: selected }) => selected),
       toolContract: {
         ffmpegVersion: toolManifest.ffmpegVersion,
         ffprobeVersion: toolManifest.ffprobeVersion,

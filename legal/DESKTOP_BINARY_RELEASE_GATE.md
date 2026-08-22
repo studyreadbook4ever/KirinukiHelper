@@ -221,6 +221,9 @@ release manifest에서 모두 `false`로 readback합니다.
   profile cleanup을 포함한 native lifecycle smoke를 같은 commit에서 통과했다.
 - [ ] 세 플랫폼 CHZZK·YouTube·SOOP 공개 VOD의 부분 준비와 범위·시간축 검증을
   실제 브라우저↔설치 엔진 경로에서 통과했다.
+- [ ] 같은 commit의 일반 사용자 네트워크에서 YouTube 무쿠키 부분 준비를
+  통과했다. GitHub-hosted runner에서는 로그인/cookie로 bot 차단을 우회하지 않고
+  공개 oEmbed identity를 확인하며 CHZZK·SOOP fresh-state 부분 준비를 통과했다.
 - [ ] 실제 Chrome에서 최초 custom-scheme pairing, signed health, 암호화 VOD
   session, 같은 profile 새로고침 뒤 무재pairing 재연결을 설치본마다 통과했다.
 - [ ] Windows Job Object/orphan gate를 닫았다.

@@ -413,6 +413,8 @@ npm run test:package:web:reproducibility
 
 # 명시적으로 허가된 네트워크 liveness만
 npm run test:liveness:live-vod
+# GitHub-hosted release runner의 무쿠키 경계와 같은 부분 집합
+npm run test:liveness:live-vod -- CHZZK SOOP
 ```
 
 AudSeg 변경 시 Python 기준과 브라우저 포트를 함께 검사한다.

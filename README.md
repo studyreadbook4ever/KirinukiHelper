@@ -250,8 +250,12 @@ macOS는 DMG를 read-only로 mount하고 `/Applications`에 복사해 실행한 
 bundle 이동 감지·runtime 정리와 detach를 확인합니다. 실제 macOS 로그인 항목의
 사용자 승인과 기존 사용자 profile 정리는 비대화형 CI에서 검증하지 않습니다. Linux도 임의의
 기존 다중 사용자 profile이나 사용자 cache를 dpkg가 즉시 정리한다고 검증한 것은
-아닙니다. 실제 공개 VOD 네트워크 검증은 명시적으로
-켜는 fresh-state liveness smoke로 CHZZK·YouTube·SOOP을 각각 검사합니다.
+아닙니다. 실제 공개 VOD 네트워크 검증은 명시적으로 켜는 fresh-state liveness
+smoke로 CHZZK·YouTube·SOOP을 각각 검사합니다. GitHub-hosted runner는 YouTube가
+로그인·cookie를 요구하며 데이터센터 IP를 차단할 수 있으므로, 서명 workflow에서는
+YouTube 공개 oEmbed identity와 무쿠키 계약을 확인하고 CHZZK·SOOP 실제 구간을
+취득합니다. YouTube 실제 구간 취득은 같은 commit을 일반 사용자 네트워크에서
+별도로 통과해야 하며 cookie/login 우회는 허용하지 않습니다.
 
 저장소 구조의 주요 경계는 다음과 같습니다.
 

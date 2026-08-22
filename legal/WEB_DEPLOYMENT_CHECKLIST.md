@@ -216,6 +216,9 @@
 
 - [ ] `npm ci --ignore-scripts`, typecheck, build, validate, license check, unit,
   browser, package, installer, security, live VOD smoke를 같은 commit에서 통과했다.
+- [ ] GitHub-hosted runner의 YouTube bot 차단을 cookie/login으로 우회하지 않았다.
+  같은 commit의 일반 사용자 네트워크에서 YouTube 실제 구간을 검증하고, hosted
+  release gate에서는 공개 oEmbed identity와 CHZZK·SOOP 실제 구간을 검증했다.
 - [ ] 웹 ZIP과 실제 HTTPS 응답을 대조하고 cookie/session/reporting header가 없음을
   확인했다.
 - [ ] Linux x64·Windows x64·macOS arm64에서 실제 install→autostart→웹 자동 감지→
