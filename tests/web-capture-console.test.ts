@@ -146,7 +146,7 @@ test("컷 전용 브리지는 플레이어 좌표만 읽고 로컬 VOD 준비는
   ]);
   assert.match(
     html,
-    /편집기를 열 때 선택한 구간만 이 PC에 준비합니다[\s\S]*강조된 행에 E로 시작, R로 끝 시각을 기록합니다/u
+    /처음 한 번만 이 PC의 영상 준비 도우미를 연결하면, 이후에는 선택한 구간만 이 PC에 준비합니다\.[\s\S]*강조된 행에 E로 시작, R로 끝 시각을 기록합니다/u
   );
   assert.match(html, /data-field="start"[^>]*required/u);
   assert.match(html, /data-field="end"[^>]*required/u);

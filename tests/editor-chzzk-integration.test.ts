@@ -459,8 +459,11 @@ test("CHZZK VOD 자동 준비 UI는 긴 원본 부분 읽기 대신 compact 편�
   assert.match(html, /id="pick-media-empty"[^>]*>내 파일 직접 연결<\/button>/u);
   assert.match(
     html,
-    /id="local-media-engine-cancel"[^>]*>내 파일 직접 연결 사용<\/button>/u
+    /id="local-media-engine-cancel"[^>]*>내 파일로 계속하기<\/button>/u
   );
+  assert.match(html, /id="local-media-engine-flow"/u);
+  assert.match(html, /도우미 받기/u);
+  assert.match(html, /다운로드한 파일을 실행하고 설치를 끝냅니다/u);
   assert.match(html, /Apple Silicon macOS 15 이상/u);
 
   const headerStrings = new Set(

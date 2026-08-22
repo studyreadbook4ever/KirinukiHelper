@@ -89,7 +89,7 @@ test("컷 단계는 원본 iframe과 컷 전용 브리지만 쓰고 편집 미�
   const { html, source } = await studioSources();
   assert.match(
     html,
-    /VOD에서 편집할 구간을 선택하세요[\s\S]*편집기를 열 때 선택한 구간만 이 PC에 준비합니다/u
+    /VOD에서 편집할 구간을 선택하세요[\s\S]*처음 한 번만 이 PC의 영상 준비 도우미를 연결하면,[\s\S]*선택한 구간만 이 PC에 준비합니다/u
   );
   assert.match(html, /id="stream-preview-frame"/u);
   assert.match(html, /강조된 행에 E로 시작, R로 끝 시각을 기록합니다/u);
@@ -307,6 +307,22 @@ test("실제 공개 배포 트리는 완전한 브라우저 편집기와 강제 
     "Cross-Origin-Resource-Policy: same-origin"
   ]) {
     assert.ok(headers.includes(requiredHeader), `공개 응답 헤더 누락: ${requiredHeader}`);
+  }
+});
+
+test("첫 방문 로컬 도우미 안내는 다운로드·설치·연결 순서를 한 번에 설명한다", async () => {
+  const [indexHtml, editorHtml] = await Promise.all([
+    readFile(new URL("../web/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../web/editor.html", import.meta.url), "utf8")
+  ]);
+  for (const html of [indexHtml, editorHtml]) {
+    assert.doesNotMatch(html, /처음 한 번만 준비하면 됩니다/u);
+    assert.match(html, /id="local-media-engine-flow"[^>]*aria-label="영상 준비 도우미를 처음 연결하는 순서"/u);
+    assert.match(html, /도우미 받기/u);
+    assert.match(html, /한 번 설치/u);
+    assert.match(html, /이 PC 연결/u);
+    assert.match(html, /id="local-media-engine-download-note"/u);
+    assert.match(html, /다운로드가 시작되면 설치가 끝날 때까지 이 화면을 닫지 않아도 됩니다/u);
   }
 });
 

@@ -1,7 +1,7 @@
 export const LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA =
   "kirinuki-web/local-media-engine-release-v1" as const;
 export const LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE =
-  "공식 설치 파일 준비 중입니다. 서명과 배포 검증이 모두 끝나기 전에는 다운로드를 열지 않습니다." as const;
+  "이 PC용 공식 도우미 설치판을 준비하고 있습니다. 서명과 배포 검증이 끝나면 이 화면의 다운로드 버튼에서 바로 받을 수 있습니다." as const;
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/u;

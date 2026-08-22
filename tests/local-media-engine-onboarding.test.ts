@@ -275,7 +275,7 @@ test("온보딩 installer는 verified channel이 있을 때만 고정된 세 파
   );
   assert.match(
     localMediaEngineInstaller("windows-x64", releaseChannel)?.installInstruction || "",
-    /설치 파일을 실행[\s\S]*‘이 PC 연결’을 한 번/u
+    /다운로드를 시작했습니다[\s\S]*‘설치 후 연결 확인’을 눌러/u
   );
   assert.match(
     localMediaEngineInstaller("macos-arm64", releaseChannel)?.installInstruction || "",
@@ -283,11 +283,11 @@ test("온보딩 installer는 verified channel이 있을 때만 고정된 세 파
   );
   assert.match(
     localMediaEngineInstaller("linux-x64", releaseChannel)?.installInstruction || "",
-    /deb를 설치[\s\S]*‘이 PC 연결’을 한 번/u
+    /deb를 설치[\s\S]*‘설치 후 연결 확인’을 눌러/u
   );
   assert.equal(
     localMediaEngineInstaller("linux-x64", releaseChannel)?.label,
-    "Debian/Ubuntu Linux 64비트용 한 번 설치"
+    "Linux용 도우미 다운로드"
   );
 });
 

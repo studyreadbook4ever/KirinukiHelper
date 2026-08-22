@@ -36,13 +36,13 @@
     <main id="local-app-surface" hidden inert>
       <section id="start-intro" class="start-intro" aria-labelledby="start-title">
         <h1 id="start-title">VOD에서 편집할 구간을 선택하세요</h1>
-        <p>편집기를 열 때 선택한 구간만 이 PC에 준비합니다.</p>
+        <p>처음 한 번만 이 PC의 영상 준비 도우미를 연결하면, 이후에는 선택한 구간만 이 PC에 준비합니다.</p>
       </section>
 
       <section id="cut-host-launch-panel" class="public-launch-card cut-host-launch-panel" aria-labelledby="cut-host-launch-title" hidden inert>
         <span class="public-launch-eyebrow">새 편집</span>
         <h1 id="cut-host-launch-title">새 컷은 Kirinuki 앱에서 선택하세요</h1>
-        <p class="public-launch-copy">한 번 설치한 Kirinuki가 플랫폼 VOD를 직접 보여 주고, 선택한 구간만 이 브라우저 편집기로 안전하게 넘깁니다.</p>
+        <p class="public-launch-copy">처음에는 이 PC의 영상 준비 도우미를 안내하고, 설치가 끝나면 플랫폼 VOD에서 고른 구간만 이 브라우저 편집기로 안전하게 넘깁니다.</p>
         <div class="public-launch-actions">
           <a id="launch-kirinuki-cut" class="button primary" role="button">새 컷 선택 열기</a>
         </div>
@@ -261,27 +261,42 @@
 
     <dialog id="local-media-engine-dialog" class="local-media-engine-dialog" aria-labelledby="local-media-engine-title" aria-describedby="local-media-engine-description">
       <div class="local-media-engine-card">
+        <div class="local-media-engine-kicker">이 PC에서 한 번만 준비</div>
         <div class="local-media-engine-mark" aria-hidden="true">K</div>
-        <h2 id="local-media-engine-title">처음 한 번만 준비하면 됩니다</h2>
-        <p id="local-media-engine-description">
-          Kirinuki 앱이 넘긴 컷을 이 브라우저 편집기로 안전하게 가져오는 작은 로컬 도구입니다.
-          로그인이나 서버 업로드 없이 이 PC 안에서만 연결합니다.
-        </p>
-        <ol>
-          <li>브라우저가 로컬 네트워크 접근을 물으면 <strong>허용</strong>합니다.</li>
-          <li>이미 설치되어 있으면 <strong>이 PC 연결</strong>을 눌러 앱 identity를 확인합니다.</li>
-          <li>아직 설치하지 않았다면 이 PC용 설치 파일을 실행한 뒤 <strong>이 PC 연결</strong>을 누릅니다.</li>
-        </ol>
+        <div class="local-media-engine-heading">
+          <h2 id="local-media-engine-title">영상 준비 도우미를 연결해 주세요</h2>
+          <p id="local-media-engine-description">
+            선택한 컷에 필요한 영상만 이 PC에 준비하는 작은 도우미입니다.
+            한 번 설치하고 연결하면 다음부터는 이 사이트의 버튼만 누르면 됩니다.
+          </p>
+        </div>
+        <div id="local-media-engine-flow" class="local-media-engine-flow" aria-label="영상 준비 도우미를 처음 연결하는 순서">
+          <div class="local-media-engine-step">
+            <span class="local-media-engine-step-number" aria-hidden="true">1</span>
+            <div><strong>도우미 받기</strong><span>이 PC에 맞는 공식 설치 파일을 내려받습니다.</span></div>
+          </div>
+          <div class="local-media-engine-step">
+            <span class="local-media-engine-step-number" aria-hidden="true">2</span>
+            <div><strong>한 번 설치</strong><span>다운로드한 파일을 실행하고 설치를 끝냅니다.</span></div>
+          </div>
+          <div class="local-media-engine-step">
+            <span class="local-media-engine-step-number" aria-hidden="true">3</span>
+            <div><strong>이 PC 연결</strong><span>브라우저 권한을 허용하면 준비가 자동으로 이어집니다.</span></div>
+          </div>
+        </div>
         <p id="local-media-engine-unsupported" class="local-media-engine-unsupported" hidden>
           현재는 Windows 64비트, Apple Silicon macOS 15 이상, Debian/Ubuntu Linux 64비트만 지원합니다.
         </p>
         <p id="local-media-engine-status" class="local-media-engine-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <p id="local-media-engine-download-note" class="local-media-engine-download-note">
+          다운로드가 시작되면 설치가 끝날 때까지 이 화면을 닫지 않아도 됩니다.
+        </p>
         <div class="local-media-engine-actions">
-          <button id="local-media-engine-cancel" class="button ghost" type="button">나중에</button>
-          <button id="local-media-engine-reset" class="button ghost" type="button" hidden>기기 연결 초기화</button>
-          <button id="local-media-engine-retry" class="button secondary" type="button">설치 완료 · 다시 확인</button>
+          <button id="local-media-engine-cancel" class="button ghost" type="button">이번에는 파일로 계속</button>
+          <button id="local-media-engine-reset" class="button ghost" type="button" hidden>연결 기억 지우기</button>
+          <button id="local-media-engine-retry" class="button secondary" type="button">설치 후 연결 확인</button>
           <a id="local-media-engine-download" class="button primary" href="#" target="_blank" rel="noopener noreferrer">
-            <span id="local-media-engine-download-label">이 PC용 한 번 설치</span>
+            <span id="local-media-engine-download-label">내 PC용 도우미 다운로드</span>
           </a>
         </div>
         <p class="local-media-engine-privacy">컷 정보와 연결 권한은 이번 인계에만 사용하고 서버로 보내지 않습니다.</p>

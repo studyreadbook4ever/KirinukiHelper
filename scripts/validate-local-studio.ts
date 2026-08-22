@@ -110,7 +110,9 @@ assert(
   "일반 브라우저 launcher·컷 앱 surface·저장 편집 흐름이 없습니다."
 );
 assert(
-  indexHtml.includes("편집기를 열 때 선택한 구간만 이 PC에 준비합니다.")
+  indexHtml.includes(
+    "처음 한 번만 이 PC의 영상 준비 도우미를 연결하면, 이후에는 선택한 구간만 이 PC에 준비합니다."
+  )
     && indexHtml.includes("확인했습니다")
     && indexHtml.includes("100%")
     && indexHtml.includes('id="import-session-archive"')
