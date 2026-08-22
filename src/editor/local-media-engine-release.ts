@@ -15,6 +15,9 @@ export const LOCAL_MEDIA_ENGINE_RELEASE_FILES = Object.freeze({
   "linux-x64": "Kirinuki-Engine-linux-x64.deb"
 } as const);
 
+export const LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE =
+  "Kirinuki-Engine-linux-x64-preview.deb" as const;
+
 export type LocalMediaEngineReleaseTarget =
   keyof typeof LOCAL_MEDIA_ENGINE_RELEASE_FILES;
 
@@ -27,14 +30,14 @@ export interface LocalMediaEngineReleaseArtifact {
 
 export interface LocalMediaEngineReleaseChannel {
   readonly schema: typeof LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA;
-  readonly status: "verified-public-release";
+  readonly status: "verified-public-release" | "verified-linux-preview";
   readonly tag: string;
   readonly commit: string;
   readonly aggregateManifestSha256: string;
-  readonly installers: Readonly<Record<
+  readonly installers: Readonly<Partial<Record<
     LocalMediaEngineReleaseTarget,
     Readonly<LocalMediaEngineReleaseArtifact>
-  >>;
+  >>>;
 }
 
 declare const __KIRINUKI_LOCAL_MEDIA_ENGINE_RELEASE__: unknown;
@@ -97,7 +100,8 @@ export function parseLocalMediaEngineReleaseChannel(
       "tag"
     ])
     || value.schema !== LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA
-    || value.status !== "verified-public-release"
+    || (value.status !== "verified-public-release"
+      && value.status !== "verified-linux-preview")
     || typeof value.tag !== "string"
     || !TAG_PATTERN.test(value.tag)
     || typeof value.commit !== "string"
@@ -105,18 +109,24 @@ export function parseLocalMediaEngineReleaseChannel(
     || typeof value.aggregateManifestSha256 !== "string"
     || !SHA256_PATTERN.test(value.aggregateManifestSha256)
     || !isRecord(value.installers)
-    || !exactKeys(value.installers, Object.keys(LOCAL_MEDIA_ENGINE_RELEASE_FILES))
   ) {
+    return null;
+  }
+  const expectedTargets: readonly LocalMediaEngineReleaseTarget[] =
+    value.status === "verified-linux-preview"
+      ? ["linux-x64"]
+      : Object.keys(LOCAL_MEDIA_ENGINE_RELEASE_FILES) as LocalMediaEngineReleaseTarget[];
+  if (!exactKeys(value.installers, expectedTargets)) {
     return null;
   }
   const installers = {} as Record<
     LocalMediaEngineReleaseTarget,
     Readonly<LocalMediaEngineReleaseArtifact>
   >;
-  for (const target of Object.keys(
-    LOCAL_MEDIA_ENGINE_RELEASE_FILES
-  ) as LocalMediaEngineReleaseTarget[]) {
-    const expectedFileName = LOCAL_MEDIA_ENGINE_RELEASE_FILES[target];
+  for (const target of expectedTargets) {
+    const expectedFileName = value.status === "verified-linux-preview"
+      ? LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE
+      : LOCAL_MEDIA_ENGINE_RELEASE_FILES[target];
     const artifact = value.installers[target];
     if (
       !isRecord(artifact)
@@ -144,7 +154,7 @@ export function parseLocalMediaEngineReleaseChannel(
   }
   return Object.freeze({
     schema: LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
-    status: "verified-public-release",
+    status: value.status,
     tag: value.tag,
     commit: value.commit,
     aggregateManifestSha256: value.aggregateManifestSha256,

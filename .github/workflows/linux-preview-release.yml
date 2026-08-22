@@ -1,0 +1,216 @@
+name: Linux x64 preview release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag, exactly v<package.json version>
+        required: true
+        type: string
+      confirmation:
+        description: Type PUBLISH_LINUX_PREVIEW
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-preview-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, install-test, attest, and publish Linux x64 preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out the exact tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.17.0"
+          cache: npm
+
+      - name: Authorize the exact tagged, quality-approved source
+        id: contract
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = "PUBLISH_LINUX_PREVIEW"
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF_NAME" = "$REQUESTED_TAG"
+          version="$(node -p "require('./package.json').version")"
+          test "$REQUESTED_TAG" = "v$version"
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "$REQUESTED_TAG")" = "$commit"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$commit"
+          quality_json="$(gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/typescript-quality.yml/runs" \
+            -f branch=main \
+            -f event=push \
+            -f head_sha="$commit" \
+            -f per_page=100)"
+          quality_successes="$(jq --arg commit "$commit" --arg repository "$GITHUB_REPOSITORY" \
+            '[.workflow_runs[] | select(
+              .head_sha == $commit
+              and .head_branch == "main"
+              and .event == "push"
+              and .status == "completed"
+              and .conclusion == "success"
+              and .head_repository.full_name == $repository
+            )] | length' <<<"$quality_json")"
+          test "$quality_successes" -ge 1
+          printf 'commit=%s\ntag=%s\nversion=%s\n' "$commit" "$REQUESTED_TAG" "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Verify pinned native tool provenance
+        run: npm run verify:upstream-tool-provenance
+
+      - name: Materialize the pinned Electron runtime
+        run: node node_modules/electron/install.js
+
+      - name: Install the Electron sandbox helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox_path="node_modules/electron/dist/chrome-sandbox"
+          test -f "$sandbox_path"
+          test ! -L "$sandbox_path"
+          sudo chown root:root -- "$sandbox_path"
+          sudo chmod 4755 -- "$sandbox_path"
+          test "$(stat -c '%u:%g:%a' -- "$sandbox_path")" = "0:0:4755"
+
+      - name: Install matching Chrome and ChromeDriver
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+
+      - name: Typecheck and build the unsigned Linux lifecycle artifact
+        run: npm run typecheck && npm run desktop:icons:check && npm run package:desktop:installer
+
+      - name: Install sandbox helper in the packaged app
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox_path="dist/desktop/linux-x64/Kirinuki-linux-x64/chrome-sandbox"
+          test -f "$sandbox_path"
+          test ! -L "$sandbox_path"
+          sudo chown root:root -- "$sandbox_path"
+          sudo chmod 4755 -- "$sandbox_path"
+          test "$(stat -c '%u:%g:%a' -- "$sandbox_path")" = "0:0:4755"
+
+      - name: Prove packaged engine liveness and semantic VOD flow
+        run: |
+          xvfb-run -a npm run test:package:desktop
+          npm run test:semantic:engine
+
+      - name: Install exact deb runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libnotify4 libsecret-1-0
+          for dependency in libnotify4 libsecret-1-0; do
+            test "$(dpkg-query --show --showformat='${Status}' "$dependency")" = "install ok installed"
+          done
+
+      - name: Install deb, prove autostart and browser loopback, then uninstall
+        run: xvfb-run -a npm run test:package:desktop:installer
+        env:
+          CHROMIUM_BINARY: ${{ steps.setup-chrome.outputs.chrome-path }}
+          CHROMEDRIVER_BINARY: ${{ steps.setup-chrome.outputs.chromedriver-path }}
+          KIRINUKI_INSTALLED_BROWSER_SMOKE: "1"
+          KIRINUKI_INSTALLER_SYSTEM_SMOKE: "1"
+
+      - name: Assemble the explicitly non-stable Linux preview asset set
+        run: npm run package:desktop:linux-preview
+        env:
+          KIRINUKI_RELEASE_COMMIT: ${{ steps.contract.outputs.commit }}
+          KIRINUKI_RELEASE_TAG: ${{ steps.contract.outputs.tag }}
+
+      - name: Prove packaging kept tracked source clean
+        run: |
+          git diff --check
+          git diff --exit-code -- web
+
+      - name: Attest every Linux preview release asset
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: dist/linux-preview-release/*
+
+      - name: Create prerelease, read back exact bytes, and publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIRINUKI_RELEASE_COMMIT: ${{ steps.contract.outputs.commit }}
+          KIRINUKI_RELEASE_TAG: ${{ steps.contract.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$KIRINUKI_RELEASE_TAG"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release already exists: $tag" >&2
+            exit 1
+          fi
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --prerelease \
+            --title "Kirinuki Engine $tag · Linux x64 Preview" \
+            --notes "Temporary Debian/Ubuntu Linux x64 public test. The deb is not a stable signed release; verify the SHA-256 file and GitHub build-provenance attestation. Windows and macOS installers are not included."
+          draft_created=1
+          published=0
+          rollback() {
+            status=$?
+            if [ "$published" -eq 0 ] && [ "$draft_created" -eq 1 ]; then
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+            fi
+            exit "$status"
+          }
+          trap rollback ERR
+          gh release upload "$tag" dist/linux-preview-release/* --repo "$GITHUB_REPOSITORY"
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")"
+          test "$(jq -r '.draft' <<<"$release_json")" = true
+          test "$(jq -r '.prerelease' <<<"$release_json")" = true
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$tag"
+          mapfile -t remote_assets < <(jq -r '.assets[].name' <<<"$release_json" | sort)
+          mapfile -t local_assets < <(find dist/linux-preview-release -maxdepth 1 -type f -printf '%f\n' | sort)
+          test "${remote_assets[*]}" = "${local_assets[*]}"
+          for file in "${local_assets[@]}"; do
+            local_size="$(stat -c '%s' -- "dist/linux-preview-release/$file")"
+            local_sha="$(sha256sum -- "dist/linux-preview-release/$file" | cut -d' ' -f1)"
+            test "$(jq -r --arg file "$file" '.assets[] | select(.name == $file) | .size' <<<"$release_json")" = "$local_size"
+            test "$(jq -r --arg file "$file" '.assets[] | select(.name == $file) | .digest' <<<"$release_json")" = "sha256:$local_sha"
+          done
+          readback="$RUNNER_TEMP/kirinuki-linux-preview-readback"
+          mkdir -m 700 -- "$readback"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$readback"
+          npm run test:package:desktop:linux-preview -- "$readback"
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          published=1
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")"
+          test "$(jq -r '.draft' <<<"$release_json")" = false
+          test "$(jq -r '.prerelease' <<<"$release_json")" = true
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$tag"
+          trap - ERR

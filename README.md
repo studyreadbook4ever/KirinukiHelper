@@ -5,17 +5,18 @@ Kirinuki는 CHZZK·YouTube·SOOP의 공개 완료 VOD에서 사용자가 직접 
 웹 편집기입니다.
 
 제품의 본체는 [`https://kirinuki.eff0rtchung.kr`](https://kirinuki.eff0rtchung.kr)입니다.
-웹사이트가 선택 구간을 이 PC에 준비해야 할 때 Windows x64, Apple Silicon Mac,
-Linux x64용 **Kirinuki 영상 준비 도우미** 설치를 안내합니다. 도우미는 별도 작업
+웹사이트가 선택 구간을 이 PC에 준비해야 할 때 **Kirinuki 영상 준비 도우미**
+설치를 안내합니다. 현재 공개 테스트는 Debian/Ubuntu 계열 Linux x64만 제공하며,
+도우미는 별도 작업
 화면 없이 백그라운드에서 웹사이트가 요청한 구간만 준비합니다.
 URL 입력부터 컷 선택·전체 편집까지 공개 웹사이트가 소유하고, 설치 도구는
 브라우저가 요청한 로컬 미디어 작업만 화면 없이 보조합니다.
 
-> 현재 저장소는 이 구조의 구현과 검증 단계입니다. 세 OS용 package를 CI에서
-> 만들고 아래에 명시한 OS별 범위만 검사하지만 아직 서명·공증된 공개 Release가
-> 아닙니다. 웹의 다운로드 링크를 일반 사용자에게 열기 전에
-> [데스크톱 바이너리 출시 게이트](legal/DESKTOP_BINARY_RELEASE_GATE.md)를 모두
-> 충족해야 합니다.
+> 현재 Linux x64 설치본은 정식 서명 안정판이 아닌 공개 테스트용 prerelease입니다.
+> exact SHA-256과 GitHub build-provenance attestation, 실제 설치·자동시작·브라우저
+> 연결·삭제 검증을 통과한 byte만 웹에서 안내합니다. Windows/macOS 설치판은 현재
+> 제공하지 않으며 정식 안정판은 별도의
+> [데스크톱 바이너리 출시 게이트](legal/DESKTOP_BINARY_RELEASE_GATE.md)를 따릅니다.
 
 ## 사용자 흐름
 
@@ -132,7 +133,14 @@ TOFU(first-use) 단계에서는 진짜 설치와 완전히 구별할 수 없습�
 
 ## 지원 설치 대상
 
-공개 Release가 열릴 때 웹사이트가 자동 선택할 파일 이름은 다음과 같습니다.
+현재 웹사이트가 공개 테스트로 자동 선택하는 파일은 다음 하나입니다.
+
+| 운영체제 | 대상 | 설치 파일 |
+|---|---|---|
+| Linux | x64, Debian/Ubuntu 계열 | `Kirinuki-Engine-linux-x64-preview.deb` |
+
+정식 안정판 계약에는 다음 세 target이 남아 있지만 현재 웹 다운로드에는 노출하지
+않습니다.
 
 | 운영체제 | 대상 | 설치 파일 |
 |---|---|---|
@@ -140,7 +148,7 @@ TOFU(first-use) 단계에서는 진짜 설치와 완전히 구별할 수 없습�
 | macOS | Apple Silicon ARM64 | `Kirinuki-Engine-macos-arm64.dmg` |
 | Linux | x64, Debian 계열 | `Kirinuki-Engine-linux-x64.deb` |
 
-현재 macOS x64, Windows ARM64, Linux ARM64와 모바일 편집은 지원하지 않습니다.
+현재 Windows, macOS, Linux ARM64와 모바일 편집은 공개 테스트에서 지원하지 않습니다.
 지원하지 않는 환경에서는 임의의 바이너리를 권하지 않고 로컬 파일 직접 연결을
 안내합니다.
 
@@ -148,10 +156,9 @@ TOFU(first-use) 단계에서는 진짜 설치와 완전히 구별할 수 없습�
 142 이상에서는 공개 사이트가 이 PC의 loopback 엔진에 처음 연결할 때 로컬
 네트워크 접근 권한을 한 번 묻습니다.
 
-Windows 설치기는 사용자 범위에 설치하고 완료 뒤 도우미를 시작합니다. macOS와
-Linux는 설치 뒤 웹사이트의 **이 PC 연결**이 화면 없는 도우미를 깨우고 자동 시작을
-등록합니다. macOS 배포 전에는 Developer ID 서명과 공증이 필요합니다. 세 OS 모두
-이후 로그인부터 화면 없이 시작합니다.
+Linux preview는 deb 설치 뒤 웹사이트의 **이 PC 연결**이 화면 없는 도우미를 깨우고
+자동 시작을 등록합니다. 장기 안정판의 Windows/macOS 구현은 소스와 CI에 유지하지만
+현재 공개 웹은 해당 설치 파일을 제공하지 않습니다.
 
 업데이트 기능이나 사용 통계를 위한 별도 백그라운드 네트워크 요청은 넣지
 않습니다. 공개 엔진의 `kirinuki-local-media-engine/v1` 계약은 앱 버전과 독립된

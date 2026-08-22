@@ -308,6 +308,9 @@ export async function loadVerifiedWebEngineReleaseChannel({
     aggregateManifestSha256: manifestIdentity.sha256,
     installers
   });
-  invariant(channel !== null, "검증된 release에서 web installer channel을 만들지 못했습니다.");
+  invariant(
+    channel !== null && channel.status === "verified-public-release",
+    "검증된 release에서 stable web installer channel을 만들지 못했습니다."
+  );
   return channel;
 }

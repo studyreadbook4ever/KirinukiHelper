@@ -36,8 +36,10 @@ commit 또는 버전, 재현 조건, 예상 영향과 최소 재현 자료를 �
 - 설치·업데이트·제거는 정확히 소유한 실행 파일, 자식 프로세스, 자동시작·protocol
   등록만 변경해야 하며, 불확실한 경로나 다른 프로세스를 삭제·종료하지 않아야
   합니다.
-- 공개 installer는 target별 서명·공증·provenance와 native lifecycle 검증이
-  완료되지 않으면 fail closed해야 합니다.
+- stable 공개 installer는 target별 서명·공증·provenance와 native lifecycle 검증이
+  완료되지 않으면 fail closed해야 합니다. 임시 Linux x64 preview는 별도
+  prerelease·SHA-256·GitHub build attestation·native lifecycle readback을 요구하며
+  unsigned preview임을 숨기지 않습니다.
 
 ## 신고 가치가 높은 문제
 

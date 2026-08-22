@@ -31,6 +31,23 @@ staple이 없으며, installer 전체 SBOM·provenance도 완결되지 않았습
 CI 산출물을 Release, 웹 다운로드, mirror, 자동 업데이트에 올리면 안 됩니다.
 hash 고정, unit test 또는 한 개발 PC의 성공은 이 차단을 해제하지 않습니다.
 
+### 임시 Linux x64 공개 테스트 예외
+
+Apple Developer Program과 Windows 서명 준비가 끝나기 전의 제품 흐름 검증을 위해
+`Linux x64 preview release` workflow만 별도 prerelease를 만들 수 있습니다. 이는
+`UNSIGNED-TEST-ONLY-*` 파일을 그대로 공개하는 경로가 아닙니다. exact tagged main과
+green quality CI를 확인하고, GitHub-hosted Ubuntu에서 deb install, XDG autostart,
+실제 Chrome↔loopback 연결, 재실행, remove/purge를 모두 통과한 byte만
+`Kirinuki-Engine-linux-x64-preview.deb`로 승격합니다. release에는 exact preview
+manifest와 SHA-256을 함께 넣고 모든 asset에 GitHub build-provenance attestation을
+발급하며, release와 웹 UI 모두 **unsigned Linux preview**임을 표시합니다.
+
+이 예외는 Debian/Ubuntu 계열 Linux x64 한정 공개 테스트이고 stable/latest release,
+자동 업데이트, Linux 배포 서명 완료, Windows/macOS 지원 또는 아래 정식 세 OS gate의
+완료로 간주하지 않습니다. 웹 링크는 exact published prerelease readback 뒤
+`KIRINUKI_INSTALLER_CHANNEL=linux-preview npm run build:web:release`로만 열 수 있고,
+tag-pinned Linux URL 하나만 포함해야 합니다.
+
 `Signed desktop installer release` workflow는 수동 dispatch, exact existing tag,
 `PUBLISH_SIGNED_INSTALLERS`, protected `installer-release` environment가 모두 맞을 때만
 시작합니다. 현재 저장소에 아래 서명·공증·provenance secret과 사람이 승인한 묶음이

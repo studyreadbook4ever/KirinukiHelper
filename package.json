@@ -2,7 +2,7 @@
   "name": "kirinuki-app",
   "productName": "Kirinuki",
   "desktopName": "kr.eff0rtchung.kirinuki.desktop",
-  "version": "3.0.3",
+  "version": "3.0.4",
   "private": true,
   "license": "Unlicense",
   "type": "module",
@@ -60,6 +60,8 @@
     "package:web": "node --import tsx scripts/package-web.ts",
     "package:desktop": "node --import tsx scripts/package-desktop.ts",
     "package:desktop:installer": "node --import tsx scripts/package-desktop-installer.ts",
+    "package:desktop:linux-preview": "node --import tsx scripts/linux-preview-release.ts assemble",
+    "test:package:desktop:linux-preview": "node --import tsx scripts/linux-preview-release.ts verify-readback",
     "package:desktop:release-assets": "node --import tsx scripts/desktop-release-assets.ts assemble",
     "prepare:desktop:release-provenance": "node --import tsx scripts/prepare-desktop-release-provenance.ts",
     "verify:upstream-tool-provenance": "node --import tsx scripts/verify-upstream-tool-provenance.ts"

@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 import { LOCAL_MEDIA_ENGINE_RELEASE_FILES } from "../src/editor/local-media-engine-release.js";
 import { buildWebDistribution } from "./build-web.js";
 import { loadVerifiedWebEngineReleaseChannel } from "./web-engine-release-channel.js";
+import {
+  loadVerifiedWebEngineLinuxPreviewChannel
+} from "./web-engine-linux-preview-channel.js";
 
 export const WEB_ENGINE_RELEASE_READBACK_ENV =
   "KIRINUKI_WEB_ENGINE_RELEASE_READBACK" as const;
@@ -26,9 +29,10 @@ export async function buildVerifiedEngineReleaseWeb(): Promise<void> {
     process.argv.length === 2,
     "사용법: KIRINUKI_WEB_ENGINE_RELEASE_READBACK=<absolute-readback> npm run build:web:release"
   );
+  const requestedChannel = process.env.KIRINUKI_INSTALLER_CHANNEL;
   invariant(
-    process.env.KIRINUKI_INSTALLER_CHANNEL === "public-release",
-    "engine link를 여는 web build에는 KIRINUKI_INSTALLER_CHANNEL=public-release가 필요합니다."
+    requestedChannel === "public-release" || requestedChannel === "linux-preview",
+    "engine link를 여는 web build에는 public-release 또는 linux-preview channel이 필요합니다."
   );
   invariant(
     typeof readbackDirectory === "string"
@@ -37,20 +41,24 @@ export async function buildVerifiedEngineReleaseWeb(): Promise<void> {
       && path.isAbsolute(readbackDirectory),
     `${WEB_ENGINE_RELEASE_READBACK_ENV}은 검증된 remote readback의 절대 경로여야 합니다.`
   );
-  const channel = await loadVerifiedWebEngineReleaseChannel({
-    directory: readbackDirectory
-  });
+  const channel = requestedChannel === "linux-preview"
+    ? await loadVerifiedWebEngineLinuxPreviewChannel({
+        directory: readbackDirectory
+      })
+    : await loadVerifiedWebEngineReleaseChannel({
+        directory: readbackDirectory
+      });
   await buildWebDistribution({ engineRelease: channel });
   const editorBundle = await readFile(
     path.join(repositoryRoot, "web", "editor", "editor.js"),
     "utf8"
   );
-  for (const target of Object.keys(LOCAL_MEDIA_ENGINE_RELEASE_FILES) as Array<
+  for (const target of Object.keys(channel.installers) as Array<
     keyof typeof LOCAL_MEDIA_ENGINE_RELEASE_FILES
   >) {
     const artifact = channel.installers[target];
     invariant(
-      editorBundle.includes(artifact.url),
+      artifact && editorBundle.includes(artifact.url),
       `release web bundle에 verified installer URL이 없습니다: ${target}`
     );
   }
@@ -62,6 +70,7 @@ export async function buildVerifiedEngineReleaseWeb(): Promise<void> {
   console.log(JSON.stringify({
     schema: "kirinuki-web-engine-release-build/v1",
     status: "ok",
+    channel: channel.status,
     tag: channel.tag,
     commit: channel.commit,
     installers: Object.keys(channel.installers).sort()

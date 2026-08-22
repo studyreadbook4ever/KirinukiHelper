@@ -89,6 +89,31 @@ test("public installer release는 explicit manual/tag confirmation과 protected 
   );
 });
 
+test("Linux preview release는 stable gate와 분리해 install E2E·prerelease·attestation을 강제한다", async () => {
+  const workflow = await readFile(path.join(
+    root,
+    ".github/workflows/linux-preview-release.yml"
+  ), "utf8");
+  assert.match(workflow, /workflow_dispatch:/u);
+  assert.match(workflow, /PUBLISH_LINUX_PREVIEW/u);
+  assert.match(workflow, /test "\$GITHUB_REF_TYPE" = "tag"/u);
+  assert.match(workflow, /refs\/remotes\/origin\/main\)" = "\$commit"/u);
+  assert.match(workflow, /typescript-quality\.yml\/runs/u);
+  assert.match(workflow, /npm run package:desktop:installer/u);
+  assert.match(workflow, /npm run test:semantic:engine/u);
+  assert.match(workflow, /KIRINUKI_INSTALLER_SYSTEM_SMOKE:\s*"1"/u);
+  assert.match(workflow, /KIRINUKI_INSTALLED_BROWSER_SMOKE:\s*"1"/u);
+  assert.match(workflow, /npm run package:desktop:linux-preview/u);
+  assert.match(workflow, /attest-build-provenance@[0-9a-f]{40}/u);
+  assert.match(workflow, /gh release create[\s\S]*--draft[\s\S]*--prerelease/u);
+  assert.match(workflow, /gh release download/u);
+  assert.match(workflow, /test:package:desktop:linux-preview/u);
+  assert.match(workflow, /\.prerelease'[\s\S]*= true/u);
+  assert.match(workflow, /not a stable signed release/u);
+  assert.doesNotMatch(workflow, /--latest|releases\/latest\/download/u);
+  assert.doesNotMatch(workflow, /KIRINUKI_(?:WINDOWS|APPLE|MACOS)_/u);
+});
+
 test("release assembler는 exact remote set, native evidence, hashes, GPG readback을 모두 강제한다", async () => {
   const source = await readFile(path.join(
     root,
