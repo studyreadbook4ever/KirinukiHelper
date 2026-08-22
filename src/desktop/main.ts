@@ -1772,7 +1772,12 @@ if (!primaryInstance) {
       } else {
         if (
           launchCommand?.kind === "cut"
-          || (!launchCommand && !argvContainsEngineUrl(argv))
+          || (
+            !nativeSmoke
+            && !launchCommand
+            && !argvContainsEngineUrl(argv)
+            && !argv.includes(ENGINE_BACKGROUND_ARGUMENT)
+          )
         ) {
           requestCutWindow();
         }

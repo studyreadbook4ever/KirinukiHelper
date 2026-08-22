@@ -146,3 +146,21 @@ test("trusted player shortcut은 installed guard와 exact direct frame·모든 �
     /state\.frameEpoch \+= 1;[\s\S]*state\.requests\.clear\(\)[\s\S]*const frameEpoch = state\.frameEpoch[\s\S]*state\.frameEpoch !== frameEpoch[\s\S]*executeStreamingFrameAction\([\s\S]*frameEpoch/u
   );
 });
+
+test("background·native smoke secondary instance는 컷 창을 열지 않는다", async () => {
+  const main = await source("src/desktop/main.ts");
+  const secondInstance = boundedSection(
+    main,
+    'app.on("second-instance"',
+    "app.whenReady().then(async () => {"
+  );
+  assert.match(
+    secondInstance,
+    /launchCommand\?\.kind === "cut"[\s\S]*!nativeSmoke[\s\S]*!argv\.includes\(ENGINE_BACKGROUND_ARGUMENT\)[\s\S]*requestCutWindow\(\)/u
+  );
+  assert.ok(
+    secondInstance.indexOf("!nativeSmoke")
+      < secondInstance.indexOf("requestCutWindow()"),
+    "내부 background/smoke secondary는 창 요청 전에 제외되어야 합니다."
+  );
+});
