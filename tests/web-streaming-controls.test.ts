@@ -55,6 +55,42 @@ test("표준 browser smoke는 Electron preload 부재를 fail-closed하고 수�
   assert.match(smoke, /playerBridge: "present-fail-closed-without-electron-preload"/u);
 });
 
+test("browser smoke는 저장소 준비 장벽 뒤 fixture를 기록하고 모든 IndexedDB 실패를 종료한다", async () => {
+  const smoke = await readFile(
+    new URL("../scripts/local-studio-browser-smoke.ts", import.meta.url),
+    "utf8"
+  );
+  const startupBarrier = smoke.indexOf(
+    "fixture 기록 전 브라우저 저장소의 명시적 새로 읽기를 완료하지 못했습니다."
+  );
+  const fixtureWrite = smoke.indexOf(
+    "await storeBrowserProjects([\n    staleBrowserProject"
+  );
+  assert(startupBarrier >= 0 && fixtureWrite > startupBarrier);
+
+  const writerStart = smoke.indexOf("async function storeBrowserProjects(");
+  const writerEnd = smoke.indexOf(
+    "async function storeBrowserProject(",
+    writerStart
+  );
+  assert(writerStart >= 0 && writerEnd > writerStart);
+  const writer = smoke.slice(writerStart, writerEnd);
+  assert.match(writer, /open\.onblocked/u);
+  assert.match(writer, /transaction\.onerror/u);
+  assert.match(writer, /transaction\.onabort/u);
+  assert.match(writer, /request\.onerror/u);
+  assert.match(writer, /closeDatabase/u);
+
+  const barrier = smoke.slice(
+    smoke.lastIndexOf("await webdriver", startupBarrier),
+    fixtureWrite
+  );
+  assert.match(barrier, /document\.readyState === "complete"/u);
+  assert.match(barrier, /getAttribute\("aria-busy"\) === "false"/u);
+  assert.match(barrier, /#local-projects-error/u);
+  assert.match(barrier, /#refresh-local-projects/u);
+});
+
 test("player 제어는 unpacked extension 대신 ASAR 고정 frame action만 배포한다", async () => {
   const [buildSource, packageSource, packageManifest] = await Promise.all([
     readFile(new URL("../scripts/build-desktop.ts", import.meta.url), "utf8"),
