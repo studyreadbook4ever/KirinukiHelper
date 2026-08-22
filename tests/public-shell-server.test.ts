@@ -245,10 +245,10 @@ test("공개 웹 request target은 allowlist의 전체 앱 파일만 허용한�
     "/editor.html?project=project-123&workspace=short-form&short=shorts-68a9bcf1-08c0-4a67-a197-8fa6d37b5d35",
     `/editor.html?project=${encodeURIComponent("한글-프로젝트")}`,
     "/studio.css",
-    "/studio.css?v=3.0.0",
-    "/studio.js?v=3.0.0",
-    "/editor/editor.css?v=3.0.0",
-    "/editor/editor.js?v=3.0.0",
+    "/studio.css?v=3.0.1",
+    "/studio.js?v=3.0.1",
+    "/editor/editor.css?v=3.0.1",
+    "/editor/editor.js?v=3.0.1",
     "/THIRD_PARTY_NOTICES.md",
     "/licenses/UNLICENSE.txt"
   ]) {
@@ -281,8 +281,8 @@ test("공개 웹 request target은 allowlist의 전체 앱 파일만 허용한�
     `/editor.html?project=project-123&workspace=short-form&short=${"a".repeat(129)}`,
     "/editor.html?project=%GG",
     "/studio.css?",
-    "/studio.css?v=03.0.0",
-    "/studio.css?v=3.0.0&x=1",
+    "/studio.css?v=03.0.1",
+    "/studio.css?v=3.0.1&x=1",
     "/index.html#x",
     "/index.html\n"
   ]) {
@@ -382,9 +382,9 @@ test("공개 웹 서버는 GET·HEAD 앱 content와 모든 오류에 같은 보�
       "editor.html",
       "text/html; charset=utf-8"
     ],
-    ["/studio.css?v=3.0.0", "studio.css", "text/css; charset=utf-8"],
-    ["/studio.js?v=3.0.0", "studio.js", "text/javascript; charset=utf-8"],
-    ["/editor/editor.css?v=3.0.0", "editor/editor.css", "text/css; charset=utf-8"],
+    ["/studio.css?v=3.0.1", "studio.css", "text/css; charset=utf-8"],
+    ["/studio.js?v=3.0.1", "studio.js", "text/javascript; charset=utf-8"],
+    ["/editor/editor.css?v=3.0.1", "editor/editor.css", "text/css; charset=utf-8"],
     [
       "/THIRD_PARTY_NOTICES.md",
       "THIRD_PARTY_NOTICES.md",

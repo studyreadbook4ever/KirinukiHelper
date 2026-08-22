@@ -77,7 +77,7 @@ https://opensource.org/osd
 
 개발/source-run 경로의 FFmpeg·ffprobe, Node.js, Python, Chromium은 시스템
 제공·비재배포 경계이고 `build-dependent`는 허가가 아니라 경계 표식입니다.
-화면 없는 로컬 엔진 installer는 Electron의 Chromium·Node와 target별
+로컬 엔진 installer는 Electron의 Chromium·Node와 target별
 FFmpeg·ffprobe·yt-dlp를 포함하므로 이 system-provided 분류를 재사용하지 않습니다.
 실제 binary와 linked component를 별도 감사해야 하며 현재 공개 바이너리 승인을
 받지 않았습니다.
@@ -120,6 +120,6 @@ CHZZK·YouTube·SOOP의 서비스 약관, 상표와 사용자가 편집하는 �
    실제 산출물 기준으로 다시 검사합니다.
 4. 광고·유료·SaaS 출시 시점의 라이선스 원문과 플랫폼·SDK 약관은 변경될 수
    있으므로 release evidence에 보관하고 사람이 승인합니다.
-5. 화면 없는 Electron 로컬 엔진 package는 license/SBOM gate와 Windows 서명
+5. background Electron 로컬 엔진 package는 license/SBOM gate와 Windows 서명
    또는 macOS 서명·공증을 모두 통과하기 전에는 CI 산출물을 release에
    업로드하지 않습니다.

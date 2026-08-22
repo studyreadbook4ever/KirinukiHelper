@@ -31,7 +31,7 @@ const [
   editorHtml,
   studioCss,
   packageManifest,
-  buildWebSource,
+  buildDesktopSource,
   browserSmokeSource
 ] = await Promise.all([
   read("web/index.html"),
@@ -42,7 +42,7 @@ const [
     readonly version?: string;
     readonly scripts?: Readonly<Record<string, string>>;
   }),
-  read("scripts/build-web.ts"),
+  read("scripts/build-desktop.ts"),
   read("scripts/local-studio-browser-smoke.ts")
 ]);
 
@@ -56,20 +56,16 @@ assert(
     && packageScripts.validate === "node --import tsx scripts/validate-local-studio.ts"
     && packageScripts.package === "node --import tsx scripts/release-package.ts"
     && packageScripts["dev:editor"] === "node --import tsx scripts/dev-web.ts"
-    && packageScripts["streaming:companion:build"] === undefined
-    && !buildWebSource.includes("buildStreamingCompanion")
-    && !buildWebSource.includes("build-streaming-companion")
+    && buildDesktopSource.includes("streaming-electron-frame-action.ts")
     && !browserSmokeSource.includes("`--load-extension=")
-    && !browserSmokeSource.includes("`--disable-extensions-except=")
-    && !browserSmokeSource.includes("buildStreamingCompanion"),
-  "기본 build/validate/package 명령이 localhost web 경로로 고정되지 않았습니다."
+    && !browserSmokeSource.includes("`--disable-extensions-except="),
+  "web/desktop build와 ASAR 내부 player action 경계가 올바르지 않습니다."
 );
 for (const [name, command] of Object.entries(packageScripts)) {
   assert(
     !name.startsWith("legacy:extension:")
-      && !/streaming[-:]companion/iu.test(`${name} ${command}`)
       && !/scripts\/(?:browser-smoke|dev-extension|build-extension-legacy|validate-extension|package-extension)\.ts|sidepanel/iu.test(command),
-    `삭제된 전체 Extension 명령이 package scripts에 남았습니다: ${name}`
+    `삭제된 외부 Extension 명령이 package scripts에 남았습니다: ${name}`
   );
 }
 
@@ -106,8 +102,12 @@ assert(
     && indexHtml.includes('data-project-action="continue"')
     && indexHtml.includes('data-project-action="recover"')
     && indexHtml.includes('data-project-action="delete"')
-    && indexHtml.includes('id="stream-preview-frame"'),
-  "localhost 시작 화면에 source·구간·per-use 정책·최근 편집 흐름이 없습니다."
+    && indexHtml.includes('id="stream-preview-frame"')
+    && indexHtml.includes('id="public-launch-shell"')
+    && indexHtml.includes('id="local-app-surface"')
+    && /<a id="launch-kirinuki-cut" class="button primary" role="button">/u
+      .test(indexHtml),
+  "일반 브라우저 launcher·컷 앱 surface·저장 편집 흐름이 없습니다."
 );
 assert(
   indexHtml.includes("편집기를 열 때 선택한 구간만 이 PC에 준비합니다.")
@@ -115,13 +115,13 @@ assert(
     && indexHtml.includes("100%")
     && indexHtml.includes('id="import-session-archive"')
     && indexHtml.includes('id="session-archive-input"')
-    && indexHtml.includes("원본을 보며 가져올 시작과 끝 시각을 직접 입력하세요.")
-    && !indexHtml.includes('id="stream-cut-console"')
-    && !indexHtml.includes('id="capture-start"')
-    && !indexHtml.includes('id="capture-end"')
+    && indexHtml.includes("강조된 행에 E로 시작, R로 끝 시각을 기록합니다.")
+    && indexHtml.includes('id="stream-cut-console"')
+    && indexHtml.includes('id="capture-start"')
+    && indexHtml.includes('id="capture-end"')
     && !indexHtml.includes('id="local-preview-video"')
     && !indexHtml.includes('id="prepare-local-preview"'),
-  "localhost 시작 화면의 streaming-only 컷 경계 또는 사용자 책임 고지가 없습니다."
+  "컷 전용 surface의 player 조작부 또는 사용자 책임 고지가 없습니다."
 );
 assert(
   !indexHtml.includes('name="basis"')

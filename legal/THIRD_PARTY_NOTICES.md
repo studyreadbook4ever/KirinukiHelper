@@ -1,10 +1,11 @@
 # Third-party notices — public web editor and local media engine
 
 이 문서는 Kirinuki 소스 저장소, 공개 full web editor, 저장소 전용 검증 다운로드,
-Windows x64·macOS arm64·Linux x64의 화면 없는 로컬 엔진 installer에 관계된 전체
+Windows x64·macOS arm64·Linux x64의 로컬 엔진 installer에 관계된 전체
 고지입니다. 웹 ZIP의 더 좁은 고지는 `web/THIRD_PARTY_NOTICES.md`를 기준으로
-합니다. 브라우저 확장 프로그램과 Electron 편집기 창은 현재 제품 산출물이
-아닙니다.
+합니다. ASAR에 고정되는 플레이어 제어 코드는 Kirinuki가 직접 작성했으며
+아래 제3자 구성요소를 추가하지 않습니다. Electron full editor, 외부 Chrome 확장,
+별도 player-action resource는 제품 산출물이 아닙니다.
 
 Kirinuki 프로젝트가 직접 작성한 코드는 루트 `UNLICENSE`에 따라 퍼블릭 도메인에
 헌정됩니다. 공개 웹 ZIP에는 같은 원문을 `web/licenses/UNLICENSE.txt`로
@@ -203,7 +204,7 @@ Astring의 MIT 조건은 저작권·허가 고지를 소프트웨어의 모든 �
 원문이 들어 있지만, 재패키징하거나 분리 배포할 때 해당 header를 제거하면
 안 됩니다.
 
-## 화면 없는 로컬 엔진 installer에 들어가는 구성요소
+## 로컬 엔진 installer에 들어가는 구성요소
 
 이 절은 현재 개발 package의 차이를 드러내기 위한 inventory이며 공개 배포
 승인이 아닙니다. 대상별 정확한 도구 URL·바이트·SHA-256은

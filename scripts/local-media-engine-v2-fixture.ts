@@ -406,7 +406,7 @@ export async function createLocalMediaEngineV2Fixture(
         challenge,
         keyId: identity.keyId,
         publicKeySpki: identity.publicKeySpki,
-        engineVersion: "3.0.0",
+        engineVersion: "3.0.1",
         issuedAt: new Date().toISOString()
       });
       sendJson(response, options.allowedOrigin, 200, {
@@ -464,7 +464,7 @@ export async function createLocalMediaEngineV2Fixture(
           backgroundStart: "ready",
           product: LOCAL_MEDIA_ENGINE_PRODUCT,
           protocol: LOCAL_MEDIA_ENGINE_API_PROTOCOL,
-          version: "3.0.0"
+          version: "3.0.1"
         },
         originBinding: options.originBinding,
         authentication: "bearer-memory-capability",

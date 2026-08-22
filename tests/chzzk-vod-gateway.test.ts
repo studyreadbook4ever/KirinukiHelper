@@ -896,6 +896,12 @@ test("VOD 상태와 취소는 생성 문서 또는 같은 프로젝트의 새 ca
     "gateway-project-1",
     ["vod"]
   );
+  const sameProjectDifferentSource = await issueCapability(
+    port,
+    "gateway-project-1",
+    ["vod"],
+    "https://www.youtube.com/watch?v=abcdefghijk"
+  );
   const otherProject = await issueCapability(port, "gateway-project-2", ["vod"]);
   const requestAs = (
     capability: TestCapability,
@@ -913,12 +919,17 @@ test("VOD 상태와 취소는 생성 문서 또는 같은 프로젝트의 새 ca
   });
 
   for (const method of ["GET", "POST", "DELETE"] as const) {
-    const rejected = await requestAs(otherProject, method);
-    assert.equal(rejected.status, 403, rejected.bytes.toString("utf8"));
-    assert.equal(
-      (json(rejected).error as Record<string, unknown>).code,
-      "CAPABILITY_SCOPE_MISMATCH"
-    );
+    for (const rejectedCapability of [
+      otherProject,
+      sameProjectDifferentSource
+    ]) {
+      const rejected = await requestAs(rejectedCapability, method);
+      assert.equal(rejected.status, 403, rejected.bytes.toString("utf8"));
+      assert.equal(
+        (json(rejected).error as Record<string, unknown>).code,
+        "CAPABILITY_SCOPE_MISMATCH"
+      );
+    }
   }
   assert.equal((await requestAs(sameProject, "GET")).status, 200);
   assert.equal((await requestAs(sameProject, "POST")).status, 200);
@@ -1125,6 +1136,33 @@ test("별도 cache DELETE는 완료된 exact job만 지우며 취소 DELETE와 �
   assert.equal(unauthorized.status, 401);
   await access(artifactPath);
 
+  const wrongSourceCapability = await issueCapability(
+    port,
+    "gateway-project-1",
+    ["vod", "cache-delete"],
+    "https://www.youtube.com/watch?v=abcdefghijk"
+  );
+  const wrongSource = await rawLocalRequest({
+    port,
+    requestPath: purgePath,
+    method: "DELETE",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${wrongSourceCapability.token}`,
+      "content-type": "application/json",
+      "x-kirinuki-client-nonce": wrongSourceCapability.clientNonce,
+      "x-kirinuki-protocol": CHZZK_VOD_CACHE_PURGE_REQUEST_SCHEMA,
+      "x-kirinuki-media-access": mediaUrl.searchParams.get("access") || ""
+    },
+    body: exactBody
+  });
+  assert.equal(wrongSource.status, 403, wrongSource.bytes.toString("utf8"));
+  assert.equal(
+    (json(wrongSource).error as Record<string, unknown>).code,
+    "CAPABILITY_SCOPE_MISMATCH"
+  );
+  await access(artifactPath);
+
   const mismatch = structuredClone(exactBody);
   mismatch.source.sourceVersionId = "d".repeat(64);
   const mismatched = await localRequest({
@@ -1304,6 +1342,33 @@ test("별도 session-cache DELETE는 인증된 consumer scope 전체만 지우�
     body: purgeBodyValue
   });
   assert.equal(wrongProtocol.status, 400);
+  await access(scopeA);
+
+  const wrongSourceCapability = await issueCapability(
+    port,
+    consumerA,
+    ["vod", "cache-delete"],
+    "https://www.youtube.com/watch?v=abcdefghijk"
+  );
+  const wrongSource = await rawLocalRequest({
+    port,
+    requestPath: purgePath,
+    method: "DELETE",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${wrongSourceCapability.token}`,
+      "content-type": "application/json",
+      "x-kirinuki-client-nonce": wrongSourceCapability.clientNonce,
+      "x-kirinuki-media-access": firstMedia.searchParams.get("access") || "",
+      "x-kirinuki-protocol": CHZZK_VOD_CONSUMER_CACHE_PURGE_REQUEST_SCHEMA
+    },
+    body: purgeBodyValue
+  });
+  assert.equal(wrongSource.status, 403, wrongSource.bytes.toString("utf8"));
+  assert.equal(
+    (json(wrongSource).error as Record<string, unknown>).code,
+    "CAPABILITY_SCOPE_MISMATCH"
+  );
   await access(scopeA);
 
   const mismatchBody = { ...purgeBodyValue, consumerId: consumerB };

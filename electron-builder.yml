@@ -8,12 +8,12 @@ buildDependenciesFromSource: false
 forceCodeSigning: false
 publish: null
 protocols:
-  - name: Kirinuki Local Engine Pairing
+  - name: Kirinuki Local Engine
     role: Viewer
     schemes:
       - kirinuki-engine
 extraMetadata:
-  description: Windowless loopback VOD acquisition engine for the Kirinuki web editor
+  description: Local VOD range engine and cut-selection host for the Kirinuki web editor
   homepage: https://kirinuki.eff0rtchung.kr
   author:
     name: Kirinuki contributors
@@ -64,8 +64,8 @@ linux:
   target:
     - deb
   category: AudioVideo
-  synopsis: Kirinuki local VOD engine
-  description: Windowless loopback VOD acquisition engine for the Kirinuki web editor
+  synopsis: Kirinuki local VOD engine and cut selector
+  description: Local VOD range engine and cut-selection host for the Kirinuki web editor
   maintainer: Kirinuki contributors <lostfragment@naver.com>
   executableArgs:
     - "%U"

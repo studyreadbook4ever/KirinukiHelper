@@ -112,6 +112,12 @@ jobs:
       - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
 
+      - name: Materialize the pinned checksum-verified Electron test runtime
+        run: node node_modules/electron/install.js
+
+      - name: Prove the sandboxed cut host and all three direct player frames in Electron
+        run: npm run test:electron:cut-window
+
       - name: Install matching Chrome and ChromeDriver for the installed-engine browser proof
         id: setup-native-chrome
         uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2

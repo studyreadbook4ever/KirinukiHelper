@@ -152,7 +152,10 @@ export interface NormalizedCaptionCue {
 type JsonRecord = Record<string, unknown>;
 type StorageArea = ReturnType<typeof studioStorageArea>;
 type FetchImplementation = typeof fetch;
-export type LocalMediaEngineSessionPurpose = "vod" | "captions";
+export type LocalMediaEngineSessionPurpose =
+  | "vod"
+  | "captions"
+  | "editor-handoff";
 
 interface CaptionAgentConnectionOptions {
   endpoint: unknown;
@@ -369,20 +372,36 @@ function normalizeLocalEngineSessionPurpose(
   const purpose = value === undefined
     ? (sourceUrl === undefined ? "captions" : "vod")
     : value;
-  if (purpose !== "vod" && purpose !== "captions") {
+  if (
+    purpose !== "vod"
+    && purpose !== "captions"
+    && purpose !== "editor-handoff"
+  ) {
     throw new TypeError("로컬 엔진 session 목적이 올바르지 않습니다.");
   }
   if (
     (purpose === "vod" && sourceUrl === undefined)
-    || (purpose === "captions" && sourceUrl !== undefined)
+    || (purpose !== "vod" && sourceUrl !== undefined)
   ) {
     throw new TypeError(
       purpose === "vod"
         ? "VOD session에는 정규 원본 주소가 필요합니다."
-        : "자막 session에는 VOD 원본 권한을 함께 요청할 수 없습니다."
+        : "원본 비결합 session에는 VOD 원본 권한을 함께 요청할 수 없습니다."
     );
   }
   return purpose;
+}
+
+function localMediaEngineSessionActions(
+  purpose: LocalMediaEngineSessionPurpose
+): readonly string[] {
+  if (purpose === "vod") {
+    return ["vod", "cache-delete"];
+  }
+  if (purpose === "captions") {
+    return ["captions"];
+  }
+  return ["editor-handoff-consume"];
 }
 
 function matchingCachedLocalEngineToken(
@@ -1639,9 +1658,7 @@ export async function pairCaptionAgent({
     schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA,
     clientNonce,
     projectId: normalizedProjectId,
-    actions: purpose === "captions"
-      ? ["captions"]
-      : ["vod", "cache-delete"],
+    actions: localMediaEngineSessionActions(purpose),
     ...(normalizedSourceUrl === undefined
       ? {}
       : { sourceUrl: normalizedSourceUrl })
@@ -1909,7 +1926,11 @@ export async function probeLocalMediaEngineSession({
   if (!isLoopbackCaptionAgentEndpoint(endpoint)) {
     return;
   }
-  if (purpose !== "vod" && purpose !== "captions") {
+  if (
+    purpose !== "vod"
+    && purpose !== "captions"
+    && purpose !== "editor-handoff"
+  ) {
     throw new TypeError("확인할 로컬 엔진 session 목적이 올바르지 않습니다.");
   }
   const deadline = createDeadlineSignal(signal, timeoutMs);
@@ -1941,9 +1962,7 @@ export async function probeLocalMediaEngineSession({
       "sourceBound",
       "expiresAt"
     ], "Kirinuki 내부 엔진 session status");
-    const expectedActions = purpose === "vod"
-      ? ["vod", "cache-delete"]
-      : ["captions"];
+    const expectedActions = localMediaEngineSessionActions(purpose);
     if (
       payload.schema !== LOCAL_MEDIA_ENGINE_SESSION_STATUS_SCHEMA
       || payload.status !== "active"

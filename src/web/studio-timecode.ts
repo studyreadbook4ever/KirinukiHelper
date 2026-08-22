@@ -1,5 +1,16 @@
 /** Maximum source clock accepted by the capture form: exactly seven days. */
 export const MAX_STUDIO_SOURCE_SECONDS = 7 * 24 * 60 * 60;
+export const MINIMUM_STUDIO_SELECTION_MILLISECONDS = 100;
+export const STUDIO_SELECTION_RANGE_INPUT_ERROR =
+  "시작과 끝 시각을 올바르게 입력해 주세요.";
+export const STUDIO_SELECTION_RANGE_ORDER_ERROR =
+  "끝 시각은 시작 시각보다 0.1초 이상 뒤여야 합니다.";
+
+export type StudioSelectionRangeValidation = Readonly<{
+  status: "blank" | "invalid-timecode" | "invalid-order" | "valid";
+  startSeconds: number | null;
+  endSeconds: number | null;
+}>;
 
 export function parseStudioTimecode(value: unknown): number | null {
   const text = String(value ?? "").trim();
@@ -39,4 +50,30 @@ export function formatStudioTimecode(value: number): string {
   return [hours, minutes, seconds]
     .map((part) => String(part).padStart(2, "0"))
     .join(":") + (fraction ? `.${String(fraction).padStart(3, "0")}` : "");
+}
+
+export function validateStudioSelectionRange(
+  startValue: unknown,
+  endValue: unknown
+): StudioSelectionRangeValidation {
+  const startText = String(startValue ?? "").trim();
+  const endText = String(endValue ?? "").trim();
+  if (!startText && !endText) {
+    return { status: "blank", startSeconds: null, endSeconds: null };
+  }
+  const startSeconds = parseStudioTimecode(startText);
+  const endSeconds = parseStudioTimecode(endText);
+  if (startSeconds === null || endSeconds === null) {
+    return { status: "invalid-timecode", startSeconds, endSeconds };
+  }
+  const durationMilliseconds = (
+    Math.round(endSeconds * 1_000) - Math.round(startSeconds * 1_000)
+  );
+  return {
+    status: durationMilliseconds < MINIMUM_STUDIO_SELECTION_MILLISECONDS
+      ? "invalid-order"
+      : "valid",
+    startSeconds,
+    endSeconds
+  };
 }

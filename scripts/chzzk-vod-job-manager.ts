@@ -417,7 +417,7 @@ const PUBLIC_MATERIALIZATION_ERROR_CODES = new Set([
  * Those codes describe implementation details (transport shape, proof document
  * layout, redirect policy, and fragment parsing) and are not a stable browser
  * API. Collapse them into a small semantic surface before a status leaves the
- * loopback companion.
+ * loopback media engine.
  */
 const INTERNAL_MATERIALIZATION_ERROR_CODE_MAP = new Map<string, string>([
   ["ABORTED", "CANCELLED"],

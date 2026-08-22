@@ -14,21 +14,33 @@ commit 또는 버전, 재현 조건, 예상 영향과 최소 재현 자료를 �
 ## 시스템과 범위
 
 - `kirinuki.eff0rtchung.kr`의 정적 웹 편집기
-- Windows x64, macOS arm64, Linux x64의 화면 없는 로컬 미디어 엔진과 installer
+- Windows x64, macOS arm64, Linux x64의 로컬 미디어 앱과 installer
+- 설치 앱이 소유하는 격리된 컷 선택 전용 Electron 창과 ASAR 고정
+  WebFrameMain 플레이어 제어
+- 컷 선택 결과를 일반 브라우저 편집기로 넘기는 일회성 암호화 handoff
 - loopback pairing, capability, 암호화된 control session과 로컬 media access
 - CHZZK·YouTube·SOOP 공개 완료 VOD의 구간 준비와 외부 도구 실행
 - build, signing, provenance, release workflow와 배포 산출물
 
 공개 웹·VOD metadata·사용자 입력 URL·프로젝트 파일·다른 웹 Origin·LAN peer·같은
-기기의 다른 프로세스는 신뢰하지 않습니다. 운영체제, 브라우저 보안 경계와 검토된
-서명 키는 신뢰 기반입니다.
+기기의 다른 프로세스는 control plane과 설치 소유권 경계에서 신뢰하지 않습니다.
+운영체제, 브라우저 보안 경계와 검토된 서명 키는 신뢰 기반입니다. 다만 같은 OS
+사용자 계정이 소유한 다른 프로세스와 로컬 VOD 캐시 파일 사이에는 별도 기밀성
+경계를 가정하지 않습니다.
 
 ## 반드시 지켜야 하는 보안 불변식
 
 - 엔진은 loopback에만 bind하고 exact public Origin·Host·fresh challenge·문서별
-  capability와 project/source scope를 검증해야 합니다.
-- token, 원본 URL과 control payload는 평문 loopback에 남기지 않고 replay와 다른
-  프로젝트 재사용을 거절해야 합니다.
+  capability와 project/source scope를 검증해야 합니다. 컷 창은 설치 앱이 매번 새로
+  만든 비영속 partition에서만 열고, 전체 편집기는 Electron 안에서 열지 않습니다.
+- session/control token, 원본 URL과 control payload는 평문 loopback에 남기지 않고
+  replay와 다른 프로젝트·원본 재사용을 거절해야 합니다. HTML media Range 요청에
+  필요한 per-job media access 값은 256-bit 난수, exact Origin·Host, `no-store`에
+  묶고 암호화된 상태 응답의 메모리 밖으로 저장·기록하지 않아야 합니다.
+- 플레이어 제어 코드는 build 때 `app.asar`에 고정하고 정확한 플랫폼 frame에만
+  실행해야 합니다. 수정 가능한 외부 resource나 별도 브라우저 확장을 설치·
+  관리하게 해서는 안 됩니다. 컷 결과 handoff는 만료·단일 소비·명시적
+  ACK를 강제하고 실패·취소·창 닫힘 때 해당 generation을 즉시 폐기해야 합니다.
 - 로그인, 서버 저장 session, analytics, telemetry 또는 숨은 update polling을
   만들지 않아야 합니다.
 - 외부 도구는 고정 출처·크기·hash로 검증하고 shell이나 사용자 cookie·설정을
@@ -50,8 +62,15 @@ commit 또는 버전, 재현 조건, 예상 영향과 최소 재현 자료를 �
 
 최초 정상 pairing 전에 같은 OS 사용자 권한의 악성 프로그램이 custom protocol을
 선점하는 TOFU 한계는 알려진 경계입니다. 이미 고정된 기기 키 불일치는 자동 승인하지
-않는 것으로 완화합니다. DRM·비공개·로그인 필요·지역 제한 원본 우회는 지원 범위가
-아닙니다. 제3자 플랫폼 자체의 취약점, 실제 영향 경로가 없는 dependency 버전 알림,
-사용자가 개발자 도구에 직접 실행한 코드만으로 생기는 self-XSS는 이 저장소의
-취약점으로 보지 않습니다. 다만 Kirinuki 경계를 통해 현실적으로 도달한다면
-신고해 주세요.
+않는 것으로 완화합니다. HTML media/Range API가 임의 Authorization header를 붙일 수
+없어 media access 값은 관리되는 per-job 수명 동안 loopback URL request-target에
+포함됩니다. 이 값은
+브라우저 history·쿠키·IndexedDB·로그에 보존하지 않고 exact Origin에서만 받습니다.
+같은 OS 사용자 프로세스는 동일 계정의 앱 캐시 파일도 직접 읽을 수 있으므로 그
+프로세스에 대한 로컬 VOD 기밀성은 보안 경계가 아니지만, 다른 웹 Origin·LAN·다른
+OS 사용자의 접근은 계속 취약점 범위입니다. 설치 직후 최초 컷 창 실행은 브라우저의
+외부 앱 실행 확인을 한 번 더 요구할 수 있습니다. DRM·비공개·로그인 필요·지역 제한
+원본 우회는 지원 범위가 아닙니다. 제3자 플랫폼 자체의 취약점, 실제 영향 경로가 없는
+dependency 버전 알림, 사용자가 개발자 도구에 직접 실행한 코드만으로 생기는
+self-XSS는 이 저장소의 취약점으로 보지 않습니다. 다만 Kirinuki 경계를 통해
+현실적으로 도달한다면 신고해 주세요.

@@ -857,25 +857,33 @@ async function verifyProjectWriterLock(
     `);
     const refusal = await waitFor(
       () => execute<{
+        activeSessionBadges: number;
+        continueDisabled: boolean;
+        editorAbsent: boolean;
         href: string;
-        gateHidden: boolean;
-        shellHidden: boolean;
-        status: string;
       }>(`
+        const row = [...document.querySelectorAll(".local-project-row")].find((candidate) => (
+          candidate.querySelector(".local-project-title")?.textContent === arguments[0]
+        ));
+        const continueButton = row?.querySelector('[data-project-action="continue"]');
         return {
+          activeSessionBadges: row?.querySelectorAll(
+            ".local-project-active-session:not([hidden])"
+          ).length || 0,
+          continueDisabled: continueButton instanceof HTMLButtonElement
+            && continueButton.disabled,
+          editorAbsent: document.querySelector("#editor-shell") === null
+            && document.querySelector("#editor-policy-gate") === null,
           href: location.href,
-          gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-          shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
-          status: document.querySelector("#editor-policy-gate-status")?.textContent || ""
         };
-      `),
+      `, [expectedProjectName]),
       (value) => (
-        value.href.startsWith(`${studioOrigin}/editor.html`)
-        && !value.gateHidden
-        && value.shellHidden
-        && value.status.includes("이미 다른 탭에서 편집 중")
+        value.href === `${studioOrigin}/`
+        && value.editorAbsent
+        && value.activeSessionBadges === 1
+        && value.continueDisabled
       ),
-      "두 번째 탭이 첫 탭의 프로젝트 writer lock에 의해 거부되지 않았습니다.",
+      "두 번째 탭이 writer lock 거부 뒤 작업 중인 프로젝트가 보이는 시작 화면으로 돌아오지 않았습니다.",
       20_000
     );
     return {
@@ -883,7 +891,7 @@ async function verifyProjectWriterLock(
       activeSessionBadged: true,
       managerActionsDisabled: true,
       competingTabRefused: true,
-      message: refusal.status
+      message: `${refusal.href}에서 기존 탭의 작업 중 상태를 유지했습니다.`
     };
   } finally {
     const handles = await webdriver<string[]>(
@@ -1572,17 +1580,28 @@ async function main(): Promise<void> {
   const editorState = await waitFor(
     () => execute<{
       href: string;
-      gateHidden: boolean;
-      shellHidden: boolean;
+      policyAbsent: boolean;
+      projectId: string;
+      sessionProjectId: string;
+      shellVisible: boolean;
+      workspace: string;
       projectName: string;
       clipTime: string;
       clipTimeCount: number;
       localDraftButtonExists: boolean;
     }>(`
+      const shell = document.querySelector("#editor-shell");
+      const url = new URL(location.href);
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
       return {
         href: location.href,
-        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        projectId: url.searchParams.get("project") || "",
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
+        workspace: shell?.dataset.workspace || "",
         projectName: document.querySelector("#project-name")?.value || "",
         clipTime: document.querySelector(".clip-time")?.textContent || "",
         clipTimeCount: document.querySelectorAll(".clip-time").length,
@@ -1591,8 +1610,11 @@ async function main(): Promise<void> {
     `),
     (value) => (
       value.href.startsWith(`${studioOrigin}/editor.html`)
-      && value.gateHidden
-      && !value.shellHidden
+      && value.policyAbsent
+      && value.projectId.length > 0
+      && value.sessionProjectId === value.projectId
+      && value.shellVisible
+      && value.workspace === "main"
       && value.projectName === projectName
       && value.clipTimeCount === 1
       && value.clipTime === expectedClipTime
@@ -2048,8 +2070,11 @@ async function main(): Promise<void> {
   const recoveryEditorState = await waitFor(
     () => execute<{
       href: string;
-      gateHidden: boolean;
-      shellHidden: boolean;
+      policyAbsent: boolean;
+      projectId: string;
+      sessionProjectId: string;
+      shellVisible: boolean;
+      workspace: string;
       projectName: string;
       clipTime: string;
       clipTimeCount: number;
@@ -2059,10 +2084,18 @@ async function main(): Promise<void> {
       cookie: string;
     }>(`
       const dialog = document.querySelector("#local-draft-dialog");
+      const shell = document.querySelector("#editor-shell");
+      const url = new URL(location.href);
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
       return {
         href: location.href,
-        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        projectId: url.searchParams.get("project") || "",
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
+        workspace: shell?.dataset.workspace || "",
         projectName: document.querySelector("#project-name")?.value || "",
         clipTime: document.querySelector(".clip-time")?.textContent || "",
         clipTimeCount: document.querySelectorAll(".clip-time").length,
@@ -2078,8 +2111,11 @@ async function main(): Promise<void> {
       value.href.startsWith(`${studioOrigin}/editor.html`)
       && new URL(value.href).searchParams.get("session") === "resume"
       && new URL(value.href).searchParams.get("recovery") === "drafts"
-      && value.gateHidden
-      && !value.shellHidden
+      && value.policyAbsent
+      && value.projectId === storedProject.id
+      && value.sessionProjectId === storedProject.id
+      && value.shellVisible
+      && value.workspace === "main"
       && value.projectName === persistedProjectName
       && value.clipTimeCount === 1
       && value.clipTime === expectedClipTime
@@ -2271,20 +2307,28 @@ async function main(): Promise<void> {
     () => execute<{
       href: string;
       projectId: string;
-      gateHidden: boolean;
-      shellHidden: boolean;
+      policyAbsent: boolean;
+      sessionProjectId: string;
+      shellVisible: boolean;
+      workspace: string;
       projectName: string;
       clipTimes: string[];
       toast: string;
     }>(`
       const href = location.href;
+      const shell = document.querySelector("#editor-shell");
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
       return {
         href,
         projectId: href.startsWith(arguments[0])
           ? new URL(href).searchParams.get("project") || ""
           : "",
-        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
+        workspace: shell?.dataset.workspace || "",
         projectName: document.querySelector("#project-name")?.value || "",
         clipTimes: [...document.querySelectorAll(".clip-time")]
           .map((element) => element.textContent || ""),
@@ -2296,8 +2340,10 @@ async function main(): Promise<void> {
       && new URL(value.href).searchParams.get("session") !== "resume"
       && value.projectId.length > 0
       && value.projectId !== String(storedProject.id || "")
-      && value.gateHidden
-      && !value.shellHidden
+      && value.policyAbsent
+      && value.sessionProjectId === value.projectId
+      && value.shellVisible
+      && value.workspace === "main"
       && value.projectName === isolatedProjectName
       && value.clipTimes.length === 1
       && value.clipTimes[0] === isolatedClipTime
@@ -2499,15 +2545,26 @@ async function main(): Promise<void> {
   const isolatedContinueEditor = await waitFor(
     () => execute<{
       href: string;
-      gateHidden: boolean;
-      shellHidden: boolean;
+      policyAbsent: boolean;
+      projectId: string;
+      sessionProjectId: string;
+      shellVisible: boolean;
+      workspace: string;
       projectName: string;
       clipTimes: string[];
     }>(`
+      const shell = document.querySelector("#editor-shell");
+      const url = new URL(location.href);
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
       return {
         href: location.href,
-        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        projectId: url.searchParams.get("project") || "",
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
+        workspace: shell?.dataset.workspace || "",
         projectName: document.querySelector("#project-name")?.value || "",
         clipTimes: [...document.querySelectorAll(".clip-time")]
           .map((element) => element.textContent || "")
@@ -2515,11 +2572,13 @@ async function main(): Promise<void> {
     `),
     (value) => (
       value.href.startsWith(`${studioOrigin}/editor.html`)
-      && new URL(value.href).searchParams.get("project") === isolatedEditorState.projectId
+      && value.projectId === isolatedEditorState.projectId
       && new URL(value.href).searchParams.get("session") === "resume"
       && new URL(value.href).searchParams.get("recovery") === null
-      && value.gateHidden
-      && !value.shellHidden
+      && value.policyAbsent
+      && value.sessionProjectId === isolatedEditorState.projectId
+      && value.shellVisible
+      && value.workspace === "main"
       && value.projectName === isolatedProjectName
       && value.clipTimes.length === 1
       && value.clipTimes[0] === isolatedClipTime
@@ -2850,20 +2909,28 @@ async function main(): Promise<void> {
     () => execute<{
       href: string;
       projectId: string;
-      gateHidden: boolean;
-      shellHidden: boolean;
+      policyAbsent: boolean;
+      sessionProjectId: string;
+      shellVisible: boolean;
+      workspace: string;
       projectName: string;
       clipTimes: string[];
       toast: string;
     }>(`
       const href = location.href;
+      const shell = document.querySelector("#editor-shell");
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
       return {
         href,
         projectId: href.startsWith(arguments[0])
           ? new URL(href).searchParams.get("project") || ""
           : "",
-        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
+        workspace: shell?.dataset.workspace || "",
         projectName: document.querySelector("#project-name")?.value || "",
         clipTimes: [...document.querySelectorAll(".clip-time")]
           .map((element) => element.textContent || ""),
@@ -2876,8 +2943,10 @@ async function main(): Promise<void> {
       && value.projectId.length > 0
       && value.projectId !== String(storedProject.id || "")
       && value.projectId !== isolatedEditorState.projectId
-      && value.gateHidden
-      && !value.shellHidden
+      && value.policyAbsent
+      && value.sessionProjectId === value.projectId
+      && value.shellVisible
+      && value.workspace === "main"
       && value.projectName === abandonedProjectName
       && value.clipTimes.length === 1
       && value.clipTimes[0] === abandonedClipTime

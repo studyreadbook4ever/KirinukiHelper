@@ -18,6 +18,8 @@ export const LOCAL_MEDIA_ENGINE_PAIRING_RESPONSE_SCHEMA =
 export const LOCAL_MEDIA_ENGINE_PAIRING_SCHEME = "kirinuki-engine" as const;
 export const LOCAL_MEDIA_ENGINE_PAIRING_URL =
   `${LOCAL_MEDIA_ENGINE_PAIRING_SCHEME}://pair` as const;
+export const LOCAL_MEDIA_ENGINE_CUT_URL =
+  `${LOCAL_MEDIA_ENGINE_PAIRING_SCHEME}://cut` as const;
 export const LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL =
   "kirinuki-local-media-engine/pairing-poll-v1" as const;
 export const LOCAL_MEDIA_ENGINE_PAIRING_POLL_STATUS_SCHEMA =
@@ -47,6 +49,13 @@ export interface LocalMediaEnginePairingRequest {
   readonly state: string;
   readonly challenge: string;
 }
+
+export type LocalMediaEngineLaunchCommand =
+  | Readonly<{
+    readonly kind: "pair";
+    readonly pairingRequest: Readonly<LocalMediaEnginePairingRequest>;
+  }>
+  | Readonly<{ readonly kind: "cut" }>;
 
 export interface LocalMediaEngineDeviceProof {
   readonly schema: typeof LOCAL_MEDIA_ENGINE_DEVICE_PROOF_SCHEMA;
@@ -297,6 +306,43 @@ export function extractLocalMediaEnginePairingRequestFromArgv(
   }
   return candidates[0]
     ? parseLocalMediaEnginePairingRequest(candidates[0])
+    : null;
+}
+
+export function parseLocalMediaEngineLaunchCommand(
+  value: unknown
+): Readonly<LocalMediaEngineLaunchCommand> {
+  const raw = String(value ?? "").trim();
+  if (raw === LOCAL_MEDIA_ENGINE_CUT_URL) {
+    return Object.freeze({ kind: "cut" });
+  }
+  return Object.freeze({
+    kind: "pair",
+    pairingRequest: parseLocalMediaEnginePairingRequest(raw)
+  });
+}
+
+export function extractLocalMediaEngineLaunchCommandFromArgv(
+  argv: readonly unknown[]
+): Readonly<LocalMediaEngineLaunchCommand> | null {
+  if (!Array.isArray(argv)) {
+    throw new TypeError("Kirinuki 엔진 실행 argv가 배열이 아닙니다.");
+  }
+  const candidates: string[] = [];
+  for (const value of argv) {
+    if (typeof value !== "string") {
+      throw new TypeError("Kirinuki 엔진 실행 argv에는 문자열만 허용합니다.");
+    }
+    const argument = value.trim();
+    if (new RegExp(`^${LOCAL_MEDIA_ENGINE_PAIRING_SCHEME}:`, "iu").test(argument)) {
+      candidates.push(argument);
+    }
+  }
+  if (candidates.length > 1) {
+    throw new TypeError("Kirinuki 엔진 실행 링크는 한 번에 하나만 허용합니다.");
+  }
+  return candidates[0]
+    ? parseLocalMediaEngineLaunchCommand(candidates[0])
     : null;
 }
 

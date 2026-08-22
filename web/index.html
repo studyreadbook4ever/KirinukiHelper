@@ -9,7 +9,7 @@
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki</title>
-    <link rel="stylesheet" href="/studio.css?v=3.0.0">
+    <link rel="stylesheet" href="/studio.css?v=3.0.1">
   </head>
   <body>
     <header class="topbar">
@@ -27,15 +27,27 @@
 
     <main id="public-launch-shell" class="public-launch-shell" hidden inert>
       <section class="public-launch-card" aria-labelledby="public-launch-title">
-        <h1 id="public-launch-title">Kirinuki를 불러오는 중입니다</h1>
-        <p class="public-launch-copy">잠시만 기다려 주세요.</p>
+        <span class="public-launch-eyebrow">이 PC에서 안전하게 인계 중</span>
+        <h1 id="public-launch-title">편집기를 준비하고 있습니다</h1>
+        <p id="public-launch-copy" class="public-launch-copy" role="status" aria-live="polite">컷 정보는 Kirinuki 앱과 이 브라우저 사이의 암호화된 로컬 연결로만 가져옵니다.</p>
       </section>
     </main>
 
     <main id="local-app-surface" hidden inert>
-      <section class="start-intro" aria-labelledby="start-title">
+      <section id="start-intro" class="start-intro" aria-labelledby="start-title">
         <h1 id="start-title">VOD에서 편집할 구간을 선택하세요</h1>
         <p>편집기를 열 때 선택한 구간만 이 PC에 준비합니다.</p>
+      </section>
+
+      <section id="cut-host-launch-panel" class="public-launch-card cut-host-launch-panel" aria-labelledby="cut-host-launch-title" hidden inert>
+        <span class="public-launch-eyebrow">새 편집</span>
+        <h1 id="cut-host-launch-title">새 컷은 Kirinuki 앱에서 선택하세요</h1>
+        <p class="public-launch-copy">한 번 설치한 Kirinuki가 플랫폼 VOD를 직접 보여 주고, 선택한 구간만 이 브라우저 편집기로 안전하게 넘깁니다.</p>
+        <div class="public-launch-actions">
+          <a id="launch-kirinuki-cut" class="button primary" role="button">새 컷 선택 열기</a>
+        </div>
+        <p class="public-launch-guide">아래에는 이 브라우저에 직접 저장한 기존 편집만 표시됩니다. 새 컷과 기존 편집이 자동으로 섞이지 않습니다.</p>
+        <p id="cut-host-launch-status" class="public-launch-status" role="status" aria-live="polite">설치 여부를 자동으로 확인한 뒤 컷 선택 창을 엽니다.</p>
       </section>
 
       <section id="recent-section" class="recent-card local-project-manager" aria-labelledby="local-projects-title" aria-busy="true">
@@ -63,7 +75,7 @@
         </div>
         <div id="local-projects-empty" class="local-project-state empty" hidden>
           <strong>저장된 편집이 없습니다.</strong>
-          <span>아래에서 VOD와 구간을 입력해 새 편집을 시작하세요.</span>
+          <span>새 편집은 위의 ‘새 컷 선택 열기’에서 시작하세요.</span>
         </div>
         <div id="local-projects-list" class="local-projects-list" role="list" aria-label="이 브라우저에 저장된 편집" hidden></div>
 
@@ -92,7 +104,7 @@
       </section>
 
       <form id="start-form" novalidate>
-        <section class="step-card" aria-labelledby="source-title">
+        <section id="source-section" class="step-card" aria-labelledby="source-title">
           <div class="step-content">
             <div class="section-heading">
               <h2 id="source-title">원본 VOD</h2>
@@ -111,7 +123,7 @@
             <input id="session-archive-input" type="file" accept="application/json,.json" hidden>
             <label class="field full">
               <span>프로젝트 이름</span>
-              <input id="project-name" name="project-name" type="text" minlength="1" maxlength="160" placeholder="예: 유이카 쇼츠 1" required>
+              <input id="project-name" name="project-name" type="text" minlength="1" maxlength="160" placeholder="예: 0520 히오스" required>
             </label>
             <div class="source-capture-workspace">
               <section class="stream-preview" aria-labelledby="stream-preview-title">
@@ -137,9 +149,32 @@
                     <span>주소를 확인한 뒤 플랫폼의 플레이어를 이 자리에 엽니다.</span>
                   </div>
                 </div>
+                <section id="stream-cut-console" class="stream-cut-console" aria-labelledby="stream-cut-console-title">
+                  <div class="stream-cut-console-heading">
+                    <div>
+                      <strong id="stream-cut-console-title">컷 캡처</strong>
+                      <span id="active-clip-label">현재 입력 #01</span>
+                      <span>현재 시각 <output id="stream-current-time">--:--:--</output></span>
+                    </div>
+                    <p id="stream-cut-console-status" role="status" aria-live="polite">VOD 주소를 입력하면 가능한 플레이어 동작을 활성화합니다.</p>
+                  </div>
+                  <div class="stream-cut-buttons" role="group" aria-label="컷 캡처 단축키">
+                    <button id="refresh-source" type="button" aria-keyshortcuts="W" title="현재 플레이어 연결 확인 (단축키 W)" disabled><kbd>W</kbd><span>연결 확인</span></button>
+                    <button id="playback-rate-quarter" type="button" aria-keyshortcuts="Y" aria-pressed="false" title="원본 영상을 0.25배속으로 재생 (단축키 Y)" disabled><kbd>Y</kbd><span>0.25×</span></button>
+                    <button id="playback-rate-double" type="button" aria-keyshortcuts="U" aria-pressed="false" title="원본 영상을 2배속으로 재생 (단축키 U)" disabled><kbd>U</kbd><span>2×</span></button>
+                    <button id="seek-backward-five" type="button" aria-keyshortcuts="D" title="원본 영상을 5초 이전으로 이동 (단축키 D)" disabled><kbd>D</kbd><span>−5초</span></button>
+                    <button id="seek-forward-five" type="button" aria-keyshortcuts="F" title="원본 영상을 5초 이후로 이동 (단축키 F)" disabled><kbd>F</kbd><span>+5초</span></button>
+                    <button id="capture-start" type="button" aria-keyshortcuts="E" title="현재 시각을 시작점으로 캡처 (단축키 E)" disabled><kbd>E</kbd><span>시작 캡처</span></button>
+                    <button id="capture-end" type="button" aria-keyshortcuts="R" title="현재 시각을 끝점으로 캡처 (단축키 R)" disabled><kbd>R</kbd><span>끝 캡처</span></button>
+                    <button id="save-segment" type="button" aria-keyshortcuts="T" title="다음 빈 구간 추가 (단축키 T)"><kbd>T</kbd><span>다음 구간</span></button>
+                  </div>
+                  <p class="stream-cut-console-guide">
+                    이 화면에서는 영상을 내려받지 않습니다. 선택한 구간은 편집기를 열 때 이 PC에 준비합니다.
+                  </p>
+                </section>
                 <div class="stream-preview-footer">
                   <p id="stream-preview-status" role="status" aria-live="polite">서버 프록시 없이 브라우저가 플랫폼 플레이어에 직접 연결합니다.</p>
-                  <button id="reload-stream" class="button ghost" type="button" disabled>원본 미리보기 다시 불러오기</button>
+                  <button id="reload-stream" class="button ghost" type="button" disabled>플레이어 다시 시작</button>
                 </div>
               </section>
 
@@ -148,7 +183,7 @@
                   <h3 id="clips-title">가져올 구간</h3>
                   <button id="add-clip" class="button ghost" type="button">빈 구간 추가</button>
                 </div>
-                <p class="section-copy">원본을 보며 가져올 시작과 끝 시각을 직접 입력하세요.</p>
+                <p class="section-copy">강조된 행에 E로 시작, R로 끝 시각을 기록합니다.</p>
                 <div id="clip-list" class="clip-list"></div>
                 <template id="clip-row-template">
                   <article class="clip-row">
@@ -158,7 +193,7 @@
                     <label class="clip-end"><span>끝</span><input data-field="end" type="text" inputmode="decimal" placeholder="00:01:35.000" required></label>
                     <label class="clip-note"><span>메모 (선택)</span><input data-field="note" type="text" maxlength="160" placeholder="장면 설명"></label>
                     <button data-action="remove" class="remove" type="button" aria-label="이 구간 삭제">삭제</button>
-                    <small class="coverage"></small>
+                    <small class="coverage" role="status" aria-live="polite"></small>
                   </article>
                 </template>
               </aside>
@@ -224,6 +259,35 @@
       </div>
     </dialog>
 
-    <script type="module" src="/studio.js?v=3.0.0"></script>
+    <dialog id="local-media-engine-dialog" class="local-media-engine-dialog" aria-labelledby="local-media-engine-title" aria-describedby="local-media-engine-description">
+      <div class="local-media-engine-card">
+        <div class="local-media-engine-mark" aria-hidden="true">K</div>
+        <h2 id="local-media-engine-title">처음 한 번만 준비하면 됩니다</h2>
+        <p id="local-media-engine-description">
+          Kirinuki 앱이 넘긴 컷을 이 브라우저 편집기로 안전하게 가져오는 작은 로컬 도구입니다.
+          로그인이나 서버 업로드 없이 이 PC 안에서만 연결합니다.
+        </p>
+        <ol>
+          <li>브라우저가 로컬 네트워크 접근을 물으면 <strong>허용</strong>합니다.</li>
+          <li>이미 설치되어 있으면 <strong>이 PC 연결</strong>을 눌러 앱 identity를 확인합니다.</li>
+          <li>아직 설치하지 않았다면 이 PC용 설치 파일을 실행한 뒤 <strong>이 PC 연결</strong>을 누릅니다.</li>
+        </ol>
+        <p id="local-media-engine-unsupported" class="local-media-engine-unsupported" hidden>
+          현재는 Windows 64비트, Apple Silicon macOS 15 이상, Debian/Ubuntu Linux 64비트만 지원합니다.
+        </p>
+        <p id="local-media-engine-status" class="local-media-engine-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <div class="local-media-engine-actions">
+          <button id="local-media-engine-cancel" class="button ghost" type="button">나중에</button>
+          <button id="local-media-engine-reset" class="button ghost" type="button" hidden>기기 연결 초기화</button>
+          <button id="local-media-engine-retry" class="button secondary" type="button">설치 완료 · 다시 확인</button>
+          <a id="local-media-engine-download" class="button primary" href="#" target="_blank" rel="noopener noreferrer">
+            <span id="local-media-engine-download-label">이 PC용 한 번 설치</span>
+          </a>
+        </div>
+        <p class="local-media-engine-privacy">컷 정보와 연결 권한은 이번 인계에만 사용하고 서버로 보내지 않습니다.</p>
+      </div>
+    </dialog>
+
+    <script type="module" src="/studio.js?v=3.0.1"></script>
   </body>
 </html>
