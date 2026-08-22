@@ -843,7 +843,10 @@ test("Studio static fd는 path ABA와 same-inode tamper를 모두 응답 전에 
     const tampered = await openStudioStaticAsset(root, descriptor);
     assert.ok(tampered);
     try {
-      await writeFile(assetPath, Buffer.alloc(originalBytes.byteLength, 0x78));
+      await writeFile(
+        assetPath,
+        Buffer.alloc(originalBytes.byteLength + 1, 0x78)
+      );
       await assert.rejects(
         readVerifiedStudioStaticAsset(tampered, true),
         /응답 준비 중 바뀌었습니다/u
@@ -859,8 +862,14 @@ test("Studio static fd는 path ABA와 same-inode tamper를 모두 응답 전에 
     try {
       await rename(assetPath, backupPath);
       await writeFile(assetPath, Buffer.alloc(originalBytes.byteLength, 0x79));
+      // Neutralize any platform-specific ctime effect from rename so this
+      // assertion proves the current pathname is rebound to the open fd.
+      const fdAfterRename = await opened.handle.stat({ bigint: true });
       await assert.rejects(
-        readVerifiedStudioStaticAsset(opened, true),
+        readVerifiedStudioStaticAsset({
+          ...opened,
+          status: fdAfterRename
+        }, true),
         /응답 준비 중 바뀌었습니다/u
       );
     } finally {

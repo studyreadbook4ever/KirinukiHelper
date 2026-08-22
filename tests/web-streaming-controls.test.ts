@@ -91,6 +91,41 @@ test("browser smoke는 저장소 준비 장벽 뒤 fixture를 기록하고 모�
   assert.match(barrier, /#refresh-local-projects/u);
 });
 
+test("browser smoke pairing은 custom-scheme 중단 완료 뒤 실제 앱 흐름으로 한 번만 연결한다", async () => {
+  const [smoke, fixture] = await Promise.all([
+    readFile(
+      new URL("../scripts/local-studio-browser-smoke.ts", import.meta.url),
+      "utf8"
+    ),
+    readFile(
+      new URL("../scripts/local-media-engine-v2-fixture.ts", import.meta.url),
+      "utf8"
+    )
+  ]);
+  const captureStart = smoke.indexOf(
+    "async function captureLocalMediaEngineProtocolAttempt("
+  );
+  const captureEnd = smoke.indexOf(
+    "async function setSourceAndVerify(",
+    captureStart
+  );
+  assert(captureStart >= 0 && captureEnd > captureStart);
+  const capture = smoke.slice(captureStart, captureEnd);
+  assert.match(
+    capture,
+    /connection\.send\("Page\.stopLoading"\)\.then\(\s*\(\) => resolveAttempt\(url\)/u
+  );
+  assert.match(smoke, /lateMaterializationFixture\.claimPairing\(pairingUrl\)/u);
+  assert.doesNotMatch(
+    smoke,
+    /enrollLocalMediaEngineFixture|__kirinukiSmokePinWrite/u
+  );
+  assert.match(
+    fixture,
+    /consumePairingResponse[\s\S]*LOCAL_MEDIA_ENGINE_PAIRING_POLL_STATUS_SCHEMA[\s\S]*status: "pending"/u
+  );
+});
+
 test("player 제어는 unpacked extension 대신 ASAR 고정 frame action만 배포한다", async () => {
   const [buildSource, packageSource, packageManifest] = await Promise.all([
     readFile(new URL("../scripts/build-desktop.ts", import.meta.url), "utf8"),
