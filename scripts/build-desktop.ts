@@ -20,100 +20,29 @@ export const DESKTOP_STAGE_ROOT = path.join(
   "desktop-app"
 );
 
-async function buildStreamingFrameActionSource(): Promise<string> {
-  const result = await build({
-    absWorkingDir: root,
-    entryPoints: ["src/streaming-electron-frame-action.ts"],
-    bundle: true,
-    platform: "browser",
-    format: "iife",
-    globalName: "KirinukiStreamingFrameAction",
-    target: "chrome120",
-    write: false,
-    sourcemap: false,
-    minify: true,
-    legalComments: "none",
-    logLevel: "silent"
-  });
-  const output = result.outputFiles?.[0]?.text;
-  if (!output || output.length > 256 * 1024) {
-    throw new Error("Electron streaming frame action bundle이 없거나 너무 큽니다.");
-  }
-  return output;
-}
-
-async function buildStreamingShortcutGuardSource(): Promise<string> {
-  const result = await build({
-    absWorkingDir: root,
-    entryPoints: ["src/desktop/cut-window-shortcut-guard.ts"],
-    bundle: true,
-    platform: "browser",
-    format: "iife",
-    globalName: "KirinukiStreamingShortcutGuard",
-    target: "chrome120",
-    write: false,
-    sourcemap: false,
-    minify: true,
-    legalComments: "none",
-    logLevel: "silent"
-  });
-  const output = result.outputFiles?.[0]?.text;
-  if (!output || output.length > 64 * 1024) {
-    throw new Error("Electron streaming shortcut guard bundle이 없거나 너무 큽니다.");
-  }
-  return output;
-}
-
 export async function buildDesktopApplication(): Promise<string> {
   const buildChannel = normalizeDesktopBuildChannel(
     process.env.KIRINUKI_INSTALLER_CHANNEL
   );
-  const [streamingFrameActionSource, streamingShortcutGuardSource] =
-    await Promise.all([
-      buildStreamingFrameActionSource(),
-      buildStreamingShortcutGuardSource()
-    ]);
   await rm(DESKTOP_STAGE_ROOT, { recursive: true, force: true });
   await mkdir(DESKTOP_STAGE_ROOT, { recursive: true, mode: 0o700 });
-  await Promise.all([
-    build({
-      absWorkingDir: root,
-      entryPoints: ["src/desktop/main.ts"],
-      outfile: path.join(DESKTOP_STAGE_ROOT, "main.mjs"),
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      target: "node24",
-      external: ["electron"],
-      define: {
-        __KIRINUKI_DESKTOP_BUILD_CHANNEL__: JSON.stringify(buildChannel),
-        __KIRINUKI_STREAMING_FRAME_ACTION_SOURCE__: JSON.stringify(
-          streamingFrameActionSource
-        ),
-        __KIRINUKI_STREAMING_SHORTCUT_GUARD_SOURCE__: JSON.stringify(
-          streamingShortcutGuardSource
-        )
-      },
-      sourcemap: false,
-      minify: false,
-      legalComments: "eof",
-      logLevel: "info"
-    }),
-    build({
-      absWorkingDir: root,
-      entryPoints: ["src/desktop/cut-window-preload.ts"],
-      outfile: path.join(DESKTOP_STAGE_ROOT, "preload.cjs"),
-      bundle: true,
-      platform: "node",
-      format: "cjs",
-      target: "node24",
-      external: ["electron"],
-      sourcemap: false,
-      minify: false,
-      legalComments: "eof",
-      logLevel: "info"
-    })
-  ]);
+  await build({
+    absWorkingDir: root,
+    entryPoints: ["src/desktop/main.ts"],
+    outfile: path.join(DESKTOP_STAGE_ROOT, "main.mjs"),
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node24",
+    external: ["electron"],
+    define: {
+      __KIRINUKI_DESKTOP_BUILD_CHANNEL__: JSON.stringify(buildChannel)
+    },
+    sourcemap: false,
+    minify: false,
+    legalComments: "eof",
+    logLevel: "info"
+  });
   const sourcePackage = JSON.parse((await readPackageSourceFile({
     repositoryRoot: root,
     repositoryPath: "package.json"

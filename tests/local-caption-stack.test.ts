@@ -388,13 +388,13 @@ test("로컬 Studio Origin은 설치 경로와 무관한 고정 browser origin�
     () => captionInstallMatchesRequestedStudioOrigin(first, {
       KIRINUKI_ALLOWED_ORIGIN: "https://kirinuki.eff0rtchung.kr"
     }),
-    /Kirinuki 앱 Origin/u
+    /Kirinuki localhost Origin/u
   );
   assert.throws(() => createInstallConfig(
     fixturePaths(),
     resolveSemanticProfile("draft", hardware(), "cpu"),
     { origin: "https://kirinuki.eff0rtchung.kr" as never }
-  ), /Kirinuki 앱 Origin/u);
+  ), /Kirinuki localhost Origin/u);
 });
 
 test("systemd-user unit은 자동 페어링·로컬 STT·exact Origin만 환경에 넣는다", {

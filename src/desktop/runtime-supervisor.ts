@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -12,13 +12,6 @@ import {
 import type {
   LocalMediaEnginePairingResponse
 } from "../lib/local-media-engine-auth.js";
-import {
-  createEditorHandoffBroker
-} from "../lib/editor-handoff.js";
-import type {
-  EditorHandoffBroker,
-  EditorHandoffSubmission
-} from "../lib/editor-handoff.js";
 import {
   DEFAULT_CAPTION_GATEWAY_PORT,
   createCaptionGatewayServer
@@ -72,16 +65,6 @@ export interface DesktopRuntimeSupervisor {
   readonly publishPairingResponse: (
     response: Readonly<LocalMediaEnginePairingResponse>
   ) => Promise<void>;
-  readonly publishEditorHandoff: (
-    submission: Readonly<EditorHandoffSubmission>
-  ) => Readonly<{ handoffNonce: string; handoffGeneration: number }>;
-  readonly editorHandoffStatus: (
-    handoffNonce: string
-  ) => "pending" | "claimed" | "acknowledged" | "absent";
-  readonly cancelEditorHandoff: (
-    handoffNonce: string,
-    handoffGeneration: number
-  ) => boolean;
   readonly stop: () => Promise<void>;
   readonly terminalFailure: Promise<Error | null>;
 }
@@ -574,13 +557,9 @@ export async function startDesktopRuntimeSupervisor(
     nodeBinary,
     tools
   });
-  const editorHandoffBroker: EditorHandoffBroker = createEditorHandoffBroker({
-    createNonce: () => randomBytes(32).toString("base64url")
-  });
   const createGateway = () => createCaptionGatewayServer({
     env: environment,
     deviceProofSigner: options.deviceIdentity,
-    editorHandoffBroker,
     chzzkMaterializer: (request) => materializeChzzkVod(
       { ...request, stateDir: options.paths.vodCacheRoot },
       {
@@ -739,22 +718,7 @@ export async function startDesktopRuntimeSupervisor(
       }
       await candidate.publishPairingResponse(response);
     },
-    publishEditorHandoff: (
-      submission: Readonly<EditorHandoffSubmission>
-    ) => (
-      editorHandoffBroker.publish(submission)
-    ),
-    editorHandoffStatus: (handoffNonce: string) => (
-      editorHandoffBroker.status(handoffNonce)
-    ),
-    cancelEditorHandoff: (
-      handoffNonce: string,
-      handoffGeneration: number
-    ) => editorHandoffBroker.cancel(handoffNonce, handoffGeneration),
-    stop: async () => {
-      editorHandoffBroker.clear();
-      await recovery.stop();
-    },
+    stop: recovery.stop,
     terminalFailure: recovery.terminalFailure
   });
 }

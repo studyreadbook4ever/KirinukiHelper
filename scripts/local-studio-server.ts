@@ -220,7 +220,7 @@ export async function verifiedStudioServerPid(
 
 async function currentPidRecord(): Promise<StudioServerPidRecord> {
   if (process.platform !== "linux") {
-    throw new Error("Kirinuki 앱 UI 엔진은 Linux에서만 지원합니다.");
+    throw new Error("localhost 개발 서버의 PID 관리는 Linux에서만 지원합니다.");
   }
   const [procStartTime, bootId] = await Promise.all([
     readProcStartTime(process.pid),
@@ -517,7 +517,7 @@ export async function startLocalStudioServer(
         !== options.studioOrigin
       ) {
         throw new Error(
-          "이전 버전의 앱 UI 엔진이 실행 중입니다. Kirinuki 앱을 다시 시작해 주세요."
+          "이전 버전의 로컬 엔진이 실행 중입니다. Kirinuki 도우미를 다시 시작해 주세요."
         );
       }
       const result = {

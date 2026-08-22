@@ -57,11 +57,11 @@ export function resolveKirinukiStudioOrigin(
 
 export function requireKirinukiAppOrigin(
   value: unknown,
-  label: string = "Kirinuki 앱 Origin"
+  label: string = "Kirinuki localhost Origin"
 ): KirinukiAppOrigin {
   if (value !== KIRINUKI_LOCAL_STUDIO_ORIGIN) {
     throw new TypeError(
-      `${label}은 설치된 Kirinuki 앱의 고정 Origin이어야 합니다.`
+      `${label}은 개발용 localhost 서버의 고정 Origin이어야 합니다.`
     );
   }
   return value;

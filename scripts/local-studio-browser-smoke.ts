@@ -32,9 +32,22 @@ import {
   stringifySessionArchive
 } from "../src/lib/session-archive.js";
 import {
+  LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
+  LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+  freshLocalMediaEngineChallenge,
   localMediaEnginePairingUrl,
-  parseLocalMediaEnginePairingRequest
+  localMediaEngineProofTranscript,
+  pairingResponseUnsignedPayload,
+  parseLocalMediaEnginePairingRequest,
+  parseLocalMediaEnginePairingResponse,
+  verifyLocalMediaEngineSignature
 } from "../src/lib/local-media-engine-auth.js";
+import {
+  LOCAL_MEDIA_ENGINE_TRUST_DATABASE,
+  LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
+  LOCAL_MEDIA_ENGINE_TRUST_STORE
+} from "../src/editor/local-media-engine-trust.js";
 import {
   createLocalMediaEngineV2Fixture,
   type LocalMediaEngineV2Fixture,
@@ -46,10 +59,10 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const studioOrigin = "http://127.0.0.1:4320";
 const gatewayPattern = "http://127.0.0.1:4319/*";
 const externalEmbedPatterns = Object.freeze([
-  "https://chzzk.naver.com/video/*",
+  "https://chzzk.naver.com/*",
   "https://www.youtube.com/*",
-  "https://www.youtube-nocookie.com/embed/*",
-  "https://vod.sooplive.com/player/*/embed*"
+  "https://www.youtube-nocookie.com/*",
+  "https://vod.sooplive.com/*"
 ]);
 const liveEmbedSmoke = process.env.KIRINUKI_LIVE_EMBED_SMOKE === "1";
 const mobileAccessSmokeOnly = (
@@ -295,7 +308,7 @@ function staleMaterializedTimingProject(canonicalUrl: string): EditorProject {
       endSeconds: 95,
       description: ""
     }]
-  }, { id: "stale-offset-browser-regression" });
+  });
   const [clip] = project.clips;
   if (!clip) {
     throw new Error("stale timing browser fixture의 clip이 없습니다.");
@@ -568,106 +581,60 @@ async function execute<T>(script: string, args: readonly unknown[] = []): Promis
   );
 }
 
-async function storeBrowserProjects(
-  projects: readonly EditorProject[]
-): Promise<void> {
-  assert(projects.length > 0, "저장할 브라우저 프로젝트 fixture가 없습니다.");
+async function storeBrowserProject(project: EditorProject): Promise<void> {
   await execute(`
     globalThis.__kirinukiSmokeProjectWrite = null;
-    let database = null;
-    const closeDatabase = () => {
-      if (!database) return;
-      try {
-        database.close();
-      } catch {
-        // 이미 닫힌 fixture 연결은 추가 정리가 필요하지 않다.
-      }
-      database = null;
-    };
-    const settle = (ready, phase, error = "") => {
-      if (globalThis.__kirinukiSmokeProjectWrite !== null) return;
-      globalThis.__kirinukiSmokeProjectWrite = {
-        ready,
-        phase,
-        error: ready ? "" : String(error || phase)
-      };
-      closeDatabase();
-    };
     const open = indexedDB.open("chzzk-kirinuki-studio");
     open.onerror = () => {
-      settle(false, "open-error", open.error || "open failed");
-    };
-    open.onblocked = () => {
-      settle(false, "open-blocked", "database open blocked");
+      globalThis.__kirinukiSmokeProjectWrite = {
+        ready: false,
+        error: String(open.error || "open failed")
+      };
     };
     open.onsuccess = () => {
-      database = open.result;
+      const database = open.result;
       let transaction;
       try {
         transaction = database.transaction("projects", "readwrite");
       } catch (error) {
-        settle(false, "transaction-create", error);
+        globalThis.__kirinukiSmokeProjectWrite = {
+          ready: false,
+          error: String(error)
+        };
+        database.close();
         return;
       }
       transaction.onerror = () => {
-        settle(
-          false,
-          "transaction-error",
-          transaction.error || "transaction failed"
-        );
+        globalThis.__kirinukiSmokeProjectWrite = {
+          ready: false,
+          error: String(transaction.error || "transaction failed")
+        };
       };
       transaction.onabort = () => {
-        settle(
-          false,
-          "transaction-abort",
-          transaction.error || "transaction aborted"
-        );
+        globalThis.__kirinukiSmokeProjectWrite = {
+          ready: false,
+          error: String(transaction.error || "transaction aborted")
+        };
       };
       transaction.oncomplete = () => {
-        settle(true, "complete");
+        database.close();
+        globalThis.__kirinukiSmokeProjectWrite = { ready: true, error: "" };
       };
-      try {
-        const store = transaction.objectStore("projects");
-        for (const project of arguments[0]) {
-          const request = store.put(project);
-          request.onerror = () => {
-            settle(
-              false,
-              "put-error",
-              request.error || "project put failed"
-            );
-          };
-        }
-      } catch (error) {
-        settle(false, "put-throw", error);
-        try {
-          transaction.abort();
-        } catch {
-          // 실패 결과는 위 settle에서 이미 기록했다.
-        }
-      }
+      transaction.objectStore("projects").put(arguments[0]);
     };
     return true;
-  `, [projects]);
+  `, [project]);
   const result = await waitFor(
-    () => execute<{
-      ready: boolean;
-      phase: string;
-      error: string;
-    } | null>(`
+    () => execute<{ ready: boolean; error: string } | null>(`
       return globalThis.__kirinukiSmokeProjectWrite || null;
     `),
-    (value) => value !== null,
-    `브라우저 프로젝트 fixture를 저장하지 못했습니다: ${projects.map(({ id }) => id).join(", ")}`
+    (value) => Boolean(value?.ready || value?.error),
+    `브라우저 프로젝트 fixture를 저장하지 못했습니다: ${project.id}`
   );
   assert(
     result?.ready && !result.error,
-    `브라우저 프로젝트 fixture 저장 실패 (${result?.phase || "unknown"}): ${result?.error || projects.map(({ id }) => id).join(", ")}`
+    `브라우저 프로젝트 fixture 저장 실패: ${result?.error || project.id}`
   );
-}
-
-async function storeBrowserProject(project: EditorProject): Promise<void> {
-  await storeBrowserProjects([project]);
 }
 
 async function readBrowserProject(projectId: string): Promise<EditorProject | null> {
@@ -856,6 +823,8 @@ async function evaluateTarget(
 interface LateMaterializationFixtureSnapshot {
   readonly interceptedUrls: readonly string[];
   readonly pairedSessionCount: number;
+  readonly pairedSessionScopes: readonly string[];
+  readonly uniqueSessionTransportCount: number;
   readonly aStarted: boolean;
   readonly aConsumerId: string;
   readonly aSourceUrl: string;
@@ -870,6 +839,9 @@ interface LateMaterializationFixtureSnapshot {
   readonly aCachePurgeRequests: number;
   readonly aMediaRequests: number;
   readonly bStartRequests: number;
+  readonly bReusedStartRequests: number;
+  readonly bRequestBodies: readonly string[];
+  readonly bConsumerId: string;
   readonly bQueuedBeforeReclaim: boolean;
   readonly bStatusPolls: number;
   readonly bStartedAfterReclaim: boolean;
@@ -880,7 +852,6 @@ interface LateMaterializationFixtureSnapshot {
 
 interface LateMaterializationFixtureInterception {
   readonly snapshot: () => LateMaterializationFixtureSnapshot;
-  readonly claimPairing: (pairingUrl: string) => void;
   readonly assertHealthy: () => void;
   readonly close: () => Promise<void>;
 }
@@ -926,6 +897,8 @@ async function installLateMaterializationV2Fixture({
   const state = {
     interceptedUrls: [] as string[],
     pairedSessionCount: 0,
+    pairedSessionScopes: [] as string[],
+    uniqueSessionTransportCount: 0,
     aStarted: false,
     aConsumerId: "",
     aSourceUrl: "",
@@ -940,6 +913,9 @@ async function installLateMaterializationV2Fixture({
     aCachePurgeRequests: 0,
     aMediaRequests: 0,
     bStartRequests: 0,
+    bReusedStartRequests: 0,
+    bRequestBodies: [] as string[],
+    bConsumerId: "",
     bQueuedBeforeReclaim: false,
     bStatusPolls: 0,
     bStartedAfterReclaim: false,
@@ -953,13 +929,9 @@ async function installLateMaterializationV2Fixture({
   let aObserverNonce = "";
   let bObserverNonce = "";
   let bRequest: Record<string, unknown> | null = null;
+  let bRequestIdentity = "";
   let aLeaseTimer: ReturnType<typeof setTimeout> | null = null;
   let aRunnerSettleTimer: ReturnType<typeof setTimeout> | null = null;
-  let claimedPairing: Readonly<{
-    challenge: string;
-    state: string;
-  }> | null = null;
-  let pairingResponseConsumed = false;
   let fixtureClosed = false;
   let fixtureError: Error | null = null;
 
@@ -979,7 +951,7 @@ async function installLateMaterializationV2Fixture({
     message: "B waits for the abandoned A runner slot",
     reused: false
   });
-  const completedBStatus = () => {
+  const completedBStatus = (reused = false) => {
     const clips = Array.isArray(bRequest?.clips) ? bRequest.clips : [];
     if (clips.length !== 1 || !isRecord(clips[0])) {
       throw new Error("lease B fixture는 정확히 한 개의 materialization clip을 기대합니다.");
@@ -1027,7 +999,7 @@ async function installLateMaterializationV2Fixture({
       state: "completed",
       progress: 1,
       message: "B completed after A observer lease reclamation",
-      reused: false,
+      reused,
       materialization: {
         schema: "chzzk-kirinuki-chzzk-vod-materialization/v2",
         materializationId: planFingerprint.slice(0, 32),
@@ -1099,18 +1071,6 @@ async function installLateMaterializationV2Fixture({
   const fixtureErrors: string[] = [];
   const fixture = await createLocalMediaEngineV2Fixture({
     allowedOrigin: studioOrigin,
-    consumePairingResponse: ({ challenge, state: pairingState }) => {
-      if (
-        pairingResponseConsumed
-        || !claimedPairing
-        || claimedPairing.state !== pairingState
-        || claimedPairing.challenge !== challenge
-      ) {
-        return false;
-      }
-      pairingResponseConsumed = true;
-      return true;
-    },
     errors: fixtureErrors,
     originBinding: "exact-local-studio",
     records: fixtureRecords,
@@ -1142,9 +1102,21 @@ async function installLateMaterializationV2Fixture({
           return { status: 202, payload: queuedAStatus() };
         }
         if (sourceUrl === sourceBUrl) {
+          const requestIdentity = JSON.stringify(request.body);
           state.bStartRequests += 1;
+          state.bRequestBodies.push(requestIdentity);
+          state.bConsumerId = String(request.body.consumerId || "");
           bObserverNonce = request.clientNonce;
-          bRequest = request.body;
+          if (!bRequest) {
+            bRequest = request.body;
+            bRequestIdentity = requestIdentity;
+          } else if (requestIdentity === bRequestIdentity) {
+            state.bReusedStartRequests += 1;
+          } else {
+            state.unexpectedRequests.push(
+              "B 편집기 재확인 요청이 시작 화면의 exact range 요청과 다릅니다."
+            );
+          }
           if (!state.aSlotReleased) {
             state.bQueuedBeforeReclaim = true;
           } else {
@@ -1156,7 +1128,9 @@ async function installLateMaterializationV2Fixture({
           }
           return {
             status: 202,
-            payload: state.bCompleted ? completedBStatus() : queuedBStatus()
+            payload: state.bCompleted
+              ? completedBStatus(state.bStartRequests > 1)
+              : queuedBStatus()
           };
         }
       }
@@ -1325,6 +1299,12 @@ async function installLateMaterializationV2Fixture({
 
   const snapshot = (): LateMaterializationFixtureSnapshot => {
     state.pairedSessionCount = fixture.sessions.length;
+    state.pairedSessionScopes = fixture.sessions.map(({ projectId, sourceUrl }) => (
+      `${projectId}\u0000${String(sourceUrl || "")}`
+    ));
+    state.uniqueSessionTransportCount = new Set(
+      fixture.sessions.map(({ transportId }) => transportId)
+    ).size;
     state.interceptedUrls = fixtureRecords.map((record) => (
       `${record.method} http://127.0.0.1:4319${record.path}`
     ));
@@ -1339,19 +1319,6 @@ async function installLateMaterializationV2Fixture({
   };
   return {
     snapshot,
-    claimPairing: (pairingUrl: string) => {
-      if (claimedPairing) {
-        throw new Error("v2 fixture pairing은 한 번만 claim할 수 있습니다.");
-      }
-      const request = parseLocalMediaEnginePairingRequest(pairingUrl);
-      if (localMediaEnginePairingUrl(request) !== pairingUrl) {
-        throw new Error("v2 fixture pairing URL이 canonical form이 아닙니다.");
-      }
-      claimedPairing = Object.freeze({
-        challenge: request.challenge,
-        state: request.state
-      });
-    },
     assertHealthy: () => {
       if (fixtureErrors.length > 0) {
         throw new Error(fixtureErrors.join("\n"));
@@ -1380,20 +1347,22 @@ async function installLateMaterializationV2Fixture({
   };
 }
 
+async function dispatchStudioShortcut(key: string): Promise<boolean> {
+  return execute<boolean>(`
+    const event = new KeyboardEvent("keydown", {
+      key: arguments[0].toLowerCase(),
+      code: "Key" + arguments[0],
+      bubbles: true,
+      cancelable: true
+    });
+    document.dispatchEvent(event);
+    return event.defaultPrevented;
+  `, [key]);
+}
+
 async function captureLocalMediaEngineProtocolAttempt(
   debuggerAddress: string
 ): Promise<string> {
-  await execute(`
-    const dialog = document.querySelector("#local-media-engine-dialog");
-    if (!(dialog instanceof HTMLDialogElement) || !dialog.open) {
-      const prepare = document.querySelector("#prepare-chzzk-vod");
-      if (!(prepare instanceof HTMLButtonElement) || prepare.disabled) {
-        throw new Error("편집 영상 준비 버튼을 누를 수 없습니다.");
-      }
-      prepare.click();
-    }
-    return true;
-  `);
   const pageTarget = await waitFor(
     async () => (await browserTargets(debuggerAddress)).find((target) => (
       target.type === "page"
@@ -1410,24 +1379,16 @@ async function captureLocalMediaEngineProtocolAttempt(
   );
   await connection.send("Page.enable");
   let resolveAttempt: (url: string) => void = () => undefined;
-  let rejectAttempt: (error: Error) => void = () => undefined;
-  const attempted = new Promise<string>((resolve, reject) => {
+  const attempted = new Promise<string>((resolve) => {
     resolveAttempt = resolve;
-    rejectAttempt = reject;
   });
-  let navigationHandled = false;
   const unsubscribe = connection.on("Page.frameRequestedNavigation", (params) => {
     const url = String(params.url || "");
-    if (!url.startsWith("kirinuki-engine://pair?") || navigationHandled) {
+    if (!url.startsWith("kirinuki-engine://pair?")) {
       return;
     }
-    navigationHandled = true;
-    void connection.send("Page.stopLoading").then(
-      () => resolveAttempt(url),
-      (error: unknown) => rejectAttempt(
-        error instanceof Error ? error : new Error(String(error))
-      )
-    );
+    resolveAttempt(url);
+    void connection.send("Page.stopLoading").catch(() => undefined);
   });
   try {
     const prompt = await waitFor(
@@ -1476,6 +1437,134 @@ async function captureLocalMediaEngineProtocolAttempt(
     unsubscribe();
     connection.close();
   }
+}
+
+async function enrollLocalMediaEngineFixture(
+  fixture: Readonly<LocalMediaEngineV2Fixture>
+): Promise<void> {
+  const state = freshLocalMediaEngineChallenge();
+  const challenge = freshLocalMediaEngineChallenge();
+  await execute(`
+    globalThis.__kirinukiSmokePairing = null;
+    fetch("http://127.0.0.1:4319/v1/pairing", {
+      method: "GET",
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      targetAddressSpace: "loopback",
+      headers: {
+        "X-Kirinuki-Protocol": arguments[0],
+        [arguments[1]]: arguments[2],
+        [arguments[3]]: arguments[4]
+      }
+    }).then(async (response) => {
+      globalThis.__kirinukiSmokePairing = {
+        ok: response.ok,
+        status: response.status,
+        value: await response.json(),
+        error: ""
+      };
+    }, (error) => {
+      globalThis.__kirinukiSmokePairing = {
+        ok: false,
+        status: 0,
+        value: null,
+        error: String(error)
+      };
+    });
+    return true;
+  `, [
+    LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
+    LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
+    state,
+    LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
+    challenge
+  ]);
+  const pairingResult = await waitFor(
+    () => execute<{
+      ok: boolean;
+      status: number;
+      value: unknown;
+      error: string;
+    } | null>("return globalThis.__kirinukiSmokePairing || null;"),
+    (value) => value !== null,
+    "브라우저가 v2 signed pairing fixture 응답을 받지 못했습니다."
+  );
+  const pairing = parseLocalMediaEnginePairingResponse(pairingResult?.value);
+  assert(
+    pairingResult?.ok
+      && pairingResult.status === 200
+      && !pairingResult.error
+      && pairing
+      && pairing.state === state
+      && pairing.challenge === challenge
+      && pairing.keyId === fixture.keyId
+      && pairing.publicKeySpki === fixture.publicKeySpki
+      && await verifyLocalMediaEngineSignature({
+        publicKeySpki: pairing.publicKeySpki,
+        signature: pairing.signature,
+        transcript: localMediaEngineProofTranscript({
+          kind: "pairing",
+          challenge,
+          instanceNonce: "",
+          requestBinding: state,
+          payload: pairingResponseUnsignedPayload(pairing)
+        })
+      }),
+    `v2 fixture pairing identity 서명이 올바르지 않습니다: ${JSON.stringify(pairingResult)}`
+  );
+  await execute(`
+    globalThis.__kirinukiSmokePinWrite = null;
+    const open = indexedDB.open(arguments[0], 1);
+    open.onupgradeneeded = () => {
+      if (!open.result.objectStoreNames.contains(arguments[1])) {
+        open.result.createObjectStore(arguments[1]);
+      }
+    };
+    open.onerror = () => {
+      globalThis.__kirinukiSmokePinWrite = {
+        ready: false,
+        error: String(open.error || "open failed")
+      };
+    };
+    open.onsuccess = () => {
+      const database = open.result;
+      const transaction = database.transaction(arguments[1], "readwrite");
+      transaction.objectStore(arguments[1]).put(arguments[2], "active");
+      transaction.oncomplete = () => {
+        database.close();
+        globalThis.__kirinukiSmokePinWrite = { ready: true, error: "" };
+      };
+      transaction.onerror = () => {
+        globalThis.__kirinukiSmokePinWrite = {
+          ready: false,
+          error: String(transaction.error || "pin write failed")
+        };
+      };
+    };
+    return true;
+  `, [
+    LOCAL_MEDIA_ENGINE_TRUST_DATABASE,
+    LOCAL_MEDIA_ENGINE_TRUST_STORE,
+    {
+      schema: LOCAL_MEDIA_ENGINE_TRUST_SCHEMA,
+      algorithm: pairing.algorithm,
+      keyId: pairing.keyId,
+      publicKeySpki: pairing.publicKeySpki,
+      enrolledAt: new Date().toISOString(),
+      maxSeenVersion: pairing.engineVersion
+    }
+  ]);
+  const stored = await waitFor(
+    () => execute<{ ready: boolean; error: string } | null>(
+      "return globalThis.__kirinukiSmokePinWrite || null;"
+    ),
+    (value) => Boolean(value?.ready || value?.error),
+    "검증된 v2 fixture pairing identity를 임시 브라우저 profile에 고정하지 못했습니다."
+  );
+  assert(stored?.ready && !stored.error, `v2 fixture pin 저장 실패: ${stored?.error || "unknown"}`);
+  process.stderr.write("[browser-smoke] signed pairing identity 임시 profile 고정 완료\n");
 }
 
 async function setSourceAndVerify({
@@ -2076,27 +2165,11 @@ async function main(): Promise<void> {
     ]
   });
   await cdp("Network.setCacheDisabled", { cacheDisabled: false });
-  await webdriver("POST", `/session/${sessionId}/url`, {
-    url: `${studioOrigin}/editor.html?project=desktop-direct-smoke`
-  });
-  const desktopDirectReturn = await waitFor(
-    () => execute<{
-      editorAbsent: boolean;
-      href: string;
-      startLabel: string;
-    }>(`
-      return {
-        editorAbsent: document.querySelector("#editor-shell") === null,
-        href: location.href,
-        startLabel: document.querySelector("#start-editor")?.textContent?.trim() || ""
-      };
-    `),
-    (value) => (
-      value.href === `${studioOrigin}/`
-      && value.editorAbsent
-      && value.startLabel === "편집기 열기"
-    ),
-    "확인 없는 데스크톱 editor 직접 URL이 같은 탭의 시작 화면으로 돌아오지 않았습니다."
+  await webdriver("POST", `/session/${sessionId}/url`, { url: `${studioOrigin}/` });
+  await waitFor(
+    () => execute<string>("return document.readyState"),
+    (value) => value === "interactive" || value === "complete",
+    "localhost 시작 화면이 준비되지 않았습니다."
   );
   if (mobileAccessSmokeOnly) {
     process.stdout.write(`${JSON.stringify({
@@ -2107,7 +2180,6 @@ async function main(): Promise<void> {
         direct: mobileDirectGate,
         detection: "ua-not-viewport",
         desktopUaRestored: true,
-        desktopDirectReturn,
         desktopHeaderLayout,
         narrowDesktopLayout
       }
@@ -2121,33 +2193,6 @@ async function main(): Promise<void> {
   assert(
     studioReferrerPolicy === "strict-origin-when-cross-origin",
     `YouTube client identity를 보존할 localhost referrer policy가 다릅니다: ${studioReferrerPolicy}`
-  );
-  await webdriver("POST", `/session/${sessionId}/url`, {
-    url: `${studioOrigin}/?kirinukiSurface=cut-host`
-  });
-  const cutHostSurface = await waitFor(
-    () => execute<{
-      formVisible: boolean;
-      launcherHidden: boolean;
-      recentHidden: boolean;
-    }>(`
-      const form = document.querySelector("#start-form");
-      const launcher = document.querySelector("#cut-host-launch-panel");
-      const recent = document.querySelector("#recent-section");
-      return {
-        formVisible: form instanceof HTMLFormElement && !form.hidden && !form.inert,
-        launcherHidden: launcher instanceof HTMLElement && launcher.hidden && launcher.inert,
-        recentHidden: recent instanceof HTMLElement && recent.hidden && recent.inert
-      };
-    `),
-    (value) => value.formVisible && value.launcherHidden && value.recentHidden,
-    "컷 전용 표면이 일반 브라우저 시작 화면과 분리되지 않았습니다."
-  );
-  assert(
-    cutHostSurface.formVisible
-      && cutHostSurface.launcherHidden
-      && cutHostSurface.recentHidden,
-    `컷 전용 표면 역할 분리가 올바르지 않습니다: ${JSON.stringify(cutHostSurface)}`
   );
   const chzzkUrl = "https://chzzk.naver.com/video/14514980";
   const transitionChzzkUrl = "https://chzzk.naver.com/video/14514981";
@@ -2198,8 +2243,8 @@ async function main(): Promise<void> {
     requireLiveTarget: liveEmbedSmoke
   });
   const extensionlessCaptureState = await execute<{
-    bridgeConsolePresent: boolean;
-    playerControlsDisabled: boolean;
+    semanticCaptureConsolePresent: boolean;
+    localCaptureDisabledUntilPrepared: boolean;
     manualInputsEnabled: boolean;
     iframeVisible: boolean;
   }>(`
@@ -2207,11 +2252,28 @@ async function main(): Promise<void> {
     const row = document.querySelector(".clip-row");
     const start = row?.querySelector('[data-field="start"]');
     const end = row?.querySelector('[data-field="end"]');
-    const playerControlIds = ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"];
+    const semanticControlIds = [
+      "stream-cut-console",
+      "refresh-source",
+      "capture-start",
+      "capture-end",
+      "seek-backward-five",
+      "seek-forward-five",
+      "playback-rate-quarter",
+      "playback-rate-double"
+    ];
     return {
-      bridgeConsolePresent: document.querySelector("#stream-cut-console") instanceof HTMLElement
-        && playerControlIds.every((id) => document.querySelector("#" + id) instanceof HTMLButtonElement),
-      playerControlsDisabled: playerControlIds.every((id) => document.querySelector("#" + id)?.disabled === true),
+      semanticCaptureConsolePresent: semanticControlIds.every(
+        (id) => document.querySelector("#" + id) instanceof HTMLElement
+      ),
+      localCaptureDisabledUntilPrepared: [
+        "capture-start",
+        "capture-end",
+        "seek-backward-five",
+        "seek-forward-five",
+        "playback-rate-quarter",
+        "playback-rate-double"
+      ].every((id) => document.querySelector("#" + id)?.disabled === true),
       manualInputsEnabled: start instanceof HTMLInputElement
         && end instanceof HTMLInputElement
         && !start.disabled
@@ -2220,13 +2282,13 @@ async function main(): Promise<void> {
     };
   `);
   assert(
-    extensionlessCaptureState.bridgeConsolePresent
-      && extensionlessCaptureState.playerControlsDisabled
+    extensionlessCaptureState.semanticCaptureConsolePresent
+      && extensionlessCaptureState.localCaptureDisabledUntilPrepared
       && extensionlessCaptureState.manualInputsEnabled
       && extensionlessCaptureState.iframeVisible,
-    `확장 프로그램이 없을 때 컷 브리지를 fail-closed하고 수동 입력을 유지하지 못했습니다: ${JSON.stringify(extensionlessCaptureState)}`
+    `공식 임베드·수동 입력과 준비 뒤 활성화되는 웹 컷 console을 함께 제공하지 못했습니다: ${JSON.stringify(extensionlessCaptureState)}`
   );
-  process.stderr.write("[browser-smoke] SOOP 임베드·Electron preload 없는 fail-closed 수동 입력 검증 완료\n");
+  process.stderr.write("[browser-smoke] SOOP 임베드·수동 입력·웹 컷 console 검증 완료\n");
 
   await execute(`
     const input = document.querySelector("#source-url");
@@ -2282,20 +2344,14 @@ async function main(): Promise<void> {
     target?: string;
     name?: string;
     features?: string;
-  } | null>(
+  }>(
     "return globalThis.__kirinukiSmokeOpen"
   );
-  const sourceOpenFailure = await waitFor(
-    () => execute<string>(`
-      return document.querySelector("#form-status")?.textContent || "";
-    `),
-    (value) => value.includes("기본 브라우저로 원본 페이지를 열 수 없습니다"),
-    "preload 없는 cut-host URL이 원본 페이지 열기를 fail-closed하지 않았습니다."
-  );
+  assert(openedSource.target === chzzkUrl, "원본 새 탭 대체 경로가 canonical CHZZK URL과 다릅니다.");
+  assert(openedSource.name === "_blank", "원본 새 탭이 새 browsing context를 사용하지 않습니다.");
   assert(
-    openedSource === null
-      && sourceOpenFailure.includes("기본 브라우저로 원본 페이지를 열 수 없습니다"),
-    "일반 Chromium이 Electron preload 없이 원본 페이지 열기 권한을 얻었습니다."
+    openedSource.features === "noopener,noreferrer",
+    "원본 새 탭이 opener/referrer 격리 없이 열립니다."
   );
 
   await waitFor(
@@ -2309,45 +2365,73 @@ async function main(): Promise<void> {
     (value) => value.frameUrl === chzzkUrl && !value.refreshDisabled,
     "CHZZK 원본 창이 준비되지 않았습니다."
   );
-  const cutHostRecentManagerHidden = await execute<boolean>(`
-    const manager = document.querySelector("#recent-section");
-    return manager instanceof HTMLElement && manager.hidden && manager.inert;
-  `);
-  assert(
-    cutHostRecentManagerHidden,
-    "컷 전용 표면에 일반 브라우저의 저장 편집 관리자가 노출됐습니다."
+  await waitFor(
+    () => execute<string | null>(`
+      return document.querySelector("#recent-section")?.getAttribute("aria-busy") ?? null;
+    `),
+    (ariaBusy) => ariaBusy === "false",
+    "초기 브라우저 저장 편집 정리가 끝나지 않았습니다.",
+    30_000
   );
+  await execute(`
+    const manager = document.querySelector("#recent-section");
+    const summary = document.querySelector("#local-projects-summary");
+    const empty = document.querySelector("#local-projects-empty");
+    if (!manager || !summary || !empty) {
+      throw new Error("local project manager 없음");
+    }
+    manager.setAttribute("aria-busy", "true");
+    summary.textContent = "Q_REFRESH_SENTINEL";
+    empty.hidden = true;
+  `);
+  const recentRefreshHandled = await dispatchStudioShortcut("Q");
+  assert(recentRefreshHandled, "Q 단축키가 document capture console에서 처리되지 않았습니다.");
+  await waitFor(
+    () => execute<{
+      ariaBusy: string | null;
+      emptyHidden: boolean;
+      summary: string;
+    }>(`
+      const manager = document.querySelector("#recent-section");
+      const empty = document.querySelector("#local-projects-empty");
+      return {
+        ariaBusy: manager?.getAttribute("aria-busy") ?? null,
+        emptyHidden: Boolean(empty?.hidden),
+        summary: document.querySelector("#local-projects-summary")?.textContent || ""
+      };
+    `),
+    (value) => (
+      value.ariaBusy === "false"
+      && value.emptyHidden === false
+      && value.summary === "저장된 편집 없음 · 아래 입력은 항상 새 프로젝트로 시작합니다."
+    ),
+    "Q 단축키가 이 기기의 최근 편집을 다시 읽지 않았습니다.",
+    30_000
+  );
+  process.stderr.write("[browser-smoke] 최근 편집 다시 읽기 검증 완료\n");
   const footerReload = await execute<{
     frameReplaced: boolean;
     frameUrl: string;
-    reloadDisabled: boolean;
-    reloadConnected: boolean;
   }>(`
     const previousFrame = document.querySelector("#stream-preview-frame");
-    const reload = document.querySelector("#reload-stream");
-    reload?.click();
+    document.querySelector("#reload-stream")?.click();
     const currentFrame = document.querySelector("#stream-preview-frame");
     return {
       frameReplaced: currentFrame !== previousFrame,
-      frameUrl: currentFrame?.getAttribute("src") || "",
-      reloadDisabled: !(reload instanceof HTMLButtonElement) || reload.disabled,
-      reloadConnected: Boolean(reload?.isConnected)
+      frameUrl: currentFrame?.getAttribute("src") || ""
     };
   `);
   assert(
-    footerReload.frameReplaced
-      && footerReload.frameUrl === chzzkUrl
-      && footerReload.reloadConnected
-      && !footerReload.reloadDisabled,
+    footerReload.frameReplaced && footerReload.frameUrl === chzzkUrl,
     `footer 플레이어 다시 불러오기가 iframe을 교체하지 못했습니다: ${JSON.stringify(footerReload)}`
   );
-  const bridgeControlsRemainPresent = await execute<boolean>(`
+  const semanticControlsRemainPresent = await execute<boolean>(`
     return ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
       .every((id) => document.querySelector("#" + id) instanceof HTMLButtonElement);
   `);
   assert(
-    bridgeControlsRemainPresent,
-    "원본 다시 불러오기 뒤 컷 전용 플레이어 제어가 사라졌습니다."
+    semanticControlsRemainPresent,
+    "원본 다시 불러오기 뒤 웹 컷 플레이어 제어가 사라졌습니다."
   );
 
   const capturePerformanceLogs = await webdriver<BrowserLogEntry[]>(
@@ -2420,7 +2504,7 @@ async function main(): Promise<void> {
   const clipFinalState = await execute<{
     finalCount: number;
     finalDisabled: boolean;
-    bridgeConsolePresent: boolean;
+    captureConsolePresent: boolean;
     visibleShortcutHintsComplete: boolean;
     coverage: string;
   }>(`
@@ -2438,14 +2522,14 @@ async function main(): Promise<void> {
           return false;
         }
         const visibleKey = button.querySelector("kbd")?.textContent;
-        return key === "Q" || key === "A"
+        return ["Q", "A"].includes(key)
           ? visibleKey === undefined
           : visibleKey === key;
       });
     return {
       finalCount: rows().length,
       finalDisabled: Boolean(first?.querySelector('[data-action="remove"]')?.disabled),
-      bridgeConsolePresent: document.querySelector("#stream-cut-console") instanceof HTMLElement,
+      captureConsolePresent: document.querySelector("#stream-cut-console") instanceof HTMLElement,
       visibleShortcutHintsComplete,
       coverage: first?.querySelector(".coverage")?.textContent || ""
     };
@@ -2462,7 +2546,7 @@ async function main(): Promise<void> {
       && clipState.manualFieldsEnabled
       && clipState.enabledAfterAdd
       && clipState.finalDisabled
-      && clipState.bridgeConsolePresent
+      && clipState.captureConsolePresent
       && clipState.visibleShortcutHintsComplete,
     `구간 추가·삭제 상태가 올바르지 않습니다: ${JSON.stringify(clipState)}`
   );
@@ -2555,7 +2639,7 @@ async function main(): Promise<void> {
     alignedTops: boolean;
     railScrollable: boolean;
     railScrolled: boolean;
-    bridgeConsolePresent: boolean;
+    captureConsolePresent: boolean;
     timeInputCount: number;
     timesInside: boolean;
     timesUnclipped: boolean;
@@ -2603,7 +2687,7 @@ async function main(): Promise<void> {
       alignedTops: Math.abs(railRect.top - streamRect.top) <= 1,
       railScrollable: list.scrollHeight > list.clientHeight,
       railScrolled: list.scrollTop > 0,
-      bridgeConsolePresent: bridgeConsole instanceof HTMLElement,
+      captureConsolePresent: bridgeConsole instanceof HTMLElement,
       timeInputCount: timeInputs.length,
       timesInside: timeInputs.every((input) => {
         const rect = input.getBoundingClientRect();
@@ -2623,7 +2707,7 @@ async function main(): Promise<void> {
       && layout.alignedTops
       && layout.railScrollable
       && layout.railScrolled
-      && layout.bridgeConsolePresent
+      && layout.captureConsolePresent
       && layout.timeInputCount === 24
       && layout.timesInside
       && layout.timesUnclipped
@@ -2692,10 +2776,7 @@ async function main(): Promise<void> {
     (value) => value.status.includes("필수 책임 확인 항목을 모두 선택"),
     "빠진 책임 확인 항목이 거절되지 않았습니다."
   );
-  assert(
-    rejected.href === `${studioOrigin}/?kirinukiSurface=cut-host`,
-    "빠진 책임 확인 항목으로 편집기에 이동했습니다."
-  );
+  assert(rejected.href === `${studioOrigin}/`, "빠진 책임 확인 항목으로 편집기에 이동했습니다.");
   assert(rejected.disabled === false, "책임 확인 거절 뒤 시작 버튼이 복구되지 않았습니다.");
 
   // Automation stands in for the one local-network confirmation a real user
@@ -2739,123 +2820,60 @@ async function main(): Promise<void> {
         pattern === "https://www.youtube.com/*"
       ))
   });
-  await webdriver("POST", `/session/${sessionId}/url`, { url: `${studioOrigin}/` });
-  await waitFor(
-    () => execute<{
-      documentReady: boolean;
-      formHidden: boolean;
-      launcherVisible: boolean;
-      recentVisible: boolean;
-      managerReady: boolean;
-      loadingHidden: boolean;
-      errorHidden: boolean;
-      refreshEnabled: boolean;
-    }>(`
-      const form = document.querySelector("#start-form");
-      const launcher = document.querySelector("#cut-host-launch-panel");
-      const recent = document.querySelector("#recent-section");
-      const loading = document.querySelector("#local-projects-loading");
-      const error = document.querySelector("#local-projects-error");
-      const refresh = document.querySelector("#refresh-local-projects");
-      return {
-        documentReady: document.readyState === "complete",
-        formHidden: form instanceof HTMLFormElement && form.hidden && form.inert,
-        launcherVisible: launcher instanceof HTMLElement && !launcher.hidden && !launcher.inert,
-        recentVisible: recent instanceof HTMLElement && !recent.hidden && !recent.inert,
-        managerReady: recent?.getAttribute("aria-busy") === "false",
-        loadingHidden: loading instanceof HTMLElement && loading.hidden,
-        errorHidden: error instanceof HTMLElement && error.hidden,
-        refreshEnabled: refresh instanceof HTMLButtonElement && !refresh.disabled
-      };
-    `),
-    (value) => (
-      value.documentReady
-      && value.formHidden
-      && value.launcherVisible
-      && value.recentVisible
-      && value.managerReady
-      && value.loadingHidden
-      && value.errorHidden
-      && value.refreshEnabled
-    ),
-    "일반 브라우저 시작 화면과 브라우저 저장소가 준비되지 않았습니다."
-  );
+  const staleBrowserProject = staleMaterializedTimingProject(chzzkUrl);
   await execute(`
-    const refresh = document.querySelector("#refresh-local-projects");
-    if (!(refresh instanceof HTMLButtonElement) || refresh.disabled) {
-      throw new Error("브라우저 저장 편집 새로 읽기 버튼이 준비되지 않았습니다.");
+    const first = document.querySelector(".clip-row");
+    if (!(first instanceof HTMLElement)) {
+      throw new Error("timing regression 구간 행이 없습니다.");
     }
-    refresh.click();
+    first.dataset.selectionId = "stale-offset-browser-regression";
     return true;
   `);
-  await waitFor(
-    () => execute<{
-      managerReady: boolean;
-      errorHidden: boolean;
-      refreshEnabled: boolean;
-      status: string;
-    }>(`
-      const recent = document.querySelector("#recent-section");
-      const error = document.querySelector("#local-projects-error");
-      const refresh = document.querySelector("#refresh-local-projects");
+  await execute(`
+    const staleProject = arguments[0];
+    globalThis.__kirinukiStaleProjectReady = false;
+    globalThis.__kirinukiStaleProjectError = "";
+    const open = indexedDB.open("chzzk-kirinuki-studio");
+    open.onerror = () => {
+      globalThis.__kirinukiStaleProjectError = String(open.error || "open failed");
+    };
+    open.onsuccess = () => {
+      const database = open.result;
+      let transaction;
+      try {
+        transaction = database.transaction("projects", "readwrite");
+      } catch (error) {
+        globalThis.__kirinukiStaleProjectError = String(error);
+        database.close();
+        return;
+      }
+      transaction.onerror = () => {
+        globalThis.__kirinukiStaleProjectError = String(
+          transaction.error || "transaction failed"
+        );
+      };
+      transaction.oncomplete = () => {
+        database.close();
+        globalThis.__kirinukiStaleProjectReady = true;
+      };
+      transaction.objectStore("projects").put(staleProject);
+    };
+    return true;
+  `, [staleBrowserProject]);
+  const staleProjectSeed = await waitFor(
+    () => execute<{ ready: boolean; error: string }>(`
       return {
-        managerReady: recent?.getAttribute("aria-busy") === "false",
-        errorHidden: error instanceof HTMLElement && error.hidden,
-        refreshEnabled: refresh instanceof HTMLButtonElement && !refresh.disabled,
-        status: document.querySelector("#form-status")?.textContent || ""
+        ready: globalThis.__kirinukiStaleProjectReady === true,
+        error: String(globalThis.__kirinukiStaleProjectError || "")
       };
     `),
-    (value) => (
-      value.managerReady
-      && value.errorHidden
-      && value.refreshEnabled
-      && (
-        value.status.includes("저장된 편집이 없습니다")
-        || value.status.includes("개를 다시 읽었습니다")
-      )
-    ),
-    "fixture 기록 전 브라우저 저장소의 명시적 새로 읽기를 완료하지 못했습니다."
+    (value) => value.ready || Boolean(value.error),
+    "잔존 +10초 정렬값 browser fixture를 IndexedDB에 저장하지 못했습니다."
   );
-  const browserAProject = createEditorProjectFromCapture({
-    projectName: "localhost-browser-smoke",
-    source: {
-      platform: "CHZZK",
-      contentType: "vod",
-      contentId: "14514980",
-      canonicalUrl: chzzkUrl,
-      url: chzzkUrl,
-      broadcastTitle: "localhost-browser-smoke"
-    },
-    segments: [{
-      id: "browser-a-selection",
-      startSeconds: 80.5,
-      endSeconds: 95,
-      description: ""
-    }]
-  }, { id: "project-browser-a-localhost-smoke" });
-  const browserBProject = createEditorProjectFromCapture({
-    projectName: "localhost-browser-smoke",
-    source: {
-      platform: "CHZZK",
-      contentType: "vod",
-      contentId: "14514981",
-      canonicalUrl: transitionChzzkUrl,
-      url: transitionChzzkUrl,
-      broadcastTitle: "localhost-browser-smoke"
-    },
-    segments: [{
-      id: "browser-b-selection",
-      startSeconds: 80.5,
-      endSeconds: 95,
-      description: ""
-    }]
-  }, { id: "project-browser-b-localhost-smoke" });
-  const staleBrowserProject = staleMaterializedTimingProject(chzzkUrl);
-  await storeBrowserProjects([
-    staleBrowserProject,
-    browserAProject,
-    browserBProject
-  ]);
+  assert(
+    staleProjectSeed.ready && !staleProjectSeed.error,
+    `잔존 +10초 정렬값 browser fixture 저장 실패: ${staleProjectSeed.error}`
+  );
   await execute(`
     localStorage.setItem(
       "kirinuki:local-web:latest-project",
@@ -2867,66 +2885,28 @@ async function main(): Promise<void> {
     }
     refresh.click();
     return true;
-  `, [browserAProject.id]);
+  `, [staleBrowserProject.id]);
   await waitFor(
     () => execute<{
-      aListed: boolean;
-      bListed: boolean;
-      staleListed: boolean;
-      formHidden: boolean;
-      managerReady: boolean;
+      status: string;
+      listedProjectId: string;
+      startLabel: string;
+      sameSource: string;
     }>(`
+      const row = document.querySelector(".local-project-row");
       return {
-        aListed: document.querySelector(
-          '.local-project-row[data-project-id="' + arguments[0] + '"]'
-        ) instanceof HTMLElement,
-        bListed: document.querySelector(
-          '.local-project-row[data-project-id="' + arguments[1] + '"]'
-        ) instanceof HTMLElement,
-        staleListed: document.querySelector(
-          '.local-project-row[data-project-id="' + arguments[2] + '"]'
-        ) instanceof HTMLElement,
-        formHidden: Boolean(document.querySelector("#start-form")?.hidden),
-        managerReady: document.querySelector("#recent-section")?.getAttribute("aria-busy") === "false"
-      };
-    `, [browserAProject.id, browserBProject.id, staleBrowserProject.id]),
-    (value) => (
-      value.aListed
-      && value.bListed
-      && value.staleListed
-      && value.formHidden
-      && value.managerReady
-    ),
-    "일반 브라우저의 저장 편집 목록에서 A와 회귀 검증용 저장본을 분리하지 못했습니다."
-  );
-  await execute(`
-    const row = document.querySelector(
-      '.local-project-row[data-project-id="' + arguments[0] + '"]'
-    );
-    const continueEditing = row?.querySelector('[data-project-action="continue"]');
-    if (!(continueEditing instanceof HTMLButtonElement) || continueEditing.disabled) {
-      throw new Error("A 저장 편집의 계속 편집 버튼을 누를 수 없습니다.");
-    }
-    continueEditing.click();
-    return true;
-  `, [browserAProject.id]);
-  await waitFor(
-    () => execute<{
-      formVisible: boolean;
-      sourceHidden: boolean;
-      startDisabled: boolean;
-    }>(`
-      const form = document.querySelector("#start-form");
-      const source = document.querySelector("#source-section");
-      const start = document.querySelector("#start-editor");
-      return {
-        formVisible: form instanceof HTMLFormElement && !form.hidden && !form.inert,
-        sourceHidden: source instanceof HTMLElement && source.hidden && source.inert,
-        startDisabled: !(start instanceof HTMLButtonElement) || start.disabled
+        status: document.querySelector("#form-status")?.textContent || "",
+        listedProjectId: row?.getAttribute("data-project-id") || "",
+        startLabel: document.querySelector("#start-editor")?.textContent || "",
+        sameSource: row?.querySelector(".local-project-same-source")?.textContent || ""
       };
     `),
-    (value) => value.formVisible && value.sourceHidden && !value.startDisabled,
-    "A 저장 편집의 이번 1회 확인 화면을 열지 못했습니다."
+    (value) => (
+      value.listedProjectId === staleBrowserProject.id
+      && value.startLabel.includes("편집기 열기")
+      && value.sameSource.includes("현재 입력한 VOD")
+    ),
+    "같은 VOD 저장본을 목록에 표시하면서 새 편집을 별도로 시작할 준비를 하지 못했습니다."
   );
   await execute(`
     for (const checkbox of document.querySelectorAll("[data-ack]")) checkbox.checked = true;
@@ -2937,33 +2917,38 @@ async function main(): Promise<void> {
     }));
     return true;
   `);
+  await waitFor(
+    () => execute<boolean>(`
+      const dialog = document.querySelector("#local-media-engine-dialog");
+      return dialog instanceof HTMLDialogElement && dialog.open;
+    `),
+    Boolean,
+    "새 편집 전 exact-range 준비의 도우미 선택 화면이 열리지 않았습니다."
+  );
+  await execute(`
+    const manual = document.querySelector("#local-media-engine-cancel");
+    if (!(manual instanceof HTMLButtonElement)) {
+      throw new Error("내 파일로 계속 버튼이 없습니다.");
+    }
+    manual.click();
+    return true;
+  `);
   const firstEditor = await waitFor(
     () => execute<{
       href: string;
       ready: string;
       policyAbsent: boolean;
-      projectId: string;
-      sessionProjectId: string;
-      shellVisible: boolean;
-      workspace: string;
+      shellHidden: boolean;
       projectName: string;
       clipTime: string;
       clipTimeCount: number;
       toast: string;
     }>(`
-      const shell = document.querySelector("#editor-shell");
-      const url = new URL(location.href);
-      const session = JSON.parse(sessionStorage.getItem(
-        "kirinuki:local-web:active-usage-session"
-      ) || "null");
       return {
         href: location.href,
         ready: document.readyState,
         policyAbsent: document.querySelector("#editor-policy-gate") === null,
-        projectId: url.searchParams.get("project") || "",
-        sessionProjectId: session?.attestation?.target?.projectId || "",
-        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
-        workspace: shell?.dataset.workspace || "",
+        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
         projectName: document.querySelector("#project-name")?.value || "",
         clipTime: document.querySelector(".clip-time")?.textContent || "",
         clipTimeCount: document.querySelectorAll(".clip-time").length,
@@ -2973,11 +2958,7 @@ async function main(): Promise<void> {
     (value) => (
       value.href.startsWith(`${studioOrigin}/editor.html?project=`)
       && value.policyAbsent
-      && value.projectId === browserAProject.id
-      && value.projectId !== staleBrowserProject.id
-      && value.sessionProjectId === value.projectId
-      && value.shellVisible
-      && value.workspace === "main"
+      && !value.shellHidden
       && value.projectName === "localhost-browser-smoke"
       && value.clipTimeCount === 1
       && value.clipTime === "00:01:20.500 → 00:01:35.000"
@@ -2990,9 +2971,35 @@ async function main(): Promise<void> {
       && !firstEditor.clipTime.includes("00:01:45.000"),
     `편집기에 +10초가 다시 더해졌습니다: ${firstEditor.clipTime}`
   );
-  const pairingUrl = await captureLocalMediaEngineProtocolAttempt(debuggerAddress);
+  await captureLocalMediaEngineProtocolAttempt(debuggerAddress);
   assert(localMediaEngineFixture, "v2 local media engine fixture가 시작되지 않았습니다.");
-  lateMaterializationFixture.claimPairing(pairingUrl);
+  await enrollLocalMediaEngineFixture(localMediaEngineFixture);
+  await webdriver("POST", `/session/${sessionId}/refresh`, {});
+  await waitFor(
+    () => execute<{
+      href: string;
+      policyAbsent: boolean;
+      shellHidden: boolean;
+      projectName: string;
+    }>(`
+      return {
+        href: location.href,
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        projectName: document.querySelector("#project-name")?.value || ""
+      };
+    `),
+    (value) => (
+      value.href.startsWith(`${studioOrigin}/editor.html?project=`)
+      && value.policyAbsent
+      && !value.shellHidden
+      && value.projectName === "localhost-browser-smoke"
+    ),
+    "동일 public key pin 주입 뒤 editor reload가 기존 A 작업을 복원하지 못했습니다.",
+    20_000
+  );
+  const firstTransitionProjectId = new URL(firstEditor.href)
+    .searchParams.get("project") || "";
   const lateAStarted = await waitFor(
     async () => lateMaterializationFixture.snapshot(),
     (value) => (
@@ -3005,89 +3012,6 @@ async function main(): Promise<void> {
     "A의 VOD materialization observer lease를 status poll로 시작하지 못했습니다.",
     15_000
   );
-  const localReloadSessionBefore = await waitFor(
-    () => execute<{
-      activeSessionPresent: boolean;
-      historyProofAbsent: boolean;
-      sessionLeaseId: string;
-      sessionProjectId: string;
-      transitionGeneration: number;
-      urlProjectId: string;
-      urlSession: string;
-    }>(`
-      const url = new URL(location.href);
-      const session = JSON.parse(sessionStorage.getItem(
-        "kirinuki:local-web:active-usage-session"
-      ) || "null");
-      return {
-        activeSessionPresent: session !== null,
-        historyProofAbsent: history.state?.kirinukiEditorReload === undefined,
-        sessionLeaseId: session?.sessionLeaseId || "",
-        sessionProjectId: session?.attestation?.target?.projectId || "",
-        transitionGeneration: Number(session?.transitionGeneration) || 0,
-        urlProjectId: url.searchParams.get("project") || "",
-        urlSession: url.searchParams.get("session") || ""
-      };
-    `),
-    (value) => (
-      value.activeSessionPresent
-      && value.historyProofAbsent
-      && value.sessionProjectId === firstEditor.projectId
-      && value.urlProjectId === firstEditor.projectId
-      && value.urlSession === "resume"
-      && /^[a-f0-9]{64}$/u.test(value.sessionLeaseId)
-      && value.transitionGeneration > 0
-    ),
-    "localhost editor가 정상 F5에 사용할 탭 lease와 체크포인트 URL을 만들지 못했습니다."
-  );
-  await webdriver("POST", `/session/${sessionId}/refresh`, {});
-  await waitFor(
-    () => execute<{
-      href: string;
-      historyProofAbsent: boolean;
-      policyAbsent: boolean;
-      projectId: string;
-      sessionProjectId: string;
-      sessionLeaseId: string;
-      transitionGeneration: number;
-      shellVisible: boolean;
-      workspace: string;
-      projectName: string;
-    }>(`
-      const shell = document.querySelector("#editor-shell");
-      const url = new URL(location.href);
-      const session = JSON.parse(sessionStorage.getItem(
-        "kirinuki:local-web:active-usage-session"
-      ) || "null");
-      return {
-        href: location.href,
-        historyProofAbsent: history.state?.kirinukiEditorReload === undefined,
-        policyAbsent: document.querySelector("#editor-policy-gate") === null,
-        projectId: url.searchParams.get("project") || "",
-        sessionProjectId: session?.attestation?.target?.projectId || "",
-        sessionLeaseId: session?.sessionLeaseId || "",
-        transitionGeneration: Number(session?.transitionGeneration) || 0,
-        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
-        workspace: shell?.dataset.workspace || "",
-        projectName: document.querySelector("#project-name")?.value || ""
-      };
-    `),
-    (value) => (
-      value.href.startsWith(`${studioOrigin}/editor.html?project=`)
-      && value.historyProofAbsent
-      && value.policyAbsent
-      && value.projectId === firstEditor.projectId
-      && value.sessionProjectId === firstEditor.projectId
-      && value.sessionLeaseId === localReloadSessionBefore.sessionLeaseId
-      && value.transitionGeneration === localReloadSessionBefore.transitionGeneration
-      && value.shellVisible
-      && value.workspace === "main"
-      && value.projectName === "localhost-browser-smoke"
-    ),
-    "정상 F5 뒤 editor가 기존 탭 lease와 A 작업을 유지하지 못했습니다.",
-    20_000
-  );
-  const firstTransitionProjectId = firstEditor.projectId;
   const firstTransitionSession = await execute<{
     projectId: string;
     sourceSessionId: string;
@@ -3130,83 +3054,39 @@ async function main(): Promise<void> {
     ),
     "A 편집기에서 뒤로 간 시작 화면이 새 작업을 받을 수 있게 복원되지 않았습니다."
   );
-  await waitFor(
-    () => execute<boolean>(`
-      const row = document.querySelector(
-        '.local-project-row[data-project-id="' + arguments[0] + '"]'
-      );
-      const button = row?.querySelector('[data-project-action="continue"]');
-      return button instanceof HTMLButtonElement && !button.disabled;
-    `, [browserBProject.id]),
-    Boolean,
-    "A에서 돌아온 뒤 B 저장 편집을 선택할 수 없습니다."
-  );
   await execute(`
-    const row = document.querySelector(
-      '.local-project-row[data-project-id="' + arguments[0] + '"]'
-    );
-    const button = row?.querySelector('[data-project-action="continue"]');
-    if (!(button instanceof HTMLButtonElement) || button.disabled) {
-      throw new Error("B 저장 편집의 계속 편집 버튼을 누를 수 없습니다.");
+    const source = document.querySelector("#source-url");
+    if (!(source instanceof HTMLInputElement)) {
+      throw new Error("A→B 전환의 원본 주소 입력을 찾지 못했습니다.");
     }
-    button.click();
-    return true;
-  `, [browserBProject.id]);
-  await waitFor(
-    () => execute<boolean>(`
-      const form = document.querySelector("#start-form");
-      const source = document.querySelector("#source-section");
-      const start = document.querySelector("#start-editor");
-      return form instanceof HTMLFormElement
-        && !form.hidden
-        && !form.inert
-        && source instanceof HTMLElement
-        && source.hidden
-        && source.inert
-        && start instanceof HTMLButtonElement
-        && !start.disabled;
-    `),
-    Boolean,
-    "B 저장 편집의 이번 1회 확인 화면을 열지 못했습니다."
-  );
-  await execute(`
+    source.value = arguments[0];
+    source.dispatchEvent(new Event("input", { bubbles: true }));
     for (const checkbox of document.querySelectorAll("[data-ack]")) {
       checkbox.checked = true;
     }
     const start = document.querySelector("#start-editor");
     if (!(start instanceof HTMLButtonElement) || start.disabled) {
-      throw new Error("B 저장 편집의 편집기 열기 버튼을 누를 수 없습니다.");
+      throw new Error("A→B 전환의 새 편집 버튼을 누를 수 없습니다.");
     }
     start.click();
     return true;
-  `);
+  `, [transitionChzzkUrl]);
   const editor = await waitFor(
     () => execute<{
       href: string;
       ready: string;
       policyAbsent: boolean;
-      projectId: string;
-      sessionProjectId: string;
-      shellVisible: boolean;
-      workspace: string;
+      shellHidden: boolean;
       projectName: string;
       clipTime: string;
       clipTimeCount: number;
       toast: string;
     }>(`
-      const shell = document.querySelector("#editor-shell");
-      const url = new URL(location.href);
-      const session = JSON.parse(sessionStorage.getItem(
-        "kirinuki:local-web:active-usage-session"
-      ) || "null");
       return {
         href: location.href,
         ready: document.readyState,
         policyAbsent: document.querySelector("#editor-policy-gate") === null,
-        projectId: url.searchParams.get("project") || "",
-        sessionProjectId: session?.attestation?.target?.projectId || "",
-        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
-        workspace: shell?.dataset.workspace || "",
+        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
         projectName: document.querySelector("#project-name")?.value || "",
         clipTime: document.querySelector(".clip-time")?.textContent || "",
         clipTimeCount: document.querySelectorAll(".clip-time").length,
@@ -3215,12 +3095,10 @@ async function main(): Promise<void> {
     `),
     (value) => (
       value.href.startsWith(`${studioOrigin}/editor.html?project=`)
-      && value.projectId === browserBProject.id
-      && value.projectId !== firstTransitionProjectId
-      && value.sessionProjectId === value.projectId
+      && new URL(value.href).searchParams.get("project")
+        !== firstTransitionProjectId
       && value.policyAbsent
-      && value.shellVisible
-      && value.workspace === "main"
+      && !value.shellHidden
       && value.projectName === "localhost-browser-smoke"
       && value.clipTimeCount === 1
       && value.clipTime === "00:01:20.500 → 00:01:35.000"
@@ -3267,14 +3145,6 @@ async function main(): Promise<void> {
       && freshProjectId !== firstTransitionProjectId,
     `저장본/A/다른 VOD B가 projectId를 공유했습니다: ${freshProjectId}`
   );
-  await execute(`
-    const prepare = document.querySelector("#prepare-chzzk-vod");
-    if (!(prepare instanceof HTMLButtonElement) || prepare.disabled) {
-      throw new Error("B 편집 영상 준비 버튼을 누를 수 없습니다.");
-    }
-    prepare.click();
-    return true;
-  `);
   const lateMaterializationAfterTransition = await waitFor(
     async () => lateMaterializationFixture.snapshot(),
     (value) => (
@@ -3285,8 +3155,7 @@ async function main(): Promise<void> {
       && value.aLateCompletionDiscarded
       && !value.aLateArtifactExposed
       && value.bStartRequests === 1
-      && value.bQueuedBeforeReclaim
-      && value.bStatusPolls >= 1
+      && (!value.bQueuedBeforeReclaim || value.bStatusPolls >= 1)
       && value.bStartedAfterReclaim
       && value.bCompleted
     ),
@@ -3513,6 +3382,14 @@ async function main(): Promise<void> {
     ),
     "쇼츠 작업 전환 identity가 selector와 URL에 함께 고정되지 않았습니다."
   );
+  await waitFor(
+    () => execute<boolean>(`
+      const button = document.querySelector("#delete-short-workspace");
+      return button instanceof HTMLButtonElement && !button.disabled;
+    `),
+    (enabled) => enabled,
+    "쇼츠 작업 전환 저장 뒤 삭제 버튼이 다시 활성화되지 않았습니다."
+  );
   await execute(`
     window.confirm = () => true;
     document.querySelector("#delete-short-workspace")?.click();
@@ -3713,9 +3590,23 @@ async function main(): Promise<void> {
   );
   const lateMaterializationFinal = lateMaterializationFixture.snapshot();
   lateMaterializationFixture.assertHealthy();
+  const expectedPairingScopes = new Set([
+    `${firstTransitionProjectId}\u0000${chzzkUrl}`,
+    `${freshProjectId}\u0000${transitionChzzkUrl}`
+  ]);
   assert(
     lateMaterializationFinal.aConsumerId === firstTransitionProjectId
-      && lateMaterializationFinal.pairedSessionCount === 2
+      && lateMaterializationFinal.bConsumerId === freshProjectId
+      && lateMaterializationFinal.pairedSessionCount >= 2
+      && lateMaterializationFinal.uniqueSessionTransportCount
+        === lateMaterializationFinal.pairedSessionCount
+      && expectedPairingScopes.size === 2
+      && lateMaterializationFinal.pairedSessionScopes.every((scope) => (
+        expectedPairingScopes.has(scope)
+      ))
+      && [...expectedPairingScopes].every((scope) => (
+        lateMaterializationFinal.pairedSessionScopes.includes(scope)
+      ))
       && lateMaterializationFinal.aStatusPolls >= 1
       && lateMaterializationFinal.aExplicitCancelRequests === 0
       && lateMaterializationFinal.aAbandonedJobsReclaimed === 1
@@ -3726,9 +3617,12 @@ async function main(): Promise<void> {
       && !lateMaterializationFinal.aLateArtifactExposed
       && lateMaterializationFinal.aCachePurgeRequests === 0
       && lateMaterializationFinal.aMediaRequests === 0
-      && lateMaterializationFinal.bStartRequests === 1
-      && lateMaterializationFinal.bQueuedBeforeReclaim
-      && lateMaterializationFinal.bStatusPolls >= 1
+      && lateMaterializationFinal.bStartRequests === 2
+      && lateMaterializationFinal.bReusedStartRequests === 1
+      && (
+        !lateMaterializationFinal.bQueuedBeforeReclaim
+        || lateMaterializationFinal.bStatusPolls >= 1
+      )
       && lateMaterializationFinal.bStartedAfterReclaim
       && lateMaterializationFinal.bCompleted
       && lateMaterializationFinal.bMediaRequests >= 1
@@ -3902,33 +3796,29 @@ async function main(): Promise<void> {
         href: string;
         projectId: string;
         purpose: string;
-        sessionProjectId: string;
         workspace: string;
         policyAbsent: boolean;
-        shellVisible: boolean;
+        shellHidden: boolean;
       }>(`
         const url = new URL(location.href);
         const session = JSON.parse(sessionStorage.getItem(
           "kirinuki:local-web:active-usage-session"
         ) || "null");
-        const shell = document.querySelector("#editor-shell");
         return {
           href: location.href,
           projectId: url.searchParams.get("project") || "",
           purpose: session?.attestation?.target?.purpose || "",
-          sessionProjectId: session?.attestation?.target?.projectId || "",
-          workspace: shell?.dataset.workspace || "",
+          workspace: document.querySelector("#editor-shell")?.dataset.workspace || "",
           policyAbsent: document.querySelector("#editor-policy-gate") === null,
-          shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert
+          shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden)
         };
       `),
       (value) => (
         value.projectId === projectId
         && value.purpose === "editor-resume"
-        && value.sessionProjectId === projectId
         && value.workspace === "main"
         && value.policyAbsent
-        && value.shellVisible
+        && !value.shellHidden
       ),
       `${context}: 새 editor-resume 세션으로 저장 프로젝트를 열지 못했습니다.`,
       20_000
@@ -4013,39 +3903,29 @@ async function main(): Promise<void> {
   const deepEditorReady = await waitFor(
     () => execute<{
       href: string;
-      projectId: string;
-      sessionProjectId: string;
       workspace: string;
       projectName: string;
       clipIds: string[];
       policyAbsent: boolean;
-      shellVisible: boolean;
+      shellHidden: boolean;
     }>(`
-      const url = new URL(location.href);
-      const session = JSON.parse(sessionStorage.getItem(
-        "kirinuki:local-web:active-usage-session"
-      ) || "null");
-      const shell = document.querySelector("#editor-shell");
       return {
         href: location.href,
-        projectId: url.searchParams.get("project") || "",
-        sessionProjectId: session?.attestation?.target?.projectId || "",
-        workspace: shell?.dataset.workspace || "",
+        workspace: document.querySelector("#editor-shell")?.dataset.workspace || "",
         projectName: document.querySelector("#project-name")?.value || "",
         clipIds: [...document.querySelectorAll(".clip-item")]
           .map((item) => item.dataset.id || ""),
         policyAbsent: document.querySelector("#editor-policy-gate") === null,
-        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert
+        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden)
       };
     `),
     (value) => (
-      value.projectId === freshProjectId
-      && value.sessionProjectId === freshProjectId
+      new URL(value.href).searchParams.get("project") === freshProjectId
       && value.workspace === "main"
       && value.projectName === "동적 순서·쇼츠 격리 브라우저 스모크"
       && value.clipIds.join(",") === "clip-order-a,clip-order-b,clip-order-c"
       && value.policyAbsent
-      && value.shellVisible
+      && !value.shellHidden
     ),
     "3컷 동적 순서 fixture를 현재 B 세션으로 다시 열지 못했습니다.",
     20_000
@@ -4739,7 +4619,7 @@ async function main(): Promise<void> {
       YOUTUBE: { url: youtubeEmbed, ...youtubeFrame },
       SOOP: { url: soopEmbed, ...soopFrame }
     },
-    playerBridge: "present-fail-closed-without-electron-preload",
+    playerBridge: "removed-manual-time-input-only",
     sourceFallback: openedSource,
     clipCoverage: clipState.coverage,
     sessionArchiveImport: {
@@ -4752,7 +4632,6 @@ async function main(): Promise<void> {
       start: mobileStartGate,
       direct: mobileDirectGate,
       detection: "ua-not-viewport",
-      desktopDirectReturn,
       desktopHeaderLayout,
       narrowDesktopLayout
     },

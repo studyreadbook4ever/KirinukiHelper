@@ -698,7 +698,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const EDITOR_ELEMENT_IDS = [
-  "editor-app-gate",
+  "editor-origin-gate",
   "editor-mobile-gate",
   "editor-shell",
   "project-name",
@@ -1337,7 +1337,7 @@ function showVerifiedEditorShell(session: ActiveUsagePolicySession): void {
     `이번 사용 확인 · ${usagePolicyBasisLabel(session.basis)}`;
   elements.usage_policy_status.title =
     "사용자 진술을 기록한 상태이며 Kirinuki의 법률·권리 검증이나 게시 승인을 뜻하지 않습니다.";
-  elements.editor_app_gate.hidden = true;
+  elements.editor_origin_gate.hidden = true;
   elements.editor_mobile_gate.hidden = true;
   elements.editor_shell.inert = false;
   elements.editor_shell.hidden = false;
@@ -1354,16 +1354,16 @@ function showEditorMobileGate(): void {
   document.documentElement.dataset.editorAccess = "mobile-blocked";
   elements.editor_shell.inert = true;
   elements.editor_shell.hidden = true;
-  elements.editor_app_gate.hidden = true;
+  elements.editor_origin_gate.hidden = true;
   elements.editor_mobile_gate.hidden = false;
 }
 
-function showEditorAppGate(): void {
-  document.documentElement.dataset.editorAccess = "app-required";
+function showEditorOriginGate(): void {
+  document.documentElement.dataset.editorAccess = "origin-blocked";
   elements.editor_shell.inert = true;
   elements.editor_shell.hidden = true;
   elements.editor_mobile_gate.hidden = true;
-  elements.editor_app_gate.hidden = false;
+  elements.editor_origin_gate.hidden = false;
 }
 
 async function verifyEditorUsagePolicyGate(): Promise<string> {
@@ -21226,7 +21226,7 @@ async function initializeSourceBinding() {
 
 async function initialize() {
   if (!isKirinukiStudioOrigin(location.origin)) {
-    showEditorAppGate();
+    showEditorOriginGate();
     return;
   }
   if (currentClientCannotUseEditor()) {
@@ -21731,9 +21731,9 @@ window.addEventListener("kirinuki:apply-local-caption-first-pass", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
-  // Launching the installed helper through a custom protocol can emit
-  // beforeunload even when Chromium keeps this document alive. Saving is
-  // harmless there; destructive teardown belongs to the real pagehide below.
+  // Launching an installed helper can emit beforeunload even when Chromium
+  // keeps this document alive. Saving is harmless there; destructive teardown
+  // belongs to the real pagehide below.
   void flushSave();
 });
 
@@ -21747,8 +21747,8 @@ window.addEventListener("pagehide", (event) => {
   stopPreviewPlaybackClock();
   stopPreviewAudioClock({ sync: false });
   void flushSave();
-  // A BFCache entry is still this live editor. Keep its media handles and
-  // in-flight preparation intact so browser Back/Forward can resume it.
+  // A BFCache entry is still this live editor. Keep media handles and in-flight
+  // preparation intact so browser Back/Forward can resume it.
   if (event.persisted) {
     return;
   }

@@ -275,15 +275,15 @@ test("온보딩 installer는 verified channel이 있을 때만 고정된 세 파
   );
   assert.match(
     localMediaEngineInstaller("windows-x64", releaseChannel)?.installInstruction || "",
-    /다운로드를 시작했습니다[\s\S]*‘설치 후 연결 확인’을 눌러/u
+    /다운로드를 요청했습니다[\s\S]*자동으로 확인/u
   );
   assert.match(
     localMediaEngineInstaller("macos-arm64", releaseChannel)?.installInstruction || "",
-    /macOS 15[\s\S]*응용 프로그램[\s\S]*한 번 실행/u
+    /macOS[\s\S]*응용 프로그램[\s\S]*한 번 실행/u
   );
   assert.match(
     localMediaEngineInstaller("linux-x64", releaseChannel)?.installInstruction || "",
-    /deb를 설치[\s\S]*‘설치 후 연결 확인’을 눌러/u
+    /deb를 설치[\s\S]*자동으로 확인/u
   );
   assert.equal(
     localMediaEngineInstaller("linux-x64", releaseChannel)?.label,
@@ -642,7 +642,7 @@ test("온보딩 재시도는 마지막 연결 오류가 요구할 때 click stac
     }
     assert.equal(dialog.open, true);
     assert.equal(pairCalls, 0, "명시 클릭 전 protocol을 열면 안 됩니다");
-    assert.equal(retry.textContent, "앱 깨우고 다시 확인");
+    assert.equal(retry.textContent, "도우미 깨우고 다시 확인");
 
     queueMicrotask(() => order.push("first-microtask"));
     retry.dispatchEvent(new Event("click"));

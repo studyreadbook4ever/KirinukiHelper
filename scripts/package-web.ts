@@ -139,7 +139,7 @@ try {
   ) as { readonly name?: string; readonly version?: string };
   assert(
     metadata.name === "kirinuki-app",
-    "기본 패키지 이름이 Kirinuki 단일 앱을 가리키지 않습니다."
+    "기본 패키지 이름이 Kirinuki 웹 제품을 가리키지 않습니다."
   );
   assert(
     typeof metadata.version === "string" && /^\d+\.\d+\.\d+$/u.test(metadata.version),
@@ -260,7 +260,7 @@ try {
         && editorHtml.includes(`src="editor/editor.js?v=${metadata.version}"`)
         && studioJavaScript.length > 0
         && !indexHtml.includes("chrome-extension://"),
-      "압축된 공개 HTML 진입점이 전체 웹 편집기 앱을 가리키지 않습니다."
+      "압축된 공개 HTML 진입점이 전체 웹 편집기를 가리키지 않습니다."
     );
     assert(
       indexHtml.includes('id="public-launch-shell"')

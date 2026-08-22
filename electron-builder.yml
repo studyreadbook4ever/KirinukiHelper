@@ -13,7 +13,7 @@ protocols:
     schemes:
       - kirinuki-engine
 extraMetadata:
-  description: Local VOD range engine and cut-selection host for the Kirinuki web editor
+  description: Background local VOD range helper for the Kirinuki web editor
   homepage: https://kirinuki.eff0rtchung.kr
   author:
     name: Kirinuki contributors
@@ -64,8 +64,8 @@ linux:
   target:
     - deb
   category: AudioVideo
-  synopsis: Kirinuki local VOD engine and cut selector
-  description: Local VOD range engine and cut-selection host for the Kirinuki web editor
+  synopsis: Kirinuki background local VOD range helper
+  description: Background local VOD range helper for the Kirinuki web editor
   maintainer: Kirinuki contributors <lostfragment@naver.com>
   executableArgs:
     - "%U"

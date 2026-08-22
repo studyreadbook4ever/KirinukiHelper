@@ -625,11 +625,11 @@ test("HTML 보안 헤더는 CSP, no-store, COOP, nosniff와 origin-only referrer
   );
 });
 
-test("앱 서버는 public-safe meta CSP 하나만 제거하고 HTTP CSP를 단독 적용한다", () => {
-  const source = '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; connect-src \'self\'">\n<main>앱</main>\n';
+test("localhost 개발 서버는 public meta CSP 하나만 제거하고 HTTP CSP를 단독 적용한다", () => {
+  const source = '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; connect-src \'self\'">\n<main>웹</main>\n';
   assert.equal(
     withoutStaticContentSecurityPolicyMeta(source),
-    "<main>앱</main>\n"
+    "<main>웹</main>\n"
   );
   assert.throws(
     () => withoutStaticContentSecurityPolicyMeta("<main>없음</main>"),
@@ -767,15 +767,15 @@ test("HTTP server는 health와 allowlist 파일만 정확한 MIME/보안 헤더�
   }
 });
 
-test("앱 UI 서버는 공개 Origin 모드 생성을 거부한다", () => {
+test("localhost 개발 서버는 공개 Origin 모드 생성을 거부한다", () => {
   assert.throws(() => createLocalStudioHttpServer({
     repoRoot: "/opt/kirinuki",
     instanceNonce: TEST_NONCE,
     studioOrigin: KIRINUKI_PUBLIC_STUDIO_ORIGIN
-  }), /Kirinuki 앱 Origin/u);
+  }), /Kirinuki localhost Origin/u);
 });
 
-test("Studio CLI URL은 설치된 앱 Origin 하나만 연다", () => {
+test("Studio CLI URL은 개발용 localhost Origin 하나만 연다", () => {
   assert.equal(
     studioBrowserUrl(KIRINUKI_LOCAL_STUDIO_ORIGIN),
     KIRINUKI_LOCAL_STUDIO_ORIGIN

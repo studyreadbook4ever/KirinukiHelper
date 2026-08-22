@@ -280,7 +280,7 @@ export async function acceptLocalMediaEnginePairingResponse({
   } catch (error) {
     if (error instanceof LocalMediaEnginePinMismatchError) {
       throw new LocalMediaEngineConnectionError(
-        "이 브라우저가 이전에 연결한 Kirinuki 엔진과 현재 앱의 identity가 다릅니다. 자동 교체하지 않았습니다. 설치를 확인한 뒤 ‘기기 연결 초기화’를 명시적으로 선택해 주세요.",
+        "이 브라우저가 이전에 연결한 영상 준비 도우미와 현재 도우미의 identity가 다릅니다. 자동 교체하지 않았습니다. 설치를 확인한 뒤 ‘연결 기억 지우기’를 명시적으로 선택해 주세요.",
         "ENGINE_IDENTITY_MISMATCH"
       );
     }
@@ -338,7 +338,7 @@ export async function pairLocalMediaEngine(
     });
     const timer = globalThis.setTimeout(() => finish({
       error: new LocalMediaEngineConnectionError(
-        "Kirinuki 앱에서 연결 응답을 받지 못했습니다. 앱 설치와 프로토콜 연결을 확인해 주세요.",
+        "영상 준비 도우미에서 연결 응답을 받지 못했습니다. 도우미 설치가 끝났는지 확인해 주세요.",
         "ENGINE_UNAVAILABLE"
       )
     }), timeoutMs);
@@ -416,7 +416,8 @@ export async function pairLocalMediaEngine(
           return;
         }
         // Connection refusal is expected while the custom-scheme launch wakes
-        // the installed app. Keep the retry bounded by the outer timeout.
+        // the installed background helper. Keep the retry bounded by the outer
+        // timeout; no helper UI owns this browser flow.
       } finally {
         signal?.removeEventListener("abort", forwardAbort);
         pollController = null;
@@ -532,7 +533,7 @@ export async function probeLocalMediaEngine(
   }
   if (!pin) {
     throw new LocalMediaEngineConnectionError(
-      "이 브라우저는 아직 Kirinuki 앱과 연결되지 않았습니다. ‘이 PC 연결’ 버튼을 눌러 한 번 연결해 주세요.",
+      "이 브라우저는 아직 영상 준비 도우미와 연결되지 않았습니다. ‘이 PC 연결’ 버튼을 눌러 한 번 연결해 주세요.",
       "ENGINE_UNPAIRED"
     );
   }
@@ -623,8 +624,8 @@ export async function probeLocalMediaEngine(
     if (!proofValid) {
       throw new LocalMediaEngineConnectionError(
         proof && proof.keyId !== pin.keyId
-          ? "현재 4319 포트의 응답은 이 브라우저에 고정된 Kirinuki 앱 identity와 다릅니다. 연결 정보를 자동 교체하지 않았습니다."
-          : "현재 4319 포트의 응답에서 고정된 Kirinuki 앱의 서명을 확인하지 못했습니다.",
+          ? "현재 도우미의 응답은 이 브라우저에 기억된 도우미 identity와 다릅니다. 연결 정보를 자동 교체하지 않았습니다."
+          : "현재 영상 준비 도우미의 응답에서 기억된 도우미의 서명을 확인하지 못했습니다.",
         proof && proof.keyId !== pin.keyId
           ? "ENGINE_IDENTITY_MISMATCH"
           : "ENGINE_INCOMPATIBLE"
@@ -813,17 +814,17 @@ export function localMediaEngineInstaller(
   const entry = {
     "windows-x64": {
       fileName: LOCAL_MEDIA_ENGINE_RELEASE_FILES["windows-x64"],
-      installInstruction: "다운로드를 시작했습니다. 설치가 끝나면 이 화면으로 돌아와 ‘설치 후 연결 확인’을 눌러 주세요.",
+      installInstruction: "Windows 설치 파일 다운로드를 요청했습니다. 브라우저 다운로드 표시가 완료되면 파일을 실행하세요. 이 화면은 설치된 도우미를 자동으로 확인하고 있습니다.",
       label: "Windows용 도우미 다운로드"
     },
     "macos-arm64": {
       fileName: LOCAL_MEDIA_ENGINE_RELEASE_FILES["macos-arm64"],
-      installInstruction: "다운로드를 시작했습니다. macOS 15 이상의 DMG를 열어 Kirinuki를 응용 프로그램에 넣고 한 번 실행한 뒤 ‘설치 후 연결 확인’을 눌러 주세요.",
+      installInstruction: "macOS 설치 파일 다운로드를 요청했습니다. 완료된 DMG를 열어 Kirinuki를 응용 프로그램에 넣고 한 번 실행하세요. 이 화면은 도우미 연결을 자동으로 확인하고 있습니다.",
       label: "macOS용 도우미 다운로드"
     },
     "linux-x64": {
       fileName: LOCAL_MEDIA_ENGINE_RELEASE_FILES["linux-x64"],
-      installInstruction: "다운로드를 시작했습니다. deb를 설치한 뒤 이 화면으로 돌아와 ‘설치 후 연결 확인’을 눌러 주세요.",
+      installInstruction: "Linux 설치 파일 다운로드를 요청했습니다. 브라우저 다운로드 표시가 완료되면 deb를 설치하세요. 이 화면은 설치된 도우미를 자동으로 확인하고 있습니다.",
       label: "Linux용 도우미 다운로드"
     }
   }[target as Exclude<LocalMediaEngineTarget, "unsupported">];
@@ -1006,7 +1007,7 @@ export async function ensureLocalMediaEngineReady(
         : initialConnectionError?.code === "ENGINE_UNPAIRED"
           ? "이 PC 연결"
           : initialConnectionError?.code === "ENGINE_UNAVAILABLE"
-            ? "앱 깨우고 다시 확인"
+            ? "도우미 깨우고 다시 확인"
             : "설치 완료 · 다시 확인";
     elements.reset.hidden = initialConnectionError?.code
       !== "ENGINE_IDENTITY_MISMATCH";
@@ -1068,7 +1069,7 @@ export async function ensureLocalMediaEngineReady(
       elements.status.textContent = "이 PC의 영상 준비 도구를 확인하는 중…";
       try {
         if (pairingAttempt) {
-          elements.status.textContent = "Kirinuki 앱에서 이 브라우저의 연결 요청을 확인하는 중…";
+          elements.status.textContent = "영상 준비 도우미에서 이 브라우저의 연결 요청을 확인하는 중…";
           await pairingAttempt;
         }
         await probe(signal);
@@ -1100,7 +1101,7 @@ export async function ensureLocalMediaEngineReady(
             ? "이 PC 연결"
             : error instanceof LocalMediaEngineConnectionError
               && error.code === "ENGINE_UNAVAILABLE"
-              ? "앱 깨우고 다시 확인"
+              ? "도우미 깨우고 다시 확인"
               : "설치 완료 · 다시 확인";
         elements.reset.hidden = !(error instanceof LocalMediaEngineConnectionError)
           || error.code !== "ENGINE_IDENTITY_MISMATCH";
@@ -1168,7 +1169,7 @@ export async function ensureLocalMediaEngineReady(
           return;
         }
         if (!globalThis.confirm(
-          "이 브라우저에 고정된 Kirinuki 엔진 identity를 지울까요? 설치 앱을 직접 확인한 경우에만 계속하세요."
+          "이 브라우저에 기억된 영상 준비 도우미 identity를 지울까요? 설치된 도우미를 직접 확인한 경우에만 계속하세요."
         )) {
           return;
         }

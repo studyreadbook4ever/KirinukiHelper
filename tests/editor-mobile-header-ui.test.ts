@@ -147,7 +147,7 @@ test("시작 화면과 직접 editor URL 모두 모바일 진입을 fail-closed�
   assert.match(studioHtml, /편집기는 모바일에서 사용할 수 없습니다/u);
   assert.match(
     studioSource,
-    /const mobileEditorBlocked = currentClientCannotUseEditor\(\);[\s\S]*function renderEditorEntryAvailability\(\)[\s\S]*mobileEditorBlocked \|\| openingEditor \|\| invalidRow[\s\S]*elements\.startEditor\.disabled/u
+    /const mobileEditorBlocked = currentClientCannotUseEditor\(\);[\s\S]*elements\.startEditor\.disabled = Boolean\([\s\S]*mobileEditorBlocked \|\| openingEditor \|\| invalidRow[\s\S]*\);/u
   );
   assert.match(
     studioSource,
@@ -155,7 +155,7 @@ test("시작 화면과 직접 editor URL 모두 모바일 진입을 fail-closed�
   );
   assert.match(
     editorSource,
-    /async function initialize\(\) \{\s*if \(!isKirinukiStudioOrigin\(location\.origin\)\) \{\s*showEditorAppGate\(\);\s*return;\s*\}\s*if \(currentClientCannotUseEditor\(\)\) \{\s*showEditorMobileGate\(\);\s*return;\s*\}\s*const verifiedProjectId = await verifyEditorUsagePolicyGate\(\);/u
+    /async function initialize\(\) \{\s*if \(!isKirinukiStudioOrigin\(location\.origin\)\) \{\s*showEditorOriginGate\(\);\s*return;\s*\}\s*if \(currentClientCannotUseEditor\(\)\) \{\s*showEditorMobileGate\(\);\s*return;\s*\}\s*const verifiedProjectId = await verifyEditorUsagePolicyGate\(\);/u
   );
   for (const html of [webEditorHtml]) {
     assert.match(html, /id="editor-mobile-gate"[^>]*hidden/u);

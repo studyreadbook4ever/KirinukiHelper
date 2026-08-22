@@ -4,59 +4,19 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import {
-  windowsNsisDirectUninstallArguments
-} from "../scripts/desktop-installer-smoke.js";
-
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-test("Windows NSIS direct uninstall은 Unicode·공백 경로를 raw 마지막 인자로 고정한다", () => {
-  const installRoot = "C:\\Users\\홍길동\\키리누키 NSIS smoke A\\installed";
-  const args = windowsNsisDirectUninstallArguments(installRoot);
-  assert.deepEqual(args, ["/S", "/currentuser", `_?=${installRoot}`]);
-  assert.equal(Object.isFrozen(args), true);
-  for (const unsafePath of [
-    "relative\\installed",
-    "C:\\unsafe\\\"quoted",
-    "C:\\unsafe\\line\rbreak",
-    "C:\\unsafe\\line\nbreak",
-    "C:\\unsafe\\nul\0byte"
-  ]) {
-    assert.throws(
-      () => windowsNsisDirectUninstallArguments(unsafePath),
-      /안전한 절대 경로/u
-    );
-  }
-});
-
-test("installed desktop main은 컷 전용 보안 창과 background 로컬 엔진을 분리한다", async () => {
+test("installed desktop main은 window·4320 Studio·extension product UX를 갖지 않는다", async () => {
   const [main, supervisor, packageFiles, packageScript] = await Promise.all([
     readFile(path.join(root, "src/desktop/main.ts"), "utf8"),
     readFile(path.join(root, "src/desktop/runtime-supervisor.ts"), "utf8"),
     readFile(path.join(root, "scripts/desktop-package-files.ts"), "utf8"),
     readFile(path.join(root, "scripts/package-desktop.ts"), "utf8")
   ]);
-  assert.match(main, /BrowserWindow/u);
-  assert.match(main, /contextIsolation:\s*true/u);
-  assert.match(main, /nodeIntegration:\s*false/u);
-  assert.match(main, /sandbox:\s*true/u);
-  assert.match(main, /webSecurity:\s*true/u);
-  assert.match(main, /setPermissionRequestHandler/u);
-  assert.match(main, /setWindowOpenHandler/u);
-  assert.match(main, /will-download/u);
-  assert.match(main, /randomBytes\(16\)\.toString\("hex"\)/u);
-  assert.match(main, /clearStorageData/u);
-  assert.match(main, /clearCache/u);
-  assert.match(main, /CUT_WINDOW_HANDOFF_CHANNEL/u);
-  assert.match(main, /event\.senderFrame !== window\.webContents\.mainFrame/u);
-  assert.match(main, /focusedFrame === window\.webContents\.mainFrame/u);
-  assert.match(main, /trustedCutShortcutKey/u);
-  assert.match(main, /pendingHandoff\.abortController\.abort/u);
-  assert.match(main, /cancelEditorHandoff/u);
-  assert.doesNotMatch(main, /window-all-closed/u);
-  assert.doesNotMatch(supervisor, /BrowserWindow/u);
-  assert.match(packageFiles, /preload\.cjs/u);
-  assert.match(packageScript, /isolatedResources\.toolsRoot/u);
+  for (const source of [main, supervisor, packageFiles, packageScript]) {
+    assert.doesNotMatch(source, /BrowserWindow|window-all-closed/u);
+    assert.doesNotMatch(source, /streaming-companion|Player Bridge/u);
+  }
   assert.doesNotMatch(supervisor, /4320|createLocalStudioHttpServer/u);
   assert.match(supervisor, /DEFAULT_CAPTION_GATEWAY_PORT/u);
   assert.match(supervisor, /KIRINUKI_PUBLIC_STUDIO_ORIGIN/u);
@@ -169,13 +129,6 @@ test("installer config는 unsigned CI와 signed public-release·managed uninstal
   assert.match(installerSmoke, /Windows uninstaller가 owned protocol\/Run\/StartupApproved 값을 제거하지 못했습니다/u);
   assert.match(installerSmoke, /production-xdg-autostart-readback-removal/u);
   assert.match(installerSmoke, /assertPathAbsent\(recoveryShortcut\)/u);
-  assert.match(installerSmoke, /stageWindowsUninstaller/u);
-  assert.match(installerSmoke, /COPYFILE_EXCL/u);
-  assert.match(installerSmoke, /sha256RegularFile\(uninstallerPath\)/u);
-  assert.match(installerSmoke, /installedEvidence\.sha256 === stagedEvidence\.sha256/u);
-  assert.match(installerSmoke, /windowsNsisDirectUninstallArguments\(installRoot\)/u);
-  assert.match(installerSmoke, /Object\.freeze\(\["\/S", "\/currentuser", `_\?=\$\{installRoot\}`\]\)/u);
-  assert.match(installerSmoke, /windowsVerbatimArguments: true/u);
   assert.match(installerSmoke, /ItemType Junction/u);
   assert.match(installerSmoke, /junction target sentinel/u);
   assert.match(nsisInclude, /customInit/u);

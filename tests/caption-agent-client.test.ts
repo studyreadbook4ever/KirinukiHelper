@@ -49,7 +49,6 @@ import {
   normalizeCaptionAgentSettings,
   pairCaptionAgent,
   probeCaptionAgent,
-  probeLocalMediaEngineSession,
   requestCaptionAgent,
   requestCaptionAgentWithSessionRetry,
   sameCaptionMediaIdentity,
@@ -332,7 +331,7 @@ test("자막 설정은 Whisper와 AudSeg 두 방식 및 loopback 주소만 허�
   assert.equal(isAudSegCaptionModel(LOCAL_WHISPER_CAPTION_MODEL), false);
 });
 
-test("내부 자막 엔진 주소는 앱의 로컬 연결만 허용하고 URL 자격정보를 거부한다", () => {
+test("내부 자막 엔진 주소는 도우미의 로컬 연결만 허용하고 URL 자격정보를 거부한다", () => {
   assert.equal(
     normalizeCaptionAgentEndpoint("http://127.0.0.1:4319/v1/captions"),
     "http://127.0.0.1:4319/v1/captions"
@@ -880,29 +879,6 @@ test("pairing은 현재 문서·프로젝트·원본에 묶인 memory capability
     LOCAL_MEDIA_ENGINE_ENCRYPTED_SESSION_RESPONSE_SCHEMA
   );
   assert.doesNotMatch(pairCall.responseBody, new RegExp(token, "u"));
-});
-
-test("편집기 인계 session은 원본 없이 handoff consume 한 동작만 받는다", async (t) => {
-  const fixture = await startV2CaptionGateway(t);
-  const token = await pairCaptionAgent({
-    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
-    purpose: "editor-handoff",
-    projectId: `editor-handoff-${"H".repeat(43)}`,
-    fetchImpl: fixture.fetchImpl,
-    trustStore: fixture.trustStore
-  });
-  await probeLocalMediaEngineSession({
-    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
-    token,
-    purpose: "editor-handoff",
-    fetchImpl: fixture.fetchImpl
-  });
-  const statusCall = fixture.records.find((record) => (
-    record.path === "/v1/session/status" && record.method === "POST"
-  ));
-  assert.ok(statusCall);
-  assert.equal(statusCall.headers.get("Authorization"), null);
-  assert.doesNotMatch(statusCall.requestBody, /editor-handoff-consume|editor-handoff-/u);
 });
 
 test("Whisper 요청은 session bearer를 암호화해 보내고 완료 응답을 검증한다", async (t) => {
