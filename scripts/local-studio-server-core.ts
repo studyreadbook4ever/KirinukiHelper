@@ -166,11 +166,15 @@ export interface StudioStaticAsset {
 }
 
 export interface OpenedStaticAsset {
-  handle: FileHandle;
-  size: number;
-  etag: string;
+  /** Absolute allowlisted path that must still name this handle at publish time. */
+  readonly candidatePath: string;
+  readonly handle: FileHandle;
+  readonly size: number;
+  readonly etag: string;
+  /** Exact path-family snapshot captured after opening and identity checks. */
+  readonly pathStatus: BigIntStats;
   /** Exact fd-family snapshot used again immediately before responding. */
-  status: BigIntStats;
+  readonly status: BigIntStats;
 }
 
 export type StudioEndpointOwnership = "down" | "foreign" | "managed";
@@ -710,8 +714,10 @@ export async function openStudioStaticAsset(
       Math.trunc(Number(stats.mtimeNs) / 1_000_000)
     );
     const result = {
+      candidatePath: candidate,
       handle: openedHandle,
       size,
+      pathStatus: pathAfter,
       status: stats,
       // Size+mtime is a cheap revalidation hint rather than a byte identity,
       // so advertise it as a weak validator.
@@ -734,6 +740,21 @@ export async function readVerifiedStudioStaticAsset(
   if (
     !sameStudioStaticAssetSnapshot(opened.status, after)
     || (bytes !== null && bytes.byteLength !== opened.size)
+  ) {
+    throw new Error("Studio 정적 파일이 응답 준비 중 바뀌었습니다.");
+  }
+  let pathAfter: BigIntStats;
+  try {
+    pathAfter = await lstat(opened.candidatePath, { bigint: true });
+  } catch {
+    throw new Error("Studio 정적 파일이 응답 준비 중 바뀌었습니다.");
+  }
+  if (
+    pathAfter.isSymbolicLink()
+    || !pathAfter.isFile()
+    || pathAfter.nlink !== 1n
+    || !sameStudioStaticAssetSnapshot(opened.pathStatus, pathAfter)
+    || !sameStudioStaticAssetCrossApiObjectIdentity(pathAfter, after)
   ) {
     throw new Error("Studio 정적 파일이 응답 준비 중 바뀌었습니다.");
   }
