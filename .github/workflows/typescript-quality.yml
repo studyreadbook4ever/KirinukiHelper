@@ -112,6 +112,28 @@ jobs:
       - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
 
+      - name: Materialize the pinned checksum-verified Electron test runtime
+        run: node node_modules/electron/install.js
+
+      - name: Install the Linux sandbox helper for the pinned Electron test runtime
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sandbox_path="node_modules/electron/dist/chrome-sandbox"
+          test -f "$sandbox_path"
+          test ! -L "$sandbox_path"
+          sudo chown root:root -- "$sandbox_path"
+          sudo chmod 4755 -- "$sandbox_path"
+          test "$(stat -c '%u:%g:%a' -- "$sandbox_path")" = "0:0:4755"
+
+      - name: Prove the sandboxed cut host and all three direct player frames in Electron on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:electron:cut-window
+
+      - name: Prove the sandboxed cut host and all three direct player frames in Electron natively
+        if: runner.os != 'Linux'
+        run: npm run test:electron:cut-window
+
       - name: Install matching Chrome and ChromeDriver for the installed-engine browser proof
         id: setup-native-chrome
         uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2

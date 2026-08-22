@@ -573,7 +573,7 @@ export async function packageDesktopApplication(): Promise<Readonly<{
             CFBundleIconFile: "Kirinuki.icns",
             CFBundleURLTypes: [{
               CFBundleTypeRole: "Viewer",
-              CFBundleURLName: "Kirinuki Local Engine Pairing",
+              CFBundleURLName: "Kirinuki Local Engine",
               CFBundleURLSchemes: ["kirinuki-engine"]
             }],
             LSMinimumSystemVersion: DESKTOP_DARWIN_MINIMUM_SYSTEM_VERSION,

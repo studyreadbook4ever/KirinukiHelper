@@ -49,6 +49,7 @@ import {
   normalizeCaptionAgentSettings,
   pairCaptionAgent,
   probeCaptionAgent,
+  probeLocalMediaEngineSession,
   requestCaptionAgent,
   requestCaptionAgentWithSessionRetry,
   sameCaptionMediaIdentity,
@@ -221,7 +222,7 @@ async function startV2CaptionGateway(
     keyId,
     publicKeySpki,
     enrolledAt: new Date().toISOString(),
-    maxSeenVersion: "3.0.0"
+    maxSeenVersion: "3.0.1"
   });
   const trustStore: Readonly<LocalMediaEngineTrustStore> = Object.freeze({
     read: async () => pin,
@@ -257,7 +258,7 @@ async function startV2CaptionGateway(
         new Uint8Array(32).fill(0x61)
       ),
       KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
-      KIRINUKI_LOCAL_ENGINE_VERSION: "3.0.0",
+      KIRINUKI_LOCAL_ENGINE_VERSION: "3.0.1",
       KIRINUKI_MAX_AUDIO_BYTES: "1048576",
       KIRINUKI_VOD_RUNTIME_SCHEMA: LOCAL_VOD_RUNTIME_SCHEMA,
       KIRINUKI_VOD_RUNTIME_KIND: "vod-only",
@@ -879,6 +880,29 @@ test("pairing은 현재 문서·프로젝트·원본에 묶인 memory capability
     LOCAL_MEDIA_ENGINE_ENCRYPTED_SESSION_RESPONSE_SCHEMA
   );
   assert.doesNotMatch(pairCall.responseBody, new RegExp(token, "u"));
+});
+
+test("편집기 인계 session은 원본 없이 handoff consume 한 동작만 받는다", async (t) => {
+  const fixture = await startV2CaptionGateway(t);
+  const token = await pairCaptionAgent({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    purpose: "editor-handoff",
+    projectId: `editor-handoff-${"H".repeat(43)}`,
+    fetchImpl: fixture.fetchImpl,
+    trustStore: fixture.trustStore
+  });
+  await probeLocalMediaEngineSession({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    token,
+    purpose: "editor-handoff",
+    fetchImpl: fixture.fetchImpl
+  });
+  const statusCall = fixture.records.find((record) => (
+    record.path === "/v1/session/status" && record.method === "POST"
+  ));
+  assert.ok(statusCall);
+  assert.equal(statusCall.headers.get("Authorization"), null);
+  assert.doesNotMatch(statusCall.requestBody, /editor-handoff-consume|editor-handoff-/u);
 });
 
 test("Whisper 요청은 session bearer를 암호화해 보내고 완료 응답을 검증한다", async (t) => {

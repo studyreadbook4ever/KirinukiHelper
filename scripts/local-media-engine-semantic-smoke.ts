@@ -57,7 +57,7 @@ import {
 } from "../src/lib/soop-vod-source-clock.js";
 
 const MAXIMUM_RESPONSE_BYTES = 2 * 1024 * 1024;
-const ENGINE_VERSION = "3.0.0";
+const ENGINE_VERSION = "3.0.1";
 const INSTANCE_NONCE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ";
 const FIXED_ENGINE_ORIGIN = "http://127.0.0.1:4319";
 const FIXED_CAPTION_ENDPOINT = `${FIXED_ENGINE_ORIGIN}/v1/captions`;

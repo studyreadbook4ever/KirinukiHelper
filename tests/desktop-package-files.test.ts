@@ -55,6 +55,7 @@ test("desktop package allowlists stay explicit and compose the ASAR set", () => 
     DESKTOP_ASAR_PACKAGE_FILES.filter((entry) => entry.startsWith("web/")),
     []
   );
+  assert.equal(DESKTOP_ASAR_PACKAGE_FILES.includes("preload.cjs"), true);
   assert.equal(
     DESKTOP_ASAR_PACKAGE_FILES.some((entry) => entry.includes("companion")),
     false

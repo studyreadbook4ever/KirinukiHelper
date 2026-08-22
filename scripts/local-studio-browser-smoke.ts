@@ -59,10 +59,10 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const studioOrigin = "http://127.0.0.1:4320";
 const gatewayPattern = "http://127.0.0.1:4319/*";
 const externalEmbedPatterns = Object.freeze([
-  "https://chzzk.naver.com/*",
+  "https://chzzk.naver.com/video/*",
   "https://www.youtube.com/*",
-  "https://www.youtube-nocookie.com/*",
-  "https://vod.sooplive.com/*"
+  "https://www.youtube-nocookie.com/embed/*",
+  "https://vod.sooplive.com/player/*/embed*"
 ]);
 const liveEmbedSmoke = process.env.KIRINUKI_LIVE_EMBED_SMOKE === "1";
 const mobileAccessSmokeOnly = (
@@ -308,7 +308,7 @@ function staleMaterializedTimingProject(canonicalUrl: string): EditorProject {
       endSeconds: 95,
       description: ""
     }]
-  });
+  }, { id: "stale-offset-browser-regression" });
   const [clip] = project.clips;
   if (!clip) {
     throw new Error("stale timing browser fixture의 clip이 없습니다.");
@@ -1316,22 +1316,20 @@ async function installLateMaterializationV2Fixture({
   };
 }
 
-async function dispatchStudioShortcut(key: string): Promise<boolean> {
-  return execute<boolean>(`
-    const event = new KeyboardEvent("keydown", {
-      key: arguments[0].toLowerCase(),
-      code: "Key" + arguments[0],
-      bubbles: true,
-      cancelable: true
-    });
-    document.dispatchEvent(event);
-    return event.defaultPrevented;
-  `, [key]);
-}
-
 async function captureLocalMediaEngineProtocolAttempt(
   debuggerAddress: string
 ): Promise<string> {
+  await execute(`
+    const dialog = document.querySelector("#local-media-engine-dialog");
+    if (!(dialog instanceof HTMLDialogElement) || !dialog.open) {
+      const prepare = document.querySelector("#prepare-chzzk-vod");
+      if (!(prepare instanceof HTMLButtonElement) || prepare.disabled) {
+        throw new Error("편집 영상 준비 버튼을 누를 수 없습니다.");
+      }
+      prepare.click();
+    }
+    return true;
+  `);
   const pageTarget = await waitFor(
     async () => (await browserTargets(debuggerAddress)).find((target) => (
       target.type === "page"
@@ -1908,23 +1906,22 @@ async function main(): Promise<void> {
       gateVisible: boolean;
       shellHidden: boolean;
       shellInert: boolean;
-      policyHidden: boolean;
+      policyAbsent: boolean;
     }>(`
       const gate = document.querySelector("#editor-mobile-gate");
       const shell = document.querySelector("#editor-shell");
-      const policy = document.querySelector("#editor-policy-gate");
       return {
         gateVisible: gate instanceof HTMLElement && !gate.hidden,
         shellHidden: shell instanceof HTMLElement && shell.hidden,
         shellInert: shell instanceof HTMLElement && shell.inert,
-        policyHidden: policy instanceof HTMLElement && policy.hidden
+        policyAbsent: document.querySelector("#editor-policy-gate") === null
       };
     `),
     (value) => (
       value.gateVisible
       && value.shellHidden
       && value.shellInert
-      && value.policyHidden
+      && value.policyAbsent
     ),
     "iPhone UA의 직접 editor URL이 inert 모바일 gate로 닫히지 않았습니다."
   );
@@ -1932,15 +1929,22 @@ async function main(): Promise<void> {
     userAgent: desktopClientSignals.userAgent,
     platform: desktopClientSignals.platform
   });
+  await cdp("Network.setBlockedURLs", {
+    urls: [
+      gatewayPattern,
+      `${studioOrigin}/editor/editor.js*`,
+      ...(liveEmbedSmoke ? [] : externalEmbedPatterns)
+    ]
+  });
+  await cdp("Network.setCacheDisabled", { cacheDisabled: true });
   await webdriver("POST", `/session/${sessionId}/url`, {
     url: `${studioOrigin}/editor.html?project=desktop-header-layout-smoke`
   });
   await waitFor(
     () => execute<boolean>(`
-      const policy = document.querySelector("#editor-policy-gate");
       return document.readyState !== "loading"
-        && policy instanceof HTMLElement
-        && !policy.hidden;
+        && document.querySelector("#editor-shell") instanceof HTMLElement
+        && document.querySelector("#editor-policy-gate") === null;
     `),
     Boolean,
     "데스크톱 UA 복구 뒤 편집기 DOM이 준비되지 않았습니다."
@@ -1956,12 +1960,10 @@ async function main(): Promise<void> {
     labelsVisible: boolean;
   }>(`
     const shell = document.querySelector("#editor-shell");
-    const policy = document.querySelector("#editor-policy-gate");
     const mobile = document.querySelector("#editor-mobile-gate");
     if (!(shell instanceof HTMLElement)) throw new Error("editor shell missing");
     shell.hidden = false;
     shell.inert = false;
-    if (policy instanceof HTMLElement) policy.hidden = true;
     if (mobile instanceof HTMLElement) mobile.hidden = true;
     for (const id of ["prepare-chzzk-vod", "finish-editing-session", "open-short-form"]) {
       const element = document.getElementById(id);
@@ -2123,11 +2125,34 @@ async function main(): Promise<void> {
       && Number(restoredWindowRect.height) >= 900,
     `브라우저 스모크 viewport를 복원하지 못했습니다: ${JSON.stringify(restoredWindowRect)}`
   );
-  await webdriver("POST", `/session/${sessionId}/url`, { url: `${studioOrigin}/` });
-  await waitFor(
-    () => execute<string>("return document.readyState"),
-    (value) => value === "interactive" || value === "complete",
-    "localhost 시작 화면이 준비되지 않았습니다."
+  await cdp("Network.setBlockedURLs", {
+    urls: [
+      gatewayPattern,
+      ...(liveEmbedSmoke ? [] : externalEmbedPatterns)
+    ]
+  });
+  await cdp("Network.setCacheDisabled", { cacheDisabled: false });
+  await webdriver("POST", `/session/${sessionId}/url`, {
+    url: `${studioOrigin}/editor.html?project=desktop-direct-smoke`
+  });
+  const desktopDirectReturn = await waitFor(
+    () => execute<{
+      editorAbsent: boolean;
+      href: string;
+      startLabel: string;
+    }>(`
+      return {
+        editorAbsent: document.querySelector("#editor-shell") === null,
+        href: location.href,
+        startLabel: document.querySelector("#start-editor")?.textContent?.trim() || ""
+      };
+    `),
+    (value) => (
+      value.href === `${studioOrigin}/`
+      && value.editorAbsent
+      && value.startLabel === "편집기 열기"
+    ),
+    "확인 없는 데스크톱 editor 직접 URL이 같은 탭의 시작 화면으로 돌아오지 않았습니다."
   );
   if (mobileAccessSmokeOnly) {
     process.stdout.write(`${JSON.stringify({
@@ -2138,6 +2163,7 @@ async function main(): Promise<void> {
         direct: mobileDirectGate,
         detection: "ua-not-viewport",
         desktopUaRestored: true,
+        desktopDirectReturn,
         desktopHeaderLayout,
         narrowDesktopLayout
       }
@@ -2151,6 +2177,33 @@ async function main(): Promise<void> {
   assert(
     studioReferrerPolicy === "strict-origin-when-cross-origin",
     `YouTube client identity를 보존할 localhost referrer policy가 다릅니다: ${studioReferrerPolicy}`
+  );
+  await webdriver("POST", `/session/${sessionId}/url`, {
+    url: `${studioOrigin}/?kirinukiSurface=cut-host`
+  });
+  const cutHostSurface = await waitFor(
+    () => execute<{
+      formVisible: boolean;
+      launcherHidden: boolean;
+      recentHidden: boolean;
+    }>(`
+      const form = document.querySelector("#start-form");
+      const launcher = document.querySelector("#cut-host-launch-panel");
+      const recent = document.querySelector("#recent-section");
+      return {
+        formVisible: form instanceof HTMLFormElement && !form.hidden && !form.inert,
+        launcherHidden: launcher instanceof HTMLElement && launcher.hidden && launcher.inert,
+        recentHidden: recent instanceof HTMLElement && recent.hidden && recent.inert
+      };
+    `),
+    (value) => value.formVisible && value.launcherHidden && value.recentHidden,
+    "컷 전용 표면이 일반 브라우저 시작 화면과 분리되지 않았습니다."
+  );
+  assert(
+    cutHostSurface.formVisible
+      && cutHostSurface.launcherHidden
+      && cutHostSurface.recentHidden,
+    `컷 전용 표면 역할 분리가 올바르지 않습니다: ${JSON.stringify(cutHostSurface)}`
   );
   const chzzkUrl = "https://chzzk.naver.com/video/14514980";
   const transitionChzzkUrl = "https://chzzk.naver.com/video/14514981";
@@ -2201,7 +2254,8 @@ async function main(): Promise<void> {
     requireLiveTarget: liveEmbedSmoke
   });
   const extensionlessCaptureState = await execute<{
-    obsoleteBridgeControlsAbsent: boolean;
+    bridgeConsolePresent: boolean;
+    playerControlsDisabled: boolean;
     manualInputsEnabled: boolean;
     iframeVisible: boolean;
   }>(`
@@ -2209,9 +2263,11 @@ async function main(): Promise<void> {
     const row = document.querySelector(".clip-row");
     const start = row?.querySelector('[data-field="start"]');
     const end = row?.querySelector('[data-field="end"]');
+    const playerControlIds = ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"];
     return {
-      obsoleteBridgeControlsAbsent: ["stream-cut-console", "capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-        .every((id) => document.querySelector("#" + id) === null),
+      bridgeConsolePresent: document.querySelector("#stream-cut-console") instanceof HTMLElement
+        && playerControlIds.every((id) => document.querySelector("#" + id) instanceof HTMLButtonElement),
+      playerControlsDisabled: playerControlIds.every((id) => document.querySelector("#" + id)?.disabled === true),
       manualInputsEnabled: start instanceof HTMLInputElement
         && end instanceof HTMLInputElement
         && !start.disabled
@@ -2220,12 +2276,13 @@ async function main(): Promise<void> {
     };
   `);
   assert(
-    extensionlessCaptureState.obsoleteBridgeControlsAbsent
+    extensionlessCaptureState.bridgeConsolePresent
+      && extensionlessCaptureState.playerControlsDisabled
       && extensionlessCaptureState.manualInputsEnabled
       && extensionlessCaptureState.iframeVisible,
-    `확장 프로그램 없이 원본 임베드와 수동 구간 입력을 제공하지 못했습니다: ${JSON.stringify(extensionlessCaptureState)}`
+    `확장 프로그램이 없을 때 컷 브리지를 fail-closed하고 수동 입력을 유지하지 못했습니다: ${JSON.stringify(extensionlessCaptureState)}`
   );
-  process.stderr.write("[browser-smoke] SOOP 임베드·확장 없는 수동 구간 입력 검증 완료\n");
+  process.stderr.write("[browser-smoke] SOOP 임베드·Electron preload 없는 fail-closed 수동 입력 검증 완료\n");
 
   await execute(`
     const input = document.querySelector("#source-url");
@@ -2281,14 +2338,20 @@ async function main(): Promise<void> {
     target?: string;
     name?: string;
     features?: string;
-  }>(
+  } | null>(
     "return globalThis.__kirinukiSmokeOpen"
   );
-  assert(openedSource.target === chzzkUrl, "원본 새 탭 대체 경로가 canonical CHZZK URL과 다릅니다.");
-  assert(openedSource.name === "_blank", "원본 새 탭이 새 browsing context를 사용하지 않습니다.");
+  const sourceOpenFailure = await waitFor(
+    () => execute<string>(`
+      return document.querySelector("#form-status")?.textContent || "";
+    `),
+    (value) => value.includes("기본 브라우저로 원본 페이지를 열 수 없습니다"),
+    "preload 없는 cut-host URL이 원본 페이지 열기를 fail-closed하지 않았습니다."
+  );
   assert(
-    openedSource.features === "noopener,noreferrer",
-    "원본 새 탭이 opener/referrer 격리 없이 열립니다."
+    openedSource === null
+      && sourceOpenFailure.includes("기본 브라우저로 원본 페이지를 열 수 없습니다"),
+    "일반 Chromium이 Electron preload 없이 원본 페이지 열기 권한을 얻었습니다."
   );
 
   await waitFor(
@@ -2302,64 +2365,45 @@ async function main(): Promise<void> {
     (value) => value.frameUrl === chzzkUrl && !value.refreshDisabled,
     "CHZZK 원본 창이 준비되지 않았습니다."
   );
-  await execute(`
+  const cutHostRecentManagerHidden = await execute<boolean>(`
     const manager = document.querySelector("#recent-section");
-    const summary = document.querySelector("#local-projects-summary");
-    const empty = document.querySelector("#local-projects-empty");
-    if (!manager || !summary || !empty) {
-      throw new Error("local project manager 없음");
-    }
-    manager.setAttribute("aria-busy", "true");
-    summary.textContent = "Q_REFRESH_SENTINEL";
-    empty.hidden = true;
+    return manager instanceof HTMLElement && manager.hidden && manager.inert;
   `);
-  const recentRefreshHandled = await dispatchStudioShortcut("Q");
-  assert(recentRefreshHandled, "Q 단축키가 document capture console에서 처리되지 않았습니다.");
-  await waitFor(
-    () => execute<{
-      ariaBusy: string | null;
-      emptyHidden: boolean;
-      summary: string;
-    }>(`
-      const manager = document.querySelector("#recent-section");
-      const empty = document.querySelector("#local-projects-empty");
-      return {
-        ariaBusy: manager?.getAttribute("aria-busy") ?? null,
-        emptyHidden: Boolean(empty?.hidden),
-        summary: document.querySelector("#local-projects-summary")?.textContent || ""
-      };
-    `),
-    (value) => (
-      value.ariaBusy === "false"
-      && value.emptyHidden === false
-      && value.summary === "저장된 편집 없음 · 아래 입력은 항상 새 프로젝트로 시작합니다."
-    ),
-    "Q 단축키가 이 기기의 최근 편집을 다시 읽지 않았습니다."
+  assert(
+    cutHostRecentManagerHidden,
+    "컷 전용 표면에 일반 브라우저의 저장 편집 관리자가 노출됐습니다."
   );
-  process.stderr.write("[browser-smoke] 최근 편집 다시 읽기 검증 완료\n");
   const footerReload = await execute<{
     frameReplaced: boolean;
     frameUrl: string;
+    reloadDisabled: boolean;
+    reloadConnected: boolean;
   }>(`
     const previousFrame = document.querySelector("#stream-preview-frame");
-    document.querySelector("#reload-stream")?.click();
+    const reload = document.querySelector("#reload-stream");
+    reload?.click();
     const currentFrame = document.querySelector("#stream-preview-frame");
     return {
       frameReplaced: currentFrame !== previousFrame,
-      frameUrl: currentFrame?.getAttribute("src") || ""
+      frameUrl: currentFrame?.getAttribute("src") || "",
+      reloadDisabled: !(reload instanceof HTMLButtonElement) || reload.disabled,
+      reloadConnected: Boolean(reload?.isConnected)
     };
   `);
   assert(
-    footerReload.frameReplaced && footerReload.frameUrl === chzzkUrl,
+    footerReload.frameReplaced
+      && footerReload.frameUrl === chzzkUrl
+      && footerReload.reloadConnected
+      && !footerReload.reloadDisabled,
     `footer 플레이어 다시 불러오기가 iframe을 교체하지 못했습니다: ${JSON.stringify(footerReload)}`
   );
-  const obsoleteControlsRemainAbsent = await execute<boolean>(`
+  const bridgeControlsRemainPresent = await execute<boolean>(`
     return ["capture-start", "capture-end", "seek-backward-five", "seek-forward-five", "playback-rate-quarter", "playback-rate-double"]
-      .every((id) => document.querySelector("#" + id) === null);
+      .every((id) => document.querySelector("#" + id) instanceof HTMLButtonElement);
   `);
   assert(
-    obsoleteControlsRemainAbsent,
-    "원본 다시 불러오기 뒤 삭제된 플레이어 제어가 다시 나타났습니다."
+    bridgeControlsRemainPresent,
+    "원본 다시 불러오기 뒤 컷 전용 플레이어 제어가 사라졌습니다."
   );
 
   const capturePerformanceLogs = await webdriver<BrowserLogEntry[]>(
@@ -2432,7 +2476,7 @@ async function main(): Promise<void> {
   const clipFinalState = await execute<{
     finalCount: number;
     finalDisabled: boolean;
-    bridgeConsoleAbsent: boolean;
+    bridgeConsolePresent: boolean;
     visibleShortcutHintsComplete: boolean;
     coverage: string;
   }>(`
@@ -2443,19 +2487,21 @@ async function main(): Promise<void> {
     }
     secondRemove.click();
     const first = rows()[0];
-    const visibleShortcutHintsComplete = ["Q", "A"]
+    const visibleShortcutHintsComplete = ["Q", "W", "E", "R", "T", "A", "D", "F", "Y", "U"]
       .every((key) => {
         const button = document.querySelector('[aria-keyshortcuts="' + key + '"]');
         if (!(button instanceof HTMLButtonElement) || !button.title.includes("단축키 " + key)) {
           return false;
         }
         const visibleKey = button.querySelector("kbd")?.textContent;
-        return visibleKey === undefined;
+        return key === "Q" || key === "A"
+          ? visibleKey === undefined
+          : visibleKey === key;
       });
     return {
       finalCount: rows().length,
       finalDisabled: Boolean(first?.querySelector('[data-action="remove"]')?.disabled),
-      bridgeConsoleAbsent: document.querySelector("#stream-cut-console") === null,
+      bridgeConsolePresent: document.querySelector("#stream-cut-console") instanceof HTMLElement,
       visibleShortcutHintsComplete,
       coverage: first?.querySelector(".coverage")?.textContent || ""
     };
@@ -2472,7 +2518,7 @@ async function main(): Promise<void> {
       && clipState.manualFieldsEnabled
       && clipState.enabledAfterAdd
       && clipState.finalDisabled
-      && clipState.bridgeConsoleAbsent
+      && clipState.bridgeConsolePresent
       && clipState.visibleShortcutHintsComplete,
     `구간 추가·삭제 상태가 올바르지 않습니다: ${JSON.stringify(clipState)}`
   );
@@ -2565,7 +2611,7 @@ async function main(): Promise<void> {
     alignedTops: boolean;
     railScrollable: boolean;
     railScrolled: boolean;
-    bridgeConsoleAbsent: boolean;
+    bridgeConsolePresent: boolean;
     timeInputCount: number;
     timesInside: boolean;
     timesUnclipped: boolean;
@@ -2613,7 +2659,7 @@ async function main(): Promise<void> {
       alignedTops: Math.abs(railRect.top - streamRect.top) <= 1,
       railScrollable: list.scrollHeight > list.clientHeight,
       railScrolled: list.scrollTop > 0,
-      bridgeConsoleAbsent: bridgeConsole === null,
+      bridgeConsolePresent: bridgeConsole instanceof HTMLElement,
       timeInputCount: timeInputs.length,
       timesInside: timeInputs.every((input) => {
         const rect = input.getBoundingClientRect();
@@ -2633,7 +2679,7 @@ async function main(): Promise<void> {
       && layout.alignedTops
       && layout.railScrollable
       && layout.railScrolled
-      && layout.bridgeConsoleAbsent
+      && layout.bridgeConsolePresent
       && layout.timeInputCount === 24
       && layout.timesInside
       && layout.timesUnclipped
@@ -2702,7 +2748,10 @@ async function main(): Promise<void> {
     (value) => value.status.includes("필수 책임 확인 항목을 모두 선택"),
     "빠진 책임 확인 항목이 거절되지 않았습니다."
   );
-  assert(rejected.href === `${studioOrigin}/`, "빠진 책임 확인 항목으로 편집기에 이동했습니다.");
+  assert(
+    rejected.href === `${studioOrigin}/?kirinukiSurface=cut-host`,
+    "빠진 책임 확인 항목으로 편집기에 이동했습니다."
+  );
   assert(rejected.disabled === false, "책임 확인 거절 뒤 시작 버튼이 복구되지 않았습니다.");
 
   // Automation stands in for the one local-network confirmation a real user
@@ -2746,17 +2795,62 @@ async function main(): Promise<void> {
         pattern === "https://www.youtube.com/*"
       ))
   });
+  await webdriver("POST", `/session/${sessionId}/url`, { url: `${studioOrigin}/` });
+  await waitFor(
+    () => execute<{
+      formHidden: boolean;
+      launcherVisible: boolean;
+      recentVisible: boolean;
+    }>(`
+      const form = document.querySelector("#start-form");
+      const launcher = document.querySelector("#cut-host-launch-panel");
+      const recent = document.querySelector("#recent-section");
+      return {
+        formHidden: form instanceof HTMLFormElement && form.hidden && form.inert,
+        launcherVisible: launcher instanceof HTMLElement && !launcher.hidden && !launcher.inert,
+        recentVisible: recent instanceof HTMLElement && !recent.hidden && !recent.inert
+      };
+    `),
+    (value) => value.formHidden && value.launcherVisible && value.recentVisible,
+    "일반 브라우저 시작 화면이 컷 전용 입력과 역할을 분리하지 않았습니다."
+  );
+  const browserAProject = createEditorProjectFromCapture({
+    projectName: "localhost-browser-smoke",
+    source: {
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "14514980",
+      canonicalUrl: chzzkUrl,
+      url: chzzkUrl,
+      broadcastTitle: "localhost-browser-smoke"
+    },
+    segments: [{
+      id: "browser-a-selection",
+      startSeconds: 80.5,
+      endSeconds: 95,
+      description: ""
+    }]
+  }, { id: "project-browser-a-localhost-smoke" });
+  const browserBProject = createEditorProjectFromCapture({
+    projectName: "localhost-browser-smoke",
+    source: {
+      platform: "CHZZK",
+      contentType: "vod",
+      contentId: "14514981",
+      canonicalUrl: transitionChzzkUrl,
+      url: transitionChzzkUrl,
+      broadcastTitle: "localhost-browser-smoke"
+    },
+    segments: [{
+      id: "browser-b-selection",
+      startSeconds: 80.5,
+      endSeconds: 95,
+      description: ""
+    }]
+  }, { id: "project-browser-b-localhost-smoke" });
   const staleBrowserProject = staleMaterializedTimingProject(chzzkUrl);
   await execute(`
-    const first = document.querySelector(".clip-row");
-    if (!(first instanceof HTMLElement)) {
-      throw new Error("timing regression 구간 행이 없습니다.");
-    }
-    first.dataset.selectionId = "stale-offset-browser-regression";
-    return true;
-  `);
-  await execute(`
-    const staleProject = arguments[0];
+    const projects = arguments[0];
     globalThis.__kirinukiStaleProjectReady = false;
     globalThis.__kirinukiStaleProjectError = "";
     const open = indexedDB.open("chzzk-kirinuki-studio");
@@ -2782,10 +2876,11 @@ async function main(): Promise<void> {
         database.close();
         globalThis.__kirinukiStaleProjectReady = true;
       };
-      transaction.objectStore("projects").put(staleProject);
+      const store = transaction.objectStore("projects");
+      for (const project of projects) store.put(project);
     };
     return true;
-  `, [staleBrowserProject]);
+  `, [[staleBrowserProject, browserAProject, browserBProject]]);
   const staleProjectSeed = await waitFor(
     () => execute<{ ready: boolean; error: string }>(`
       return {
@@ -2811,28 +2906,66 @@ async function main(): Promise<void> {
     }
     refresh.click();
     return true;
-  `, [staleBrowserProject.id]);
+  `, [browserAProject.id]);
   await waitFor(
     () => execute<{
-      status: string;
-      listedProjectId: string;
-      startLabel: string;
-      sameSource: string;
+      aListed: boolean;
+      bListed: boolean;
+      staleListed: boolean;
+      formHidden: boolean;
+      managerReady: boolean;
     }>(`
-      const row = document.querySelector(".local-project-row");
       return {
-        status: document.querySelector("#form-status")?.textContent || "",
-        listedProjectId: row?.getAttribute("data-project-id") || "",
-        startLabel: document.querySelector("#start-editor")?.textContent || "",
-        sameSource: row?.querySelector(".local-project-same-source")?.textContent || ""
+        aListed: document.querySelector(
+          '.local-project-row[data-project-id="' + arguments[0] + '"]'
+        ) instanceof HTMLElement,
+        bListed: document.querySelector(
+          '.local-project-row[data-project-id="' + arguments[1] + '"]'
+        ) instanceof HTMLElement,
+        staleListed: document.querySelector(
+          '.local-project-row[data-project-id="' + arguments[2] + '"]'
+        ) instanceof HTMLElement,
+        formHidden: Boolean(document.querySelector("#start-form")?.hidden),
+        managerReady: document.querySelector("#recent-section")?.getAttribute("aria-busy") === "false"
+      };
+    `, [browserAProject.id, browserBProject.id, staleBrowserProject.id]),
+    (value) => (
+      value.aListed
+      && value.bListed
+      && value.staleListed
+      && value.formHidden
+      && value.managerReady
+    ),
+    "일반 브라우저의 저장 편집 목록에서 A와 회귀 검증용 저장본을 분리하지 못했습니다."
+  );
+  await execute(`
+    const row = document.querySelector(
+      '.local-project-row[data-project-id="' + arguments[0] + '"]'
+    );
+    const continueEditing = row?.querySelector('[data-project-action="continue"]');
+    if (!(continueEditing instanceof HTMLButtonElement) || continueEditing.disabled) {
+      throw new Error("A 저장 편집의 계속 편집 버튼을 누를 수 없습니다.");
+    }
+    continueEditing.click();
+    return true;
+  `, [browserAProject.id]);
+  await waitFor(
+    () => execute<{
+      formVisible: boolean;
+      sourceHidden: boolean;
+      startDisabled: boolean;
+    }>(`
+      const form = document.querySelector("#start-form");
+      const source = document.querySelector("#source-section");
+      const start = document.querySelector("#start-editor");
+      return {
+        formVisible: form instanceof HTMLFormElement && !form.hidden && !form.inert,
+        sourceHidden: source instanceof HTMLElement && source.hidden && source.inert,
+        startDisabled: !(start instanceof HTMLButtonElement) || start.disabled
       };
     `),
-    (value) => (
-      value.listedProjectId === staleBrowserProject.id
-      && value.startLabel.includes("편집기 열기")
-      && value.sameSource.includes("현재 입력한 VOD")
-    ),
-    "같은 VOD 저장본을 목록에 표시하면서 새 편집을 별도로 시작할 준비를 하지 못했습니다."
+    (value) => value.formVisible && value.sourceHidden && !value.startDisabled,
+    "A 저장 편집의 이번 1회 확인 화면을 열지 못했습니다."
   );
   await execute(`
     for (const checkbox of document.querySelectorAll("[data-ack]")) checkbox.checked = true;
@@ -2847,18 +2980,29 @@ async function main(): Promise<void> {
     () => execute<{
       href: string;
       ready: string;
-      gateHidden: boolean;
-      shellHidden: boolean;
+      policyAbsent: boolean;
+      projectId: string;
+      sessionProjectId: string;
+      shellVisible: boolean;
+      workspace: string;
       projectName: string;
       clipTime: string;
       clipTimeCount: number;
       toast: string;
     }>(`
+      const shell = document.querySelector("#editor-shell");
+      const url = new URL(location.href);
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
       return {
         href: location.href,
         ready: document.readyState,
-        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        projectId: url.searchParams.get("project") || "",
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
+        workspace: shell?.dataset.workspace || "",
         projectName: document.querySelector("#project-name")?.value || "",
         clipTime: document.querySelector(".clip-time")?.textContent || "",
         clipTimeCount: document.querySelectorAll(".clip-time").length,
@@ -2867,8 +3011,12 @@ async function main(): Promise<void> {
     `),
     (value) => (
       value.href.startsWith(`${studioOrigin}/editor.html?project=`)
-      && value.gateHidden
-      && !value.shellHidden
+      && value.policyAbsent
+      && value.projectId === browserAProject.id
+      && value.projectId !== staleBrowserProject.id
+      && value.sessionProjectId === value.projectId
+      && value.shellVisible
+      && value.workspace === "main"
       && value.projectName === "localhost-browser-smoke"
       && value.clipTimeCount === 1
       && value.clipTime === "00:01:20.500 → 00:01:35.000"
@@ -2884,32 +3032,6 @@ async function main(): Promise<void> {
   await captureLocalMediaEngineProtocolAttempt(debuggerAddress);
   assert(localMediaEngineFixture, "v2 local media engine fixture가 시작되지 않았습니다.");
   await enrollLocalMediaEngineFixture(localMediaEngineFixture);
-  await webdriver("POST", `/session/${sessionId}/refresh`, {});
-  await waitFor(
-    () => execute<{
-      href: string;
-      gateHidden: boolean;
-      shellHidden: boolean;
-      projectName: string;
-    }>(`
-      return {
-        href: location.href,
-        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
-        projectName: document.querySelector("#project-name")?.value || ""
-      };
-    `),
-    (value) => (
-      value.href.startsWith(`${studioOrigin}/editor.html?project=`)
-      && value.gateHidden
-      && !value.shellHidden
-      && value.projectName === "localhost-browser-smoke"
-    ),
-    "동일 public key pin 주입 뒤 editor reload가 기존 A 작업을 복원하지 못했습니다.",
-    20_000
-  );
-  const firstTransitionProjectId = new URL(firstEditor.href)
-    .searchParams.get("project") || "";
   const lateAStarted = await waitFor(
     async () => lateMaterializationFixture.snapshot(),
     (value) => (
@@ -2922,6 +3044,89 @@ async function main(): Promise<void> {
     "A의 VOD materialization observer lease를 status poll로 시작하지 못했습니다.",
     15_000
   );
+  const localReloadSessionBefore = await waitFor(
+    () => execute<{
+      activeSessionPresent: boolean;
+      historyProofAbsent: boolean;
+      sessionLeaseId: string;
+      sessionProjectId: string;
+      transitionGeneration: number;
+      urlProjectId: string;
+      urlSession: string;
+    }>(`
+      const url = new URL(location.href);
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
+      return {
+        activeSessionPresent: session !== null,
+        historyProofAbsent: history.state?.kirinukiEditorReload === undefined,
+        sessionLeaseId: session?.sessionLeaseId || "",
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        transitionGeneration: Number(session?.transitionGeneration) || 0,
+        urlProjectId: url.searchParams.get("project") || "",
+        urlSession: url.searchParams.get("session") || ""
+      };
+    `),
+    (value) => (
+      value.activeSessionPresent
+      && value.historyProofAbsent
+      && value.sessionProjectId === firstEditor.projectId
+      && value.urlProjectId === firstEditor.projectId
+      && value.urlSession === "resume"
+      && /^[a-f0-9]{64}$/u.test(value.sessionLeaseId)
+      && value.transitionGeneration > 0
+    ),
+    "localhost editor가 정상 F5에 사용할 탭 lease와 체크포인트 URL을 만들지 못했습니다."
+  );
+  await webdriver("POST", `/session/${sessionId}/refresh`, {});
+  await waitFor(
+    () => execute<{
+      href: string;
+      historyProofAbsent: boolean;
+      policyAbsent: boolean;
+      projectId: string;
+      sessionProjectId: string;
+      sessionLeaseId: string;
+      transitionGeneration: number;
+      shellVisible: boolean;
+      workspace: string;
+      projectName: string;
+    }>(`
+      const shell = document.querySelector("#editor-shell");
+      const url = new URL(location.href);
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
+      return {
+        href: location.href,
+        historyProofAbsent: history.state?.kirinukiEditorReload === undefined,
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        projectId: url.searchParams.get("project") || "",
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        sessionLeaseId: session?.sessionLeaseId || "",
+        transitionGeneration: Number(session?.transitionGeneration) || 0,
+        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
+        workspace: shell?.dataset.workspace || "",
+        projectName: document.querySelector("#project-name")?.value || ""
+      };
+    `),
+    (value) => (
+      value.href.startsWith(`${studioOrigin}/editor.html?project=`)
+      && value.historyProofAbsent
+      && value.policyAbsent
+      && value.projectId === firstEditor.projectId
+      && value.sessionProjectId === firstEditor.projectId
+      && value.sessionLeaseId === localReloadSessionBefore.sessionLeaseId
+      && value.transitionGeneration === localReloadSessionBefore.transitionGeneration
+      && value.shellVisible
+      && value.workspace === "main"
+      && value.projectName === "localhost-browser-smoke"
+    ),
+    "정상 F5 뒤 editor가 기존 탭 lease와 A 작업을 유지하지 못했습니다.",
+    20_000
+  );
+  const firstTransitionProjectId = firstEditor.projectId;
   const firstTransitionSession = await execute<{
     projectId: string;
     sourceSessionId: string;
@@ -2964,39 +3169,83 @@ async function main(): Promise<void> {
     ),
     "A 편집기에서 뒤로 간 시작 화면이 새 작업을 받을 수 있게 복원되지 않았습니다."
   );
+  await waitFor(
+    () => execute<boolean>(`
+      const row = document.querySelector(
+        '.local-project-row[data-project-id="' + arguments[0] + '"]'
+      );
+      const button = row?.querySelector('[data-project-action="continue"]');
+      return button instanceof HTMLButtonElement && !button.disabled;
+    `, [browserBProject.id]),
+    Boolean,
+    "A에서 돌아온 뒤 B 저장 편집을 선택할 수 없습니다."
+  );
   await execute(`
-    const source = document.querySelector("#source-url");
-    if (!(source instanceof HTMLInputElement)) {
-      throw new Error("A→B 전환의 원본 주소 입력을 찾지 못했습니다.");
+    const row = document.querySelector(
+      '.local-project-row[data-project-id="' + arguments[0] + '"]'
+    );
+    const button = row?.querySelector('[data-project-action="continue"]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) {
+      throw new Error("B 저장 편집의 계속 편집 버튼을 누를 수 없습니다.");
     }
-    source.value = arguments[0];
-    source.dispatchEvent(new Event("input", { bubbles: true }));
+    button.click();
+    return true;
+  `, [browserBProject.id]);
+  await waitFor(
+    () => execute<boolean>(`
+      const form = document.querySelector("#start-form");
+      const source = document.querySelector("#source-section");
+      const start = document.querySelector("#start-editor");
+      return form instanceof HTMLFormElement
+        && !form.hidden
+        && !form.inert
+        && source instanceof HTMLElement
+        && source.hidden
+        && source.inert
+        && start instanceof HTMLButtonElement
+        && !start.disabled;
+    `),
+    Boolean,
+    "B 저장 편집의 이번 1회 확인 화면을 열지 못했습니다."
+  );
+  await execute(`
     for (const checkbox of document.querySelectorAll("[data-ack]")) {
       checkbox.checked = true;
     }
     const start = document.querySelector("#start-editor");
     if (!(start instanceof HTMLButtonElement) || start.disabled) {
-      throw new Error("A→B 전환의 새 편집 버튼을 누를 수 없습니다.");
+      throw new Error("B 저장 편집의 편집기 열기 버튼을 누를 수 없습니다.");
     }
     start.click();
     return true;
-  `, [transitionChzzkUrl]);
+  `);
   const editor = await waitFor(
     () => execute<{
       href: string;
       ready: string;
-      gateHidden: boolean;
-      shellHidden: boolean;
+      policyAbsent: boolean;
+      projectId: string;
+      sessionProjectId: string;
+      shellVisible: boolean;
+      workspace: string;
       projectName: string;
       clipTime: string;
       clipTimeCount: number;
       toast: string;
     }>(`
+      const shell = document.querySelector("#editor-shell");
+      const url = new URL(location.href);
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
       return {
         href: location.href,
         ready: document.readyState,
-        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        projectId: url.searchParams.get("project") || "",
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
+        workspace: shell?.dataset.workspace || "",
         projectName: document.querySelector("#project-name")?.value || "",
         clipTime: document.querySelector(".clip-time")?.textContent || "",
         clipTimeCount: document.querySelectorAll(".clip-time").length,
@@ -3005,10 +3254,12 @@ async function main(): Promise<void> {
     `),
     (value) => (
       value.href.startsWith(`${studioOrigin}/editor.html?project=`)
-      && new URL(value.href).searchParams.get("project")
-        !== firstTransitionProjectId
-      && value.gateHidden
-      && !value.shellHidden
+      && value.projectId === browserBProject.id
+      && value.projectId !== firstTransitionProjectId
+      && value.sessionProjectId === value.projectId
+      && value.policyAbsent
+      && value.shellVisible
+      && value.workspace === "main"
       && value.projectName === "localhost-browser-smoke"
       && value.clipTimeCount === 1
       && value.clipTime === "00:01:20.500 → 00:01:35.000"
@@ -3055,6 +3306,14 @@ async function main(): Promise<void> {
       && freshProjectId !== firstTransitionProjectId,
     `저장본/A/다른 VOD B가 projectId를 공유했습니다: ${freshProjectId}`
   );
+  await execute(`
+    const prepare = document.querySelector("#prepare-chzzk-vod");
+    if (!(prepare instanceof HTMLButtonElement) || prepare.disabled) {
+      throw new Error("B 편집 영상 준비 버튼을 누를 수 없습니다.");
+    }
+    prepare.click();
+    return true;
+  `);
   const lateMaterializationAfterTransition = await waitFor(
     async () => lateMaterializationFixture.snapshot(),
     (value) => (
@@ -3682,29 +3941,33 @@ async function main(): Promise<void> {
         href: string;
         projectId: string;
         purpose: string;
+        sessionProjectId: string;
         workspace: string;
-        gateHidden: boolean;
-        shellHidden: boolean;
+        policyAbsent: boolean;
+        shellVisible: boolean;
       }>(`
         const url = new URL(location.href);
         const session = JSON.parse(sessionStorage.getItem(
           "kirinuki:local-web:active-usage-session"
         ) || "null");
+        const shell = document.querySelector("#editor-shell");
         return {
           href: location.href,
           projectId: url.searchParams.get("project") || "",
           purpose: session?.attestation?.target?.purpose || "",
-          workspace: document.querySelector("#editor-shell")?.dataset.workspace || "",
-          gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-          shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden)
+          sessionProjectId: session?.attestation?.target?.projectId || "",
+          workspace: shell?.dataset.workspace || "",
+          policyAbsent: document.querySelector("#editor-policy-gate") === null,
+          shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert
         };
       `),
       (value) => (
         value.projectId === projectId
         && value.purpose === "editor-resume"
+        && value.sessionProjectId === projectId
         && value.workspace === "main"
-        && value.gateHidden
-        && !value.shellHidden
+        && value.policyAbsent
+        && value.shellVisible
       ),
       `${context}: 새 editor-resume 세션으로 저장 프로젝트를 열지 못했습니다.`,
       20_000
@@ -3789,29 +4052,39 @@ async function main(): Promise<void> {
   const deepEditorReady = await waitFor(
     () => execute<{
       href: string;
+      projectId: string;
+      sessionProjectId: string;
       workspace: string;
       projectName: string;
       clipIds: string[];
-      gateHidden: boolean;
-      shellHidden: boolean;
+      policyAbsent: boolean;
+      shellVisible: boolean;
     }>(`
+      const url = new URL(location.href);
+      const session = JSON.parse(sessionStorage.getItem(
+        "kirinuki:local-web:active-usage-session"
+      ) || "null");
+      const shell = document.querySelector("#editor-shell");
       return {
         href: location.href,
-        workspace: document.querySelector("#editor-shell")?.dataset.workspace || "",
+        projectId: url.searchParams.get("project") || "",
+        sessionProjectId: session?.attestation?.target?.projectId || "",
+        workspace: shell?.dataset.workspace || "",
         projectName: document.querySelector("#project-name")?.value || "",
         clipIds: [...document.querySelectorAll(".clip-item")]
           .map((item) => item.dataset.id || ""),
-        gateHidden: Boolean(document.querySelector("#editor-policy-gate")?.hidden),
-        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden)
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert
       };
     `),
     (value) => (
-      new URL(value.href).searchParams.get("project") === freshProjectId
+      value.projectId === freshProjectId
+      && value.sessionProjectId === freshProjectId
       && value.workspace === "main"
       && value.projectName === "동적 순서·쇼츠 격리 브라우저 스모크"
       && value.clipIds.join(",") === "clip-order-a,clip-order-b,clip-order-c"
-      && value.gateHidden
-      && !value.shellHidden
+      && value.policyAbsent
+      && value.shellVisible
     ),
     "3컷 동적 순서 fixture를 현재 B 세션으로 다시 열지 못했습니다.",
     20_000
@@ -4505,7 +4778,7 @@ async function main(): Promise<void> {
       YOUTUBE: { url: youtubeEmbed, ...youtubeFrame },
       SOOP: { url: soopEmbed, ...soopFrame }
     },
-    playerBridge: "removed-manual-time-input-only",
+    playerBridge: "present-fail-closed-without-electron-preload",
     sourceFallback: openedSource,
     clipCoverage: clipState.coverage,
     sessionArchiveImport: {
@@ -4518,6 +4791,7 @@ async function main(): Promise<void> {
       start: mobileStartGate,
       direct: mobileDirectGate,
       detection: "ua-not-viewport",
+      desktopDirectReturn,
       desktopHeaderLayout,
       narrowDesktopLayout
     },

@@ -10,31 +10,21 @@ function sectionFrom(source: string, marker: string, endMarker: string): string 
   return source.slice(start, end + endMarker.length);
 }
 
-test("편집기 HTML은 검증 중 경고를 숨기고 실제 작업공간도 기본 잠금 상태다", async () => {
+test("편집기 HTML은 긴 권한 진술 벽 없이 검증 중 작업공간만 숨긴다", async () => {
   const html = await readFile(
     new URL("../web/editor.html", import.meta.url),
     "utf8"
   );
-  const gateStart = /<main id="editor-policy-gate"[^>]*>/u.exec(html)?.[0] ?? "";
   const shellStart = /<div id="editor-shell"[^>]*>/u.exec(html)?.[0] ?? "";
 
-  assert.ok(gateStart);
   assert.ok(shellStart);
-  assert.match(gateStart, /aria-labelledby="editor-policy-gate-title"/u);
-  assert.match(gateStart, /\bhidden\b/u);
   assert.match(shellStart, /\bhidden\b/u);
-  assert.match(html, /이번 사용의 사용자 권한 진술이 필요합니다/u);
-  assert.match(html, /시작 화면에서 매번 직접 확인한 뒤에만 열립니다/u);
-  assert.match(html, /책임은 전적으로\(100%\) 사용자/u);
-  assert.match(html, /실제 권리나 법적 적합성을 심사·보증/u);
-  assert.match(
-    html,
-    /href="\/"[^>]*target="_blank"[^>]*rel="noopener"/u
-  );
-  assert.match(
-    html,
-    /id="editor-policy-gate-status"[^>]*role="alert"/u
-  );
+  assert.doesNotMatch(html, /id="editor-policy-gate(?:-status)?"/u);
+  assert.doesNotMatch(html, /이번 사용의 사용자 권한 진술이 필요합니다/u);
+  assert.doesNotMatch(html, /시작 화면에서 매번 직접 확인한 뒤에만 열립니다/u);
+  assert.doesNotMatch(html, /책임은 전적으로\(100%\) 사용자/u);
+  assert.doesNotMatch(html, /실제 권리나 법적 적합성을 심사·보증/u);
+  assert.doesNotMatch(html, /새 탭에서 시작 화면 열기/u);
 });
 
 test("고정된 공개 origin은 전체 웹 편집기를 열고 알 수 없는 origin만 차단한다", async () => {
@@ -151,9 +141,9 @@ test("편집기 스크립트는 정책 검증 성공 전 프로젝트·미디어
     /verifyStudioUsagePolicyGate\([\s\S]*projectId,[\s\S]*gateToken[\s\S]*storedWebUsageSession\(\)[\s\S]*session\.attestation\.target\.projectId !== projectId[\s\S]*gateToken !== session\.gateToken/u
   );
   assert.doesNotMatch(studioRuntime, /chrome\.|KIRINUKI_VERIFY_USAGE_POLICY_GATE/u);
-  assert.match(
-    verify,
-    /!isRecord\(response\) \|\| response\.ok !== true[\s\S]*이 탭에서 이번 사용 확인[\s\S]*시작 화면에서 편집기를 다시 열어/u
+  assert.doesNotMatch(
+    source,
+    /editingSessionCheckpointOwner|restoreStudioUsagePolicyGate|WEB_STUDIO_RELOAD_HISTORY_KEY|currentEditorReloadState|editorHistoryStateWithReloadProof|currentStudioUsagePolicyReloadState|kirinukiEditorReload/u
   );
   assert.doesNotMatch(verify, /chrome:\/\/extensions|새로고침/u);
   assert.match(verify, /normalizeActiveUsagePolicySession\(/u);
@@ -180,6 +170,15 @@ test("편집기 스크립트는 정책 검증 성공 전 프로젝트·미디어
   assert.match(
     source,
     /function markEditorUrlReloadable\(\)[\s\S]*searchParams\.set\("session", RECOVERY_SESSION_MODE\)[\s\S]*history\.replaceState/u
+  );
+  assert.match(
+    source,
+    /function markEditorUrlReloadable\(\)[\s\S]*history\.replaceState\(null, "", url\.href\)/u
+  );
+  assert.match(
+    source,
+    /history\.replaceState\(null,/u,
+    "URL history에는 세션 재생성 자료를 남기지 않습니다."
   );
   assert.match(
     initialize,
@@ -212,11 +211,16 @@ test("편집기 스크립트는 정책 검증 성공 전 프로젝트·미디어
   );
   assert.match(
     source,
-    /function showVerifiedEditorShell[\s\S]*editor_policy_gate\.hidden = true;[\s\S]*editor_shell\.hidden = false;/u
+    /function showVerifiedEditorShell[\s\S]*editor_shell\.inert = false;[\s\S]*editor_shell\.hidden = false;/u
   );
+  assert.doesNotMatch(source, /showEditorPolicyGateError|editor_policy_gate/u);
   assert.match(
     source,
-    /function showEditorPolicyGateError[\s\S]*editor_shell\.hidden = true;[\s\S]*editor_policy_gate\.hidden = false;/u
+    /void initialize\(\)\.catch\([\s\S]*editor_shell\.inert = true;[\s\S]*editor_shell\.hidden = true;[\s\S]*location\.replace\(new URL\("\/", location\.origin\)\.href\)/u
+  );
+  assert.doesNotMatch(
+    source,
+    /이번 편집의 권리·책임 확인을 찾지 못했습니다[\s\S]*새 탭에서 시작 화면 열기/u
   );
 });
 

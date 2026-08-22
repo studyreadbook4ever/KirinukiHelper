@@ -108,6 +108,13 @@ import {
 } from "../src/lib/soop-vod-source-clock.js";
 import type { SoopVodSourceClockIdentity } from "../src/lib/soop-vod-source-clock.js";
 import {
+  EDITOR_HANDOFF_ACKNOWLEDGEMENT_SCHEMA,
+  EDITOR_HANDOFF_CAPABILITY_ACTION,
+  EDITOR_HANDOFF_CONSUME_PROTOCOL,
+  EDITOR_HANDOFF_CONSUME_REQUEST_SCHEMA
+} from "../src/lib/editor-handoff.js";
+import type { EditorHandoffBroker } from "../src/lib/editor-handoff.js";
+import {
   CHZZK_VOD_HANDLE_MS,
   CHZZK_VOD_CACHE_PURGE_REQUEST_SCHEMA,
   CHZZK_VOD_CONSUMER_CACHE_PURGE_REQUEST_SCHEMA,
@@ -211,7 +218,8 @@ interface PairingState {
 const LOCAL_ENGINE_CAPABILITY_ACTIONS = Object.freeze([
   "vod",
   "captions",
-  "cache-delete"
+  "cache-delete",
+  EDITOR_HANDOFF_CAPABILITY_ACTION
 ] as const);
 
 type LocalEngineCapabilityAction =
@@ -283,6 +291,7 @@ export interface LocalMediaEngineDeviceProofSigner {
 
 interface MaterializationJobOwner {
   projectId: string;
+  sourceUrl: string;
 }
 
 type PipelineRunner = (
@@ -913,14 +922,16 @@ function normalizeLocalEngineSessionRequest(
     );
   }
   if (expectedSchema === LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL) {
-    const expectedActions: readonly LocalEngineCapabilityAction[] =
+    const expectedActionSets: readonly (readonly LocalEngineCapabilityAction[])[] =
       sourceUrl === undefined
-        ? ["captions"]
-        : ["vod", "cache-delete"];
-    if (JSON.stringify(record.actions) !== JSON.stringify(expectedActions)) {
+        ? [["captions"], [EDITOR_HANDOFF_CAPABILITY_ACTION]]
+        : [["vod", "cache-delete"]];
+    if (!expectedActionSets.some((expectedActions) => (
+      JSON.stringify(record.actions) === JSON.stringify(expectedActions)
+    ))) {
       throw new TypeError(
         sourceUrl === undefined
-          ? "자막 session은 captions 최소 권한만 요청해야 합니다."
+          ? "원본 없는 session은 자막 또는 편집기 인계 최소 권한 하나만 요청해야 합니다."
           : "VOD session은 vod/cache-delete 최소 권한만 요청해야 합니다."
       );
     }
@@ -1693,6 +1704,7 @@ export function createCaptionGatewayServer({
   materializationRunner,
   chzzkMaterializer = materializeChzzkVod,
   externalMaterializer = materializeExternalVod,
+  editorHandoffBroker,
   vodObserverLeaseTtlMs,
   vodObserverLeaseScheduler,
   randomBytesImpl = randomBytes,
@@ -1705,6 +1717,7 @@ export function createCaptionGatewayServer({
   materializationRunner?: ChzzkVodMaterializationRunner;
   chzzkMaterializer?: ChzzkVodMaterializerImplementation;
   externalMaterializer?: ExternalVodMaterializerImplementation;
+  editorHandoffBroker?: Readonly<EditorHandoffBroker>;
   vodObserverLeaseTtlMs?: number;
   vodObserverLeaseScheduler?: ChzzkVodObserverLeaseScheduler;
   randomBytesImpl?: typeof randomBytes;
@@ -2145,10 +2158,25 @@ export function createCaptionGatewayServer({
     jobId: string,
     capability: LocalEngineCapability
   ): void => {
-    const current = materializationJobOwners.get(jobId);
-    if (current && current.projectId !== capability.projectId) {
+    if (!capability.sourceUrl) {
       throw new CaptionGatewayError(
-        "VOD 작업의 문서 소유권이 일치하지 않습니다.",
+        "VOD 작업의 원본 소유권을 확인하지 못했습니다.",
+        {
+          code: "CAPABILITY_SCOPE_MISMATCH",
+          httpStatus: 403
+        }
+      );
+    }
+    const current = materializationJobOwners.get(jobId);
+    if (
+      current
+      && (
+        current.projectId !== capability.projectId
+        || current.sourceUrl !== capability.sourceUrl
+      )
+    ) {
+      throw new CaptionGatewayError(
+        "VOD 작업의 문서 또는 원본 소유권이 일치하지 않습니다.",
         {
           code: "CAPABILITY_SCOPE_MISMATCH",
           httpStatus: 403
@@ -2157,7 +2185,8 @@ export function createCaptionGatewayServer({
     }
     if (!current) {
       materializationJobOwners.set(jobId, {
-        projectId: capability.projectId
+        projectId: capability.projectId,
+        sourceUrl: capability.sourceUrl
       });
     }
     while (materializationJobOwners.size > 256) {
@@ -2168,15 +2197,20 @@ export function createCaptionGatewayServer({
       materializationJobOwners.delete(oldestJobId);
     }
   };
-  const materializationOwnerProject = (
+  const materializationOwnerScope = (
     jobId: string
-  ): string | null => {
+  ): Readonly<MaterializationJobOwner> | null => {
     const remembered = materializationJobOwners.get(jobId);
     if (remembered) {
-      return remembered.projectId;
+      return remembered;
     }
     const job = chzzkVodJobs.get(jobId);
-    return job?.request.consumerId || null;
+    return job
+      ? Object.freeze({
+        projectId: job.request.consumerId,
+        sourceUrl: job.request.sourceUrl
+      })
+      : null;
   };
   const decryptControlRequest = async ({
     request,
@@ -2395,6 +2429,8 @@ export function createCaptionGatewayServer({
     const isSessionStatusRequest =
       requestUrl.pathname === "/v1/session/status";
     const isCaptionRequest = requestUrl.pathname === "/v1/captions";
+    const isEditorHandoffRequest =
+      requestUrl.pathname === "/v1/editor-handoff";
     const materializationCollectionMatch =
       /^\/v1\/(chzzk-vod|vod)\/materializations$/u
         .exec(requestUrl.pathname);
@@ -2427,6 +2463,7 @@ export function createCaptionGatewayServer({
       && !isPairingRequest
       && !isSessionStatusRequest
       && !isCaptionRequest
+      && !isEditorHandoffRequest
       && !isMaterializationCollection
       && !materializationJobMatch
       && !materializationPurgeMatch
@@ -2454,6 +2491,8 @@ export function createCaptionGatewayServer({
               ? authenticatedPublicMode
                 ? ["POST"]
                 : ["GET", "POST"]
+              : isEditorHandoffRequest
+                ? ["POST"]
               : materializationMediaMatch
                 ? ["GET", "HEAD"]
                 : materializationPurgeMatch
@@ -2522,6 +2561,69 @@ export function createCaptionGatewayServer({
       })) {
         return;
       }
+    }
+    if (isEditorHandoffRequest) {
+      if (
+        request.method !== "POST"
+        || requestUrl.search !== ""
+        || protocol !== EDITOR_HANDOFF_CONSUME_PROTOCOL
+      ) {
+        rejectJson(request, response, 404, {
+          error: {
+            code: "EDITOR_HANDOFF_NOT_AVAILABLE",
+            message: "이 편집기 인계를 사용할 수 없습니다."
+          }
+        });
+        return;
+      }
+      const capability = authenticateCapability(
+        request,
+        response,
+        EDITOR_HANDOFF_CAPABILITY_ACTION
+      );
+      if (!capability) {
+        return;
+      }
+      const body = decryptedControlRequests.get(request)?.body;
+      const schema = body && typeof body === "object" && !Array.isArray(body)
+        ? (body as Record<string, unknown>).schema
+        : null;
+      try {
+        if (schema === EDITOR_HANDOFF_CONSUME_REQUEST_SCHEMA) {
+          const envelope = editorHandoffBroker?.claim(
+            body,
+            capability.projectId
+          ) ?? null;
+          if (envelope) {
+            touchCapability(capability);
+            sendJson(response, 200, envelope);
+            return;
+          }
+        } else if (schema === EDITOR_HANDOFF_ACKNOWLEDGEMENT_SCHEMA) {
+          const acknowledged = editorHandoffBroker?.acknowledge(
+            body,
+            capability.projectId
+          ) ?? false;
+          if (acknowledged) {
+            touchCapability(capability);
+            sendJson(response, 200, {
+              schema: EDITOR_HANDOFF_ACKNOWLEDGEMENT_SCHEMA,
+              status: "acknowledged"
+            });
+            return;
+          }
+        }
+      } catch {
+        // Malformed, expired, wrong-scope and wrong-claim requests deliberately
+        // share one response so this endpoint cannot become a handoff oracle.
+      }
+      rejectJson(request, response, 404, {
+        error: {
+          code: "EDITOR_HANDOFF_NOT_AVAILABLE",
+          message: "이 편집기 인계를 사용할 수 없습니다."
+        }
+      });
+      return;
     }
     if (isPairingPollRequest) {
       const state = exactBase64UrlBytes(
@@ -3046,10 +3148,10 @@ export function createCaptionGatewayServer({
           && !Array.isArray(body)
           ? body as Record<string, unknown>
           : null;
-        const ownerProject = materializationOwnerProject(
+        const owner = materializationOwnerScope(
           materializationSessionPurgeMatch[2] || ""
         );
-        if (!ownerProject) {
+        if (!owner) {
           rejectJson(request, response, 404, {
             error: {
               code: "SESSION_CACHE_NOT_FOUND",
@@ -3063,7 +3165,9 @@ export function createCaptionGatewayServer({
             request,
             response,
             capability,
-            ownerProject
+            owner.projectId,
+            owner.sourceUrl,
+            true
           )
           || !authorizeCapabilityProject(
             request,
@@ -3163,10 +3267,10 @@ export function createCaptionGatewayServer({
           request,
           MAX_CHZZK_VOD_CACHE_PURGE_REQUEST_BYTES
         );
-        const ownerProject = materializationOwnerProject(
+        const owner = materializationOwnerScope(
           materializationPurgeMatch[2] || ""
         );
-        if (!ownerProject) {
+        if (!owner) {
           rejectJson(request, response, 404, {
             error: {
               code: "CACHE_NOT_FOUND",
@@ -3180,7 +3284,9 @@ export function createCaptionGatewayServer({
             request,
             response,
             capability,
-            ownerProject
+            owner.projectId,
+            owner.sourceUrl,
+            true
           )
         ) {
           return;
@@ -3337,11 +3443,17 @@ export function createCaptionGatewayServer({
           });
           return;
         }
+        const owner = materializationOwnerScope(jobId) ?? Object.freeze({
+          projectId: job.request.consumerId,
+          sourceUrl: job.request.sourceUrl
+        });
         if (!authorizeCapabilityProject(
           request,
           response,
           capability,
-          materializationOwnerProject(jobId) || job.request.consumerId
+          owner.projectId,
+          owner.sourceUrl,
+          true
         )) {
           return;
         }

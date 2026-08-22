@@ -6,17 +6,34 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-test("installed desktop main은 window·4320 Studio·extension product UX를 갖지 않는다", async () => {
+test("installed desktop main은 컷 전용 보안 창과 background 로컬 엔진을 분리한다", async () => {
   const [main, supervisor, packageFiles, packageScript] = await Promise.all([
     readFile(path.join(root, "src/desktop/main.ts"), "utf8"),
     readFile(path.join(root, "src/desktop/runtime-supervisor.ts"), "utf8"),
     readFile(path.join(root, "scripts/desktop-package-files.ts"), "utf8"),
     readFile(path.join(root, "scripts/package-desktop.ts"), "utf8")
   ]);
-  for (const source of [main, supervisor, packageFiles, packageScript]) {
-    assert.doesNotMatch(source, /BrowserWindow|window-all-closed/u);
-    assert.doesNotMatch(source, /streaming-companion|Player Bridge/u);
-  }
+  assert.match(main, /BrowserWindow/u);
+  assert.match(main, /contextIsolation:\s*true/u);
+  assert.match(main, /nodeIntegration:\s*false/u);
+  assert.match(main, /sandbox:\s*true/u);
+  assert.match(main, /webSecurity:\s*true/u);
+  assert.match(main, /setPermissionRequestHandler/u);
+  assert.match(main, /setWindowOpenHandler/u);
+  assert.match(main, /will-download/u);
+  assert.match(main, /randomBytes\(16\)\.toString\("hex"\)/u);
+  assert.match(main, /clearStorageData/u);
+  assert.match(main, /clearCache/u);
+  assert.match(main, /CUT_WINDOW_HANDOFF_CHANNEL/u);
+  assert.match(main, /event\.senderFrame !== window\.webContents\.mainFrame/u);
+  assert.match(main, /focusedFrame === window\.webContents\.mainFrame/u);
+  assert.match(main, /trustedCutShortcutKey/u);
+  assert.match(main, /pendingHandoff\.abortController\.abort/u);
+  assert.match(main, /cancelEditorHandoff/u);
+  assert.doesNotMatch(main, /window-all-closed/u);
+  assert.doesNotMatch(supervisor, /BrowserWindow/u);
+  assert.match(packageFiles, /preload\.cjs/u);
+  assert.match(packageScript, /isolatedResources\.toolsRoot/u);
   assert.doesNotMatch(supervisor, /4320|createLocalStudioHttpServer/u);
   assert.match(supervisor, /DEFAULT_CAPTION_GATEWAY_PORT/u);
   assert.match(supervisor, /KIRINUKI_PUBLIC_STUDIO_ORIGIN/u);

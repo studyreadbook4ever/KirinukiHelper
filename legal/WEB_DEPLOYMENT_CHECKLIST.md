@@ -1,8 +1,10 @@
 # Kirinuki 웹·로컬 엔진 출시 체크리스트
 
 이 문서는 `https://kirinuki.eff0rtchung.kr`의 **전체 웹 편집기**와 사용자가 한 번
-설치하는 **화면 없는 로컬 미디어 엔진**을 함께 출시하는 hard gate입니다.
-브라우저 확장, Electron 편집기 창, 서버 VOD proxy는 제품 구조가 아닙니다.
+설치하는 **로컬 미디어 엔진**을 함께 출시하는 hard gate입니다.
+플레이어 제어 코드는 build 때 설치 앱의 `app.asar`에 고정되어 컷 선택 전용
+Electron 창의 정확한 플랫폼 frame에서만 실행됩니다. Electron full editor, 외부
+Chrome 확장과 서버 VOD proxy는 제품 구조가 아닙니다.
 
 법률 자문이나 무위험 보증이 아닙니다. 체크 표시는 같은 release candidate의
 실제 산출물과 readback 증거가 있을 때만 합니다.
@@ -11,8 +13,10 @@
 
 - [ ] 웹 ZIP에는 시작 화면, full editor, worker, font, license만 있고 로컬
   executable·server secret·사용자 데이터가 없다.
-- [ ] 설치 파일에는 창 없는 range engine과 target sidecar만 있고 웹 편집기 창,
-  browser extension, auto-updater가 없다.
+- [ ] 설치 파일에는 background range engine, 컷 전용 격리 창, target sidecar와
+  ASAR에 고정된 player action만 있고 Electron full editor·extension·auto-updater가 없다.
+- [ ] player action은 정확한 CHZZK·YouTube·SOOP frame에만 실행하며 Chrome
+  profile에 extension으로 설치하거나 임의 외부 웹페이지에 주입하지 않는다.
 - [ ] 공개 서버는 정적 파일만 제공하며 VOD, 프로젝트, 로그인, 사용자 session,
   analytics, telemetry를 받거나 저장하지 않는다.
 - [ ] Windows x64, macOS arm64, Linux x64 이외의 설치 파일을 자동 추천하지 않는다.
@@ -26,22 +30,40 @@
 
 ## 2. 일반 웹사이트 같은 사용자 흐름
 
-- [ ] 사용자는 사이트 → URL·구간 입력 → 편집기 → **편집 영상 준비**만 수행한다.
+- [ ] 사용자는 사이트 → **컷 선택 열기** → 설치 앱에서 URL·구간 확정 →
+  자동으로 열린 기본 브라우저 편집기 흐름만 수행한다.
 - [ ] 엔진이 없을 때만 OS에 맞는 installer와 1회 설치 안내를 보여 준다.
-- [ ] 설치 뒤 같은 페이지가 자동으로 재탐지하며 사용자가 port, endpoint, token,
-  process, 시작·종료 상태를 입력하거나 관리하지 않는다.
+- [ ] 설치 뒤 사이트가 앱을 자동 호출하며 사용자가 port, endpoint, token, process,
+  시작·종료 상태, 확장 프로그램 또는 handoff 값을 입력하거나 관리하지 않는다.
 - [ ] Chrome Local Network Access prompt는 최초 연결 안내에 포함하고, 허용·거절·
   재시도·브라우저 정책 차단을 실제 Chrome에서 검증했다.
 - [ ] 설치 완료, 엔진 이미 실행 중, 엔진 재시작, protocol 불일치, port 충돌이
   각각 이해 가능한 한 문장과 단일 다음 행동으로 복구된다.
 - [ ] 모바일에서는 편집을 시작하지 않고 데스크톱에서 다시 열도록 안내한다.
 - [ ] 자동 준비가 불가능한 권한 있는 원본에는 **내 파일 직접 연결**을 제공한다.
-- [ ] UI와 사용자 문서에 companion, extension, localhost 주소, Electron editor
-  또는 별도 관리 CLI를 현재 제품 단계처럼 표시하지 않는다.
+- [ ] UI와 사용자 문서는 컷 전용 설치 앱 창과 일반 브라우저 full editor의 경계를
+  사실대로 표시하고 localhost 주소나 별도 관리 CLI를 사용자 절차로 노출하지 않는다.
+- [ ] 컷 창의 최소 embed host 범위, 비영구 partition, navigation·권한 차단,
+  세 플랫폼 실제 단축키와 창→브라우저 인계를 검증하기 전에는 공개 출시하지 않는다.
 
 ## 3. 공개 정적 웹 배포
 
 - [ ] `npm run build` 뒤 `npm run package:web`으로 만든 검증 ZIP만 배포한다.
+- [ ] 컷 전용 Electron 창·`kirinuki-engine://cut`·일회성 editor handoff를 처음
+  요구하는 웹은 로컬 엔진 최소 버전을 `3.0.1` 이상으로 검사한다. `3.0.0` 이하를
+  감지하면 custom protocol을 호출해 무응답으로 만들지 않고 같은 stable install
+  path의 최신 서명 installer를 먼저 안내한다.
+- [ ] 전환 순서는 **서명된 3.0.1+ 세 installer publish → remote size·SHA-256·서명
+  readback → 그 release channel을 고정한 웹 build → 웹 원자적 교체**다. 새 웹을
+  installer보다 먼저 공개하거나, 새 앱을 요구하는 웹과 구버전 installer 링크를
+  동시에 제공하지 않는다.
+- [ ] 교체 직후 일반 시작 URL과
+  `/?kirinukiSurface=cut-host`의 실제 HTTPS bytes·cache header를 각각 확인하고,
+  이전 `studio.js`/HTML cache가 섞이지 않도록 release version과 immutable asset
+  query가 모두 바뀌었음을 확인한다.
+- [ ] rollback은 `3.0.1+` 컷 host 계약을 이해하는 직전 호환 웹으로만 수행한다.
+  컷-host query를 모르는 구 UI로 되돌려 Electron 안에서 full editor navigation을
+  유도하지 않는다.
 - [ ] 서명된 엔진 Release 전의 일반 build에는 installer URL이 없고 **설치 파일
   준비 중**으로 표시된다.
 - [ ] installer 링크를 여는 배포는 published remote asset 전체의 exact
@@ -85,6 +107,14 @@
   bearer, OPTIONS preflight, redirect와 timing race를 negative test했다.
 - [ ] 엔진 재시작 뒤 웹은 새 capability를 자동 발급받고 사용자가 다시 설치하거나
   연결 설정을 열지 않는다.
+- [ ] 컷 창은 exact public top frame만 허용하고 popup, webview, download, 임의
+  navigation과 모든 permission request를 차단한다.
+- [ ] preload는 context isolation·sandbox·최소 API를 유지하고 renderer payload를
+  main process가 source·범위·크기·schema·권리 확인까지 다시 검증한다.
+- [ ] 컷→브라우저 handoff는 기존 device proof와 ECDH/AES-GCM channel, 짧은 TTL,
+  project/source scope, 단일 claim ID, ACK·replay tombstone을 사용한다.
+- [ ] handoff URL에는 payload·source·project·token·key가 없고 opaque nonce fragment는
+  브라우저가 읽는 즉시 제거한다.
 
 ## 5. 프로젝트·세션·캐시 의미
 
@@ -131,7 +161,8 @@
   실제 설치한다.
 - [ ] 첫 실행이 자동 시작을 등록하고 readback하며, 두 번째 실행은 중복 engine을
   만들지 않는다.
-- [ ] 실행 중 Electron BrowserWindow/webContents가 0이고 foreground UI가 없다.
+- [ ] background 시작에는 BrowserWindow/webContents가 0이며, 명시적인 컷 요청에만
+  격리된 창 하나가 열리고 편집기 인계가 확인된 뒤 닫힌다.
 - [ ] port를 다른 process가 차지하면 그 process를 종료하거나 takeover하지 않고
   명확히 fail closed한다.
 - [ ] 정상 종료·취소·timeout·crash 뒤 gateway와 child process, temp directory가

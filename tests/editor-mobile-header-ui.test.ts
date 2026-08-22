@@ -147,7 +147,7 @@ test("시작 화면과 직접 editor URL 모두 모바일 진입을 fail-closed�
   assert.match(studioHtml, /편집기는 모바일에서 사용할 수 없습니다/u);
   assert.match(
     studioSource,
-    /const mobileEditorBlocked = currentClientCannotUseEditor\(\);[\s\S]*elements\.startEditor\.disabled = mobileEditorBlocked \|\| openingEditor/u
+    /const mobileEditorBlocked = currentClientCannotUseEditor\(\);[\s\S]*function renderEditorEntryAvailability\(\)[\s\S]*mobileEditorBlocked \|\| openingEditor \|\| invalidRow[\s\S]*elements\.startEditor\.disabled/u
   );
   assert.match(
     studioSource,

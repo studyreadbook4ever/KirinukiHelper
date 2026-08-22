@@ -248,6 +248,37 @@ test("A→B 전환은 A seed를 보존 캐시와 혼동하지 않고 B envelope�
   });
 });
 
+test("같은 탭의 정상 F5는 admitted lease를 그대로 쓰고 지운 lease를 재생성하지 않는다", async () => {
+  await withWebRuntimeGlobals(async (storage) => {
+    const projectId = "project-reload";
+    const sourceSessionId = "vod:reload";
+    const opened = await beginWebEditorSession({
+      attestation: attestation({ projectId, sourceSessionId }),
+      captureSeed: { source: { contentId: "reload" }, segments: [] }
+    });
+    const admitted = await verifyStudioUsagePolicyGate({
+      projectId,
+      gateToken: opened.gateToken
+    });
+    assert.equal(admitted.ok, true);
+    const reloaded = await verifyStudioUsagePolicyGate({
+      projectId,
+      gateToken: ""
+    });
+    assert.equal(reloaded.ok, true);
+    assert.deepEqual(reloaded.usagePolicy, admitted.usagePolicy);
+
+    clearCurrentTabWebEditorSession();
+    assert.equal(storage.getItem(WEB_STUDIO_SESSION_STORAGE_KEY), null);
+    const closedTab = await verifyStudioUsagePolicyGate({
+      projectId,
+      gateToken: ""
+    });
+    assert.equal(closedTab.ok, false);
+    assert.equal(storage.getItem(WEB_STUDIO_SESSION_STORAGE_KEY), null);
+  });
+});
+
 test("24시간 idle lease는 fail-closed로 seed까지 지우고 활성 lease는 sliding 갱신한다", async () => {
   await withWebRuntimeGlobals(async (storage) => {
     const projectId = "project-ttl";

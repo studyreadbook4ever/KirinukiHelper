@@ -56,6 +56,12 @@ import {
   createCaptionGatewayServer
 } from "../scripts/caption-gateway.js";
 import {
+  CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+} from "../scripts/chzzk-vod-job-manager.js";
+import type {
+  ChzzkVodMaterializationRunner
+} from "../scripts/chzzk-vod-job-manager.js";
+import {
   LOCAL_WHISPERCPP_TRANSCRIPTION_MODE
 } from "../src/caption-agent/caption-gateway-core.js";
 import {
@@ -108,7 +114,7 @@ async function deviceFixture(): Promise<DeviceFixture> {
     keyId,
     publicKeySpki,
     enrolledAt: new Date().toISOString(),
-    maxSeenVersion: "3.0.0"
+    maxSeenVersion: "3.0.1"
   });
   const trustStore = Object.freeze({
     read: async () => pin,
@@ -162,20 +168,29 @@ function recordingFetch(port: number, records: WireRecord[]): typeof fetch {
   }) as typeof fetch;
 }
 
-async function startPublicGateway(t: TestContext, device: DeviceFixture) {
+async function startPublicGateway(
+  t: TestContext,
+  device: DeviceFixture,
+  {
+    materializationRunner
+  }: {
+    readonly materializationRunner?: ChzzkVodMaterializationRunner;
+  } = {}
+) {
   const stateRoot = await mkdtemp(path.join(
     os.tmpdir(),
     "kirinuki-security-gateway-"
   ));
   const runtime = createCaptionGatewayServer({
     deviceProofSigner: device.signer,
+    ...(materializationRunner ? { materializationRunner } : {}),
     env: {
       KIRINUKI_STT_MODE: LOCAL_WHISPERCPP_TRANSCRIPTION_MODE,
       KIRINUKI_STT_ENDPOINT: "http://127.0.0.1:4318/test/inference",
       KIRINUKI_STT_MODEL: "tiny-q5_1",
       KIRINUKI_AGENT_TOKEN: encodeBase64Url(new Uint8Array(32).fill(0x51)),
       KIRINUKI_ALLOWED_ORIGIN: KIRINUKI_PUBLIC_STUDIO_ORIGIN,
-      KIRINUKI_LOCAL_ENGINE_VERSION: "3.0.0",
+      KIRINUKI_LOCAL_ENGINE_VERSION: "3.0.1",
       KIRINUKI_MAX_AUDIO_BYTES: "1048576",
       KIRINUKI_VOD_RUNTIME_SCHEMA: LOCAL_VOD_RUNTIME_SCHEMA,
       KIRINUKI_VOD_RUNTIME_KIND: "vod-only",
@@ -388,6 +403,91 @@ test("public loopback v2는 session/control plaintext를 숨기고 exact actions
   assert.equal(captionStatusBody.sourceBound, false);
 });
 
+test("public VOD recovery capability는 같은 project와 같은 canonical source에만 묶인다", async (t) => {
+  const device = await deviceFixture();
+  const materializationRunner: ChzzkVodMaterializationRunner = async ({
+    signal
+  }) => await new Promise<never>((_resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  const { port } = await startPublicGateway(t, device, {
+    materializationRunner
+  });
+  const fetchImpl = recordingFetch(port, []);
+  const projectId = "source-scope-project";
+  const sourceA = SOURCE_URL;
+  const sourceB = "https://www.youtube.com/watch?v=lmnopqrstuv";
+  const tokenA = await pairCaptionAgent({
+    endpoint: FIXED_ENDPOINT,
+    purpose: "vod",
+    projectId,
+    sourceUrl: sourceA,
+    fetchImpl,
+    trustStore: device.trustStore
+  });
+  const created = await localMediaEngineTransportFetch(
+    "http://127.0.0.1:4319/v1/vod/materializations",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Kirinuki-Protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
+        ...captionAgentRequestHeaders(tokenA)
+      },
+      body: JSON.stringify({
+        schema: CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
+        consumerId: projectId,
+        sourceUrl: sourceA,
+        clips: [{ id: "source-a", startMs: 1_000, endMs: 2_000 }],
+        handleMs: 10_000,
+        permission: {
+          confirmed: true,
+          scope: "owned-or-authorized-public-vod"
+        }
+      })
+    },
+    fetchImpl
+  );
+  assert.equal(created.status, 202, await created.clone().text());
+  const jobId = String(
+    ((await created.json()) as Record<string, unknown>).jobId || ""
+  );
+  assert.match(jobId, /^[A-Za-z0-9_-]{16,128}$/u);
+
+  clearLocalMediaEngineSessionState();
+  const tokenB = await pairCaptionAgent({
+    endpoint: FIXED_ENDPOINT,
+    purpose: "vod",
+    projectId,
+    sourceUrl: sourceB,
+    fetchImpl,
+    trustStore: device.trustStore
+  });
+  for (const method of ["POST", "DELETE"] as const) {
+    const rejected = await localMediaEngineTransportFetch(
+      `http://127.0.0.1:4319/v1/vod/materializations/${jobId}`,
+      {
+        method,
+        headers: {
+          "X-Kirinuki-Protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
+          ...captionAgentRequestHeaders(tokenB)
+        }
+      },
+      fetchImpl
+    );
+    assert.equal(rejected.status, 403, await rejected.clone().text());
+    assert.equal(
+      ((await rejected.json()) as { error: { code: string } }).error.code,
+      "CAPABILITY_SCOPE_MISMATCH"
+    );
+  }
+});
+
 test("signed health/session tamper와 one-shot ECDH grant oracle를 fail closed한다", async (t) => {
   const device = await deviceFixture();
   const { port } = await startPublicGateway(t, device);
@@ -522,7 +622,7 @@ test("custom-scheme pairing handoff는 state/challenge에 묶여 loopback에서 
     challenge,
     keyId: device.pin.keyId,
     publicKeySpki: device.pin.publicKeySpki,
-    engineVersion: "3.0.0",
+    engineVersion: "3.0.1",
     issuedAt: new Date().toISOString()
   };
   const response = Object.freeze({

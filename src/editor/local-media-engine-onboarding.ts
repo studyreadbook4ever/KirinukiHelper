@@ -849,6 +849,8 @@ export interface LocalMediaEnginePrimeOptions {
 }
 
 export interface LocalMediaEngineReadinessOptions {
+  /** Set only when this function is entered directly from a trusted click. */
+  readonly allowImmediateProtocolLaunch?: boolean;
   readonly permissionState?: () => Promise<PermissionState | null>;
   readonly pair?: (
     signal?: AbortSignal,
@@ -892,6 +894,7 @@ export function invalidatePrimedLocalMediaEngineTrust(): void {
 export async function ensureLocalMediaEngineReady(
   signal?: AbortSignal,
   {
+    allowImmediateProtocolLaunch = false,
     permissionState: readPermissionState = () => (
       localMediaEnginePermissionState()
     ),
@@ -923,7 +926,7 @@ export async function ensureLocalMediaEngineReady(
         // offers the explicit wake action instead.
         pinnedWakeError = error;
       }
-    } else {
+    } else if (allowImmediateProtocolLaunch) {
       try {
         await pair(signal, {
           timeoutMs: PINNED_ENGINE_WAKE_TIMEOUT_MS
@@ -1019,6 +1022,7 @@ export async function ensureLocalMediaEngineReady(
       : releaseUnavailable
         ? LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE
         : "현재 PC는 자동 설치 지원 대상이 아닙니다.";
+    let lastConnectionError = initialConnectionError;
     let pollingTimer: number | null = null;
     let pollingDeadline = 0;
     let settled = false;
@@ -1056,26 +1060,18 @@ export async function ensureLocalMediaEngineReady(
       elements.dialog.close();
       resolveOnboarding("ready");
     };
-    const check = async (allowPairing = false) => {
+    const check = async (
+      pairingAttempt?: Promise<Readonly<LocalMediaEngineDevicePin>>
+    ) => {
       elements.retry.disabled = true;
       elements.status.dataset.state = "checking";
       elements.status.textContent = "이 PC의 영상 준비 도구를 확인하는 중…";
       try {
-        try {
-          await probe(signal);
-        } catch (error) {
-          if (
-            allowPairing
-            && error instanceof LocalMediaEngineConnectionError
-            && ["ENGINE_UNPAIRED", "ENGINE_UNAVAILABLE"].includes(error.code)
-          ) {
-            elements.status.textContent = "Kirinuki 앱에서 이 브라우저의 연결 요청을 확인하는 중…";
-            await pair(signal);
-            await probe(signal);
-          } else {
-            throw error;
-          }
+        if (pairingAttempt) {
+          elements.status.textContent = "Kirinuki 앱에서 이 브라우저의 연결 요청을 확인하는 중…";
+          await pairingAttempt;
         }
+        await probe(signal);
         primedEngineWasHealthy = true;
         succeed();
         return true;
@@ -1084,6 +1080,9 @@ export async function ensureLocalMediaEngineReady(
           throw signal.reason;
         }
         primedEngineWasHealthy = false;
+        if (error instanceof LocalMediaEngineConnectionError) {
+          lastConnectionError = error;
+        }
         permissionState = await readPermissionState();
         const permissionStillBlocked = permissionState === "prompt"
           || permissionState === "denied";
@@ -1141,7 +1140,25 @@ export async function ensureLocalMediaEngineReady(
         || "설치가 끝난 뒤 다시 확인해 주세요.";
     }
     function retry(): void {
-      void check(true).catch(abort);
+      let pairingAttempt:
+        | Promise<Readonly<LocalMediaEngineDevicePin>>
+        | undefined;
+      if (
+        lastConnectionError
+        && ["ENGINE_UNPAIRED", "ENGINE_UNAVAILABLE"].includes(
+          lastConnectionError.code
+        )
+      ) {
+        try {
+          // Keep the custom-protocol launch inside this trusted click stack.
+          // A probe before pair() would cross an await boundary and Chromium
+          // could discard the transient user activation needed by the launch.
+          pairingAttempt = pair(signal);
+        } catch (error) {
+          pairingAttempt = Promise.reject(error);
+        }
+      }
+      void check(pairingAttempt).catch(abort);
     }
     function resetPairing(): void {
       void (async () => {

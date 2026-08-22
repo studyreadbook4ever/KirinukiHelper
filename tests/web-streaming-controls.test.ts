@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("컷 단계는 원본 iframe과 수동 입력만 유지하고 삭제된 브리지 경로를 싣지 않는다", async () => {
+test("컷 단계는 원본 iframe과 컷 전용 bridge만 쓰고 로컬 미디어 준비를 시작하지 않는다", async () => {
   const [html, mainSource, bundle] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
@@ -10,22 +10,25 @@ test("컷 단계는 원본 iframe과 수동 입력만 유지하고 삭제된 브
   ]);
 
   assert.match(html, /<iframe[^>]+id="stream-preview-frame"/u);
-  assert.match(html, /원본을 보며 가져올 시작과 끝 시각을 직접 입력하세요/u);
+  assert.match(html, /id="stream-cut-console"[\s\S]*id="stream-current-time"/u);
+  assert.match(html, /강조된 행에 E로 시작, R로 끝 시각을 기록합니다/u);
   assert.doesNotMatch(
     html,
-    /stream-cut-console|local-preview-video|local-preview-anchor|prepare-local-preview/u
+    /local-preview-video|local-preview-anchor|prepare-local-preview/u
+  );
+  assert.match(
+    mainSource,
+    /StreamingBridgeClient[\s\S]*captureCurrentPlayerTime[\s\S]*seekPlayerBy[\s\S]*setPlayerRate/u
   );
   assert.doesNotMatch(
     mainSource,
-    /streaming-bridge|StreamingBridge|streamingBridge|captureCurrentPlayerTime|seekPlayerBy|setPlayerRate|ChzzkVodMaterialization|LOCAL_VOD_COMPANION_ENDPOINT/u
+    /ChzzkVodMaterialization|LOCAL_VOD_COMPANION_ENDPOINT|KIRINUKI_MEDIA_ENGINE_ENDPOINT|startChzzkVodMaterialization|waitForChzzkVodMaterialization|localPreviewVideo|\/v1\/vod\/materializations/u
   );
-  assert.doesNotMatch(
-    bundle,
-    /chrome-extension|streaming-companion|streaming-bridge|StreamingBridge|stream-cut-console/u
-  );
+  assert.match(bundle, /kirinuki-streaming-bridge\/v2/u);
+  assert.doesNotMatch(bundle, /chrome-extension:\/\//u);
 });
 
-test("browser smoke는 확장을 로드하지 않고 임베드·수동 구간 입력·0회 acquisition을 검증한다", async () => {
+test("표준 browser smoke는 Electron preload 부재를 fail-closed하고 수동 입력과 0회 acquisition을 유지한다", async () => {
   const smoke = await readFile(
     new URL("../scripts/local-studio-browser-smoke.ts", import.meta.url),
     "utf8"
@@ -40,25 +43,25 @@ test("browser smoke는 확장을 로드하지 않고 임베드·수동 구간 �
   assert(capturePhaseStart >= 0 && capturePhaseEnd > capturePhaseStart);
   const capturePhase = smoke.slice(capturePhaseStart, capturePhaseEnd);
   assert.doesNotMatch(capturePhase, /\/v1\/vod\/materializations|#local-preview-video/u);
-  assert.match(capturePhase, /extensionlessCaptureState/u);
-  assert.match(capturePhase, /obsoleteBridgeControlsAbsent[\s\S]*manualInputsEnabled[\s\S]*iframeVisible/u);
-  assert.match(capturePhase, /(?:acquisition|materialization|download|gateway)\w*\s*===\s*0/iu);
-  assert.doesNotMatch(smoke, /buildStreamingCompanion|production-companion-fixtures/u);
-  assert.doesNotMatch(smoke, /`--load-extension=|`--disable-extensions-except=/u);
+  assert.match(
+    capturePhase,
+    /extensionlessCaptureState[\s\S]*bridgeConsolePresent[\s\S]*playerControlsDisabled[\s\S]*manualInputsEnabled[\s\S]*iframeVisible/u
+  );
+  assert.match(
+    capturePhase,
+    /acquisitionRequests\s*===\s*0/u
+  );
+  assert.match(smoke, /browserExtension: "not-loaded"/u);
+  assert.match(smoke, /playerBridge: "present-fail-closed-without-electron-preload"/u);
 });
 
-test("표준 package script는 확장·구 Linux source archive 경로를 노출하지 않는다", async () => {
-  const manifest = JSON.parse(await readFile(
-    new URL("../package.json", import.meta.url),
-    "utf8"
-  )) as { scripts?: Record<string, string> };
-  const scripts = manifest.scripts || {};
-  assert.equal(scripts["test:browser:live-vod"], undefined);
-  assert.equal(scripts["test:browser:live-vod-cut"], undefined);
-  assert.equal(scripts["streaming:companion:build"], undefined);
-  assert.equal(scripts["package:linux"], undefined);
-  assert.doesNotMatch(
-    JSON.stringify(scripts),
-    /--load-extension|streaming-companion|package-linux-app|verify-linux-app-package/u
-  );
+test("player 제어는 unpacked extension 대신 ASAR 고정 frame action만 배포한다", async () => {
+  const [buildSource, packageSource, packageManifest] = await Promise.all([
+    readFile(new URL("../scripts/build-desktop.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/package-desktop.ts", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8")
+  ]);
+  assert.match(buildSource, /streaming-electron-frame-action\.ts/u);
+  assert.match(packageSource, /isolatedResources\.toolsRoot/u);
+  assert.doesNotMatch(packageManifest, /package-linux-app|verify-linux-app-package/u);
 });

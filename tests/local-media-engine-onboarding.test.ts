@@ -46,7 +46,7 @@ import type {
 } from "../src/editor/local-media-engine-release.js";
 
 function verifiedReleaseChannel(): Readonly<LocalMediaEngineReleaseChannel> {
-  const tag = "v3.0.0";
+  const tag = "v3.0.1";
   const installers = Object.fromEntries(
     Object.entries(LOCAL_MEDIA_ENGINE_RELEASE_FILES).map(([target, fileName]) => [
       target,
@@ -91,7 +91,7 @@ async function signingFixture(): Promise<SigningFixture> {
     keyId,
     publicKeySpki,
     enrolledAt: new Date().toISOString(),
-    maxSeenVersion: "3.0.0"
+    maxSeenVersion: "3.0.1"
   });
   const trustStore: Readonly<LocalMediaEngineTrustStore> = Object.freeze({
     read: async () => pin,
@@ -119,7 +119,7 @@ async function compatibleHealth(): Promise<Record<string, unknown>> {
       backgroundStart: "ready",
       product: LOCAL_MEDIA_ENGINE_PRODUCT,
       protocol: LOCAL_MEDIA_ENGINE_API_PROTOCOL,
-      version: "3.0.0"
+      version: "3.0.1"
     },
     originBinding: "exact-public-studio",
     authentication: "bearer-memory-capability",
@@ -271,7 +271,7 @@ test("온보딩 installer는 verified channel이 있을 때만 고정된 세 파
   assert.equal(localMediaEngineInstaller("unsupported", releaseChannel), null);
   assert.match(
     localMediaEngineInstaller("windows-x64", releaseChannel)?.url || "",
-    /^https:\/\/github\.com\/studyreadbook4ever\/KirinukiHelper\/releases\/download\/v3\.0\.0\//u
+    /^https:\/\/github\.com\/studyreadbook4ever\/KirinukiHelper\/releases\/download\/v3\.0\.1\//u
   );
   assert.match(
     localMediaEngineInstaller("windows-x64", releaseChannel)?.installInstruction || "",
@@ -501,6 +501,7 @@ test("sleeping pinned 엔진은 첫 prepare 활성화에서 protocol handler를 
       }
     });
     const outcome = ensureLocalMediaEngineReady(undefined, {
+      allowImmediateProtocolLaunch: true,
       permissionState: async () => "granted",
       pair: async () => {
         pairCalls += 1;
@@ -518,6 +519,160 @@ test("sleeping pinned 엔진은 첫 prepare 활성화에서 protocol handler를 
     assert.equal(runtimeProbeCalls, 1);
   } finally {
     invalidatePrimedLocalMediaEngineTrust();
+  }
+});
+
+test("온보딩 재시도는 마지막 연결 오류가 요구할 때 click stack에서 pair를 먼저 연다", async () => {
+  class RetryFixtureElement extends EventTarget {
+    className = "";
+    dataset: Record<string, string> = {};
+    download = "";
+    disabled = false;
+    hidden = false;
+    href = "";
+    open = false;
+    textContent = "";
+
+    close(): void {
+      this.open = false;
+    }
+
+    focus(): void {}
+
+    removeAttribute(name: string): void {
+      if (name === "href") this.href = "";
+      if (name === "download") this.download = "";
+    }
+
+    showModal(): void {
+      this.open = true;
+    }
+  }
+  const selectors = new Map<string, RetryFixtureElement>([
+    ["#local-media-engine-dialog", new RetryFixtureElement()],
+    ["#local-media-engine-download", new RetryFixtureElement()],
+    ["#local-media-engine-download-label", new RetryFixtureElement()],
+    ["#local-media-engine-retry", new RetryFixtureElement()],
+    ["#local-media-engine-reset", new RetryFixtureElement()],
+    ["#local-media-engine-cancel", new RetryFixtureElement()],
+    ["#local-media-engine-status", new RetryFixtureElement()],
+    ["#local-media-engine-unsupported", new RetryFixtureElement()]
+  ]);
+  const previous = {
+    document: Object.getOwnPropertyDescriptor(globalThis, "document"),
+    navigator: Object.getOwnPropertyDescriptor(globalThis, "navigator"),
+    window: Object.getOwnPropertyDescriptor(globalThis, "window")
+  };
+  const restore = (name: keyof typeof previous) => {
+    const descriptor = previous[name];
+    if (descriptor) {
+      Object.defineProperty(globalThis, name, descriptor);
+    } else {
+      delete (globalThis as Record<string, unknown>)[name];
+    }
+  };
+  const fixture = await signingFixture();
+  const order: string[] = [];
+  let probeCalls = 0;
+  let pairCalls = 0;
+  let resolvePair: ((pin: Readonly<LocalMediaEngineDevicePin>) => void)
+    | undefined;
+  const pendingPair = new Promise<Readonly<LocalMediaEngineDevicePin>>(
+    (resolve) => {
+      resolvePair = resolve;
+    }
+  );
+  try {
+    invalidatePrimedLocalMediaEngineTrust();
+    await primeLocalMediaEngineTrust({
+      trustStore: fixture.trustStore,
+      permissionState: async () => "granted",
+      probe: async () => {
+        throw new LocalMediaEngineConnectionError(
+          "sleeping",
+          "ENGINE_UNAVAILABLE"
+        );
+      }
+    });
+    Object.defineProperties(globalThis, {
+      document: {
+        configurable: true,
+        value: {
+          querySelector: (selector: string) => selectors.get(selector) ?? null
+        }
+      },
+      navigator: {
+        configurable: true,
+        value: navigatorFixture({ platform: "Windows", architecture: "x86" })
+      },
+      window: {
+        configurable: true,
+        value: { clearTimeout, setTimeout }
+      }
+    });
+    const outcome = ensureLocalMediaEngineReady(undefined, {
+      permissionState: async () => "granted",
+      pair: () => {
+        pairCalls += 1;
+        order.push("pair");
+        return pendingPair;
+      },
+      probe: async () => {
+        probeCalls += 1;
+        if (probeCalls === 1) {
+          throw new LocalMediaEngineConnectionError(
+            "not running",
+            "ENGINE_UNAVAILABLE"
+          );
+        }
+        order.push(`probe-${probeCalls}`);
+        if (probeCalls === 2) {
+          throw new LocalMediaEngineConnectionError(
+            "incompatible",
+            "ENGINE_INCOMPATIBLE"
+          );
+        }
+      }
+    });
+    const dialog = selectors.get("#local-media-engine-dialog")!;
+    const retry = selectors.get("#local-media-engine-retry")!;
+    const status = selectors.get("#local-media-engine-status")!;
+    for (let index = 0; index < 20 && !dialog.open; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    assert.equal(dialog.open, true);
+    assert.equal(pairCalls, 0, "명시 클릭 전 protocol을 열면 안 됩니다");
+    assert.equal(retry.textContent, "앱 깨우고 다시 확인");
+
+    queueMicrotask(() => order.push("first-microtask"));
+    retry.dispatchEvent(new Event("click"));
+    assert.deepEqual(order, ["pair"]);
+    assert.equal(pairCalls, 1);
+    assert.equal(probeCalls, 1);
+    await Promise.resolve();
+    assert.deepEqual(order, ["pair", "first-microtask"]);
+    assert.equal(probeCalls, 1, "pair가 끝나기 전 probe하면 안 됩니다");
+
+    resolvePair?.(fixture.pin);
+    for (
+      let index = 0;
+      index < 20 && status.dataset.state !== "error";
+      index += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    assert.deepEqual(order, ["pair", "first-microtask", "probe-2"]);
+    assert.equal(retry.textContent, "설치 완료 · 다시 확인");
+
+    retry.dispatchEvent(new Event("click"));
+    assert.equal(pairCalls, 1, "호환 오류 뒤에는 protocol을 다시 열면 안 됩니다");
+    assert.equal(probeCalls, 3);
+    assert.equal(await outcome, "ready");
+  } finally {
+    invalidatePrimedLocalMediaEngineTrust();
+    restore("window");
+    restore("navigator");
+    restore("document");
   }
 });
 

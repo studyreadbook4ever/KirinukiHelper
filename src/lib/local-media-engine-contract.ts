@@ -15,7 +15,7 @@ export const LOCAL_MEDIA_ENGINE_PRODUCT =
  */
 export const LOCAL_MEDIA_ENGINE_API_PROTOCOL =
   "kirinuki-local-media-engine/v1" as const;
-export const MINIMUM_LOCAL_MEDIA_ENGINE_VERSION = "3.0.0" as const;
+export const MINIMUM_LOCAL_MEDIA_ENGINE_VERSION = "3.0.1" as const;
 export const MINIMUM_LOCAL_MEDIA_ENGINE_YT_DLP_VERSION =
   "2026.07.04" as const;
 export const MINIMUM_LOCAL_MEDIA_ENGINE_EJS_VERSION = "0.8.0" as const;

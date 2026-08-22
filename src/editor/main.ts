@@ -700,8 +700,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const EDITOR_ELEMENT_IDS = [
   "editor-app-gate",
   "editor-mobile-gate",
-  "editor-policy-gate",
-  "editor-policy-gate-status",
   "editor-shell",
   "project-name",
   "source-kind",
@@ -1282,9 +1280,11 @@ function leaveReplacedUsagePolicySession(message: string): void {
     stopPreviewAudioClock({ sync: false });
     cancelActiveJob();
   }
-  showEditorPolicyGateError(
-    `${message} 시작 화면에서 계속할 작업을 다시 선택해 주세요.`
+  console.warn(
+    `${message} 시작 화면에서 계속할 작업을 다시 선택합니다.`
   );
+  elements.editor_shell.inert = true;
+  elements.editor_shell.hidden = true;
   window.setTimeout(() => {
     location.replace(new URL("/", location.origin).href);
   }, 0);
@@ -1339,7 +1339,6 @@ function showVerifiedEditorShell(session: ActiveUsagePolicySession): void {
     "사용자 진술을 기록한 상태이며 Kirinuki의 법률·권리 검증이나 게시 승인을 뜻하지 않습니다.";
   elements.editor_app_gate.hidden = true;
   elements.editor_mobile_gate.hidden = true;
-  elements.editor_policy_gate.hidden = true;
   elements.editor_shell.inert = false;
   elements.editor_shell.hidden = false;
   if (project?.id && !localDraftAutosaveTimer) {
@@ -1351,21 +1350,11 @@ function showVerifiedEditorShell(session: ActiveUsagePolicySession): void {
   scheduleUsagePolicyLeaseHeartbeat();
 }
 
-function showEditorPolicyGateError(message: string): void {
-  elements.editor_shell.inert = true;
-  elements.editor_shell.hidden = true;
-  elements.editor_app_gate.hidden = true;
-  elements.editor_mobile_gate.hidden = true;
-  elements.editor_policy_gate.hidden = false;
-  elements.editor_policy_gate_status.textContent = message;
-}
-
 function showEditorMobileGate(): void {
   document.documentElement.dataset.editorAccess = "mobile-blocked";
   elements.editor_shell.inert = true;
   elements.editor_shell.hidden = true;
   elements.editor_app_gate.hidden = true;
-  elements.editor_policy_gate.hidden = true;
   elements.editor_mobile_gate.hidden = false;
 }
 
@@ -1374,7 +1363,6 @@ function showEditorAppGate(): void {
   elements.editor_shell.inert = true;
   elements.editor_shell.hidden = true;
   elements.editor_mobile_gate.hidden = true;
-  elements.editor_policy_gate.hidden = true;
   elements.editor_app_gate.hidden = false;
 }
 
@@ -21743,8 +21731,13 @@ window.addEventListener("kirinuki:apply-local-caption-first-pass", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
-  clearLocalMediaEngineSessionState();
-  invalidateShortPreviewCacheOperation();
+  // Launching the installed helper through a custom protocol can emit
+  // beforeunload even when Chromium keeps this document alive. Saving is
+  // harmless there; destructive teardown belongs to the real pagehide below.
+  void flushSave();
+});
+
+window.addEventListener("pagehide", (event) => {
   clearUsagePolicyExpiryTimer();
   stopDevReloadObserver();
   stopLocalDraftAutosave();
@@ -21753,10 +21746,18 @@ window.addEventListener("beforeunload", () => {
   }
   stopPreviewPlaybackClock();
   stopPreviewAudioClock({ sync: false });
+  void flushSave();
+  // A BFCache entry is still this live editor. Keep its media handles and
+  // in-flight preparation intact so browser Back/Forward can resume it.
+  if (event.persisted) {
+    return;
+  }
+  clearLocalMediaEngineSessionState();
+  invalidatePrimedLocalMediaEngineTrust();
+  invalidateShortPreviewCacheOperation();
   cancelPreviewPreload({ clearSource: true });
   releaseShortPreviewLayerVideos();
   releaseShortPreviewSourceAudio();
-  void flushSave();
   if (mediaUrl) {
     URL.revokeObjectURL(mediaUrl);
   }
@@ -21765,18 +21766,6 @@ window.addEventListener("beforeunload", () => {
   releaseShortPreviewAdaptiveScaler();
   releaseShortPreviewFallbackSurface();
   cancelActiveJob();
-});
-
-window.addEventListener("pagehide", () => {
-  clearLocalMediaEngineSessionState();
-  invalidatePrimedLocalMediaEngineTrust();
-  invalidateShortPreviewCacheOperation();
-  stopDevReloadObserver();
-  stopLocalDraftAutosave();
-  if (project && workspaceMode === "short-form") {
-    stopShortCanvasPlayback();
-  }
-  void flushSave();
 });
 
 document.addEventListener("visibilitychange", () => {
@@ -21865,6 +21854,7 @@ window.addEventListener("pageshow", (event) => {
 
 void initialize().catch((error: unknown) => {
   console.error(error);
-  showEditorPolicyGateError(`편집기를 열지 못했습니다: ${errorMessage(error)}`);
-  showToast(`편집기를 열지 못했습니다: ${errorMessage(error)}`, "error", 0);
+  elements.editor_shell.inert = true;
+  elements.editor_shell.hidden = true;
+  location.replace(new URL("/", location.origin).href);
 });

@@ -6,8 +6,9 @@ Kirinuki는 CHZZK·YouTube·SOOP의 공개 완료 VOD에서 사용자가 직접 
 
 제품의 본체는 [`https://kirinuki.eff0rtchung.kr`](https://kirinuki.eff0rtchung.kr)입니다.
 Windows x64, Apple Silicon Mac, Linux x64 사용자는 처음 한 번만 **Kirinuki 영상
-준비 도구**를 설치합니다. 그 뒤에는 별도 프로그램 창이나 브라우저 확장,
-연결 주소, 포트를 조작하지 않고 일반 웹사이트처럼 사용합니다.
+준비 도구**를 설치합니다. 그 뒤에는 사이트에서 컷 선택을 누르면 설치 앱의
+원본 플레이어 창이 자동으로 열리고, 컷을 확정하면 기본 브라우저 편집기로 자동
+돌아옵니다. 연결 주소나 포트를 조작할 필요가 없습니다.
 
 > 현재 저장소는 이 구조의 구현과 검증 단계입니다. 세 OS용 package를 CI에서
 > 만들고 아래에 명시한 OS별 범위만 검사하지만 아직 서명·공증된 공개 Release가
@@ -15,22 +16,27 @@ Windows x64, Apple Silicon Mac, Linux x64 사용자는 처음 한 번만 **Kirin
 > [데스크톱 바이너리 출시 게이트](legal/DESKTOP_BINARY_RELEASE_GATE.md)를 모두
 > 충족해야 합니다.
 
+원본 플레이어 위에서 `E/R`, `D/F`, `Y/U`를 쓰는 선택 기능은 설치 앱의 ASAR에
+고정된 플레이어 제어 코드가 담당합니다. 별도 Chrome 확장, Web Store 설치 또는
+개발자 모드는 필요하지 않습니다. 이 코드는 컷 선택 전용 격리 창의 정확한 플랫폼
+frame에서만 실행되고 일반 브라우저 편집기에는 주입되지 않습니다.
+
 ## 사용자 흐름
 
-1. 웹사이트에 CHZZK·YouTube·SOOP VOD URL을 붙여넣습니다.
-2. 사용할 시작·끝을 `초`, `MM:SS` 또는 `HH:MM:SS`로 직접 입력합니다.
-3. 프로젝트 이름과 이번 사용의 권리·책임 확인란을 입력한 뒤 **편집기 열기**를
-   누릅니다.
-4. **편집 영상 준비**를 누릅니다. 영상 준비 도구가 없을 때만 OS에 맞는 설치
-   안내가 한 번 나타납니다.
-5. 최초 설치 뒤 같은 페이지에서 **이 PC 연결**을 한 번 누릅니다. 브라우저가
-   로컬 네트워크 접근을 물으면 허용해야 합니다. 한 번 연결한 뒤 잠든 도구는
-   이후 **편집 영상 준비** 클릭 한 번으로 깨어나 선택 구간 준비를 이어갑니다.
-6. 컷과 자막을 검수한 뒤 내보낼 파일 제목과 저장 위치를 정합니다.
+1. 웹사이트에서 **새 컷 선택 열기**를 누릅니다. 영상 준비 도구가 없을 때만
+   OS에 맞는 설치 안내가 한 번 나타납니다.
+2. 설치 앱의 컷 창에 CHZZK·YouTube·SOOP VOD URL을 붙여넣습니다.
+3. 원본 플레이어에서 시작·끝을 직접 입력하거나 `E/R`, `D/F`, `Y/U`
+   단축키로 정하고, 프로젝트 이름과 이번 사용의 권리·책임 확인을 완료합니다.
+4. **편집기 열기**를 누르면 선택값이 암호화된 일회성 인계로 전달되고 기본
+   브라우저 편집기가 열립니다. 컷 창은 닫히며 엔진은 background로 남습니다.
+5. 최초 연결 때 브라우저가 로컬 네트워크 접근을 물으면 한 번 허용합니다.
+6. 필요한 VOD 구간이 이 PC에 준비되면 컷과 자막을 검수한 뒤 내보낼 파일 제목과
+   저장 위치를 정합니다.
 
-이후 방문에서는 1~3, 4~6의 편집 흐름만 반복합니다. 영상 준비 도구에는 보이는
-편집 창이 없고 로그인·계정·동기화 기능도 없습니다. 운영체제 로그인 시 백그라운드로
-시작해 웹사이트가 필요할 때만 선택한 구간을 준비합니다.
+이후 방문에서는 같은 흐름을 반복합니다. 영상 준비 도구의 보이는 창은 컷 선택에만
+쓰이며 full editor, 로그인·계정·동기화 기능은 없습니다. 운영체제 로그인 시에는
+창 없이 시작해 웹사이트가 필요할 때만 선택한 구간을 준비합니다.
 
 라이브, 비공개, 로그인 필요, DRM 또는 지역 제한 원본은 우회하지 않습니다.
 자동 준비가 불가능한 원본에는 사용 권한이 있는 파일을 **내 파일 직접 연결**로
@@ -40,9 +46,12 @@ Windows x64, Apple Silicon Mac, Linux x64 사용자는 처음 한 번만 **Kirin
 
 ```text
 kirinuki.eff0rtchung.kr
-  └─ 컷·자막·레이어·미리보기·내보내기 UI (브라우저)
-       └─ 127.0.0.1:4319 (사용자에게 숨긴 고정 내부 연결)
-            └─ 필요한 VOD 구간 취득·검증·로컬 캐시 (설치된 백그라운드 엔진)
+  ├─ 시작·자막·레이어·미리보기·내보내기 UI (일반 브라우저)
+  └─ 설치 앱 호출
+       └─ 컷 선택 전용 Electron 창 + ASAR 고정 player action
+            ├─ 암호화된 일회성 컷→브라우저 인계
+            └─ 127.0.0.1:4319 (사용자에게 숨긴 고정 내부 연결)
+                 └─ 필요한 VOD 구간 취득·검증·로컬 캐시
 
 원본 플랫폼 ────────────────┘
 ```
@@ -54,9 +63,10 @@ kirinuki.eff0rtchung.kr
   검증만 담당합니다.
 - Cloudflare Tunnel은 공개 웹 origin으로만 연결합니다. 로컬 엔진 포트는
   Tunnel, LAN 또는 공인 인터페이스에 노출하지 않습니다.
-- Chrome 확장 프로그램과 Electron 편집기 창은 제품 구조에 포함되지 않습니다.
-  Electron은 세 OS에서 동일한 백그라운드 엔진을 패키징하는 런타임으로만
-  사용합니다.
+- Electron의 창은 원본을 보며 컷을 고르는 동안에만 하나 열립니다. full editor와
+  저장본 관리는 일반 브라우저에만 있고 로그인 자동 시작은 계속 windowless입니다.
+- 플레이어 제어 코드는 build 때 `app.asar`에 고정되며, 별도 extension·
+  `extraResource`·Chrome profile 설치물을 만들지 않습니다.
 
 ## 구간과 시간축
 
@@ -111,6 +121,11 @@ analytics를 수집하지 않습니다.
 - session 발급과 이후 JSON control traffic은 one-shot ECDH에서 만든 AES-GCM
   transport로 봉인합니다. token, 프로젝트 ID와 원본 URL을 plaintext loopback에
   보내지 않으며 counter replay도 거절합니다.
+- 컷 선택 결과도 같은 암호화 채널에서 짧게 살아 있는 nonce·project scope·claim
+  ID로 한 번만 수령하고, 브라우저 저장과 ACK가 끝난 뒤 폐기합니다. 주소에는
+  payload나 token을 넣지 않고 불투명 nonce fragment도 읽자마자 지웁니다.
+- 컷 창은 비영구 partition을 쓰며 top-frame 이동, popup, webview, download와
+  권한 요청을 차단합니다. 플랫폼 iframe은 preload·Node IPC에 접근할 수 없습니다.
 - capability는 프로젝트, canonical 원본 URL, 허용 작업에 묶이고 만료됩니다.
 - 다른 탭의 nonce 재사용, 다른 프로젝트·원본으로의 scope 변경, 과대 요청을
   거절합니다.
@@ -151,11 +166,13 @@ DMG에서 앱을 설치하고 최초 한 번 실행해야 하며, 배포 전 Dev
 
 업데이트 기능이나 사용 통계를 위한 별도 백그라운드 네트워크 요청은 넣지
 않습니다. 공개 엔진의 `kirinuki-local-media-engine/v1` 계약은 앱 버전과 독립된
-additive-only 장기 호환 경계입니다. 따라서 한 번 설치한 v1 엔진은 이후 웹에서도
-그대로 받아들이며, 일반 기능 변경 때문에 다시 설치하라고 요구하지 않습니다.
-실제 보안 결함처럼 로컬 바이너리 교체가 불가피한 예외에만 동일한 stable install
-path의 서명된 installer를 명시적으로 제공합니다. unsigned 자동 업데이트나 조용한
-binary replacement는 허용하지 않습니다.
+additive-only 장기 호환 경계입니다. 다만 컷 전용 Electron 창과 browser handoff를
+처음 포함하는 shell 기준은 `3.0.1`이므로 `3.0.0` 이하는 한 번 명시적으로 다시
+설치해야 합니다. 웹은 구버전에 cut protocol을 보내 무응답으로 만들지 않고 먼저
+재설치 안내를 보여 줍니다. 이 기준 이후의 일반적인 additive v1 변경 때문에 매번
+재설치를 요구하지 않으며, 로컬 바이너리 교체가 불가피한 경우에만 동일한 stable
+install path의 서명된 installer를 명시적으로 제공합니다. unsigned 자동 업데이트나
+조용한 binary replacement는 허용하지 않습니다.
 
 ## 편집 기능
 
@@ -255,7 +272,7 @@ bundle 이동 감지·runtime 정리와 detach를 확인합니다. 실제 macOS 
 src/web/          시작 화면
 src/editor/       브라우저 편집기
 src/lib/          공유 도메인·시간축·저장 계약
-src/desktop/      화면 없는 로컬 엔진 패키지와 OS 생명주기
+src/desktop/      background 엔진·컷 전용 창 패키지와 OS 생명주기
 scripts/          빌드·gateway·VOD materializer·검증 도구
 tests/            결정론적 unit/contract 테스트
 web/              생성된 정적 배포 산출물
