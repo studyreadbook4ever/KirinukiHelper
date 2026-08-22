@@ -581,60 +581,106 @@ async function execute<T>(script: string, args: readonly unknown[] = []): Promis
   );
 }
 
-async function storeBrowserProject(project: EditorProject): Promise<void> {
+async function storeBrowserProjects(
+  projects: readonly EditorProject[]
+): Promise<void> {
+  assert(projects.length > 0, "저장할 브라우저 프로젝트 fixture가 없습니다.");
   await execute(`
     globalThis.__kirinukiSmokeProjectWrite = null;
+    let database = null;
+    const closeDatabase = () => {
+      if (!database) return;
+      try {
+        database.close();
+      } catch {
+        // 이미 닫힌 fixture 연결은 추가 정리가 필요하지 않다.
+      }
+      database = null;
+    };
+    const settle = (ready, phase, error = "") => {
+      if (globalThis.__kirinukiSmokeProjectWrite !== null) return;
+      globalThis.__kirinukiSmokeProjectWrite = {
+        ready,
+        phase,
+        error: ready ? "" : String(error || phase)
+      };
+      closeDatabase();
+    };
     const open = indexedDB.open("chzzk-kirinuki-studio");
     open.onerror = () => {
-      globalThis.__kirinukiSmokeProjectWrite = {
-        ready: false,
-        error: String(open.error || "open failed")
-      };
+      settle(false, "open-error", open.error || "open failed");
+    };
+    open.onblocked = () => {
+      settle(false, "open-blocked", "database open blocked");
     };
     open.onsuccess = () => {
-      const database = open.result;
+      database = open.result;
       let transaction;
       try {
         transaction = database.transaction("projects", "readwrite");
       } catch (error) {
-        globalThis.__kirinukiSmokeProjectWrite = {
-          ready: false,
-          error: String(error)
-        };
-        database.close();
+        settle(false, "transaction-create", error);
         return;
       }
       transaction.onerror = () => {
-        globalThis.__kirinukiSmokeProjectWrite = {
-          ready: false,
-          error: String(transaction.error || "transaction failed")
-        };
+        settle(
+          false,
+          "transaction-error",
+          transaction.error || "transaction failed"
+        );
       };
       transaction.onabort = () => {
-        globalThis.__kirinukiSmokeProjectWrite = {
-          ready: false,
-          error: String(transaction.error || "transaction aborted")
-        };
+        settle(
+          false,
+          "transaction-abort",
+          transaction.error || "transaction aborted"
+        );
       };
       transaction.oncomplete = () => {
-        database.close();
-        globalThis.__kirinukiSmokeProjectWrite = { ready: true, error: "" };
+        settle(true, "complete");
       };
-      transaction.objectStore("projects").put(arguments[0]);
+      try {
+        const store = transaction.objectStore("projects");
+        for (const project of arguments[0]) {
+          const request = store.put(project);
+          request.onerror = () => {
+            settle(
+              false,
+              "put-error",
+              request.error || "project put failed"
+            );
+          };
+        }
+      } catch (error) {
+        settle(false, "put-throw", error);
+        try {
+          transaction.abort();
+        } catch {
+          // 실패 결과는 위 settle에서 이미 기록했다.
+        }
+      }
     };
     return true;
-  `, [project]);
+  `, [projects]);
   const result = await waitFor(
-    () => execute<{ ready: boolean; error: string } | null>(`
+    () => execute<{
+      ready: boolean;
+      phase: string;
+      error: string;
+    } | null>(`
       return globalThis.__kirinukiSmokeProjectWrite || null;
     `),
-    (value) => Boolean(value?.ready || value?.error),
-    `브라우저 프로젝트 fixture를 저장하지 못했습니다: ${project.id}`
+    (value) => value !== null,
+    `브라우저 프로젝트 fixture를 저장하지 못했습니다: ${projects.map(({ id }) => id).join(", ")}`
   );
   assert(
     result?.ready && !result.error,
-    `브라우저 프로젝트 fixture 저장 실패: ${result?.error || project.id}`
+    `브라우저 프로젝트 fixture 저장 실패 (${result?.phase || "unknown"}): ${result?.error || projects.map(({ id }) => id).join(", ")}`
   );
+}
+
+async function storeBrowserProject(project: EditorProject): Promise<void> {
+  await storeBrowserProjects([project]);
 }
 
 async function readBrowserProject(projectId: string): Promise<EditorProject | null> {
@@ -2798,21 +2844,79 @@ async function main(): Promise<void> {
   await webdriver("POST", `/session/${sessionId}/url`, { url: `${studioOrigin}/` });
   await waitFor(
     () => execute<{
+      documentReady: boolean;
       formHidden: boolean;
       launcherVisible: boolean;
       recentVisible: boolean;
+      managerReady: boolean;
+      loadingHidden: boolean;
+      errorHidden: boolean;
+      refreshEnabled: boolean;
     }>(`
       const form = document.querySelector("#start-form");
       const launcher = document.querySelector("#cut-host-launch-panel");
       const recent = document.querySelector("#recent-section");
+      const loading = document.querySelector("#local-projects-loading");
+      const error = document.querySelector("#local-projects-error");
+      const refresh = document.querySelector("#refresh-local-projects");
       return {
+        documentReady: document.readyState === "complete",
         formHidden: form instanceof HTMLFormElement && form.hidden && form.inert,
         launcherVisible: launcher instanceof HTMLElement && !launcher.hidden && !launcher.inert,
-        recentVisible: recent instanceof HTMLElement && !recent.hidden && !recent.inert
+        recentVisible: recent instanceof HTMLElement && !recent.hidden && !recent.inert,
+        managerReady: recent?.getAttribute("aria-busy") === "false",
+        loadingHidden: loading instanceof HTMLElement && loading.hidden,
+        errorHidden: error instanceof HTMLElement && error.hidden,
+        refreshEnabled: refresh instanceof HTMLButtonElement && !refresh.disabled
       };
     `),
-    (value) => value.formHidden && value.launcherVisible && value.recentVisible,
-    "일반 브라우저 시작 화면이 컷 전용 입력과 역할을 분리하지 않았습니다."
+    (value) => (
+      value.documentReady
+      && value.formHidden
+      && value.launcherVisible
+      && value.recentVisible
+      && value.managerReady
+      && value.loadingHidden
+      && value.errorHidden
+      && value.refreshEnabled
+    ),
+    "일반 브라우저 시작 화면과 브라우저 저장소가 준비되지 않았습니다."
+  );
+  await execute(`
+    const refresh = document.querySelector("#refresh-local-projects");
+    if (!(refresh instanceof HTMLButtonElement) || refresh.disabled) {
+      throw new Error("브라우저 저장 편집 새로 읽기 버튼이 준비되지 않았습니다.");
+    }
+    refresh.click();
+    return true;
+  `);
+  await waitFor(
+    () => execute<{
+      managerReady: boolean;
+      errorHidden: boolean;
+      refreshEnabled: boolean;
+      status: string;
+    }>(`
+      const recent = document.querySelector("#recent-section");
+      const error = document.querySelector("#local-projects-error");
+      const refresh = document.querySelector("#refresh-local-projects");
+      return {
+        managerReady: recent?.getAttribute("aria-busy") === "false",
+        errorHidden: error instanceof HTMLElement && error.hidden,
+        refreshEnabled: refresh instanceof HTMLButtonElement && !refresh.disabled,
+        status: document.querySelector("#form-status")?.textContent || ""
+      };
+    `),
+    (value) => (
+      value.managerReady
+      && value.errorHidden
+      && value.refreshEnabled
+      && (
+        value.status.includes("저장된 편집이 없습니다")
+        || value.status.includes("개를 다시 읽었습니다")
+      )
+    ),
+    "fixture 기록 전 브라우저 저장소의 명시적 새로 읽기를 완료하지 못했습니다."
   );
   const browserAProject = createEditorProjectFromCapture({
     projectName: "localhost-browser-smoke",
@@ -2849,52 +2953,11 @@ async function main(): Promise<void> {
     }]
   }, { id: "project-browser-b-localhost-smoke" });
   const staleBrowserProject = staleMaterializedTimingProject(chzzkUrl);
-  await execute(`
-    const projects = arguments[0];
-    globalThis.__kirinukiStaleProjectReady = false;
-    globalThis.__kirinukiStaleProjectError = "";
-    const open = indexedDB.open("chzzk-kirinuki-studio");
-    open.onerror = () => {
-      globalThis.__kirinukiStaleProjectError = String(open.error || "open failed");
-    };
-    open.onsuccess = () => {
-      const database = open.result;
-      let transaction;
-      try {
-        transaction = database.transaction("projects", "readwrite");
-      } catch (error) {
-        globalThis.__kirinukiStaleProjectError = String(error);
-        database.close();
-        return;
-      }
-      transaction.onerror = () => {
-        globalThis.__kirinukiStaleProjectError = String(
-          transaction.error || "transaction failed"
-        );
-      };
-      transaction.oncomplete = () => {
-        database.close();
-        globalThis.__kirinukiStaleProjectReady = true;
-      };
-      const store = transaction.objectStore("projects");
-      for (const project of projects) store.put(project);
-    };
-    return true;
-  `, [[staleBrowserProject, browserAProject, browserBProject]]);
-  const staleProjectSeed = await waitFor(
-    () => execute<{ ready: boolean; error: string }>(`
-      return {
-        ready: globalThis.__kirinukiStaleProjectReady === true,
-        error: String(globalThis.__kirinukiStaleProjectError || "")
-      };
-    `),
-    (value) => value.ready || Boolean(value.error),
-    "잔존 +10초 정렬값 browser fixture를 IndexedDB에 저장하지 못했습니다."
-  );
-  assert(
-    staleProjectSeed.ready && !staleProjectSeed.error,
-    `잔존 +10초 정렬값 browser fixture 저장 실패: ${staleProjectSeed.error}`
-  );
+  await storeBrowserProjects([
+    staleBrowserProject,
+    browserAProject,
+    browserBProject
+  ]);
   await execute(`
     localStorage.setItem(
       "kirinuki:local-web:latest-project",
