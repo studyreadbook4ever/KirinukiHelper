@@ -242,9 +242,9 @@ systemd-user가 없다면:
   종료는 같은 터미널에서 Ctrl+C
   실행 중 설정 변경은 caption-stack:stop → setup → start 순서로 적용
 
-앱 연결 경계:
-  http://127.0.0.1:4320의 Kirinuki 앱 내부 Origin 하나만 허용합니다.
-  공개 사이트와 Cloudflare Tunnel에는 자막 엔진을 연결하지 않습니다.
+개발용 연결 경계:
+  이 CLI는 http://127.0.0.1:4320의 localhost Origin 하나만 허용합니다.
+  공개 웹은 이 CLI가 아니라 서명된 백그라운드 영상 준비 도우미에 연결합니다.
 `.trim();
 }
 

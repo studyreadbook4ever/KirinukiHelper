@@ -7,38 +7,36 @@
 
 ## 제품 한 문장
 
-Kirinuki는 `https://kirinuki.eff0rtchung.kr`에서 실행되는 일반 브라우저 편집기와,
-Windows x64·macOS Apple Silicon·Linux x64에 처음 한 번 설치하는 로컬 미디어
-엔진으로 구성된다. 설치 앱의 격리된 Electron 창은 원본 플랫폼을 보며 컷 시작·끝을
-고르는 동안에만 열리고, 실제 편집기는 사용자의 기본 브라우저로 인계한다.
+Kirinuki는 `https://kirinuki.eff0rtchung.kr`에서 실행되는 일반 브라우저 컷 선택기와
+전체 편집기, Windows x64·macOS Apple Silicon·Linux x64에 처음 한 번 설치하는
+화면 없는 로컬 미디어 엔진으로 구성된다. 웹사이트가 제품 본체이고 설치 엔진은
+브라우저만으로 안전하게 수행할 수 없는 VOD 범위 취득·검증만 보조한다.
 
 일반 사용자는 다음 흐름만 경험해야 한다.
 
-1. 웹사이트에서 **새 컷 선택 열기**를 누른다.
-2. 엔진이 없을 때만 OS에 맞는 설치 안내를 한 번 따른다.
-3. 설치 앱의 격리된 컷 창에 CHZZK·YouTube·SOOP 공개 완료 VOD URL을 붙여넣는다.
-4. 원본 시각 기준 시작·끝을 정하고 **편집기 열기**를 누른다.
-5. 설치 앱은 선택값을 암호화된 일회성 인계로 넘기고 기본 브라우저 편집기를 연다.
-6. 엔진은 필요한 구간만 이 PC에 준비하고 컷 창은 닫히며 background로 남는다.
-7. 일반 브라우저에서 컷·자막·레이어를 검수하고 제목과 저장 위치를 정해 내보낸다.
+1. 웹사이트에 CHZZK·YouTube·SOOP 공개 완료 VOD URL을 붙여넣는다.
+2. 같은 웹페이지의 원본 화면에서 W/Y/U/D/F/E/R/T 단축키와 보이는 버튼으로
+   시작·끝·메모를 정한다.
+3. 엔진이 없을 때만 웹사이트가 OS에 맞는 설치 안내를 한 번 보여 준다.
+4. **편집기 열기**를 누르면 웹사이트가 엔진에 확정한 구간만 요청하고, 다운로드·
+   검증·로컬 영상 구성 진행률을 같은 화면에서 설명한다.
+5. 준비가 끝나면 같은 브라우저의 전체 편집기로 이동한다.
+6. 컷·자막·레이어를 검수하고 제목과 저장 위치를 정해 내보낸다.
 
-설치 뒤 사용자가 로컬 주소, 포트, 토큰, 실행·종료 상태 또는 브라우저 확장을
-보거나 조작해야 한다면 제품 회귀다. 컷 선택용 설치 앱 창과 기본 브라우저 편집기
-사이의 전환은 버튼 한 번으로 끝나야 하며, 사용자가 복사·붙여넣기나 재연결 절차를
-수행하게 해서는 안 된다. Chrome이 최초 연결에서 표시하는 Local Network Access
-권한은 운영체제·브라우저가 요구하는 한 번의 온보딩으로 설명하고, 그 뒤에는
-일반 웹사이트처럼 동작해야 한다.
+설치 뒤 사용자가 별도 앱 창, 로컬 주소, 포트, 토큰, 실행·종료 상태 또는 브라우저
+확장을 보거나 조작해야 한다면 제품 회귀다. URL 입력부터 컷 선택과 전체 편집까지
+항상 공개 웹사이트가 소유해야 하며, 설치 앱이나 custom protocol이 새 컷의 시작
+화면이 되어서는 안 된다. Chrome이 최초 연결에서 표시하는 Local Network Access
+권한은 운영체제·브라우저가 요구하는 한 번의 온보딩으로 설명하고, 그 뒤에는 일반
+웹사이트처럼 동작해야 한다.
 
 ## 현재 배포 경계
 
 ```text
 https://kirinuki.eff0rtchung.kr
-  ├─ 시작 화면·full editor·자막·렌더 (일반 브라우저)
-  └─ 설치 앱 호출
-       └─ 컷 선택 전용 격리 Electron 창 + ASAR 고정 player action
-            ├─ 암호화된 일회성 컷→브라우저 인계
-            └─ 127.0.0.1:4319 (내부 고정 loopback API)
-                 └─ 필요한 VOD 범위 취득·검증·로컬 캐시 (설치 엔진)
+  └─ URL 입력·원본 확인·컷 선택·full editor·자막·렌더 (일반 브라우저)
+       └─ 127.0.0.1:4319 (내부 고정 loopback API)
+            └─ 필요한 VOD 범위 취득·검증·로컬 캐시 (화면 없는 설치 엔진)
 
 CHZZK / YouTube / SOOP ───────────────────────────────┘
 ```
@@ -48,9 +46,9 @@ CHZZK / YouTube / SOOP ───────────────────
   analytics·telemetry 수집기가 아니다.
 - Cloudflare Tunnel은 정적 웹 origin에만 연결한다. 사용자 PC의 loopback 엔진을
   Tunnel, LAN 또는 공인 인터페이스에 노출하지 않는다.
-- Electron은 세 OS의 동일한 background engine과 컷 선택 전용 격리 창을
-  패키징한다. `BrowserWindow`는 명시적인 컷 선택 요청에만 하나 열며 full editor,
-  저장본 관리, 자막·렌더 UI를 넣지 않는다. background autostart는 창을 열지 않는다.
+- Electron은 세 OS의 동일한 background engine을 패키징하는 수단일 뿐이다.
+  제품 runtime은 `BrowserWindow`를 만들지 않으며 background autostart도 창을 열지
+  않는다. 컷 선택, 저장본 관리, 자막·렌더 UI는 모두 공개 웹에만 둔다.
 - 엔진은 사용 통계나 업데이트 확인을 위한 독자적 네트워크 polling을 하지 않는다.
   사용자가 요청한 공개 VOD 범위를 원본 플랫폼에서 준비할 때만 외부로 연결한다.
 - 제품 설치 대상은 정확히 Windows x64, macOS arm64, Linux x64다. 모바일은 편집
@@ -160,13 +158,14 @@ npm run caption-stack:stop
 ## 프로젝트·세션·복구
 
 - 로그인과 서버 저장 session은 없다.
-- 컷 선택 Electron 창의 partition은 비영구적이다. 일반 브라우저의 sessionStorage,
-  IndexedDB, 저장본 목록 또는 파일 handle을 공유한다고 가정하지 않는다.
-- 컷→편집기 전환은 canonical source, 사용자 selection, 이번 1회 권리 확인과
-  project scope를 짧게 살아 있는 일회성 handoff로 전달한다. 외부 브라우저가 exact
-  payload를 claim하고 저장한 뒤 ACK하기 전에는 원본을 삭제하지 않는다.
-- handoff의 URL에는 payload, source URL, project ID, access token 또는 암호키를
-  넣지 않는다. 불투명한 nonce는 fragment로만 전달하고 읽은 즉시 주소에서 지운다.
+- URL 입력·컷 선택·편집기 진입은 같은 공개 웹 Origin과 같은 브라우저 저장 경계에서
+  이어진다. 설치 엔진 창이나 별도 브라우저로 프로젝트를 handoff하지 않는다.
+- 컷→편집기 전환은 canonical source, 사용자 selection, 이번 1회 권리 확인과 새
+  `projectId`를 같은 탭의 짧은 session seed로 전달한다. URL에는 source, selection,
+  access token, 암호키 또는 로컬 파일 위치를 넣지 않는다.
+- 편집기 전환 전에 확정한 selection의 로컬 부분 준비를 완료한다. 편집기 진입 뒤
+  같은 exact request를 다시 확인할 수 있지만 managed cache를 재사용해야 하며 전체
+  VOD를 다시 받거나 별도 앱 화면으로 되돌아가면 안 된다.
 - 탭을 닫으면 저장하지 않은 이번 작업을 폐기하는 것이 기본이다. 이어서 쓸
   저장본은 사용자가 **지금 저장** 또는 종료 확인에서 명시적으로 선택한다.
 - 편집 중 CURRENT와 5분 복구본은 crash 복구용이다. 탭 종료 시 임시본을 정리하며,
@@ -291,20 +290,16 @@ AudSeg 기준 구현은 `AudSeg/src/audseg/`, 브라우저 포트는
   추측 불가능한 access URL, range와 ownership을 함께 확인한다.
 - token과 nonce를 URL query, disk, IndexedDB, project, CLI 인자 또는 로그에
   기록하지 않는다.
-- 컷 창은 exact 공개 Origin의 시작 경로만 top frame으로 허용하고 임의 navigation,
-  popup, webview, download와 모든 웹 권한 요청을 차단한다. 플랫폼 player frame은
-  필요한 embed host만 허용하며 Node·preload IPC에 접근하지 못한다.
-- 컷 창 preload는 context isolation과 sandbox를 유지하고 최소 권한 API만 노출한다.
-  renderer가 보낸 handoff payload는 main process에서 schema, 크기, source, 시간 범위,
-  권리 확인을 다시 검증한다.
-- 플레이어 제어는 build 때 `app.asar`에 고정한 코드만 정확한 WebFrameMain에
-  실행한다. 수정 가능한 extension·`extraResource`를 만들지 않고, 사용자가
-  Chrome Web Store, 확장 관리 화면 또는 developer mode를 다룰 필요가 없어야 한다.
-- 플랫폼 iframe이나 페이지 script가 shortcut/action 메시지를 위조해 사용자 컷을
-  바꾸지 못해야 한다. 물리 키 입력의 신뢰 경계는 Electron main process다.
-- handoff는 기존 device proof와 ECDH/AES-GCM channel 안에서만 claim·ACK한다.
-  짧은 TTL, project/source scope, 단일 claim ID, replay tombstone과 제한된 pending
-  개수를 적용하고 잘못된 scope·재사용·만료는 동일한 실패로 거절한다.
+- 웹 컷 화면의 단축키는 문서가 직접 소유하고 IME, modifier, repeat, input·textarea·
+  contenteditable을 건드리지 않는다. iframe script나 로컬 엔진 응답이 사용자 입력인
+  것처럼 컷 경계를 조용히 바꾸면 안 된다.
+- 플랫폼 iframe은 시각 확인용이다. 정확한 시각 제어가 브라우저 SOP 때문에 불가능한
+  플랫폼은 loopback 엔진이 검증한 짧은 로컬 preview를 같은 웹의 `<video>`에 연결해
+  source clock을 유지한다. 공개 서버 proxy나 Electron frame injection으로 우회하지
+  않는다.
+- preview와 확정 구간 준비 요청은 device proof와 ECDH/AES-GCM channel 안에서만
+  수행한다. 짧은 TTL, project/source/action scope, replay 방지와 제한된 pending
+  개수를 적용한다.
 - 엔진 재시작이나 업데이트 뒤 웹은 새 capability를 자동으로 발급받는다.
 - 같은 exact engine이 이미 실행 중이면 멱등적으로 재사용한다. 다른 프로세스가
   내부 포트를 사용하면 takeover하거나 임의 종료하지 않고 안전하게 실패한다.
@@ -328,11 +323,11 @@ AudSeg 기준 구현은 `AudSeg/src/audseg/`, 브라우저 포트는
 
 ## 저장소 지도
 
-- `src/web/`: 공개 시작 화면과 컷 선택 화면 공용 로직, 플레이어 제어 계약
+- `src/web/`: 공개 시작 화면, PR16 계열 컷 선택 UX와 브라우저 플레이어 제어
 - `src/editor/`: 브라우저 편집기, AudSeg, 로컬 엔진 onboarding/client
-- `src/lib/`: source, project, time mapping, session, capability와 editor handoff 공용 계약
-- `src/desktop/`: background engine entry, 컷 전용 창·preload, autostart,
-  단일 인스턴스, installer 계약
+- `src/lib/`: source, project, time mapping, session과 capability 공용 계약
+- `src/desktop/`: 화면 없는 background engine entry, autostart, 단일 인스턴스,
+  installer 계약
 - `scripts/caption-gateway.ts`: exact-Origin loopback gateway와 VOD job API
 - `scripts/chzzk-vod-materializer.ts`: CHZZK 공개 VOD 범위 준비
 - `scripts/external-vod-materializer.ts`: YouTube·SOOP 범위 준비
@@ -349,9 +344,9 @@ AudSeg 기준 구현은 `AudSeg/src/audseg/`, 브라우저 포트는
 - `tests/`: unit·contract·browser·native package 검증
 
 삭제된 외부 browser extension, Linux-only helper, Electron full editor 또는 Origin
-migration 파일을 문서·build·test inventory에 다시 넣지 않는다. 플레이어 제어는
-`src/streaming-electron-frame-action.ts`에서 build 시 ASAR main bundle에 고정한다. 파일이나
-명령 이름이 바뀌면 이 지도를 같은 변경에서 갱신한다.
+migration 파일을 문서·build·test inventory에 다시 넣지 않는다. 과거 Chrome
+extension과 PR16은 웹 컷 UX·단축키의 회귀 기준이지 제품 runtime이나 배포물이
+아니다. 파일이나 명령 이름이 바뀌면 이 지도를 같은 변경에서 갱신한다.
 
 ## 수정 절차
 
@@ -454,10 +449,11 @@ fail closed한다. `npm run license:check`는 승인된 dependency와 배포 고
 
 ## 릴리스 합격 기준
 
-- [ ] 제품 본체가 public HTTPS full editor이고 설치 앱 UI는 컷 선택에만 한정됨
+- [ ] 제품 본체가 URL 입력·컷 선택·full editor를 모두 소유하는 public HTTPS 웹임
+- [ ] 설치 엔진은 `BrowserWindow`, preload 또는 제품 UI 없이 필요한 VOD 범위만 준비함
 - [ ] 설치 뒤 사용자가 포트·endpoint·token·프로세스를 관리하지 않음
-- [ ] 컷 창→기본 브라우저 편집기 인계가 암호화·일회성·ACK 기반이며 실패 시
-      중복 프로젝트나 유실 없이 다시 시도할 수 있음
+- [ ] Q/W/E/R/T/A/D/F/Y/U가 PR16·최종 Chrome extension과 같은 의미로 웹에서 동작함
+- [ ] 컷→편집기 전환 전에 확정 구간만 준비하고 같은 탭의 편집기가 cache를 재사용함
 - [ ] CHZZK·YouTube·SOOP 실제 구간이 원본 시각과 정확히 맞음
 - [ ] 새로고침과 A→B 전환이 project/source/generation 단위로 멱등적임
 - [ ] 새 작업에 이전 media, cache, pending response 또는 recovery가 섞이지 않음

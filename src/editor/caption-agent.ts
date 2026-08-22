@@ -152,10 +152,7 @@ export interface NormalizedCaptionCue {
 type JsonRecord = Record<string, unknown>;
 type StorageArea = ReturnType<typeof studioStorageArea>;
 type FetchImplementation = typeof fetch;
-export type LocalMediaEngineSessionPurpose =
-  | "vod"
-  | "captions"
-  | "editor-handoff";
+export type LocalMediaEngineSessionPurpose = "vod" | "captions";
 
 interface CaptionAgentConnectionOptions {
   endpoint: unknown;
@@ -372,36 +369,20 @@ function normalizeLocalEngineSessionPurpose(
   const purpose = value === undefined
     ? (sourceUrl === undefined ? "captions" : "vod")
     : value;
-  if (
-    purpose !== "vod"
-    && purpose !== "captions"
-    && purpose !== "editor-handoff"
-  ) {
+  if (purpose !== "vod" && purpose !== "captions") {
     throw new TypeError("로컬 엔진 session 목적이 올바르지 않습니다.");
   }
   if (
     (purpose === "vod" && sourceUrl === undefined)
-    || (purpose !== "vod" && sourceUrl !== undefined)
+    || (purpose === "captions" && sourceUrl !== undefined)
   ) {
     throw new TypeError(
       purpose === "vod"
         ? "VOD session에는 정규 원본 주소가 필요합니다."
-        : "원본 비결합 session에는 VOD 원본 권한을 함께 요청할 수 없습니다."
+        : "자막 session에는 VOD 원본 권한을 함께 요청할 수 없습니다."
     );
   }
   return purpose;
-}
-
-function localMediaEngineSessionActions(
-  purpose: LocalMediaEngineSessionPurpose
-): readonly string[] {
-  if (purpose === "vod") {
-    return ["vod", "cache-delete"];
-  }
-  if (purpose === "captions") {
-    return ["captions"];
-  }
-  return ["editor-handoff-consume"];
 }
 
 function matchingCachedLocalEngineToken(
@@ -425,7 +406,7 @@ function matchingCachedLocalEngineToken(
 export function captionAgentSessionEndpoint(endpoint: unknown): string {
   const url = new URL(normalizeCaptionAgentEndpoint(endpoint));
   if (!isLoopbackCaptionAgentEndpoint(url.toString())) {
-    throw new Error("자동 연결은 Kirinuki 앱이 관리하는 내부 자막 엔진에서만 사용할 수 있습니다.");
+    throw new Error("자동 연결은 영상 준비 도우미가 관리하는 내부 자막 엔진에서만 사용할 수 있습니다.");
   }
   url.pathname = "/v1/session";
   url.search = "";
@@ -463,7 +444,7 @@ export function normalizeCaptionAgentEndpoint(value: unknown): string {
   const localHttp = url.protocol === "http:" && isLoopbackHostname(url.hostname);
   if (!localHttp) {
     throw new Error(
-      "내부 자막 엔진은 Kirinuki 앱이 관리하는 로컬 연결만 사용할 수 있습니다."
+      "내부 자막 엔진은 영상 준비 도우미가 관리하는 로컬 연결만 사용할 수 있습니다."
     );
   }
   return url.toString();
@@ -1658,7 +1639,9 @@ export async function pairCaptionAgent({
     schema: LOCAL_ENGINE_SESSION_REQUEST_SCHEMA,
     clientNonce,
     projectId: normalizedProjectId,
-    actions: localMediaEngineSessionActions(purpose),
+    actions: purpose === "captions"
+      ? ["captions"]
+      : ["vod", "cache-delete"],
     ...(normalizedSourceUrl === undefined
       ? {}
       : { sourceUrl: normalizedSourceUrl })
@@ -1926,11 +1909,7 @@ export async function probeLocalMediaEngineSession({
   if (!isLoopbackCaptionAgentEndpoint(endpoint)) {
     return;
   }
-  if (
-    purpose !== "vod"
-    && purpose !== "captions"
-    && purpose !== "editor-handoff"
-  ) {
+  if (purpose !== "vod" && purpose !== "captions") {
     throw new TypeError("확인할 로컬 엔진 session 목적이 올바르지 않습니다.");
   }
   const deadline = createDeadlineSignal(signal, timeoutMs);
@@ -1962,7 +1941,9 @@ export async function probeLocalMediaEngineSession({
       "sourceBound",
       "expiresAt"
     ], "Kirinuki 내부 엔진 session status");
-    const expectedActions = localMediaEngineSessionActions(purpose);
+    const expectedActions = purpose === "vod"
+      ? ["vod", "cache-delete"]
+      : ["captions"];
     if (
       payload.schema !== LOCAL_MEDIA_ENGINE_SESSION_STATUS_SCHEMA
       || payload.status !== "active"

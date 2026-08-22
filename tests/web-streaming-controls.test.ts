@@ -2,137 +2,59 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("컷 단계는 원본 iframe과 컷 전용 bridge만 쓰고 로컬 미디어 준비를 시작하지 않는다", async () => {
-  const [html, mainSource, bundle] = await Promise.all([
+test("웹 컷 화면은 공식 iframe과 같은 페이지의 검증된 로컬 video를 함께 쓴다", async () => {
+  const [html, source, bundle] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
     readFile(new URL("../web/studio.js", import.meta.url), "utf8")
   ]);
-
   assert.match(html, /<iframe[^>]+id="stream-preview-frame"/u);
-  assert.match(html, /id="stream-cut-console"[\s\S]*id="stream-current-time"/u);
-  assert.match(html, /강조된 행에 E로 시작, R로 끝 시각을 기록합니다/u);
-  assert.doesNotMatch(
-    html,
-    /local-preview-video|local-preview-anchor|prepare-local-preview/u
-  );
-  assert.match(
-    mainSource,
-    /StreamingBridgeClient[\s\S]*captureCurrentPlayerTime[\s\S]*seekPlayerBy[\s\S]*setPlayerRate/u
-  );
-  assert.doesNotMatch(
-    mainSource,
-    /ChzzkVodMaterialization|LOCAL_VOD_COMPANION_ENDPOINT|KIRINUKI_MEDIA_ENGINE_ENDPOINT|startChzzkVodMaterialization|waitForChzzkVodMaterialization|localPreviewVideo|\/v1\/vod\/materializations/u
-  );
-  assert.match(bundle, /kirinuki-streaming-bridge\/v2/u);
-  assert.doesNotMatch(bundle, /chrome-extension:\/\//u);
+  assert.match(html, /<video[^>]+id="stream-preview-video"/u);
+  assert.match(source, /materializeLocalPreviewRange[\s\S]*startChzzkVodMaterialization/u);
+  assert.match(source, /localPreviewSourceAtMediaZero\(window\)/u);
+  assert.match(source, /currentLocalPreviewSourceTime[\s\S]*localPreviewSourceSeconds/u);
+  assert.match(source, /targetMediaSeconds[\s\S]*prepareLocalPreview\(targetSourceSeconds\)/u);
+  assert.match(source, /function cancelActiveLocalPreviewOperation/u);
+  assert.match(source, /cancelChzzkVodMaterialization\(\{/u);
+  assert.match(source, /signal: operation\.controller\.signal/u);
+  assert.doesNotMatch(`${source}\n${bundle}`, /streaming-bridge|chrome-extension:\/\//u);
 });
 
-test("표준 browser smoke는 Electron preload 부재를 fail-closed하고 수동 입력과 0회 acquisition을 유지한다", async () => {
-  const smoke = await readFile(
-    new URL("../scripts/local-studio-browser-smoke.ts", import.meta.url),
+test("확정 구간 요청은 사용자 선택을 millisecond 범위로 그대로 보낸다", async () => {
+  const source = await readFile(
+    new URL("../src/web/main.ts", import.meta.url),
     "utf8"
   );
-  const capturePhaseStart = smoke.indexOf(
-    "const chzzkFrame = await setSourceAndVerify"
-  );
-  const capturePhaseEnd = smoke.indexOf(
-    "const clipInitialState = await execute",
-    capturePhaseStart
-  );
-  assert(capturePhaseStart >= 0 && capturePhaseEnd > capturePhaseStart);
-  const capturePhase = smoke.slice(capturePhaseStart, capturePhaseEnd);
-  assert.doesNotMatch(capturePhase, /\/v1\/vod\/materializations|#local-preview-video/u);
   assert.match(
-    capturePhase,
-    /extensionlessCaptureState[\s\S]*bridgeConsolePresent[\s\S]*playerControlsDisabled[\s\S]*manualInputsEnabled[\s\S]*iframeVisible/u
+    source,
+    /prepareSelectedVodForEditor[\s\S]*captureSeed\.segments[\s\S]*id: captureSegmentEditorClipId\(segment, index\)[\s\S]*startMs: Math\.round\(startSeconds \* 1_000\)[\s\S]*endMs: Math\.round\(endSeconds \* 1_000\)/u
   );
   assert.match(
-    capturePhase,
-    /acquisitionRequests\s*===\s*0/u
+    source,
+    /startChzzkVodMaterialization\(\{[\s\S]*consumerId: projectId,[\s\S]*clips,[\s\S]*rightsConfirmed: true/u
   );
-  assert.match(smoke, /browserExtension: "not-loaded"/u);
-  assert.match(smoke, /playerBridge: "present-fail-closed-without-electron-preload"/u);
+  assert.match(source, /status\.state !== "completed"[\s\S]*waitForChzzkVodMaterialization/u);
 });
 
-test("browser smoke는 저장소 준비 장벽 뒤 fixture를 기록하고 모든 IndexedDB 실패를 종료한다", async () => {
-  const smoke = await readFile(
-    new URL("../scripts/local-studio-browser-smoke.ts", import.meta.url),
-    "utf8"
-  );
-  const startupBarrier = smoke.indexOf(
-    "fixture 기록 전 브라우저 저장소의 명시적 새로 읽기를 완료하지 못했습니다."
-  );
-  const fixtureWrite = smoke.indexOf(
-    "await storeBrowserProjects([\n    staleBrowserProject"
-  );
-  assert(startupBarrier >= 0 && fixtureWrite > startupBarrier);
-
-  const writerStart = smoke.indexOf("async function storeBrowserProjects(");
-  const writerEnd = smoke.indexOf(
-    "async function storeBrowserProject(",
-    writerStart
-  );
-  assert(writerStart >= 0 && writerEnd > writerStart);
-  const writer = smoke.slice(writerStart, writerEnd);
-  assert.match(writer, /open\.onblocked/u);
-  assert.match(writer, /transaction\.onerror/u);
-  assert.match(writer, /transaction\.onabort/u);
-  assert.match(writer, /request\.onerror/u);
-  assert.match(writer, /closeDatabase/u);
-
-  const barrier = smoke.slice(
-    smoke.lastIndexOf("await webdriver", startupBarrier),
-    fixtureWrite
-  );
-  assert.match(barrier, /document\.readyState === "complete"/u);
-  assert.match(barrier, /getAttribute\("aria-busy"\) === "false"/u);
-  assert.match(barrier, /#local-projects-error/u);
-  assert.match(barrier, /#refresh-local-projects/u);
-});
-
-test("browser smoke pairing은 custom-scheme 중단 완료 뒤 실제 앱 흐름으로 한 번만 연결한다", async () => {
-  const [smoke, fixture] = await Promise.all([
-    readFile(
-      new URL("../scripts/local-studio-browser-smoke.ts", import.meta.url),
-      "utf8"
-    ),
-    readFile(
-      new URL("../scripts/local-media-engine-v2-fixture.ts", import.meta.url),
-      "utf8"
-    )
-  ]);
-  const captureStart = smoke.indexOf(
-    "async function captureLocalMediaEngineProtocolAttempt("
-  );
-  const captureEnd = smoke.indexOf(
-    "async function setSourceAndVerify(",
-    captureStart
-  );
-  assert(captureStart >= 0 && captureEnd > captureStart);
-  const capture = smoke.slice(captureStart, captureEnd);
-  assert.match(
-    capture,
-    /connection\.send\("Page\.stopLoading"\)\.then\(\s*\(\) => resolveAttempt\(url\)/u
-  );
-  assert.match(smoke, /lateMaterializationFixture\.claimPairing\(pairingUrl\)/u);
-  assert.doesNotMatch(
-    smoke,
-    /enrollLocalMediaEngineFixture|__kirinukiSmokePinWrite/u
-  );
-  assert.match(
-    fixture,
-    /consumePairingResponse[\s\S]*LOCAL_MEDIA_ENGINE_PAIRING_POLL_STATUS_SCHEMA[\s\S]*status: "pending"/u
-  );
-});
-
-test("player 제어는 unpacked extension 대신 ASAR 고정 frame action만 배포한다", async () => {
-  const [buildSource, packageSource, packageManifest] = await Promise.all([
+test("desktop package는 UI·preload·frame action 없이 headless main만 묶는다", async () => {
+  const [build, packageFiles, manifest] = await Promise.all([
     readFile(new URL("../scripts/build-desktop.ts", import.meta.url), "utf8"),
-    readFile(new URL("../scripts/package-desktop.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/desktop-package-files.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8")
   ]);
-  assert.match(buildSource, /streaming-electron-frame-action\.ts/u);
-  assert.match(packageSource, /isolatedResources\.toolsRoot/u);
-  assert.doesNotMatch(packageManifest, /package-linux-app|verify-linux-app-package/u);
+  assert.match(build, /entryPoints: \["src\/desktop\/main\.ts"\]/u);
+  assert.doesNotMatch(
+    `${build}\n${packageFiles}\n${manifest}`,
+    /cut-window|preload|streaming-electron-frame-action|test:electron:cut-window/u
+  );
+});
+
+test("구 Extension과 Electron 컷 호스트 모듈은 build·test inventory에 없다", async () => {
+  const [validator, migration] = await Promise.all([
+    readFile(new URL("../scripts/validate-local-studio.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/check-typescript-migration.ts", import.meta.url), "utf8")
+  ]);
+  assert.match(validator, /test:electron:cut-window/u);
+  assert.match(validator, /!buildWebSource\.includes\("streaming-electron-frame-action"\)/u);
+  assert.doesNotMatch(migration, /build-extension-legacy|dev-extension/u);
 });

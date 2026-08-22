@@ -103,7 +103,7 @@ test("내부 미디어 엔진은 공개 문서 Origin을 절대 허용하지 않
   );
   assert.throws(
     () => resolveKirinukiAppOrigin(KIRINUKI_PUBLIC_STUDIO_ORIGIN),
-    /앱.*Origin/u
+    /localhost Origin/u
   );
 });
 
@@ -173,7 +173,7 @@ test("공개 페이지는 Whisper 연결 파일을 만들 수 없다", () => {
     effectiveProfile: "draft",
     backend: "cpu",
     modelId: "tiny-q5_1"
-  }), /설치된 Kirinuki 앱/u);
+  }), /localhost 개발 서버/u);
 });
 
 test("연결 parser는 외부 주소·다른 Origin·추가 필드·모델 불일치를 fail-closed한다", () => {
@@ -196,7 +196,7 @@ test("연결 parser는 외부 주소·다른 Origin·추가 필드·모델 불�
       valid,
       "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     ),
-    /설치된 Kirinuki 앱/u
+    /localhost 개발 서버/u
   );
   assert.throws(
     () => parseWhisperConnectionDescriptor({

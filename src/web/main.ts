@@ -1,4 +1,5 @@
 import {
+  captureSegmentEditorClipId,
   normalizeEditorProject,
   sourceSessionIdentity
 } from "../lib/editor-core.js";
@@ -10,22 +11,10 @@ import type {
 import { recoverySourceRecord } from "../lib/session-recovery.js";
 import {
   inferSourceIdentifiers,
-  SOURCE_PLATFORM_CHZZK,
-  SOURCE_PLATFORM_SOOP,
-  SOURCE_PLATFORM_YOUTUBE,
   sourcePlatformLabel
 } from "../lib/source-platform.js";
 import {
-  normalizeSoopVodSourceClockIdentity,
-  sameSoopVodSourceClockIdentity
-} from "../lib/soop-vod-source-clock.js";
-import type {
-  SoopVodSourceClockIdentity
-} from "../lib/soop-vod-source-clock.js";
-import {
-  StaleSerialOperationGenerationError,
   createCoalescedAutomaticOperation,
-  createGenerationBoundSerialOperationQueue,
   createLatestSerialOperationQueue
 } from "../lib/serial-operation-gate.js";
 import { sourceEmbedDescriptor } from "../lib/source-embed.js";
@@ -47,24 +36,6 @@ import {
 import {
   currentClientCannotUseEditor
 } from "../lib/editor-mobile-access.js";
-import {
-  EDITOR_HANDOFF_ACKNOWLEDGEMENT_SCHEMA,
-  EDITOR_HANDOFF_CONSUME_PROTOCOL,
-  EDITOR_HANDOFF_CONSUME_REQUEST_SCHEMA,
-  EDITOR_HANDOFF_FRAGMENT_KEY,
-  EDITOR_HANDOFF_MAXIMUM_BYTES,
-  EDITOR_HANDOFF_SUBMISSION_SCHEMA,
-  editorHandoffAcknowledgementFailureDisposition,
-  editorHandoffCapabilityProjectId,
-  normalizeEditorHandoffEnvelope,
-  normalizeEditorHandoffSubmission
-} from "../lib/editor-handoff.js";
-import type {
-  EditorHandoffSubmission
-} from "../lib/editor-handoff.js";
-import {
-  freshLocalMediaEngineChallenge
-} from "../lib/local-media-engine-auth.js";
 
 import {
   deleteAllProjectSessionsAtomically,
@@ -84,39 +55,29 @@ import {
   studioStorageArea
 } from "../editor/studio-runtime.js";
 import {
-  DEFAULT_CAPTION_AGENT_SETTINGS,
-  captionAgentRequestHeaders,
-  pairCaptionAgent
-} from "../editor/caption-agent.js";
-import {
-  ensureLocalMediaEngineReady,
-  primeLocalMediaEngineTrust,
-  probeLocalMediaEngine
-} from "../editor/local-media-engine-onboarding.js";
-import {
-  localMediaEngineTransportFetch
-} from "../editor/local-media-engine-transport.js";
-import {
   STUDIO_CAPTURE_SHORTCUT_BINDINGS,
   studioCaptureShortcutBinding,
   studioCaptureShortcutLetterFromEvent
 } from "./studio-capture-console.js";
-import type {
-  StudioCaptureAction
-} from "./studio-capture-console.js";
+import type { StudioCaptureAction } from "./studio-capture-console.js";
 import {
-  StreamingBridgeClient,
-  StreamingBridgeRequestError
-} from "./streaming-bridge-client.js";
-import type {
-  StreamingBridgePlayerSnapshot,
-  StreamingBridgeRequest,
-  StreamingBridgeSourceIdentity
-} from "./streaming-bridge-protocol.js";
+  DEFAULT_CAPTION_AGENT_SETTINGS,
+  pairCaptionAgent
+} from "../editor/caption-agent.js";
 import {
-  createStreamingBridgeSourceIdentity,
-  sameStreamingBridgeSourceIdentity
-} from "./streaming-bridge-protocol.js";
+  ensureLocalMediaEngineReady
+} from "../editor/local-media-engine-onboarding.js";
+import {
+  cancelChzzkVodMaterialization,
+  startChzzkVodMaterialization,
+  waitForChzzkVodMaterialization
+} from "../editor/chzzk-vod-client.js";
+import type {
+  ChzzkVodMaterializationStatus
+} from "../editor/chzzk-vod-client.js";
+import {
+  normalizeChzzkVodMaterialization
+} from "../lib/chzzk-vod-materialization.js";
 import {
   sessionArchiveCaptureFromJson
 } from "./session-archive-capture.js";
@@ -126,9 +87,12 @@ import {
   STUDIO_SELECTION_RANGE_ORDER_ERROR,
   validateStudioSelectionRange
 } from "./studio-timecode.js";
-import type {
-  TrustedCutShortcutMessage
-} from "../desktop/cut-window-contract.js";
+import {
+  localPreviewMediaSeconds,
+  localPreviewSourceAtMediaZero,
+  localPreviewSourceSeconds,
+  planLocalPreviewRange
+} from "./local-preview-range.js";
 
 export {
   formatStudioTimecode,
@@ -140,44 +104,6 @@ const activeStudioOrigin = assertKirinukiStudioDocumentOrigin(
   document.querySelector<HTMLMetaElement>(
     `meta[name="${KIRINUKI_STUDIO_ORIGIN_META_NAME}"]`
   )?.content
-);
-
-interface CutHostBridge {
-  handoffEditor(submission: EditorHandoffSubmission): Promise<unknown>;
-  playerAction(request: unknown): Promise<unknown>;
-  openCanonicalSource(sourceUrl: unknown): Promise<void>;
-  onTrustedShortcut?(
-    listener: (message: Readonly<TrustedCutShortcutMessage>) => void
-  ): () => void;
-}
-
-declare global {
-  interface Window {
-    kirinukiCutHost?: CutHostBridge;
-  }
-}
-
-const initialHandoffLocation = (() => {
-  const prefix = `#${EDITOR_HANDOFF_FRAGMENT_KEY}=`;
-  const requested = location.hash.startsWith(prefix);
-  const match = new RegExp(
-    `^#${EDITOR_HANDOFF_FRAGMENT_KEY}=([A-Za-z0-9_-]{43})$`,
-    "u"
-  ).exec(location.hash);
-  if (requested) {
-    // The fragment is an opaque, one-use locator. Remove it before any async
-    // work, dialog, loopback request, logging or navigation can observe it.
-    history.replaceState(null, "", `${location.pathname}${location.search}`);
-  }
-  return Object.freeze({
-    requested,
-    nonce: match?.[1] ?? null
-  });
-})();
-
-const isElectronCutHostSurface = Boolean(
-  !initialHandoffLocation.requested
-  && location.search === "?kirinukiSurface=cut-host"
 );
 
 const publicLaunchShell = requiredElement<HTMLElement>("#public-launch-shell");
@@ -198,6 +124,7 @@ function setDocumentSurface(surface: "public" | "local"): void {
 }
 
 const HANDLE_SECONDS = 10;
+const MINIMUM_SELECTION_SECONDS = 0.1;
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -218,327 +145,11 @@ function requiredElementWithin<T extends Element>(
   return element;
 }
 
-class EditorHandoffRequestError extends Error {
-  readonly status: number;
-
-  constructor(status: number) {
-    super(
-      status === 404
-        ? "이 컷 인계가 만료됐거나 이미 다른 편집기에서 열렸습니다. Kirinuki 앱의 컷 창에서 다시 열어 주세요."
-        : "이 PC의 컷 인계 응답을 확인하지 못했습니다."
-    );
-    this.name = "EditorHandoffRequestError";
-    this.status = status;
-  }
-}
-
-function editorHandoffEndpoint(): string {
-  const endpoint = new URL(DEFAULT_CAPTION_AGENT_SETTINGS.endpoint);
-  endpoint.pathname = "/v1/editor-handoff";
-  endpoint.search = "";
-  endpoint.hash = "";
-  return endpoint.href;
-}
-
-function setPublicHandoffStatus(title: string, message: string): void {
-  requiredElement<HTMLElement>("#public-launch-title").textContent = title;
-  requiredElement<HTMLElement>("#public-launch-copy").textContent = message;
-}
-
-function editorHandoffErrorMessage(error: unknown): string {
-  return error instanceof Error
-    ? error.message
-    : "알 수 없는 오류로 컷 인계를 완료하지 못했습니다.";
-}
-
-function isPlainJsonRecord(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-async function readEditorHandoffJson(
-  response: Response,
-  maximumBytes: number
-): Promise<unknown> {
-  const text = await response.text();
-  if (new TextEncoder().encode(text).byteLength > maximumBytes) {
-    throw new Error("이 PC의 컷 인계 응답이 허용 크기를 넘었습니다.");
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text) as unknown;
-  } catch {
-    throw new Error("이 PC의 컷 인계 응답이 올바른 JSON이 아닙니다.");
-  }
-  if (!response.ok) {
-    throw new EditorHandoffRequestError(response.status);
-  }
-  return value;
-}
-
-function waitForEditorHandoffRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
-}
-
-async function postEncryptedEditorHandoff(
-  token: string,
-  body: unknown,
-  maximumResponseBytes: number
-): Promise<unknown> {
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const response = await localMediaEngineTransportFetch(
-        editorHandoffEndpoint(),
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Kirinuki-Protocol": EDITOR_HANDOFF_CONSUME_PROTOCOL,
-            ...captionAgentRequestHeaders(token)
-          },
-          body: JSON.stringify(body),
-          cache: "no-store",
-          credentials: "omit",
-          redirect: "error"
-        }
-      );
-      return await readEditorHandoffJson(response, maximumResponseBytes);
-    } catch (error) {
-      lastError = error;
-      const status = error instanceof EditorHandoffRequestError
-        ? error.status
-        : 0;
-      const retryable = status === 0
-        || status === 408
-        || status === 429
-        || status >= 500;
-      if (!retryable || attempt >= 2) {
-        throw error;
-      }
-      await waitForEditorHandoffRetry(125 * (attempt + 1));
-    }
-  }
-  throw lastError;
-}
-
-function assertEditorHandoffAcknowledged(value: unknown): void {
-  if (
-    !isPlainJsonRecord(value)
-    || Object.keys(value).length !== 2
-    || value.schema !== EDITOR_HANDOFF_ACKNOWLEDGEMENT_SCHEMA
-    || value.status !== "acknowledged"
-  ) {
-    throw new Error("이 PC의 컷 인계 완료 응답이 올바르지 않습니다.");
-  }
-}
-
-function editorHandoffAcknowledgementFailureIsAmbiguous(
-  error: unknown
-): boolean {
-  // A received 4xx is a definite application rejection. A missing/malformed
-  // success response, transport failure, or 5xx may occur after broker commit
-  // but before the browser receives proof of it.
-  return editorHandoffAcknowledgementFailureDisposition(
-    error instanceof EditorHandoffRequestError ? error.status : null
-  ) === "preserve";
-}
-
-async function reconcileAbandonedBrowserProjectsForHandoff(): Promise<Set<string>> {
-  const checkpointProjectIds = [
-    ...new Set(await listEditingSessionCheckpointProjectIds())
-  ].sort((first, second) => first.localeCompare(second));
-  await Promise.all(checkpointProjectIds.map(async (projectId) => {
-    const result = await runWithExclusiveStudioProjectAccess(
-      projectId,
-      () => discardAbandonedEditingSessionCheckpoint(projectId)
-    );
-    if (!result.acquired || !result.value) {
-      return;
-    }
-    await studioStorageArea().remove(
-      `chzzkKirinukiEditorSeed:${projectId}`
-    );
-    if (localStorage.getItem(WEB_STUDIO_LATEST_PROJECT_KEY) === projectId) {
-      localStorage.removeItem(WEB_STUDIO_LATEST_PROJECT_KEY);
-    }
-  }));
-  // Re-read both checkpoint and project inventories after every acquired
-  // rollback. This is the same fail-closed barrier used by normal editor
-  // entry, without initializing the cut/streaming surface in this browser.
-  await listEditingSessionCheckpointProjectIds();
-  const projects = await listProjects();
-  const projectIds = new Set<string>();
-  for (const storedProject of projects) {
-    const project = normalizeEditorProject(storedProject);
-    if (!project) {
-      throw new Error(
-        "지원하지 않는 브라우저 프로젝트가 있어 새 편집을 만들지 않았습니다."
-      );
-    }
-    projectIds.add(project.id);
-  }
-  return projectIds;
-}
-
-function createFreshHandoffProjectId(existingProjectIds: ReadonlySet<string>): string {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const projectId = createFreshEditorProjectId();
-    if (!existingProjectIds.has(projectId)) {
-      return projectId;
-    }
-  }
-  throw new Error("새 브라우저 프로젝트 식별자를 만들지 못했습니다.");
-}
-
-async function rollbackFailedEditorHandoff(projectId: string): Promise<void> {
-  let rollbackError: unknown = null;
-  try {
-    const deletion = await runWithExclusiveStudioProjectAccess(
-      projectId,
-      () => deleteProjectSessionAtomically(projectId)
-    );
-    if (!deletion.acquired) {
-      throw new Error("실패한 새 편집의 writer lock을 확보하지 못했습니다.");
-    }
-    await studioStorageArea().remove(
-      `chzzkKirinukiEditorSeed:${projectId}`
-    );
-    if (localStorage.getItem(WEB_STUDIO_LATEST_PROJECT_KEY) === projectId) {
-      localStorage.removeItem(WEB_STUDIO_LATEST_PROJECT_KEY);
-    }
-  } catch (error) {
-    rollbackError = error;
-  } finally {
-    // This removes the newly-created tab lease and every ephemeral seed even
-    // if IndexedDB cleanup itself reports an error.
-    clearCurrentTabWebEditorSession();
-  }
-  if (rollbackError) {
-    throw new Error(
-      "컷 인계 실패 뒤 새 브라우저 편집 상태를 완전히 되돌리지 못했습니다.",
-      { cause: rollbackError }
-    );
-  }
-}
-
-async function consumeEditorHandoff(handoffNonce: string): Promise<void> {
-  setDocumentSurface("public");
-  setPublicHandoffStatus(
-    "편집기를 준비하고 있습니다",
-    "Kirinuki 앱과 이 브라우저의 암호화된 로컬 연결을 확인하는 중입니다."
-  );
-  await primeLocalMediaEngineTrust();
-  const readiness = await ensureLocalMediaEngineReady();
-  if (readiness !== "ready") {
-    throw new Error(
-      "컷을 가져오려면 이 PC 연결이 필요합니다. Kirinuki 앱의 컷 창은 그대로 유지됩니다."
-    );
-  }
-  const capabilityProjectId = editorHandoffCapabilityProjectId(handoffNonce);
-  const token = await pairCaptionAgent({
-    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
-    purpose: "editor-handoff",
-    projectId: capabilityProjectId
-  });
-  setPublicHandoffStatus(
-    "브라우저 저장 상태를 확인하고 있습니다",
-    "이전에 닫힌 편집을 정리한 뒤 새 컷을 받습니다."
-  );
-  const existingProjectIds =
-    await reconcileAbandonedBrowserProjectsForHandoff();
-  clearCurrentTabWebEditorSession();
-  const claimId = freshLocalMediaEngineChallenge();
-  const claimRequest = Object.freeze({
-    schema: EDITOR_HANDOFF_CONSUME_REQUEST_SCHEMA,
-    handoffNonce,
-    claimId
-  });
-  const envelope = normalizeEditorHandoffEnvelope(
-    await postEncryptedEditorHandoff(
-      token,
-      claimRequest,
-      EDITOR_HANDOFF_MAXIMUM_BYTES
-    )
-  );
-  setPublicHandoffStatus(
-    "브라우저 편집을 만드는 중입니다",
-    "새 프로젝트를 이 브라우저에만 만들고 있습니다. 기존 저장 편집과는 섞이지 않습니다."
-  );
-  const projectId = createFreshHandoffProjectId(existingProjectIds);
-  const sourceSessionId = sourceSessionIdentity(envelope.captureSeed.source);
-  if (!sourceSessionId) {
-    throw new Error("넘겨받은 원본 VOD 회차를 식별하지 못했습니다.");
-  }
-  const target: UsagePolicyTarget = {
-    projectId,
-    sourceSessionId,
-    purpose: "editor-new"
-  };
-  const attestation = createPerUseConfirmationAttestation({
-    target,
-    confirmationText: USAGE_POLICY_CONFIRMATION_PHRASE,
-    confirmedAt: envelope.confirmedAt
-  });
-  let session: Awaited<ReturnType<typeof beginWebEditorSession>>;
-  let acknowledgementUncertain = false;
-  try {
-    session = await beginWebEditorSession({
-      attestation,
-      captureSeed: envelope.captureSeed
-    });
-    try {
-      const acknowledgement = await postEncryptedEditorHandoff(
-        token,
-        Object.freeze({
-          schema: EDITOR_HANDOFF_ACKNOWLEDGEMENT_SCHEMA,
-          handoffNonce,
-          claimId
-        }),
-        8 * 1024
-      );
-      assertEditorHandoffAcknowledged(acknowledgement);
-    } catch (error) {
-      if (!editorHandoffAcknowledgementFailureIsAmbiguous(error)) {
-        throw error;
-      }
-      // If ACK committed and only its response was lost, rolling B back while
-      // A observes the tombstone destroys both sides. Preserve B instead.
-      acknowledgementUncertain = true;
-    }
-  } catch (error) {
-    try {
-      await rollbackFailedEditorHandoff(projectId);
-    } catch (rollbackError) {
-      throw new Error(
-        `${editorHandoffErrorMessage(error)} ${editorHandoffErrorMessage(rollbackError)}`,
-        { cause: rollbackError }
-      );
-    }
-    throw error;
-  }
-  setPublicHandoffStatus(
-    "편집기를 엽니다",
-    acknowledgementUncertain
-      ? "완료 응답은 확인하지 못했지만 만든 편집을 보존해서 엽니다."
-      : "컷 인계를 완료했습니다."
-  );
-  location.assign(session.editorUrl);
-}
-
 function startLocalApplication(): void {
 setDocumentSurface("local");
 
 const elements = {
-  startIntro: requiredElement<HTMLElement>("#start-intro"),
-  cutHostLaunchPanel: requiredElement<HTMLElement>("#cut-host-launch-panel"),
-  launchKirinukiCut: requiredElement<HTMLAnchorElement>("#launch-kirinuki-cut"),
-  cutHostLaunchStatus: requiredElement<HTMLElement>("#cut-host-launch-status"),
   form: requiredElement<HTMLFormElement>("#start-form"),
-  sourceSection: requiredElement<HTMLElement>("#source-section"),
   sourceUrl: requiredElement<HTMLInputElement>("#source-url"),
   sourcePlatform: requiredElement<HTMLElement>("#source-platform"),
   openSource: requiredElement<HTMLButtonElement>("#open-source"),
@@ -550,14 +161,11 @@ const elements = {
   ),
   projectName: requiredElement<HTMLInputElement>("#project-name"),
   streamFrame: requiredElement<HTMLIFrameElement>("#stream-preview-frame"),
+  streamVideo: requiredElement<HTMLVideoElement>("#stream-preview-video"),
   streamPlaceholder: requiredElement<HTMLElement>("#stream-preview-placeholder"),
   streamKind: requiredElement<HTMLElement>("#stream-preview-kind"),
   streamStatus: requiredElement<HTMLElement>("#stream-preview-status"),
   reloadStream: requiredElement<HTMLButtonElement>("#reload-stream"),
-  streamCurrentTime: requiredElement<HTMLOutputElement>("#stream-current-time"),
-  streamCutConsole: requiredElement<HTMLElement>("#stream-cut-console"),
-  streamCutStatus: requiredElement<HTMLElement>("#stream-cut-console-status"),
-  activeClipLabel: requiredElement<HTMLElement>("#active-clip-label"),
   clipList: requiredElement<HTMLElement>("#clip-list"),
   selectionRail: requiredElement<HTMLElement>(".selection-rail"),
   clipTemplate: requiredElement<HTMLTemplateElement>("#clip-row-template"),
@@ -593,55 +201,47 @@ const elements = {
   policySection: requiredElement<HTMLElement>("#policy-section"),
   mobileEditorNotice: requiredElement<HTMLElement>("#mobile-editor-notice"),
   status: requiredElement<HTMLElement>("#form-status"),
-  startEditor: requiredElement<HTMLButtonElement>("#start-editor")
+  startEditor: requiredElement<HTMLButtonElement>("#start-editor"),
+  cutPreparationProgress: requiredElement<HTMLElement>(
+    "#cut-preparation-progress"
+  ),
+  cutPreparationStage: requiredElement<HTMLElement>(
+    "#cut-preparation-stage"
+  ),
+  cutPreparationPercent: requiredElement<HTMLOutputElement>(
+    "#cut-preparation-percent"
+  ),
+  cutPreparationMeter: requiredElement<HTMLProgressElement>(
+    "#cut-preparation-meter"
+  ),
+  streamCurrentTime: requiredElement<HTMLOutputElement>(
+    "#stream-current-time"
+  ),
+  streamCutStatus: requiredElement<HTMLElement>(
+    "#stream-cut-console-status"
+  ),
+  activeClipLabel: requiredElement<HTMLElement>("#active-clip-label"),
+  refreshSource: requiredElement<HTMLButtonElement>("#refresh-source"),
+  captureStart: requiredElement<HTMLButtonElement>("#capture-start"),
+  captureEnd: requiredElement<HTMLButtonElement>("#capture-end"),
+  saveSegment: requiredElement<HTMLButtonElement>("#save-segment"),
+  seekBackwardFive: requiredElement<HTMLButtonElement>("#seek-backward-five"),
+  seekForwardFive: requiredElement<HTMLButtonElement>("#seek-forward-five"),
+  playbackRateQuarter: requiredElement<HTMLButtonElement>("#playback-rate-quarter"),
+  playbackRateDouble: requiredElement<HTMLButtonElement>("#playback-rate-double"),
+  streamPreviewNavigation: requiredElement<HTMLElement>(
+    "#stream-preview-navigation"
+  ),
+  streamPreviewTimeline: requiredElement<HTMLInputElement>(
+    "#stream-preview-timeline"
+  ),
+  streamPreviewTarget: requiredElement<HTMLOutputElement>(
+    "#stream-preview-target"
+  ),
+  loadPreviewWindow: requiredElement<HTMLButtonElement>(
+    "#load-preview-window"
+  )
 };
-
-elements.startIntro.hidden = !isElectronCutHostSurface;
-elements.startIntro.inert = !isElectronCutHostSurface;
-elements.cutHostLaunchPanel.hidden = isElectronCutHostSurface;
-elements.cutHostLaunchPanel.inert = isElectronCutHostSurface;
-elements.localProjectManager.hidden = isElectronCutHostSurface;
-elements.localProjectManager.inert = isElectronCutHostSurface;
-elements.form.hidden = !isElectronCutHostSurface;
-elements.form.inert = !isElectronCutHostSurface;
-elements.sourceSection.hidden = !isElectronCutHostSurface;
-elements.sourceSection.inert = !isElectronCutHostSurface;
-elements.localProjectDeleteDialog.hidden = isElectronCutHostSurface;
-elements.localProjectDeleteDialog.inert = isElectronCutHostSurface;
-
-let initialLocalEngineTrustPrimeSettled = isElectronCutHostSurface;
-const initialLocalEngineTrustPrime = (
-  isElectronCutHostSurface
-    ? Promise.resolve()
-    : primeLocalMediaEngineTrust().catch(() => {
-      // Readiness performs a fresh, user-visible check on click. A failed
-      // background prime must never launch a protocol or hide installation UI.
-    })
-).finally(() => {
-  initialLocalEngineTrustPrimeSettled = true;
-});
-let cutLauncherBusy = false;
-let cutLauncherReady = false;
-
-function armCutLauncher(): void {
-  cutLauncherReady = true;
-  elements.launchKirinukiCut.href = "kirinuki-engine://cut";
-  elements.launchKirinukiCut.removeAttribute("aria-disabled");
-}
-
-if (!isElectronCutHostSurface) {
-  void initialLocalEngineTrustPrime.then(async () => {
-    await probeLocalMediaEngine(undefined, fetch, 1_500);
-    armCutLauncher();
-    setCutHostLaunchStatus(
-      "이 PC의 Kirinuki가 준비됐습니다. 한 번 누르면 컷 선택 창이 열립니다.",
-      "success"
-    );
-  }).catch(() => {
-    // A background miss is expected on first install. The explicit click
-    // below owns all dialog/protocol UI and never launches by itself.
-  });
-}
 
 interface LocalProjectEntry {
   project: EditorProject;
@@ -674,26 +274,20 @@ let activeStreamEmbedUrl = "";
 let activeStreamPlatform = "";
 let streamLoadTimer: number | null = null;
 let activeClipRow: HTMLElement | null = null;
-let streamingBridgeClient: StreamingBridgeClient | null = null;
-let latestStreamingSnapshot: StreamingBridgePlayerSnapshot | null = null;
-let boundSoopSourceClockIdentity: SoopVodSourceClockIdentity | null = null;
-let streamingBridgeTargetOrigin = "";
-let streamingBridgeGeneration = 0;
-let trustedShortcutWindowGeneration: number | null = null;
-let activePlayerDocumentGeneration = 0;
-let playerActionBindingPromise: Promise<Readonly<{
-  transportEpoch: number;
-  documentGeneration: number;
-}>> | null = null;
-let streamingBridgeClockPollingEnabled = false;
-let streamingBridgeConsecutiveClockFailures = 0;
-let streamingBridgeClockPollInFlight: {
-  readonly client: StreamingBridgeClient;
+let localPreviewSourceStartSeconds = 0;
+let localPreviewSourceDurationSeconds = 0;
+let localPreviewProjectId = createFreshEditorProjectId();
+let localPreviewSourceUrl = "";
+let localPreviewToken = "";
+let localPreviewBusy = false;
+let localPreviewGeneration = 0;
+interface ActiveLocalPreviewOperation {
+  readonly controller: AbortController;
   readonly generation: number;
-} | null = null;
-let streamCutBackgroundStatusTimer: number | null = null;
-let streamCutForegroundStatusUntil = 0;
-const sourceClockOperationQueue = createGenerationBoundSerialOperationQueue();
+  readonly token: string;
+  jobId: string | null;
+}
+let activeLocalPreviewOperation: ActiveLocalPreviewOperation | null = null;
 
 function explainMobileEditorBlock(): void {
   const message = "편집기는 모바일에서 사용할 수 없습니다. PC 브라우저에서 열어 주세요.";
@@ -741,42 +335,36 @@ function setStatus(message: string, kind: "idle" | "error" | "success" = "idle")
   elements.status.classList.toggle("success", kind === "success");
 }
 
-function setCutHostLaunchStatus(
-  message: string,
-  kind: "idle" | "error" | "success" = "idle"
+function materializationStage(status: ChzzkVodMaterializationStatus): string {
+  const labels: Readonly<Record<ChzzkVodMaterializationStatus["state"], string>> = {
+    queued: "도우미가 요청을 확인하고 있습니다",
+    resolving: "원본 VOD를 안전하게 확인하고 있습니다",
+    planning: "선택한 구간만 계산하고 있습니다",
+    downloading: "선택한 구간을 이 PC에 받고 있습니다",
+    verifying: "받은 영상과 원본 시각을 검증하고 있습니다",
+    muxing: "웹 편집기용 영상을 구성하고 있습니다",
+    completed: "선택한 구간 준비를 마쳤습니다",
+    failed: "선택한 구간을 준비하지 못했습니다",
+    cancelled: "선택한 구간 준비를 취소했습니다"
+  };
+  return labels[status.state];
+}
+
+function showCutPreparation(
+  stage: string,
+  progress: number
 ): void {
-  elements.cutHostLaunchStatus.textContent = message;
-  elements.cutHostLaunchStatus.classList.toggle("error", kind === "error");
-  elements.cutHostLaunchStatus.classList.toggle("success", kind === "success");
+  const value = Math.max(0, Math.min(1, Number(progress) || 0));
+  elements.cutPreparationProgress.hidden = false;
+  elements.cutPreparationStage.textContent = stage;
+  elements.cutPreparationMeter.value = value;
+  elements.cutPreparationPercent.textContent = `${Math.round(value * 100)}%`;
 }
 
-function setStreamCutStatus(message: string): void {
-  streamCutForegroundStatusUntil = performance.now() + 750;
-  if (streamCutBackgroundStatusTimer !== null) {
-    window.clearTimeout(streamCutBackgroundStatusTimer);
-    streamCutBackgroundStatusTimer = null;
-  }
-  elements.streamCutStatus.textContent = message;
-}
-
-function setStreamCutBackgroundStatus(message: string): void {
-  if (streamCutBackgroundStatusTimer !== null) {
-    window.clearTimeout(streamCutBackgroundStatusTimer);
-    streamCutBackgroundStatusTimer = null;
-  }
-  const remaining = streamCutForegroundStatusUntil - performance.now();
-  if (remaining <= 0) {
-    elements.streamCutStatus.textContent = message;
-    return;
-  }
-  streamCutBackgroundStatusTimer = window.setTimeout(() => {
-    streamCutBackgroundStatusTimer = null;
-    elements.streamCutStatus.textContent = message;
-  }, Math.ceil(remaining));
-}
-
-function captureConsoleButton(targetId: string): HTMLButtonElement {
-  return requiredElement<HTMLButtonElement>(`#${targetId}`);
+function hideCutPreparation(): void {
+  elements.cutPreparationProgress.hidden = true;
+  elements.cutPreparationMeter.value = 0;
+  elements.cutPreparationPercent.textContent = "0%";
 }
 
 function replaceStreamFrame(): void {
@@ -791,481 +379,6 @@ function replaceStreamFrame(): void {
   }
   elements.streamFrame = replacement;
   installStreamFrameLoadHandler(replacement);
-  updateCaptureConsoleAvailability();
-}
-
-function currentStreamingSourceIdentity(): StreamingBridgeSourceIdentity | null {
-  const identifiers = inferSourceIdentifiers(elements.sourceUrl.value.trim());
-  if (
-    (identifiers.platform !== SOURCE_PLATFORM_CHZZK
-      && identifiers.platform !== SOURCE_PLATFORM_SOOP
-      && identifiers.platform !== SOURCE_PLATFORM_YOUTUBE)
-    || identifiers.contentType !== "vod"
-    || !identifiers.contentId
-  ) {
-    return null;
-  }
-  return createStreamingBridgeSourceIdentity({
-    platform: identifiers.platform,
-    contentId: identifiers.contentId,
-    contentType: "vod"
-  });
-}
-
-function resetStreamingBridge(): void {
-  sourceClockOperationQueue.advanceGeneration();
-  streamingBridgeGeneration += 1;
-  activePlayerDocumentGeneration = 0;
-  if (isElectronCutHostSurface) {
-    const transportEpoch = streamingBridgeGeneration;
-    const action = window.kirinukiCutHost?.playerAction;
-    playerActionBindingPromise = typeof action === "function"
-      ? action({ type: "invalidate", transportEpoch }).then((value) => {
-        if (!value || typeof value !== "object" || Array.isArray(value)) {
-          throw new TypeError("원본 플레이어 문서 세대 응답이 없습니다.");
-        }
-        const record = value as Record<string, unknown>;
-        if (
-          Object.keys(record).sort().join(",")
-            !== "documentGeneration,status,transportEpoch"
-          || record.status !== "invalidated"
-          || record.transportEpoch !== transportEpoch
-          || !Number.isSafeInteger(record.documentGeneration)
-          || Number(record.documentGeneration) <= 0
-        ) {
-          throw new TypeError("원본 플레이어 문서 세대 응답이 올바르지 않습니다.");
-        }
-        const binding = Object.freeze({
-          transportEpoch,
-          documentGeneration: Number(record.documentGeneration)
-        });
-        if (transportEpoch === streamingBridgeGeneration) {
-          activePlayerDocumentGeneration = binding.documentGeneration;
-        }
-        return binding;
-      })
-      : Promise.reject(new Error("컷 창의 원본 플레이어 연결이 없습니다."));
-    void playerActionBindingPromise.catch(() => undefined);
-  } else {
-    playerActionBindingPromise = null;
-  }
-  streamingBridgeClient?.destroy();
-  streamingBridgeClient = null;
-  streamingBridgeTargetOrigin = "";
-  latestStreamingSnapshot = null;
-  boundSoopSourceClockIdentity = null;
-  streamingBridgeClockPollingEnabled = false;
-  streamingBridgeConsecutiveClockFailures = 0;
-  streamingBridgeClockPollInFlight = null;
-}
-
-function transientStreamingPlayerStateError(error: unknown): boolean {
-  return error instanceof StreamingBridgeRequestError
-    && [
-      "action-failed",
-      "player-unavailable",
-      "player-state-transient",
-      "source-unavailable"
-    ].includes(error.code);
-}
-
-function recoverableStreamingClockError(error: unknown): boolean {
-  return error instanceof StreamingBridgeRequestError
-    && [
-      "action-failed",
-      "player-unavailable",
-      "player-state-transient",
-      "source-unavailable",
-      "timeout",
-      "send-failed"
-    ].includes(error.code);
-}
-
-function acceptStreamingBridgeSnapshot(
-  snapshot: StreamingBridgePlayerSnapshot
-): void {
-  if (activeStreamPlatform === SOURCE_PLATFORM_SOOP) {
-    const identity = normalizeSoopVodSourceClockIdentity(
-      snapshot.sourceClockIdentity
-    );
-    if (
-      !snapshot.found
-      || snapshot.currentTime === null
-      || !identity
-      || snapshot.sourceClockPosition?.globalTimeSeconds
-        !== snapshot.currentTime
-    ) {
-      latestStreamingSnapshot = null;
-      throw new StreamingBridgeRequestError(
-        "player-state-transient",
-        "SOOP 공식 VOD part 시계 증명을 확인하지 못했습니다."
-      );
-    }
-    if (
-      boundSoopSourceClockIdentity
-      && !sameSoopVodSourceClockIdentity(
-        boundSoopSourceClockIdentity,
-        identity
-      )
-    ) {
-      latestStreamingSnapshot = null;
-      streamingBridgeClockPollingEnabled = false;
-      throw new StreamingBridgeRequestError(
-        "source-mismatch",
-        "SOOP VOD의 공식 part 구성이 바뀌어 현재 컷 시계를 안전하게 유지할 수 없습니다. W로 플레이어를 다시 불러와 주세요."
-      );
-    }
-    boundSoopSourceClockIdentity = identity;
-  }
-  if (snapshot.found && snapshot.currentTime !== null) {
-    latestStreamingSnapshot = snapshot;
-    streamingBridgeConsecutiveClockFailures = 0;
-    streamingBridgeClockPollingEnabled = true;
-  }
-}
-
-async function runTransientSafeStreamingAction(
-  client: StreamingBridgeClient,
-  operation: () => Promise<StreamingBridgePlayerSnapshot>
-): Promise<StreamingBridgePlayerSnapshot> {
-  const generation = streamingBridgeGeneration;
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    if (
-      client !== streamingBridgeClient
-      || generation !== streamingBridgeGeneration
-    ) {
-      throw new DOMException(
-        "원본 변경으로 오래된 스트리밍 제어를 중단했습니다.",
-        "AbortError"
-      );
-    }
-    try {
-      const snapshot = await operation();
-      if (!snapshot.found || snapshot.currentTime === null) {
-        lastError = new StreamingBridgeRequestError(
-          "player-unavailable",
-          "플랫폼 플레이어의 원본 시각을 잠시 읽지 못했습니다."
-        );
-        if (attempt >= 5) {
-          throw lastError;
-        }
-        setStreamCutStatus(
-          "플랫폼 플레이어 전환을 감지했습니다. 현재 스트리밍에서 제어를 자동으로 다시 시도합니다…"
-        );
-        await waitForBridgeProbe(75 * Math.min(attempt + 1, 3));
-        continue;
-      }
-      acceptStreamingBridgeSnapshot(snapshot);
-      return snapshot;
-    } catch (error) {
-      lastError = error;
-      if (!transientStreamingPlayerStateError(error) || attempt >= 5) {
-        throw error;
-      }
-      setStreamCutStatus(
-        "플랫폼 플레이어 전환을 감지했습니다. 현재 스트리밍에서 제어를 자동으로 다시 시도합니다…"
-      );
-      await waitForBridgeProbe(75 * Math.min(attempt + 1, 3));
-    }
-  }
-  throw lastError;
-}
-
-function syncStreamingBridgeSource(): void {
-  if (
-    !isElectronCutHostSurface
-    || typeof window.kirinukiCutHost?.playerAction !== "function"
-  ) {
-    // The ordinary browser surface may preview the public VOD and keep manual
-    // time inputs usable. Likewise, typing the cut-host query into an ordinary
-    // browser must not manufacture the privileged Electron transport. Failing
-    // closed here also lets the non-privileged iframe lifecycle complete.
-    resetStreamingBridge();
-    return;
-  }
-  const source = currentStreamingSourceIdentity();
-  const targetOrigin = activeStreamEmbedUrl
-    ? new URL(activeStreamEmbedUrl).origin
-    : "";
-  if (!source || !targetOrigin) {
-    resetStreamingBridge();
-    return;
-  }
-  if (
-    streamingBridgeClient
-    && streamingBridgeTargetOrigin === targetOrigin
-  ) {
-    if (!sameStreamingBridgeSourceIdentity(
-      streamingBridgeClient.source,
-      source
-    )) {
-      streamingBridgeClient.replaceSource(source);
-      latestStreamingSnapshot = null;
-      boundSoopSourceClockIdentity = null;
-    }
-    return;
-  }
-  resetStreamingBridge();
-  const transport = createElectronStreamingBridgeTransport(
-    streamingBridgeGeneration
-  );
-  streamingBridgeClient = new StreamingBridgeClient({
-    source,
-    ...transport,
-    requestTimeoutMs: 900,
-    maxDeliveryAttempts: 3
-  });
-  streamingBridgeTargetOrigin = targetOrigin;
-  latestStreamingSnapshot = null;
-  boundSoopSourceClockIdentity = null;
-}
-
-function createElectronStreamingBridgeTransport(
-  transportEpoch: number
-): Readonly<{
-  send: (request: StreamingBridgeRequest) => Promise<void>;
-  subscribe: (listener: (response: unknown) => void) => () => void;
-}> {
-  const action = window.kirinukiCutHost?.playerAction;
-  if (!isElectronCutHostSurface || typeof action !== "function") {
-    throw new Error("원본 플레이어는 Kirinuki 컷 선택 창에서만 제어할 수 있습니다.");
-  }
-  const bindingPromise = playerActionBindingPromise;
-  if (!bindingPromise) {
-    throw new Error("원본 플레이어 문서 세대를 준비하지 못했습니다.");
-  }
-  const listeners = new Set<(response: unknown) => void>();
-  return Object.freeze({
-    async send(request: StreamingBridgeRequest): Promise<void> {
-      const binding = await bindingPromise;
-      if (
-        binding.transportEpoch !== transportEpoch
-        || transportEpoch !== streamingBridgeGeneration
-      ) {
-        throw new DOMException("원본 플레이어 세대가 바뀌었습니다.", "AbortError");
-      }
-      const response = await action({
-        type: "request",
-        transportEpoch,
-        documentGeneration: binding.documentGeneration,
-        request
-      });
-      for (const listener of listeners) {
-        listener(response);
-      }
-    },
-    subscribe(listener: (response: unknown) => void): () => void {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    }
-  });
-}
-
-function waitForBridgeProbe(delayMs: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
-}
-
-async function connectStreamingBridge(
-  frame: HTMLIFrameElement,
-  expectedEmbedUrl: string
-): Promise<void> {
-  syncStreamingBridgeSource();
-  const client = streamingBridgeClient;
-  const generation = streamingBridgeGeneration;
-  if (!client) {
-    return;
-  }
-  for (let attempt = 0; attempt < 48; attempt += 1) {
-    if (
-      client !== streamingBridgeClient
-      || generation !== streamingBridgeGeneration
-      || frame !== elements.streamFrame
-      || activeStreamEmbedUrl !== expectedEmbedUrl
-    ) {
-      return;
-    }
-    try {
-      const snapshot = await client.snapshot();
-      if (
-        client !== streamingBridgeClient
-        || generation !== streamingBridgeGeneration
-      ) {
-        return;
-      }
-      acceptStreamingBridgeSnapshot(snapshot);
-      updateCaptureConsoleAvailability();
-      if (snapshot.found && snapshot.currentTime !== null) {
-        setStreamCutBackgroundStatus(
-          "원본 스트리밍 연결 완료 · E/R 캡처와 D/F/Y/U 제어를 사용할 수 있습니다."
-        );
-        return;
-      }
-      setStreamCutBackgroundStatus(
-        "플랫폼 문서는 연결됐고 영상 요소를 기다리는 중입니다. 플레이어에서 재생을 한 번 눌러 주세요."
-      );
-    } catch (error) {
-      if (
-        client !== streamingBridgeClient
-        || generation !== streamingBridgeGeneration
-      ) {
-        return;
-      }
-      if (transientStreamingPlayerStateError(error)) {
-        updateCaptureConsoleAvailability();
-        setStreamCutBackgroundStatus(
-          "플랫폼 플레이어가 전환되는 중입니다. 같은 원본 스트리밍에서 자동으로 다시 연결합니다…"
-        );
-        await waitForBridgeProbe(250);
-        continue;
-      }
-      setStreamCutBackgroundStatus(
-        `Kirinuki의 원본 플레이어 연결부가 현재 버전과 맞지 않습니다: ${errorMessage(error)} 컷 선택 창을 닫았다가 다시 열어 주세요.`
-      );
-      updateCaptureConsoleAvailability();
-      return;
-    }
-    await waitForBridgeProbe(250);
-  }
-  setStreamCutBackgroundStatus(
-    "플레이어 제어는 준비됐지만 재생 가능한 영상을 찾지 못했습니다. W로 연결을 다시 확인해 주세요."
-  );
-}
-
-async function pollStreamingBridgeClock(): Promise<void> {
-  const client = streamingBridgeClient;
-  if (
-    !client
-    || !streamingBridgeClockPollingEnabled
-    || streamingBridgeClockPollInFlight
-  ) {
-    return;
-  }
-  const generation = streamingBridgeGeneration;
-  const pollToken = { client, generation };
-  streamingBridgeClockPollInFlight = pollToken;
-  try {
-    const snapshot = await client.snapshot();
-    if (
-      client === streamingBridgeClient
-      && generation === streamingBridgeGeneration
-    ) {
-      const recovered = streamingBridgeConsecutiveClockFailures > 0;
-      acceptStreamingBridgeSnapshot(snapshot);
-      updateCaptureConsoleAvailability();
-      if (snapshot.found && snapshot.currentTime !== null) {
-        if (recovered) {
-          setStreamCutBackgroundStatus(
-            "원본 스트리밍 시각 동기화를 자동으로 복구했습니다. E/R 캡처와 D/F/Y/U 제어를 사용할 수 있습니다."
-          );
-        }
-      } else {
-        setStreamCutBackgroundStatus(
-          "플랫폼 플레이어가 전환되는 중입니다. 같은 원본 스트리밍에서 자동으로 다시 연결합니다…"
-        );
-      }
-    }
-  } catch (error) {
-    if (
-      client === streamingBridgeClient
-      && generation === streamingBridgeGeneration
-      && !(error instanceof DOMException && error.name === "AbortError")
-    ) {
-      streamingBridgeConsecutiveClockFailures += 1;
-      const recoverable = recoverableStreamingClockError(error);
-      if (!recoverable) {
-        latestStreamingSnapshot = null;
-        streamingBridgeClockPollingEnabled = false;
-      }
-      updateCaptureConsoleAvailability();
-      setStreamCutBackgroundStatus(recoverable
-        ? "플랫폼 플레이어의 일시 전환을 감지했습니다. 화면을 유지한 채 자동으로 다시 연결합니다…"
-        : `원본 스트리밍 확인이 중단됐습니다: ${errorMessage(error)} W로 현재 플레이어를 다시 확인해 주세요.`);
-    }
-  } finally {
-    if (streamingBridgeClockPollInFlight === pollToken) {
-      streamingBridgeClockPollInFlight = null;
-    }
-  }
-}
-
-function streamingBridgeReady(): boolean {
-  return Boolean(
-    streamingBridgeClient
-    && latestStreamingSnapshot?.found
-    && latestStreamingSnapshot.currentTime !== null
-  );
-}
-
-function currentControllablePlayerTime(): number | null {
-  return streamingBridgeReady()
-    ? latestStreamingSnapshot?.currentTime ?? null
-    : null;
-}
-
-function updatePlayerClockDisplay(): void {
-  const currentTime = currentControllablePlayerTime();
-  elements.streamCurrentTime.value = currentTime === null
-    ? "--:--:--"
-    : formatStudioTimecode(currentTime);
-}
-
-function updateCaptureConsoleAvailability(): void {
-  const bridgeReady = streamingBridgeReady();
-  const hasCurrentTime = currentControllablePlayerTime() !== null;
-  elements.streamCutConsole.setAttribute(
-    "aria-busy",
-    String(sourceClockOperationQueue.pendingCount > 0)
-  );
-  captureConsoleButton("refresh-source").disabled = !activeStreamEmbedUrl;
-  for (const targetId of [
-    "capture-start",
-    "capture-end",
-    "seek-backward-five",
-    "seek-forward-five"
-  ]) {
-    captureConsoleButton(targetId).disabled = !bridgeReady || !hasCurrentTime;
-  }
-  for (const targetId of [
-    "playback-rate-quarter",
-    "playback-rate-double"
-  ]) {
-    captureConsoleButton(targetId).disabled = !bridgeReady;
-  }
-  const playbackRate = latestStreamingSnapshot?.playbackRate ?? null;
-  captureConsoleButton("playback-rate-quarter").setAttribute(
-    "aria-pressed",
-    String(playbackRate === 0.25)
-  );
-  captureConsoleButton("playback-rate-double").setAttribute(
-    "aria-pressed",
-    String(playbackRate === 2)
-  );
-  updatePlayerClockDisplay();
-}
-
-function explainUnavailablePlayerControl(): void {
-  if (!activeStreamEmbedUrl) {
-    setStreamCutStatus("먼저 지원되는 VOD 주소를 입력해 주세요.");
-    elements.sourceUrl.focus();
-    return;
-  }
-  if (
-    activeStreamPlatform === SOURCE_PLATFORM_CHZZK
-    || activeStreamPlatform === SOURCE_PLATFORM_SOOP
-  ) {
-    setStreamCutStatus(
-      "플레이어 제어가 아직 응답하지 않습니다. W로 연결을 다시 확인해 주세요."
-    );
-    return;
-  }
-  if (activeStreamPlatform !== SOURCE_PLATFORM_YOUTUBE) {
-    setStreamCutStatus("지원되는 공개 VOD 주소를 다시 확인해 주세요.");
-    return;
-  }
-  setStreamCutStatus(
-    "YouTube 플레이어가 아직 준비되지 않았습니다. 영상을 재생한 뒤 W로 연결을 다시 확인해 주세요."
-  );
 }
 
 function clipRows(): HTMLElement[] {
@@ -1306,9 +419,7 @@ function updateClipRows(): void {
     const invalidEnd = invalid && (
       validation.endSeconds === null || validation.status === "invalid-order"
     );
-    row.dataset.rangeValidity = invalid
-      ? "invalid"
-      : validation.status;
+    row.dataset.rangeValidity = invalid ? "invalid" : validation.status;
     row.classList.toggle("invalid", invalid);
     if (start) {
       if (invalidStart) {
@@ -1334,11 +445,10 @@ function updateClipRows(): void {
             : "시작과 끝을 기록하면 편집기에서 준비할 범위를 보여드립니다.";
     }
   });
-  const activeIndex = activeClipRow ? rows.indexOf(activeClipRow) : -1;
-  elements.activeClipLabel.textContent = activeIndex >= 0
-    ? `현재 입력 #${String(activeIndex + 1).padStart(2, "0")}`
-    : "현재 입력 없음";
-  updateCaptureConsoleAvailability();
+  const activeIndex = Math.max(0, rows.indexOf(activeClipRow ?? rows[0]!));
+  elements.activeClipLabel.textContent =
+    `현재 입력 #${String(activeIndex + 1).padStart(2, "0")}`;
+  syncCaptureConsoleAvailability();
   renderEditorEntryAvailability();
 }
 
@@ -1444,28 +554,6 @@ function currentSource({
   const identifiers = inferSourceIdentifiers(descriptor.sourceUrl);
   const canonicalUrl = descriptor.sourceUrl;
   const projectName = normalizedProjectName({ required: requireProjectName });
-  let sourceClockIdentity: SoopVodSourceClockIdentity | undefined;
-  if (identifiers.platform === SOURCE_PLATFORM_SOOP) {
-    const latestIdentity = normalizeSoopVodSourceClockIdentity(
-      latestStreamingSnapshot?.sourceClockIdentity
-    );
-    if (
-      !latestStreamingSnapshot?.found
-      || latestStreamingSnapshot.currentTime === null
-      || !latestIdentity
-      || !boundSoopSourceClockIdentity
-      || !sameSoopVodSourceClockIdentity(
-        boundSoopSourceClockIdentity,
-        latestIdentity
-      )
-      || latestIdentity.contentId !== identifiers.contentId
-    ) {
-      throw new TypeError(
-        "SOOP 공식 VOD part 시계를 먼저 확인해야 합니다. 플레이어가 열린 뒤 W를 누르고 다시 시도해 주세요."
-      );
-    }
-    sourceClockIdentity = latestIdentity;
-  }
   return {
     platform: identifiers.platform,
     channelId: identifiers.channelId,
@@ -1473,8 +561,7 @@ function currentSource({
     contentType: "vod",
     canonicalUrl,
     url: canonicalUrl,
-    broadcastTitle: projectName || "Kirinuki 로컬 컷 제어",
-    ...(sourceClockIdentity ? { sourceClockIdentity } : {})
+    broadcastTitle: projectName || "Kirinuki 로컬 컷 제어"
   };
 }
 
@@ -1537,6 +624,356 @@ function currentCaptureState({
   };
 }
 
+async function cancelLocalPreviewOperation(
+  operation: ActiveLocalPreviewOperation
+): Promise<void> {
+  operation.controller.abort();
+  if (!operation.jobId) {
+    return;
+  }
+  try {
+    await cancelChzzkVodMaterialization({
+      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+      token: operation.token,
+      jobId: operation.jobId
+    });
+  } catch {
+    // A terminal/reused job can win the race with cancellation. Its generation
+    // guard still prevents stale media from replacing the current preview.
+  }
+}
+
+function cancelActiveLocalPreviewOperation(): void {
+  const operation = activeLocalPreviewOperation;
+  if (!operation) {
+    return;
+  }
+  activeLocalPreviewOperation = null;
+  void cancelLocalPreviewOperation(operation);
+}
+
+function resetLocalPreviewSession(): void {
+  cancelActiveLocalPreviewOperation();
+  localPreviewGeneration += 1;
+  localPreviewBusy = false;
+  localPreviewSourceStartSeconds = 0;
+  localPreviewSourceDurationSeconds = 0;
+  localPreviewProjectId = createFreshEditorProjectId();
+  localPreviewSourceUrl = "";
+  localPreviewToken = "";
+  elements.streamVideo.pause();
+  elements.streamVideo.removeAttribute("src");
+  elements.streamVideo.load();
+  elements.streamVideo.hidden = true;
+  elements.streamPreviewNavigation.hidden = true;
+  elements.streamPreviewTimeline.value = "0";
+  elements.streamPreviewTimeline.max = "0";
+  elements.streamPreviewTimeline.disabled = true;
+  elements.loadPreviewWindow.disabled = true;
+  elements.streamPreviewTarget.textContent = "00:00:00";
+  syncCaptureConsoleAvailability();
+}
+
+async function materializeLocalPreviewRange({
+  token,
+  sourceUrl,
+  projectId,
+  generation,
+  startSeconds,
+  endSeconds,
+  targetSeconds
+}: {
+  token: string;
+  sourceUrl: string;
+  projectId: string;
+  generation: number;
+  startSeconds: number;
+  endSeconds: number;
+  targetSeconds: number;
+}): Promise<ChzzkVodMaterializationStatus> {
+  const clipId = `preview-${generation}-${Math.round(startSeconds * 1_000)}-${Math.round(endSeconds * 1_000)}`;
+  const operation: ActiveLocalPreviewOperation = {
+    controller: new AbortController(),
+    generation,
+    token,
+    jobId: null
+  };
+  activeLocalPreviewOperation = operation;
+  let status: ChzzkVodMaterializationStatus;
+  try {
+    status = await startChzzkVodMaterialization({
+      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+      token,
+      consumerId: projectId,
+      sourceUrl,
+      clips: [{
+        id: clipId,
+        startMs: Math.round(startSeconds * 1_000),
+        endMs: Math.round(endSeconds * 1_000)
+      }],
+      rightsConfirmed: true
+    });
+    operation.jobId = status.jobId;
+    if (
+      generation !== localPreviewGeneration
+      || activeLocalPreviewOperation !== operation
+    ) {
+      await cancelLocalPreviewOperation(operation);
+      throw new DOMException(
+        "원본 또는 목표 위치 변경으로 오래된 미리보기를 폐기했습니다.",
+        "AbortError"
+      );
+    }
+  } catch (error) {
+    if (activeLocalPreviewOperation === operation) {
+      activeLocalPreviewOperation = null;
+    }
+    throw error;
+  }
+  const report = (nextStatus: ChzzkVodMaterializationStatus): void => {
+    if (
+      generation !== localPreviewGeneration
+      || activeLocalPreviewOperation !== operation
+    ) {
+      return;
+    }
+    const percent = Math.round(nextStatus.progress * 100);
+    elements.streamCutStatus.textContent =
+      `${materializationStage(nextStatus)} · ${percent}%`;
+  };
+  report(status);
+  if (status.state !== "completed") {
+    status = await waitForChzzkVodMaterialization({
+      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+      token,
+      jobId: status.jobId,
+      signal: operation.controller.signal,
+      onProgress: report
+    });
+  }
+  if (
+    generation !== localPreviewGeneration
+    || activeLocalPreviewOperation !== operation
+  ) {
+    await cancelLocalPreviewOperation(operation);
+    throw new DOMException("원본 변경으로 오래된 미리보기를 폐기했습니다.", "AbortError");
+  }
+  activeLocalPreviewOperation = null;
+  const materialization = normalizeChzzkVodMaterialization(
+    status.materialization
+  );
+  const window = materialization?.windows.find(
+    (candidate) => candidate.clipIds.includes(clipId)
+  );
+  if (!materialization || !window || !status.media) {
+    throw new Error("도우미가 로컬 미리보기의 원본 시각을 검증하지 못했습니다.");
+  }
+  localPreviewSourceDurationSeconds = materialization.sourceDurationMs / 1_000;
+  localPreviewSourceStartSeconds = localPreviewSourceAtMediaZero(window);
+  elements.streamPreviewNavigation.hidden = false;
+  elements.streamPreviewTimeline.disabled = false;
+  elements.loadPreviewWindow.disabled = false;
+  elements.streamPreviewTimeline.max = String(localPreviewSourceDurationSeconds);
+  elements.streamPreviewTimeline.value = String(Math.min(
+    localPreviewSourceDurationSeconds,
+    Math.max(0, targetSeconds)
+  ));
+  elements.streamPreviewTarget.textContent = formatStudioTimecode(
+    Number(elements.streamPreviewTimeline.value)
+  );
+  elements.streamFrame.hidden = true;
+  elements.streamPlaceholder.hidden = true;
+  elements.streamVideo.hidden = false;
+  elements.streamVideo.src = status.media.url;
+  elements.streamVideo.load();
+  elements.streamVideo.addEventListener("loadedmetadata", () => {
+    if (generation !== localPreviewGeneration) {
+      return;
+    }
+    elements.streamVideo.currentTime = Math.max(
+      0,
+      Math.min(
+        elements.streamVideo.duration,
+        targetSeconds - localPreviewSourceStartSeconds
+      )
+    );
+    syncCaptureConsoleAvailability();
+  }, { once: true });
+  elements.streamStatus.textContent =
+    "도우미가 준비한 짧은 로컬 구간을 이 웹페이지에서 재생합니다.";
+  elements.streamCutStatus.textContent =
+    "연결됐습니다. E/R/D/F/Y/U 단축키가 현재 원본 시각에 맞춰 동작합니다.";
+  return status;
+}
+
+async function prepareLocalPreview(targetSeconds = 0): Promise<void> {
+  if (localPreviewBusy) {
+    cancelActiveLocalPreviewOperation();
+  }
+  if (!allAcknowledgementsChecked()) {
+    elements.streamCutStatus.textContent =
+      "로컬 VOD를 준비하기 전에 아래 권리 확인 항목을 확인해 주세요.";
+    focusFirstMissingAcknowledgement();
+    return;
+  }
+  const source = currentSource({ requireProjectName: false });
+  const sourceUrl = String(source.canonicalUrl || source.url || "").trim();
+  if (localPreviewSourceUrl && localPreviewSourceUrl !== sourceUrl) {
+    resetLocalPreviewSession();
+  }
+  localPreviewSourceUrl = sourceUrl;
+  const generation = ++localPreviewGeneration;
+  localPreviewBusy = true;
+  elements.refreshSource.disabled = true;
+  elements.loadPreviewWindow.disabled = true;
+  try {
+    elements.streamCutStatus.textContent =
+      "이 PC의 영상 준비 도우미 연결을 확인하고 있습니다…";
+    const readiness = await ensureLocalMediaEngineReady();
+    if (generation !== localPreviewGeneration) {
+      throw new DOMException("더 새로운 미리보기 요청이 시작됐습니다.", "AbortError");
+    }
+    if (readiness === "manual-file") {
+      elements.streamCutStatus.textContent =
+        "도우미 연결을 건너뛰었습니다. 시간은 직접 입력하고 편집기에서 파일을 연결할 수 있습니다.";
+      return;
+    }
+    localPreviewToken = await pairCaptionAgent({
+      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+      purpose: "vod",
+      projectId: localPreviewProjectId,
+      sourceUrl
+    });
+    if (generation !== localPreviewGeneration) {
+      throw new DOMException("더 새로운 미리보기 요청이 시작됐습니다.", "AbortError");
+    }
+    let duration = localPreviewSourceDurationSeconds;
+    if (duration <= 0) {
+      const bootstrap = await materializeLocalPreviewRange({
+        token: localPreviewToken,
+        sourceUrl,
+        projectId: localPreviewProjectId,
+        generation,
+        startSeconds: 0,
+        endSeconds: 1,
+        targetSeconds: 0
+      });
+      const materialization = normalizeChzzkVodMaterialization(
+        bootstrap.materialization
+      );
+      duration = (materialization?.sourceDurationMs || 0) / 1_000;
+    }
+    if (duration <= 0) {
+      throw new Error("원본 VOD의 전체 길이를 확인하지 못했습니다.");
+    }
+    const preview = planLocalPreviewRange(duration, targetSeconds);
+    await materializeLocalPreviewRange({
+      token: localPreviewToken,
+      sourceUrl,
+      projectId: localPreviewProjectId,
+      generation,
+      startSeconds: preview.startSeconds,
+      endSeconds: preview.endSeconds,
+      targetSeconds: preview.targetSeconds
+    });
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) {
+      if (activeLocalPreviewOperation?.generation === generation) {
+        cancelActiveLocalPreviewOperation();
+      }
+      elements.streamCutStatus.textContent =
+        `로컬 미리보기를 준비하지 못했습니다: ${errorMessage(error)}`;
+    }
+  } finally {
+    if (generation === localPreviewGeneration) {
+      if (activeLocalPreviewOperation?.generation === generation) {
+        activeLocalPreviewOperation = null;
+      }
+      localPreviewBusy = false;
+      syncCaptureConsoleAvailability();
+      elements.loadPreviewWindow.disabled = localPreviewSourceDurationSeconds <= 0;
+    }
+  }
+}
+
+async function prepareSelectedVodForEditor(
+  projectId: string,
+  captureSeed: CaptureState
+): Promise<boolean> {
+  showCutPreparation("이 PC의 영상 준비 도우미를 확인하고 있습니다", 0.01);
+  const readiness = await ensureLocalMediaEngineReady();
+  if (readiness === "manual-file") {
+    hideCutPreparation();
+    setStatus(
+      "도우미 없이 계속합니다. 편집기에서 ‘내 파일 직접 연결’을 선택해 주세요.",
+      "idle"
+    );
+    return false;
+  }
+  const sourceUrl = String(
+    captureSeed.source?.canonicalUrl || captureSeed.source?.url || ""
+  ).trim();
+  const clips = (captureSeed.segments || []).map((segment, index) => {
+    const id = String(segment.id || "").trim();
+    const startSeconds = Number(segment.startSeconds);
+    const endSeconds = Number(segment.endSeconds);
+    if (
+      !id
+      || !Number.isFinite(startSeconds)
+      || !Number.isFinite(endSeconds)
+      || startSeconds < 0
+      || endSeconds - startSeconds < MINIMUM_SELECTION_SECONDS
+    ) {
+      throw new TypeError("선택한 VOD 구간을 부분 준비 범위로 바꾸지 못했습니다.");
+    }
+    return {
+      id: captureSegmentEditorClipId(segment, index),
+      startMs: Math.round(startSeconds * 1_000),
+      endMs: Math.round(endSeconds * 1_000)
+    };
+  });
+  showCutPreparation("도우미와 이 편집만을 위한 안전한 연결을 만들고 있습니다", 0.03);
+  const token = await pairCaptionAgent({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    purpose: "vod",
+    projectId,
+    sourceUrl
+  });
+  let status = await startChzzkVodMaterialization({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    token,
+    consumerId: projectId,
+    sourceUrl,
+    clips,
+    rightsConfirmed: true
+  });
+  showCutPreparation(materializationStage(status), status.progress);
+  if (status.state !== "completed") {
+    status = await waitForChzzkVodMaterialization({
+      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+      token,
+      jobId: status.jobId,
+      onProgress: (nextStatus) => {
+        showCutPreparation(
+          materializationStage(nextStatus),
+          nextStatus.progress
+        );
+      }
+    });
+  }
+  if (
+    status.state !== "completed"
+    || status.media === undefined
+    || status.materialization === undefined
+  ) {
+    throw new Error(
+      "도우미가 선택한 구간의 영상과 원본 시각 검증을 완료하지 못했습니다."
+    );
+  }
+  showCutPreparation("준비가 끝났습니다. 같은 브라우저 편집기를 여는 중입니다", 1);
+  return true;
+}
+
 function allAcknowledgementsChecked(): boolean {
   const acknowledgements = [
     ...document.querySelectorAll<HTMLInputElement>("[data-ack]")
@@ -1581,12 +1018,6 @@ function showResumePolicy(
   const source = recoverySourceRecord(project.source);
   resumeProject = project;
   resumeRecoveryDrafts = recoveryDrafts;
-  if (!isElectronCutHostSurface) {
-    elements.form.hidden = false;
-    elements.form.inert = false;
-    elements.sourceSection.hidden = true;
-    elements.sourceSection.inert = true;
-  }
   if (source?.canonicalUrl) {
     elements.sourceUrl.value = String(source.canonicalUrl);
   }
@@ -1594,20 +1025,15 @@ function showResumePolicy(
   elements.startEditor.textContent = "편집기 열기";
   elements.selectionRail.hidden = true;
   elements.selectionRail.inert = true;
-  elements.streamCutConsole.hidden = true;
-  elements.streamCutConsole.inert = true;
   elements.sourceCacheStatus.hidden = true;
-  renderEditorEntryAvailability();
   setStatus(
     recoveryDrafts
       ? `“${project.name}”의 복구본을 권리 확인 후 선택합니다.`
       : `“${project.name}”의 마지막 저장 상태를 권리 확인 후 이어서 엽니다.`,
     "success"
   );
-  if (isElectronCutHostSurface) {
-    updateSourcePlatform();
-    updateStreamPreview();
-  }
+  updateSourcePlatform();
+  updateStreamPreview();
   elements.policySection.scrollIntoView({ behavior: "smooth", block: "start" });
   document.querySelector<HTMLInputElement>(
     "#policy-section [data-ack]"
@@ -1623,15 +1049,6 @@ function clearResumeMode(): void {
   elements.startEditor.textContent = "편집기 열기";
   elements.selectionRail.hidden = false;
   elements.selectionRail.inert = false;
-  elements.streamCutConsole.hidden = false;
-  elements.streamCutConsole.inert = false;
-  if (!isElectronCutHostSurface) {
-    elements.form.hidden = true;
-    elements.form.inert = true;
-    elements.sourceSection.hidden = true;
-    elements.sourceSection.inert = true;
-  }
-  updateClipRows();
   setStatus("새 편집을 만들려면 원본 VOD와 한 개 이상의 구간이 필요합니다.");
   void refreshStoredSourceIntent();
 }
@@ -1736,6 +1153,7 @@ function updateSourcePlatform(): void {
   }
   elements.sourcePlatform.textContent = isVod ? `${label} VOD` : "URL 확인 필요";
   elements.sourcePlatform.classList.toggle("valid", isVod);
+  syncCaptureConsoleAvailability();
   renderLocalProjectEntries();
   void refreshStoredSourceIntent();
 }
@@ -1747,17 +1165,20 @@ function clearStreamPreview(message: string): void {
   }
   activeStreamEmbedUrl = "";
   activeStreamPlatform = "";
-  resetStreamingBridge();
   replaceStreamFrame();
   elements.streamFrame.removeAttribute("src");
   elements.streamFrame.hidden = true;
+  elements.streamVideo.pause();
+  elements.streamVideo.removeAttribute("src");
+  elements.streamVideo.load();
+  elements.streamVideo.hidden = true;
+  localPreviewSourceStartSeconds = 0;
   elements.streamPlaceholder.hidden = false;
   elements.streamKind.textContent = "링크 대기";
   elements.streamKind.classList.remove("valid");
   elements.streamStatus.textContent = message;
   elements.reloadStream.disabled = true;
-  setStreamCutStatus("VOD 주소를 입력하면 가능한 플레이어 동작을 활성화합니다.");
-  updateCaptureConsoleAvailability();
+  syncCaptureConsoleAvailability();
 }
 
 function updateStreamPreview({ force = false }: { force?: boolean } = {}): void {
@@ -1783,7 +1204,6 @@ function updateStreamPreview({ force = false }: { force?: boolean } = {}): void 
   }
   activeStreamEmbedUrl = descriptor.embedUrl;
   activeStreamPlatform = descriptor.platform;
-  resetStreamingBridge();
   replaceStreamFrame();
   elements.streamKind.textContent = descriptor.label;
   elements.streamKind.classList.add("valid");
@@ -1793,12 +1213,7 @@ function updateStreamPreview({ force = false }: { force?: boolean } = {}): void 
   elements.streamPlaceholder.hidden = true;
   elements.streamFrame.hidden = false;
   elements.streamFrame.src = descriptor.embedUrl;
-  syncStreamingBridgeSource();
   elements.reloadStream.disabled = false;
-  setStreamCutStatus(descriptor.platform === SOURCE_PLATFORM_YOUTUBE
-    ? "YouTube 플레이어 연결을 기다리는 중입니다…"
-    : "플레이어 제어를 연결하는 중입니다. 이 화면에서는 영상을 내려받지 않습니다.");
-  updateCaptureConsoleAvailability();
   if (streamLoadTimer !== null) {
     window.clearTimeout(streamLoadTimer);
   }
@@ -1806,7 +1221,7 @@ function updateStreamPreview({ force = false }: { force?: boolean } = {}): void 
     streamLoadTimer = null;
     if (activeStreamEmbedUrl === descriptor.embedUrl) {
       elements.streamStatus.textContent =
-        "플레이어 응답을 아직 확인하지 못했습니다. ‘플레이어 다시 시작’ 또는 ‘원본 페이지 열기’를 사용하세요.";
+        "원본 미리보기 응답을 아직 확인하지 못했습니다. ‘원본 미리보기 다시 불러오기’ 또는 ‘원본 페이지 열기’를 사용하세요.";
     }
   }, 12_000);
 }
@@ -2331,244 +1746,173 @@ async function confirmLocalProjectDeletion(): Promise<void> {
   }
 }
 
-function currentDraftRow(): HTMLElement | null {
-  if (activeClipRow?.isConnected) {
-    return activeClipRow;
+function currentLocalPreviewSourceTime(): number | null {
+  if (
+    elements.streamVideo.hidden
+    || elements.streamVideo.readyState < HTMLMediaElement.HAVE_METADATA
+    || !Number.isFinite(elements.streamVideo.currentTime)
+  ) {
+    return null;
   }
-  activeClipRow = clipRows().at(-1) ?? null;
-  return activeClipRow;
-}
-
-function writeCapturedPlayerTime(
-  field: "start" | "end",
-  currentTime: number
-): void {
-  const row = currentDraftRow();
-  if (!row) {
-    throw new Error("현재 구간 입력 행이 없습니다.");
-  }
-  const input = requiredInputWithin(row, `[data-field="${field}"]`);
-  input.value = formatStudioTimecode(currentTime);
-  row.classList.remove("finalized");
-  row.removeAttribute("data-finalized");
-  updateClipRows();
-  setStreamCutStatus(
-    `${formatStudioTimecode(currentTime)}을 ${field === "start" ? "시작" : "끝"} 시각에 기록했습니다.`
+  return localPreviewSourceSeconds(
+    localPreviewSourceStartSeconds,
+    elements.streamVideo.currentTime
   );
 }
 
-async function captureCurrentPlayerTime(
-  field: "start" | "end"
-): Promise<void> {
-  let currentTime: number | null = null;
-  if (streamingBridgeClient) {
-    const client = streamingBridgeClient;
-    latestStreamingSnapshot = await runTransientSafeStreamingAction(
-      client,
-      () => client.snapshot()
-    );
-    currentTime = latestStreamingSnapshot.currentTime;
-  }
-  if (currentTime === null) {
-    explainUnavailablePlayerControl();
+function updatePlayerClockDisplay(): void {
+  const sourceSeconds = currentLocalPreviewSourceTime();
+  elements.streamCurrentTime.textContent = sourceSeconds === null
+    ? "--:--:--"
+    : formatStudioTimecode(sourceSeconds);
+}
+
+function captureCurrentPlayerTime(field: "start" | "end"): void {
+  const sourceSeconds = currentLocalPreviewSourceTime();
+  if (sourceSeconds === null) {
+    elements.streamCutStatus.textContent =
+      "정확한 시각 캡처에는 이 PC의 로컬 미리보기가 필요합니다. W로 연결을 확인해 주세요.";
     return;
   }
-  writeCapturedPlayerTime(field, currentTime);
-  updateCaptureConsoleAvailability();
+  const row = activeClipRow ?? clipRows().at(-1) ?? addClipRow();
+  activeClipRow = row;
+  const input = requiredInputWithin(row, `[data-field="${field}"]`);
+  input.value = formatStudioTimecode(sourceSeconds);
+  row.classList.remove("finalized");
+  updateClipRows();
+  elements.streamCutStatus.textContent = field === "start"
+    ? `시작을 ${formatStudioTimecode(sourceSeconds)}로 기록했습니다.`
+    : `끝을 ${formatStudioTimecode(sourceSeconds)}로 기록했습니다.`;
+}
+
+function seekPlayerBy(deltaSeconds: number): void {
+  const sourceSeconds = currentLocalPreviewSourceTime();
+  if (sourceSeconds === null) {
+    elements.streamCutStatus.textContent =
+      "로컬 미리보기가 준비된 뒤에 영상 위치를 이동할 수 있습니다.";
+    return;
+  }
+  const targetSourceSeconds = Math.max(
+    0,
+    Math.min(
+      localPreviewSourceDurationSeconds || Number.MAX_SAFE_INTEGER,
+      sourceSeconds + deltaSeconds
+    )
+  );
+  const targetMediaSeconds = localPreviewMediaSeconds(
+    localPreviewSourceStartSeconds,
+    targetSourceSeconds
+  );
+  if (
+    targetMediaSeconds < 0
+    || !Number.isFinite(elements.streamVideo.duration)
+    || targetMediaSeconds > elements.streamVideo.duration
+  ) {
+    void prepareLocalPreview(targetSourceSeconds);
+    return;
+  }
+  elements.streamVideo.currentTime = targetMediaSeconds;
+  updatePlayerClockDisplay();
+}
+
+function setPlayerRate(playbackRate: 0.25 | 2): void {
+  if (currentLocalPreviewSourceTime() === null) {
+    elements.streamCutStatus.textContent =
+      "로컬 미리보기가 준비된 뒤에 재생 속도를 바꿀 수 있습니다.";
+    return;
+  }
+  elements.streamVideo.playbackRate = playbackRate;
+  elements.playbackRateQuarter.ariaPressed = String(playbackRate === 0.25);
+  elements.playbackRateDouble.ariaPressed = String(playbackRate === 2);
+  elements.streamCutStatus.textContent = `재생 속도를 ${playbackRate}배로 바꿨습니다.`;
 }
 
 function finalizeCurrentDraftRow(): void {
-  const row = currentDraftRow();
-  if (!row) {
-    throw new Error("확정할 구간 입력 행이 없습니다.");
-  }
-  const startInput = requiredInputWithin(row, '[data-field="start"]');
-  const endInput = requiredInputWithin(row, '[data-field="end"]');
-  const validation = validateStudioSelectionRange(
-    startInput.value,
-    endInput.value
-  );
+  const row = activeClipRow ?? clipRows().at(-1) ?? addClipRow();
+  const start = requiredInputWithin(row, '[data-field="start"]');
+  const end = requiredInputWithin(row, '[data-field="end"]');
+  const validation = validateStudioSelectionRange(start.value, end.value);
   if (validation.status !== "valid") {
     row.classList.add("invalid");
-    const message = validation.status === "invalid-order"
-      ? STUDIO_SELECTION_RANGE_ORDER_ERROR
-      : STUDIO_SELECTION_RANGE_INPUT_ERROR;
-    (validation.status === "invalid-order" ? endInput : startInput).focus();
-    setStreamCutStatus(message);
-    updateClipRows();
+    elements.streamCutStatus.textContent =
+      validation.status === "invalid-order"
+        ? STUDIO_SELECTION_RANGE_ORDER_ERROR
+        : STUDIO_SELECTION_RANGE_INPUT_ERROR;
+    (validation.status === "invalid-order" ? end : start).focus();
     return;
   }
-  row.dataset.finalized = "true";
   row.classList.add("finalized");
-  const rowNumber = clipRows().indexOf(row) + 1;
-  const nextSibling = row.nextElementSibling;
-  const nextRow = nextSibling instanceof HTMLElement
-    && nextSibling.matches(".clip-row")
-    ? nextSibling
-    : addClipRow();
-  activeClipRow = nextRow;
-  requiredInputWithin(nextRow, '[data-field="start"]').focus();
-  updateClipRows();
-  setStreamCutStatus(
-    `${rowNumber}번 구간을 확정했습니다. 다음 구간의 시작 시각을 입력하거나 E로 캡처하세요.`
-  );
-}
-
-async function seekPlayerBy(deltaSeconds: -5 | 5): Promise<void> {
-  if (!streamingBridgeClient || !streamingBridgeReady()) {
-    explainUnavailablePlayerControl();
-    return;
-  }
-  const client = streamingBridgeClient;
-  const before = await runTransientSafeStreamingAction(
-    client,
-    () => client.snapshot()
-  );
-  if (!before.found || before.currentTime === null) {
-    explainUnavailablePlayerControl();
-    return;
-  }
-  const minimum = before.seekableStart ?? 0;
-  const maximum = before.seekableEnd
-    ?? before.duration
-    ?? Number.POSITIVE_INFINITY;
-  const target = Math.min(
-    maximum,
-    Math.max(minimum, before.currentTime + deltaSeconds)
-  );
-  latestStreamingSnapshot = await runTransientSafeStreamingAction(
-    client,
-    () => client.seekAbsolute(target)
-  );
-  updateCaptureConsoleAvailability();
-  setStreamCutStatus(
-    `원본 스트리밍을 ${formatStudioTimecode(latestStreamingSnapshot.currentTime ?? 0)}로 이동했습니다.`
-  );
-}
-
-async function setPlayerRate(playbackRate: 0.25 | 2): Promise<void> {
-  if (!streamingBridgeClient || !streamingBridgeReady()) {
-    explainUnavailablePlayerControl();
-    return;
-  }
-  const client = streamingBridgeClient;
-  latestStreamingSnapshot = await runTransientSafeStreamingAction(
-    client,
-    () => client.setPlaybackRate(playbackRate)
-  );
-  updateCaptureConsoleAvailability();
-  setStreamCutStatus(`원본 스트리밍을 ${playbackRate}배속으로 설정했습니다.`);
-}
-
-function studioCaptureActionNeedsPlayer(
-  action: StudioCaptureAction
-): boolean {
-  return action === "capture-start"
-    || action === "capture-end"
-    || action === "player-seek-backward-five"
-    || action === "player-seek-forward-five"
-    || action === "player-rate-quarter"
-    || action === "player-rate-double";
-}
-
-function playerControlAvailable(): boolean {
-  return streamingBridgeReady();
-}
-
-async function refreshActivePlayerContext(): Promise<void> {
-  syncStreamingBridgeSource();
-  const client = streamingBridgeClient;
-  if (!client) {
-    explainUnavailablePlayerControl();
-    return;
-  }
-  latestStreamingSnapshot = await runTransientSafeStreamingAction(
-    client,
-    () => client.snapshot()
-  );
-  updateCaptureConsoleAvailability();
-  setStreamCutStatus("현재 원본 스트리밍 시각을 다시 읽었습니다.");
-}
-
-async function runQueuedSourceClockAction(
-  action: StudioCaptureAction
-): Promise<void> {
-  switch (action) {
-    case "capture-start":
-      await captureCurrentPlayerTime("start");
-      return;
-    case "capture-end":
-      await captureCurrentPlayerTime("end");
-      return;
-    case "save-segment":
-      finalizeCurrentDraftRow();
-      return;
-    case "player-seek-backward-five":
-      await seekPlayerBy(-5);
-      return;
-    case "player-seek-forward-five":
-      await seekPlayerBy(5);
-      return;
-    case "player-rate-quarter":
-      await setPlayerRate(0.25);
-      return;
-    case "player-rate-double":
-      await setPlayerRate(2);
-      return;
-    case "open-editor":
-      elements.startEditor.click();
-      return;
-    default:
-      throw new TypeError(`직렬화할 수 없는 컷 제어 동작입니다: ${action}`);
-  }
-}
-
-function queueSourceClockAction(action: StudioCaptureAction): void {
-  const expectedGeneration = sourceClockOperationQueue.generation;
-  const queued = sourceClockOperationQueue.enqueue(async () => {
-    await runQueuedSourceClockAction(action);
-    if (expectedGeneration !== sourceClockOperationQueue.generation) {
-      throw new StaleSerialOperationGenerationError();
-    }
-  });
-  updateCaptureConsoleAvailability();
-  void queued
-    .catch(reportStudioCaptureActionError)
-    .finally(updateCaptureConsoleAvailability);
+  row.dataset.finalized = "true";
+  const next = addClipRow();
+  requiredInputWithin(next, '[data-field="start"]').focus();
+  elements.streamCutStatus.textContent =
+    "구간을 확정하고 다음 빈 구간을 열었습니다.";
 }
 
 function runStudioCaptureAction(action: StudioCaptureAction): void {
-  if (studioCaptureActionNeedsPlayer(action) && !playerControlAvailable()) {
-    explainUnavailablePlayerControl();
-    return;
-  }
   switch (action) {
     case "refresh-recovery-sessions":
-      if (!isElectronCutHostSurface && !openingEditor) {
+      if (!openingEditor) {
         void refreshRecentProject();
       }
       return;
     case "refresh-source":
-      void refreshActivePlayerContext().catch(reportStudioCaptureActionError);
+      void prepareLocalPreview(
+        Number(elements.streamPreviewTimeline.value || 0)
+      );
+      return;
+    case "capture-start":
+      captureCurrentPlayerTime("start");
+      return;
+    case "capture-end":
+      captureCurrentPlayerTime("end");
+      return;
+    case "save-segment":
+      finalizeCurrentDraftRow();
       return;
     case "open-editor":
-      elements.startEditor.click();
+      if (!elements.startEditor.disabled) {
+        elements.startEditor.click();
+      }
       return;
-    default:
-      queueSourceClockAction(action);
+    case "player-seek-backward-five":
+      seekPlayerBy(-5);
+      return;
+    case "player-seek-forward-five":
+      seekPlayerBy(5);
+      return;
+    case "player-rate-quarter":
+      setPlayerRate(0.25);
+      return;
+    case "player-rate-double":
+      setPlayerRate(2);
+      return;
   }
 }
 
-function reportStudioCaptureActionError(error: unknown): void {
-  if (error instanceof DOMException && error.name === "AbortError") {
-    return;
+function syncCaptureConsoleAvailability(): void {
+  const previewReady = currentLocalPreviewSourceTime() !== null;
+  let sourceReady = false;
+  try {
+    sourceReady = Boolean(sourceEmbedDescriptor(
+      elements.sourceUrl.value.trim(),
+      { studioOrigin: location.origin }
+    ));
+  } catch {
+    sourceReady = false;
   }
-  if (error instanceof StaleSerialOperationGenerationError) {
-    return;
+  elements.refreshSource.disabled = !sourceReady;
+  for (const button of [
+    elements.captureStart,
+    elements.captureEnd,
+    elements.seekBackwardFive,
+    elements.seekForwardFive,
+    elements.playbackRateQuarter,
+    elements.playbackRateDouble
+  ]) {
+    button.disabled = !previewReady;
   }
-  const message = `컷 제어를 실행하지 못했습니다: ${errorMessage(error)}`;
-  setStreamCutStatus(message);
-  setStatus(message, "error");
+  updatePlayerClockDisplay();
 }
 
 function installStudioCaptureConsole(): void {
@@ -2576,9 +1920,10 @@ function installStudioCaptureConsole(): void {
     if (!binding.targetId) {
       continue;
     }
-    const button = captureConsoleButton(binding.targetId);
-    button.title = binding.title;
-    button.setAttribute("aria-keyshortcuts", binding.key);
+    const button = document.getElementById(binding.targetId);
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error(`컷 단축키 대상이 없습니다: #${binding.targetId}`);
+    }
     button.addEventListener("click", () => runStudioCaptureAction(binding.action));
   }
   document.addEventListener("keydown", (event) => {
@@ -2587,13 +1932,10 @@ function installStudioCaptureConsole(): void {
     if (!binding) {
       return;
     }
-    if (binding.targetId) {
-      const button = captureConsoleButton(binding.targetId);
-      if (button.disabled || button.closest("[hidden]")) {
-        return;
-      }
-      event.preventDefault();
-      button.click();
+    const button = binding.targetId
+      ? document.getElementById(binding.targetId)
+      : null;
+    if (button instanceof HTMLButtonElement && button.disabled) {
       return;
     }
     if (binding.action === "open-editor" && elements.startEditor.disabled) {
@@ -2602,142 +1944,26 @@ function installStudioCaptureConsole(): void {
     event.preventDefault();
     runStudioCaptureAction(binding.action);
   });
-}
-
-function activeStudioElementIsEditable(): boolean {
-  const active = document.activeElement;
-  return active instanceof HTMLInputElement
-    || active instanceof HTMLTextAreaElement
-    || active instanceof HTMLSelectElement
-    || (active instanceof HTMLElement && active.isContentEditable);
-}
-
-function trustedShortcutContentId(
-  source: Readonly<StreamingBridgeSourceIdentity>
-): string | null {
-  const pattern = source.platform === SOURCE_PLATFORM_YOUTUBE
-    ? /^youtube:vod:([A-Za-z0-9_-]{11})$/u
-    : source.platform === SOURCE_PLATFORM_SOOP
-      ? /^soop:vod:(\d{1,32})$/u
-      : /^chzzk:vod:(\d{1,32})$/u;
-  return pattern.exec(source.sessionId)?.[1] ?? null;
-}
-
-function runTrustedCutShortcut(
-  message: Readonly<TrustedCutShortcutMessage>
-): void {
-  const client = streamingBridgeClient;
-  const descriptor = sourceEmbedDescriptor(elements.sourceUrl.value.trim(), {
-    studioOrigin: location.origin
-  });
-  if (
-    !isElectronCutHostSurface
-    || !client
-    || message.transportEpoch !== streamingBridgeGeneration
-    || message.documentGeneration !== activePlayerDocumentGeneration
-    || message.bridgeGeneration !== client.generation
-    || message.platform !== client.source.platform
-    || message.platform !== activeStreamPlatform
-    || message.contentId !== trustedShortcutContentId(client.source)
-    || !descriptor
-    || descriptor.platform !== message.platform
-    || descriptor.embedUrl !== activeStreamEmbedUrl
-    || activeStudioElementIsEditable()
-  ) {
-    return;
-  }
-  if (trustedShortcutWindowGeneration === null) {
-    trustedShortcutWindowGeneration = message.windowGeneration;
-  } else if (trustedShortcutWindowGeneration !== message.windowGeneration) {
-    return;
-  }
-  const binding = studioCaptureShortcutBinding(message.key);
-  if (!binding) {
-    return;
-  }
-  if (binding.targetId) {
-    const button = captureConsoleButton(binding.targetId);
-    if (!button.disabled && !button.closest("[hidden]")) {
-      button.click();
-    }
-    return;
-  }
-  if (binding.action === "open-editor") {
-    if (!elements.startEditor.disabled) {
-      // Keep the trusted preload ticket inside this synchronous IPC callback.
-      // Queueing A would lose both transient activation and the one-shot ticket.
-      elements.startEditor.click();
-    }
-    return;
-  }
-  runStudioCaptureAction(binding.action);
-}
-
-function installTrustedCutShortcuts(): void {
-  const subscribe = window.kirinukiCutHost?.onTrustedShortcut;
-  if (typeof subscribe !== "function") {
-    return;
-  }
-  const unsubscribe = subscribe(runTrustedCutShortcut);
-  window.addEventListener("beforeunload", unsubscribe, { once: true });
-}
-
-elements.launchKirinukiCut.addEventListener("click", (event) => {
-  if (isElectronCutHostSurface) {
-    event.preventDefault();
-    return;
-  }
-  if (
-    cutLauncherReady
-    && elements.launchKirinukiCut.href === "kirinuki-engine://cut"
-  ) {
-    // Keep the custom-protocol navigation in this exact trusted click task.
-    // An asynchronous health check here would lose Chromium's transient activation.
-    return;
-  }
-  event.preventDefault();
-  if (!initialLocalEngineTrustPrimeSettled) {
-    setCutHostLaunchStatus(
-      "이 PC의 Kirinuki 연결 정보를 준비하고 있습니다. 잠시 뒤 다시 눌러 주세요."
+  elements.streamVideo.addEventListener("loadedmetadata", syncCaptureConsoleAvailability);
+  elements.streamVideo.addEventListener("timeupdate", updatePlayerClockDisplay);
+  elements.streamVideo.addEventListener("ratechange", () => {
+    elements.playbackRateQuarter.ariaPressed = String(
+      elements.streamVideo.playbackRate === 0.25
     );
-    return;
-  }
-  if (cutLauncherBusy) {
-    return;
-  }
-  cutLauncherBusy = true;
-  elements.launchKirinukiCut.setAttribute("aria-disabled", "true");
-  setCutHostLaunchStatus(
-    "이 PC의 Kirinuki 설치와 안전한 로컬 연결을 확인하는 중입니다…"
-  );
-  // Calling readiness in this exact click stack lets a known sleeping or
-  // unpaired engine invoke its custom protocol before any asynchronous boundary.
-  // A click that arrived before the background prime was deliberately ended
-  // above and requires a second explicit click instead.
-  const readinessAttempt = ensureLocalMediaEngineReady(undefined, {
-    allowImmediateProtocolLaunch: true
-  });
-  void readinessAttempt.then((readiness) => {
-    if (readiness !== "ready") {
-      setCutHostLaunchStatus(
-        "컷 선택 창을 열지 않았습니다. 준비되면 다시 눌러 주세요."
-      );
-      return;
-    }
-    armCutLauncher();
-    setCutHostLaunchStatus(
-      "준비됐습니다. ‘새 컷 선택 열기’를 한 번 더 눌러 주세요.",
-      "success"
+    elements.playbackRateDouble.ariaPressed = String(
+      elements.streamVideo.playbackRate === 2
     );
-  }).catch((error) => {
-    setCutHostLaunchStatus(editorHandoffErrorMessage(error), "error");
-  }).finally(() => {
-    cutLauncherBusy = false;
-    if (!cutLauncherReady) {
-      elements.launchKirinukiCut.removeAttribute("aria-disabled");
-    }
   });
-});
+  elements.streamPreviewTimeline.addEventListener("input", () => {
+    elements.streamPreviewTarget.textContent = formatStudioTimecode(
+      Number(elements.streamPreviewTimeline.value)
+    );
+  });
+  elements.loadPreviewWindow.addEventListener("click", () => {
+    void prepareLocalPreview(Number(elements.streamPreviewTimeline.value));
+  });
+  syncCaptureConsoleAvailability();
+}
 
 elements.addClip.addEventListener("click", () => addClipRow());
 elements.importSessionArchive.addEventListener("click", () => {
@@ -2760,9 +1986,8 @@ elements.sessionArchiveInput.addEventListener("change", () => {
 });
 elements.sourceUrl.addEventListener("input", () => {
   clearResumeMode();
-  resetStreamingBridge();
+  resetLocalPreviewSession();
   activeStreamPlatform = "";
-  setStreamCutStatus("원본 주소 변경을 확인하는 중입니다…");
   updateSourcePlatform();
   scheduleStreamPreview();
 });
@@ -2779,17 +2004,6 @@ elements.openSource.addEventListener("click", () => {
       throw new TypeError(
         "라이브·클립이 아닌 CHZZK·YouTube·SOOP의 단일 공개 VOD 주소를 입력해 주세요."
       );
-    }
-    if (isElectronCutHostSurface) {
-      const openCanonicalSource = window.kirinukiCutHost?.openCanonicalSource;
-      if (typeof openCanonicalSource !== "function") {
-        throw new Error("기본 브라우저로 원본 페이지를 열 수 없습니다.");
-      }
-      void openCanonicalSource(descriptor.sourceUrl).catch((error) => {
-        setStatus(errorMessage(error), "error");
-        elements.sourceUrl.focus();
-      });
-      return;
     }
     window.open(descriptor.sourceUrl, "_blank", "noopener,noreferrer");
   } catch (error) {
@@ -2882,8 +2096,7 @@ function installStreamFrameLoadHandler(frame: HTMLIFrameElement): void {
       streamLoadTimer = null;
     }
     elements.streamStatus.textContent =
-      "플랫폼 문서를 브라우저에 직접 불러왔습니다. 플레이어 제어 연결을 확인하는 중입니다.";
-    void connectStreamingBridge(frame, activeStreamEmbedUrl);
+      "플랫폼 원본 미리보기를 브라우저에 직접 불러왔습니다.";
   });
 }
 elements.form.addEventListener("submit", (event) => {
@@ -2914,56 +2127,46 @@ elements.form.addEventListener("submit", (event) => {
       localProjectLifecycleRefreshTimer = null;
     }
     try {
-      if (isElectronCutHostSurface) {
-        if (!allAcknowledgementsChecked()) {
-          throw new TypeError("필수 책임 확인 항목을 모두 선택해 주세요.");
-        }
-        const bridge = window.kirinukiCutHost;
-        if (!bridge || typeof bridge.handoffEditor !== "function") {
-          throw new Error(
-            "새 컷 선택 화면은 설치된 Kirinuki 앱에서 열어 주세요."
-          );
-        }
-        const submission = normalizeEditorHandoffSubmission({
-          schema: EDITOR_HANDOFF_SUBMISSION_SCHEMA,
-          confirmedAt: new Date().toISOString(),
-          acknowledgements: {
-            vodCovered: true,
-            localAcquisitionAndEditing: true,
-            publicationIsSeparate: true,
-            thirdPartyRights: true,
-            platformTermsAndNoCircumvention: true,
-            userResponsibility: true
-          },
-          captureSeed: currentCaptureState()
-        });
-        setStatus(
-          "브라우저 편집기로 안전하게 넘기는 중입니다…",
-          "success"
-        );
-        await bridge.handoffEditor(submission);
-        setStatus("브라우저 편집기를 열었습니다.", "success");
-        return;
-      }
-      if (!resumeProject) {
-        throw new Error(
-          "새 컷은 ‘새 컷 선택 열기’로 Kirinuki 앱에서 시작해 주세요."
-        );
-      }
       // Never race a fresh A→B navigation against startup/focus rollback of a
       // checkpoint left by a crashed or closed editor document.
       await requireSafeLocalProjectStateForEditorEntry();
-      const target: UsagePolicyTarget = {
-        projectId: resumeProject.id,
-        sourceSessionId: resumeSourceSessionId(resumeProject),
-        purpose: resumeRecoveryDrafts ? "editor-recovery" : "editor-resume"
-      };
+      let target: UsagePolicyTarget;
+      let captureSeed: CaptureState | undefined;
+      if (resumeProject) {
+        target = {
+          projectId: resumeProject.id,
+          sourceSessionId: resumeSourceSessionId(resumeProject),
+          purpose: resumeRecoveryDrafts ? "editor-recovery" : "editor-resume"
+        };
+      } else {
+        captureSeed = currentCaptureState();
+        const projectId = localPreviewProjectId;
+        const sourceSessionId = sourceSessionIdentity(captureSeed.source);
+        if (!sourceSessionId) {
+          throw new TypeError("원본 VOD 회차를 식별하지 못했습니다.");
+        }
+        target = { projectId, sourceSessionId, purpose: "editor-new" };
+      }
       const attestation = createAttestation(target);
-      setStatus("편집기를 여는 중입니다…", "success");
-      const session = await beginWebEditorSession({ attestation });
+      if (captureSeed !== undefined) {
+        setStatus(
+          "도우미가 선택한 구간만 준비합니다. 이 페이지에서 진행 상황을 확인할 수 있습니다.",
+          "success"
+        );
+        await prepareSelectedVodForEditor(target.projectId, captureSeed);
+      }
+      setStatus("같은 브라우저에서 편집기를 여는 중입니다…", "success");
+      const session = await beginWebEditorSession({
+        attestation,
+        ...(captureSeed === undefined ? {} : { captureSeed })
+      });
       location.assign(session.editorUrl);
     } catch (error) {
       setStatus(errorMessage(error), "error");
+      if (!elements.cutPreparationProgress.hidden) {
+        elements.cutPreparationStage.textContent =
+          "선택한 구간 준비를 완료하지 못했습니다";
+      }
       if (!allAcknowledgementsChecked()) {
         focusFirstMissingAcknowledgement();
       }
@@ -2976,67 +2179,43 @@ elements.form.addEventListener("submit", (event) => {
 renderMobileEditorAccess();
 addClipRow();
 installStudioCaptureConsole();
-if (isElectronCutHostSurface) {
-  installTrustedCutShortcuts();
-  installStreamFrameLoadHandler(elements.streamFrame);
-  prefillSourceFromLocation();
-  updateStreamPreview();
-  window.setInterval(() => {
-    updatePlayerClockDisplay();
-    void pollStreamingBridgeClock();
-  }, 250);
-} else {
-  window.addEventListener("focus", scheduleLocalProjectLifecycleRefresh);
-  window.addEventListener("pageshow", (event) => {
-    if (event.persisted) {
-      // A same-tab editor navigation can leave this start document in bfcache
-      // with its pre-navigation `openingEditor` flag. On return, it is a live
-      // start page again and must be allowed to reconcile the abandoned writer.
-      openingEditor = false;
-      renderMobileEditorAccess();
-      clearCurrentTabWebEditorSession();
-      requestAutomaticLocalProjectLifecycleCleanup();
-      return;
-    }
+installStreamFrameLoadHandler(elements.streamFrame);
+prefillSourceFromLocation();
+updateStreamPreview();
+window.addEventListener("focus", scheduleLocalProjectLifecycleRefresh);
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {
+    // A same-tab editor navigation can leave this start document in bfcache
+    // with its pre-navigation `openingEditor` flag. On return, it is a live
+    // start page again and must be allowed to reconcile the abandoned writer.
+    openingEditor = false;
+    renderMobileEditorAccess();
+    clearCurrentTabWebEditorSession();
+    requestAutomaticLocalProjectLifecycleCleanup();
+    return;
+  }
+  scheduleLocalProjectLifecycleRefresh();
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
     scheduleLocalProjectLifecycleRefresh();
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) {
-      scheduleLocalProjectLifecycleRefresh();
-    }
-  });
-  clearCurrentTabWebEditorSession();
-  const initialLocalProjectCleanup = localProjectLifecycleCleanupQueue.enqueue(
-    async () => {
-      try {
-        await reconcileAbandonedProjectsBeforeEditorEntry();
-      } finally {
-        // A failed startup inventory must leave the visible Retry control usable;
-        // it must not silently authorize editor entry.
-        localProjectManagerInitialized = true;
-      }
-    }
-  );
-  observeLocalProjectLifecycleCleanup(initialLocalProjectCleanup);
-}
+  }
+});
+clearCurrentTabWebEditorSession();
+const initialLocalProjectCleanup = localProjectLifecycleCleanupQueue.enqueue(async () => {
+  try {
+    await reconcileAbandonedProjectsBeforeEditorEntry();
+  } finally {
+    // A failed startup inventory must leave the visible Retry control usable;
+    // it must not silently authorize editor entry.
+    localProjectManagerInitialized = true;
+  }
+});
+observeLocalProjectLifecycleCleanup(initialLocalProjectCleanup);
 }
 
+// The public HTTPS deployment is the application, not a launcher for a
+// second editor window.  The optional OS install supplies only the local VOD
+// acquisition engine; every editing surface remains in this browser page.
 void activeStudioOrigin;
-if (initialHandoffLocation.requested) {
-  setDocumentSurface("public");
-  if (!initialHandoffLocation.nonce) {
-    setPublicHandoffStatus(
-      "컷 인계를 열 수 없습니다",
-      "인계 주소가 올바르지 않습니다. Kirinuki 앱의 컷 창에서 다시 열어 주세요."
-    );
-  } else {
-    void consumeEditorHandoff(initialHandoffLocation.nonce).catch((error) => {
-      setPublicHandoffStatus(
-        "컷 인계를 완료하지 못했습니다",
-        editorHandoffErrorMessage(error)
-      );
-    });
-  }
-} else {
-  startLocalApplication();
-}
+startLocalApplication();

@@ -8,7 +8,7 @@ import {
   studioCaptureShortcutLetterFromEvent
 } from "../src/web/studio-capture-console.js";
 
-test("웹 컷 화면은 PR16 컷 전용 플레이어 브리지 콘솔을 노출한다", async () => {
+test("웹 컷 화면은 PR16 단축키 의미를 소유하는 캡처 콘솔을 노출한다", async () => {
   const [html, source, css] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
@@ -138,7 +138,7 @@ test("A는 화면 아래의 단일 편집기 CTA와 같은 검증 경로를 사�
   assert.doesNotMatch(html, /id="(?:open-editor|create-codex-job)"/u);
 });
 
-test("컷 전용 브리지는 플레이어 좌표만 읽고 로컬 VOD 준비는 편집기 진입까지 미룬다", async () => {
+test("웹은 짧은 로컬 미리보기와 확정 컷 준비를 무창 도우미에 의미 단위로 요청한다", async () => {
   const [html, source, server] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
@@ -146,31 +146,32 @@ test("컷 전용 브리지는 플레이어 좌표만 읽고 로컬 VOD 준비는
   ]);
   assert.match(
     html,
-    /처음 한 번만 이 PC의 영상 준비 도우미를 연결하면, 이후에는 선택한 구간만 이 PC에 준비합니다\.[\s\S]*강조된 행에 E로 시작, R로 끝 시각을 기록합니다/u
+    /링크를 붙여넣으면 이 페이지에서 바로 컷을 고를 수 있습니다\.[\s\S]*도우미는 별도 편집 창을 열지 않[\s\S]*강조된 행에 E로 시작, R로 끝 시각을 기록합니다/u
   );
   assert.match(html, /data-field="start"[^>]*required/u);
   assert.match(html, /data-field="end"[^>]*required/u);
   assert.match(html, /id="start-editor"[^>]*>편집기 열기<\/button>/u);
   assert.match(source, /function replaceStreamFrame\(\)/u);
   assert.match(source, /elements\.reloadStream\.addEventListener[\s\S]*reloadActivePlayerFrame\(\)/u);
-  assert.match(source, /StreamingBridgeClient[\s\S]*captureCurrentPlayerTime[\s\S]*seekPlayerBy[\s\S]*setPlayerRate/u);
+  assert.match(html, /id="stream-preview-video"[\s\S]*id="stream-preview-timeline"/u);
+  assert.match(source, /prepareLocalPreview[\s\S]*captureCurrentPlayerTime[\s\S]*seekPlayerBy[\s\S]*setPlayerRate/u);
+  assert.match(source, /materializeLocalPreviewRange[\s\S]*startChzzkVodMaterialization/u);
+  assert.match(source, /prepareSelectedVodForEditor[\s\S]*waitForChzzkVodMaterialization/u);
+  assert.doesNotMatch(source, /StreamingBridgeClient|kirinukiCutHost|kirinukiSurface=cut-host/u);
   assert.doesNotMatch(source, /youtube-iframe-api|window\.YT|onYouTubeIframeAPIReady|new api\.Player/u);
-  assert.doesNotMatch(
-    source,
-    /LOCAL_VOD_COMPANION_ENDPOINT|KIRINUKI_MEDIA_ENGINE_ENDPOINT|localPreviewVideo/u
-  );
   assert.doesNotMatch(source, /fetch\([^\n]*(?:youtube|chzzk|soop)/iu);
   assert.match(server, /"script-src 'self'"/u);
   assert.doesNotMatch(server, /script-src[^\n]*youtube/u);
 });
 
-test("웹 컷 화면은 Electron 컷 브리지 단축키를 쓰되 구 Codex 작업폴더에는 의존하지 않는다", async () => {
+test("웹 컷 화면은 PR16 단축키를 직접 쓰되 Electron·구 Codex 작업폴더에는 의존하지 않는다", async () => {
   const [html, source] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8")
   ]);
   assert.equal(studioCaptureShortcutBinding("W")?.action, "refresh-source");
   assert.equal(studioCaptureShortcutBinding("S"), null);
+  assert.doesNotMatch(source, /Electron|kirinukiCutHost/u);
   assert.doesNotMatch(source, /createWebCodexJobFolder|createCodexJobFromCurrentForm/u);
   assert.doesNotMatch(html, /chrome-extension:\/\//u);
 });

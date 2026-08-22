@@ -1,10 +1,9 @@
 # Kirinuki 런타임 의존성과 배포 경계
 
-Kirinuki의 제품 구조는 **공개 정적 웹 편집기 + 사용자가 한 번 설치하는 로컬
-미디어 엔진**입니다. 설치 앱의 Electron 창은 원본을 보며 컷을 선택할 때만 열리고,
-full editor는 기본 브라우저에서 실행됩니다. 공개 서버는 VOD 바이트, 프로젝트,
-로그인, 세션, telemetry 또는 analytics를 처리하지 않습니다.
-플레이어 제어 코드는 build 때 설치 앱의 `app.asar`에 고정됩니다.
+Kirinuki의 제품 구조는 **공개 정적 웹 편집기 + 사용자가 한 번 설치하는 화면 없는
+로컬 미디어 엔진**입니다. 공개 서버는 VOD 바이트, 프로젝트, 로그인, 세션,
+telemetry 또는 analytics를 처리하지 않습니다. 브라우저 확장 프로그램과 Electron
+편집기 창은 현재 제품 경계가 아닙니다.
 
 이 문서는 실제 파일이 어느 산출물에 들어가는지와 공개 배포 전에 남은 검증을
 구분하는 공학적 기록입니다. 법률 자문이나 무위험 보증이 아닙니다.
@@ -14,9 +13,9 @@ full editor는 기본 브라우저에서 실행됩니다. 공개 서버는 VOD �
 | 산출물 | 포함하는 것 | 포함하지 않는 것 |
 | --- | --- | --- |
 | `kirinuki-web-v*.zip` | 전체 시작 화면·편집기·worker·글꼴·웹 고지 | 로컬 엔진, FFmpeg, yt-dlp, Electron, 서버 세션 |
-| Windows x64 NSIS | background Electron 엔진, 컷 전용 격리 창, target sidecar, ASAR 고정 player action | Electron full editor, Chrome 확장 설치, 자동 업데이트 |
-| macOS arm64 DMG | background Electron 엔진, 컷 전용 격리 창, target sidecar, ASAR 고정 player action | Electron full editor, Chrome 확장 설치, 자동 업데이트 |
-| Linux x64 deb | background Electron 엔진, 컷 전용 격리 창, target sidecar, ASAR 고정 player action | Electron full editor, Chrome 확장 설치, 자동 업데이트 |
+| Windows x64 NSIS | 화면 없는 Electron 엔진과 target sidecar | 웹 편집기 창, 브라우저 확장, 자동 업데이트 |
+| macOS arm64 DMG | 화면 없는 Electron 엔진과 target sidecar | 웹 편집기 창, 브라우저 확장, 자동 업데이트 |
+| Linux x64 deb | 화면 없는 Electron 엔진과 target sidecar | 웹 편집기 창, 브라우저 확장, 자동 업데이트 |
 | 저장소 전용 source-run 경로 | 고정 npm 설치와 선택적 로컬 도구 | 일반 사용자용 공개 설치 계약 |
 
 설치 파일 이름은 `Kirinuki-Engine-windows-x64-setup.exe`,
@@ -43,15 +42,13 @@ Network Access를 물을 수 있지만, 이후 `https://kirinuki.eff0rtchung.kr`
 loopback 엔진을 자동 감지합니다. 사용자가 포트·endpoint·프로세스를 구성하는
 UI는 제품에 두지 않습니다.
 
-## 로컬 미디어 엔진 설치기
+## 화면 없는 로컬 미디어 엔진 설치기
 
 <!-- attribution-id: desktop-local-engine-runtime -->
-엔진은 Electron 43.4.1을 background runtime과 컷 선택 전용 격리 UI로 사용합니다.
+엔진은 Electron 43.4.1을 **UI shell이 아니라 background runtime**으로 사용합니다.
 빌드 입력은 `electron-builder@26.15.3`, `@electron/asar@4.2.1`,
 `@electron/packager@20.3.0`, `@electron/fuses@2.1.3`과 exact lockfile입니다.
-설치 후 운영체제 로그인 시에는 화면 없이 시작하며 loopback에만 bind합니다.
-명시적인 컷 선택 요청에만 한 개의 비영구 창을 열고, 선택값은 암호화된 일회성
-claim·ACK 인계로 기본 브라우저에 전달합니다.
+설치 후 운영체제 로그인 시 화면 없이 시작하며 loopback에만 bind합니다.
 
 각 설치기는 `src/desktop/tool-manifest.ts`에 고정된 다음 target용 파일도
 포함합니다.
@@ -184,9 +181,7 @@ SOOP(https://www.sooplive.co.kr/)은 지원 원본과 상표를 식별하기 위
 2. unsigned Windows installer, unsigned·unnotarized macOS DMG, provenance가
    불완전한 Linux deb는 공개하지 않습니다.
 3. `--enable-nonfree`가 발견된 FFmpeg 산출물은 자동 배포를 **차단**합니다.
-4. player action은 ASAR main bundle에만 고정합니다. 컷 창의 정확한 host·frame
-   범위, 비영구 partition, navigation·권한 차단, 플랫폼별 실제 단축키 liveness와
-   Electron 업데이트·제거 생명주기를 검증해야 합니다. 수정 가능한 외부
-   resource나 Chrome profile extension, 외부 웹페이지 주입은 만들지 않습니다.
+4. 브라우저 확장 또는 별도 편집기 창을 제품 의존성으로 다시 넣으려면 새
+   아키텍처·보안·라이선스 검토를 먼저 수행합니다.
 5. `npm run license:check`가 통과해도 최종 산출물 SBOM과 사람의 출시 승인을
    대체하지 않습니다.

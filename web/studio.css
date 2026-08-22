@@ -48,8 +48,6 @@ main { width: min(1560px, calc(100% - 40px)); margin: 0 auto; padding: 30px 0 11
 .public-launch-status.success { color: var(--accent); }
 .public-launch-privacy { max-width: 720px; margin: 28px 0 0; color: #929da4; font-size: 13px; line-height: 1.65; }
 .public-source-link { display: inline-flex; margin-top: 14px; color: var(--accent); font-weight: 800; }
-.cut-host-launch-panel { margin-bottom: 18px; padding: clamp(24px, 4vw, 42px); }
-.cut-host-launch-panel h1 { font-size: clamp(28px, 4vw, 44px); }
 .start-intro { padding: 6px 2px 22px; }
 .start-intro h1 { margin: 0; font-family: Pretendard, sans-serif; font-size: clamp(27px, 3vw, 38px); line-height: 1.2; letter-spacing: -.04em; word-break: keep-all; }
 .start-intro p { margin: 8px 0 0; color: #aeb8bd; font-size: 15px; line-height: 1.6; }
@@ -109,6 +107,7 @@ input:focus { border-color: #1aa781; box-shadow: 0 0 0 3px rgb(0 230 163 / .1); 
 .stream-preview-heading h3 { margin: 5px 0 0; font-family: Pretendard, sans-serif; font-size: 20px; }
 .stream-stage { position: relative; overflow: hidden; width: 100%; aspect-ratio: 16 / 9; min-height: 270px; border: 1px solid #252b2e; border-radius: 12px; background: #000; }
 .stream-stage iframe { display: block; width: 100%; height: 100%; border: 0; background: #000; }
+.stream-stage video { display: block; width: 100%; height: 100%; border: 0; background: #000; object-fit: contain; }
 .stream-placeholder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 9px; padding: 24px; color: var(--muted); text-align: center; }
 .stream-placeholder strong { color: #d7dddf; font-size: 17px; }
 .stream-cut-console { margin-top: 8px; padding: 10px; border: 1px solid #2f373b; border-radius: 12px; background: #111416; }
@@ -148,6 +147,11 @@ input:focus { border-color: #1aa781; box-shadow: 0 0 0 3px rgb(0 230 163 / .1); 
 #playback-rate-quarter[aria-pressed="true"], #playback-rate-double[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-dark); color: var(--accent); }
 #save-segment { border-color: #25775f; background: #102a22; }
 .stream-cut-console-guide { margin: 7px 0 0; color: #7f8b91; font-size: 12px; line-height: 1.45; }
+.stream-preview-navigation { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; margin-top: 10px; padding: 11px; border: 1px solid #30383c; border-radius: 11px; background: #0d1012; }
+.stream-preview-navigation label { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; color: #cbd3d6; font-size: 12px; font-weight: 800; }
+.stream-preview-navigation output { color: var(--accent); font-variant-numeric: tabular-nums; }
+.stream-preview-navigation input[type="range"] { width: 100%; accent-color: var(--accent); }
+.stream-preview-navigation small { grid-column: 1 / -1; color: #7f8b91; line-height: 1.45; }
 .stream-preview-footer { margin-top: 9px; }
 .stream-preview-footer p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .button { min-height: 44px; border: 1px solid #3b4449; border-radius: 10px; padding: 0 17px; background: #1b2023; cursor: pointer; font-weight: 800; }
@@ -192,6 +196,11 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .editor-entry-panel > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
 .editor-entry-panel > p.error { color: #ff9292; }
 .editor-entry-panel > p.success { color: var(--accent); }
+.cut-preparation-progress { width: 100%; display: grid; gap: 9px; margin-top: 8px; padding: 14px; border: 1px solid #2f705d; border-radius: 12px; background: rgb(21 92 71 / .16); }
+.cut-preparation-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cut-preparation-heading output { color: var(--accent); font-weight: 800; font-variant-numeric: tabular-nums; }
+.cut-preparation-progress progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.cut-preparation-progress p { margin: 0; color: #aeb8bd; font-size: 12px; line-height: 1.55; }
 .mobile-editor-notice { width: 100%; padding: 13px 15px; border: 1px solid #85533a; border-radius: 10px; color: #ffd3b6 !important; background: #251912; }
 .mobile-editor-notice strong { display: block; margin-bottom: 3px; color: #ffe7d7; }
 .site-trust-notice { display: grid; gap: 9px; padding: 17px 18px; border: 1px solid #354047; border-radius: 12px; background: #0b0e10; }

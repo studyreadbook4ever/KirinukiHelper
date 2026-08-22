@@ -31,7 +31,7 @@ const [
   editorHtml,
   studioCss,
   packageManifest,
-  buildDesktopSource,
+  buildWebSource,
   browserSmokeSource
 ] = await Promise.all([
   read("web/index.html"),
@@ -42,7 +42,7 @@ const [
     readonly version?: string;
     readonly scripts?: Readonly<Record<string, string>>;
   }),
-  read("scripts/build-desktop.ts"),
+  read("scripts/build-web.ts"),
   read("scripts/local-studio-browser-smoke.ts")
 ]);
 
@@ -56,10 +56,11 @@ assert(
     && packageScripts.validate === "node --import tsx scripts/validate-local-studio.ts"
     && packageScripts.package === "node --import tsx scripts/release-package.ts"
     && packageScripts["dev:editor"] === "node --import tsx scripts/dev-web.ts"
-    && buildDesktopSource.includes("streaming-electron-frame-action.ts")
+    && packageScripts["test:electron:cut-window"] === undefined
+    && !buildWebSource.includes("streaming-electron-frame-action")
     && !browserSmokeSource.includes("`--load-extension=")
     && !browserSmokeSource.includes("`--disable-extensions-except="),
-  "web/desktop build와 ASAR 내부 player action 경계가 올바르지 않습니다."
+  "공개 웹과 화면 없는 로컬 엔진 build 경계가 올바르지 않습니다."
 );
 for (const [name, command] of Object.entries(packageScripts)) {
   assert(
@@ -103,15 +104,14 @@ assert(
     && indexHtml.includes('data-project-action="recover"')
     && indexHtml.includes('data-project-action="delete"')
     && indexHtml.includes('id="stream-preview-frame"')
-    && indexHtml.includes('id="public-launch-shell"')
+    && indexHtml.includes('id="stream-preview-video"')
     && indexHtml.includes('id="local-app-surface"')
-    && /<a id="launch-kirinuki-cut" class="button primary" role="button">/u
-      .test(indexHtml),
-  "일반 브라우저 launcher·컷 앱 surface·저장 편집 흐름이 없습니다."
+    && !indexHtml.includes('id="launch-kirinuki-cut"'),
+  "일반 브라우저 컷 선택·미리보기·저장 편집 흐름이 없습니다."
 );
 assert(
   indexHtml.includes(
-    "처음 한 번만 이 PC의 영상 준비 도우미를 연결하면, 이후에는 선택한 구간만 이 PC에 준비합니다."
+    "도우미는 별도 편집 창을 열지 않고"
   )
     && indexHtml.includes("확인했습니다")
     && indexHtml.includes("100%")
@@ -121,9 +121,9 @@ assert(
     && indexHtml.includes('id="stream-cut-console"')
     && indexHtml.includes('id="capture-start"')
     && indexHtml.includes('id="capture-end"')
-    && !indexHtml.includes('id="local-preview-video"')
-    && !indexHtml.includes('id="prepare-local-preview"'),
-  "컷 전용 surface의 player 조작부 또는 사용자 책임 고지가 없습니다."
+    && indexHtml.includes('id="stream-preview-video"')
+    && indexHtml.includes('id="cut-preparation-progress"'),
+  "웹 컷 surface의 player 조작부·부분 준비 진행률 또는 사용자 책임 고지가 없습니다."
 );
 assert(
   !indexHtml.includes('name="basis"')
@@ -288,6 +288,6 @@ assert(
 );
 
 console.log(
-  `Kirinuki 앱 검증 통과: ${WEB_JAVASCRIPT_PATHS.length}개 typed bundle, `
-  + "source/구간/policy/resume UI, browser runtime, exact app-only CSP"
+  `Kirinuki 웹·도우미 검증 통과: ${WEB_JAVASCRIPT_PATHS.length}개 typed bundle, `
+  + "source/구간/policy/resume UI, browser runtime, exact web CSP"
 );

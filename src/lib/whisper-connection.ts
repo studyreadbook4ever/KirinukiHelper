@@ -128,7 +128,7 @@ function assertStudioOrigin(
 ): KirinukiAppOrigin {
   if (!isKirinukiLocalStudioOrigin(value)) {
     throw new TypeError(
-      `${label}은 설치된 Kirinuki 앱의 고정 Origin이어야 합니다.`
+      `${label}은 localhost 개발 서버의 고정 Origin이어야 합니다.`
     );
   }
   return value;

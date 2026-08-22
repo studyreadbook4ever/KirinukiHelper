@@ -69,10 +69,10 @@ const STATIC_CSP_META_PATTERN =
   /^[ \t]*<meta http-equiv="Content-Security-Policy" content="[^"]*">\r?\n?/gmu;
 
 /**
- * The tracked HTML carries a public-site CSP that cannot reach app-private
- * engines.  The installed app serves the same HTML with its stricter HTTP
- * header instead, so the two policies do not accidentally intersect and
- * disable local media access.
+ * The tracked HTML carries the public HTTPS CSP in a meta tag. The localhost
+ * development server removes that one tag and applies its loopback-aware CSP as
+ * an HTTP response header, so the policies do not intersect and disable local
+ * media access during browser development.
  */
 export function withoutStaticContentSecurityPolicyMeta(
   html: string

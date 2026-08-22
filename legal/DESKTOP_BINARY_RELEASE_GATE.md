@@ -1,15 +1,14 @@
 # Kirinuki 로컬 미디어 엔진 공개 배포 차단 조건
 
-이 문서는 웹 편집기와 함께 쓰는 **로컬 구간 준비 엔진과 컷 선택 전용 창**의 설치
-파일을 공개하기 전에 닫아야 할 공학적·법적 조건입니다. Electron full editor나
-외부 Chrome 확장의 출시 문서가 아닙니다. 법률 자문 또는 무위험 보증도 아닙니다.
+이 문서는 웹 편집기와 함께 쓰는 **화면 없는 로컬 구간 준비 엔진**의 설치 파일을
+공개하기 전에 닫아야 할 공학적·법적 조건입니다. Electron 편집기나 브라우저
+확장 프로그램의 출시 문서가 아닙니다. 법률 자문 또는 무위험 보증도 아닙니다.
 
 ## 현재 상태: 공개 차단
 
 native CI는 다음 unsigned package를 만들지만 OS별 smoke 범위는 동일하지 않습니다.
-공통 검증은 격리된 사용자 상태에서 windowless background 실행, 컷 창 격리,
-loopback health, 두 번째 실행, 정상 종료와 격리 임시 경로 정리입니다. Windows는
-임시 경로 silent install에 더해
+공통 검증은 격리된 사용자 상태에서 windowless 실행, loopback health, 두 번째 실행,
+정상 종료와 격리 임시 경로 정리입니다. Windows는 임시 경로 silent install에 더해
 실제 HKCU Run의 exact name/path/argument/enabled 등록·readback과, 엔진 실행 중 실제
 NSIS 제거가 owned Run/StartupApproved 값만 제거하고 외부 junction을 보존하는지
 확인합니다. Linux는 deb 설치 뒤 격리된 실제 XDG 사용자 profile의 autostart
@@ -60,8 +59,7 @@ installer·signed checksum과 함께 공개합니다. archive가 없거나 tree/
 ## 실제 제품 계약
 
 - 제품 UI는 `https://kirinuki.eff0rtchung.kr`의 전체 웹 편집기입니다.
-- 설치 파일은 background engine과 컷 선택 전용 격리 창만 설치하며 full editor는
-  기본 브라우저에서 실행합니다.
+- 설치 파일은 편집 창을 만들지 않고 background engine만 설치합니다.
 - 운영체제 로그인 시 화면 없이 시작하고 `127.0.0.1`의 고정 내부 연결에만
   bind합니다.
 - 정확한 public Origin과 문서별 memory capability만 허용합니다.
@@ -75,7 +73,7 @@ installer·signed checksum과 함께 공개합니다. archive가 없거나 tree/
 
 | 구성요소 | 고정점 | 역할 |
 | --- | --- | --- |
-| Electron | `43.4.1` | background runtime·컷 전용 격리 창; Chromium·Node 포함 |
+| Electron | `43.4.1` | background runtime; Chromium·Node 포함 |
 | electron-builder | `26.15.3` | NSIS·DMG·deb installer 생성 |
 | `@electron/asar` | `4.2.1` | ASAR exact-file 검증 |
 | `@electron/packager` | `20.3.0` | target app stage 생성 |
@@ -168,12 +166,7 @@ https://www.electronjs.org/docs/latest/tutorial/code-signing
 
 - [ ] 세 OS에서 설치 전 → 설치 → 첫 실행 → 로그인 자동 시작 → 두 번째 실행 →
   업데이트 재설치 → uninstall을 실제 native runner에서 검증했다.
-- [ ] background 시작에는 창/webContents가 0이고, 명시적인 컷 선택 요청에만 exact
-  public top frame의 비영구 BrowserWindow 하나가 열림을 readback했다.
-- [ ] 컷 창은 popup·webview·download·임의 navigation·permission을 차단하고 플랫폼
-  iframe에 Node/preload IPC를 노출하지 않는다.
-- [ ] 컷→기본 브라우저 인계는 암호화된 one-shot claim·ACK이며, ACK 전 창 종료·
-  중복 claim·만료·replay에서도 작업 혼합이나 payload 유출이 없다.
+- [ ] 실행 중 창/webContents가 0이고 편집 UI가 공개 웹사이트에만 있음을 readback했다.
 - [ ] loopback listener가 LAN/공인 interface에 노출되지 않고 정확한 Origin·Host·
   nonce·capability scope를 강제한다.
 - [ ] 같은 엔진이 이미 있을 때 멱등적으로 재사용하고 다른 프로세스가 port를
@@ -205,15 +198,6 @@ breaking change가 불가피하면 v1을 깨는 대신 parallel protocol을 추�
 실행합니다. 자동 network polling, unsigned updater, 조용한 binary replacement는
 release manifest에서 모두 `false`로 readback합니다.
 
-이 API 호환성은 설치 앱 shell에 과거에 없던 기능까지 있다고 가정하는 뜻이
-아닙니다. 컷 전용 Electron 창, `kirinuki-engine://cut`, ASAR 고정 player action과
-일회성 browser handoff를 함께 제공하는 첫 shell release의 최소 버전은 `3.0.1`입니다.
-이 흐름을 쓰는 웹은 signed health에서 그 최소 버전을 확인한 뒤에만 cut protocol을
-호출해야 합니다. 공개 전환은 서명된 `3.0.1+` installer와 remote digest readback을
-먼저 완료하고, 그 exact release channel을 포함한 웹을 나중에 원자적으로 배포합니다.
-`3.0.0` 이하가 설치된 사용자는 무응답 launch가 아니라 명시적인 재설치 안내를
-받아야 하며, rollback 웹도 `3.0.1+` cut-host query를 이해해야 합니다.
-
 이 정책은 실제 OS별 old→new 설치 덮어쓰기 smoke를 대체하지 않습니다. 해당 native
 검증이 완료되기 전에는 위 업데이트 재설치 체크를 완료 처리하지 않습니다.
 
@@ -239,9 +223,6 @@ release manifest에서 모두 `false`로 readback합니다.
   실제 브라우저↔설치 엔진 경로에서 통과했다.
 - [ ] 실제 Chrome에서 최초 custom-scheme pairing, signed health, 암호화 VOD
   session, 같은 profile 새로고침 뒤 무재pairing 재연결을 설치본마다 통과했다.
-- [ ] ASAR 고정 player action의 exact start/cut·platform frame 범위, 권한 차단,
-  업데이트·제거, 세 플랫폼 shortcut liveness를 검증했으며 별도 resource나
-  사용자의 Chrome profile extension이 없음을 확인했다.
 - [ ] Windows Job Object/orphan gate를 닫았다.
 - [ ] Windows Authenticode/timestamp와 macOS Developer ID/notarization/staple을
   최종 artifact에서 검증했다.

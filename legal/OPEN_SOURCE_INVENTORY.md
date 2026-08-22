@@ -1,6 +1,6 @@
 # Kirinuki 오픈소스·배포 인벤토리
 
-이 문서는 공개 웹 편집기, 로컬 미디어 엔진 installer, 저장소 전용
+이 문서는 공개 웹 편집기, 화면 없는 로컬 미디어 엔진 installer, 저장소 전용
 도구의 경계를 사람이 빠르게 확인하기 위한 목록입니다. 기계가 검사하는 canonical
 목록은 `src/lib/third-party-attributions.ts`, 자세한 고지는
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)입니다. 이 기록은 법률 자문이나
@@ -10,12 +10,9 @@
 
 - `kirinuki.eff0rtchung.kr`: 전체 정적 웹 편집기. 로그인·서버 세션·analytics·
   telemetry·서버 VOD proxy가 없습니다.
-- Windows x64, macOS arm64, Linux x64: 한 번 설치하는 로컬 구간 준비 엔진과
-  컷 선택 전용 격리 창. 사용자는 port나 endpoint를 구성하지 않습니다.
-- `src/streaming-electron-frame-action.ts`: Kirinuki가 직접 작성한 플레이어 제어 코드.
-  build 때 ASAR main bundle에 고정하며 사용자의 Chrome profile에 설치하지 않습니다.
-- Electron full editor: 제품 산출물이 아닙니다. full editor는 일반 브라우저에서
-  실행됩니다.
+- Windows x64, macOS arm64, Linux x64: 한 번 설치하는 화면 없는 로컬 구간 준비
+  엔진. 사용자는 port나 endpoint를 구성하지 않습니다.
+- 브라우저 확장과 Electron 편집기 창: 현재 제품 산출물이 아닙니다.
 - first-party 소스: 루트 `UNLICENSE`. 제3자 파일은 각 라이선스를 그대로 유지하며
   Unlicense로 재허가하지 않습니다.
 

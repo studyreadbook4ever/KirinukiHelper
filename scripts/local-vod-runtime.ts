@@ -130,8 +130,8 @@ Kirinuki 로컬 VOD runtime
 보안 계약:
   쿠키·로그인·API 키를 입력하거나 전달·저장하지 않습니다.
   gateway는 항상 127.0.0.1:4319에만 bind합니다.
-  앱 내부 Origin http://127.0.0.1:4320 하나만 허용합니다.
-  공개 사이트와 Cloudflare Tunnel에는 이 내부 엔진을 연결하지 않습니다.
+  이 개발용 CLI는 localhost Origin http://127.0.0.1:4320 하나만 허용합니다.
+  공개 웹은 이 CLI가 아니라 서명된 백그라운드 영상 준비 도우미에 연결합니다.
 `.trim();
 }
 

@@ -258,7 +258,7 @@ test("artifact 검증은 regular non-symlink·크기·SHA·실행 비트를 모�
   }
 });
 
-test("설정은 pin·절대 도구 경로·앱 Origin·VOD state를 강하게 묶는다", async () => {
+test("설정은 pin·절대 도구 경로·localhost Origin·VOD state를 강하게 묶는다", async () => {
   const paths = fixturePaths();
   const config = fixtureConfig();
   assert.equal(config.schema, LOCAL_VOD_RUNTIME_SCHEMA);
@@ -276,7 +276,7 @@ test("설정은 pin·절대 도구 경로·앱 Origin·VOD state를 강하게 �
     () => vodRuntimeOriginMatchesRequestedStudio(config, {
       KIRINUKI_ALLOWED_ORIGIN: "https://kirinuki.eff0rtchung.kr"
     }),
-    /Kirinuki 앱 Origin/u
+    /Kirinuki localhost Origin/u
   );
   assert.throws(() => createVodRuntimeConfig(paths, {
     node: config.node,
@@ -287,7 +287,7 @@ test("설정은 pin·절대 도구 경로·앱 Origin·VOD state를 강하게 �
     installedAt: config.installedAt,
     notices: TEST_NOTICES,
     origin: "https://kirinuki.eff0rtchung.kr" as never
-  }), /Kirinuki 앱 Origin/u);
+  }), /Kirinuki localhost Origin/u);
   assert.throws(
     () => validateVodRuntimeConfig({
       ...config,

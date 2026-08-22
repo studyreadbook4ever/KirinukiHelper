@@ -91,7 +91,7 @@ const RAW_STUDIO_CAPTURE_SHORTCUT_BINDINGS = [
   }
 ] as const satisfies readonly Omit<StudioCaptureShortcutBinding, "title">[];
 
-/** The web capture screen owns its shortcuts through the cut-only bridge. */
+/** The public web capture screen owns every visible PR16-era cut shortcut. */
 export const STUDIO_CAPTURE_SHORTCUT_BINDINGS = Object.freeze(
   RAW_STUDIO_CAPTURE_SHORTCUT_BINDINGS.map((binding) => Object.freeze({
     ...binding,

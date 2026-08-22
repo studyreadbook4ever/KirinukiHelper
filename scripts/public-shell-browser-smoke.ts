@@ -41,18 +41,6 @@ import {
   CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
 } from "./chzzk-vod-job-manager.js";
 import {
-  EDITOR_HANDOFF_ACKNOWLEDGEMENT_SCHEMA,
-  EDITOR_HANDOFF_CONSUME_PROTOCOL,
-  EDITOR_HANDOFF_CONSUME_REQUEST_SCHEMA,
-  EDITOR_HANDOFF_FRAGMENT_KEY,
-  EDITOR_HANDOFF_SUBMISSION_SCHEMA,
-  createEditorHandoffBroker,
-  editorHandoffCapabilityProjectId
-} from "../src/lib/editor-handoff.js";
-import type {
-  EditorHandoffBroker
-} from "../src/lib/editor-handoff.js";
-import {
   LOCAL_MEDIA_ENGINE_API_PROTOCOL,
   LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA,
   LOCAL_MEDIA_ENGINE_PRODUCT,
@@ -124,8 +112,6 @@ interface ProxyRequestRecord {
 type LocalEngineProbeRecord = LocalMediaEngineV2FixtureRecord;
 
 interface LocalEngineSemanticFixtureState {
-  handoffAcknowledgements: number;
-  handoffClaims: number;
   materializationRequests: number;
   mediaRequests: number;
   sessionRequests: number;
@@ -488,8 +474,7 @@ async function listenLocalEngineProbe(
 async function createLocalEngineV2ProbeFixture(
   records: LocalEngineProbeRecord[],
   mediaBytes: Buffer,
-  fixtureState: LocalEngineSemanticFixtureState,
-  handoffBroker: Readonly<EditorHandoffBroker>
+  fixtureState: LocalEngineSemanticFixtureState
 ): Promise<Readonly<LocalMediaEngineV2Fixture>> {
   const mediaAccess = "M".repeat(43);
   const jobId = "semantic_browser_job_0001";
@@ -501,67 +486,6 @@ async function createLocalEngineV2ProbeFixture(
     records,
     onControlRequest: (control) => {
       const requestUrl = new URL(control.path, "http://127.0.0.1:4319");
-      if (
-        requestUrl.pathname === "/v1/editor-handoff"
-        && control.method === "POST"
-        && isRecord(control.body)
-      ) {
-        const request = control.body;
-        const handoffNonce = String(request.handoffNonce || "");
-        const exactScope = editorHandoffCapabilityProjectId(handoffNonce);
-        assert(
-          control.protocol === EDITOR_HANDOFF_CONSUME_PROTOCOL
-            && control.mediaAccess === null
-            && control.session.projectId === exactScope
-            && control.session.sourceUrl === undefined
-            && JSON.stringify(control.session.actions)
-              === JSON.stringify(["editor-handoff-consume"]),
-          "공개 편집기 인계의 encrypted session scope가 다릅니다."
-        );
-        if (request.schema === EDITOR_HANDOFF_CONSUME_REQUEST_SCHEMA) {
-          const envelope = handoffBroker.claim(request, control.session.projectId);
-          if (!envelope) {
-            return {
-              status: 404,
-              statusText: "Not Found",
-              payload: {
-                error: {
-                  code: "HANDOFF_NOT_FOUND",
-                  message: "편집기 인계를 찾지 못했습니다."
-                }
-              }
-            };
-          }
-          fixtureState.handoffClaims += 1;
-          return { status: 200, payload: envelope };
-        }
-        if (request.schema === EDITOR_HANDOFF_ACKNOWLEDGEMENT_SCHEMA) {
-          const acknowledged = handoffBroker.acknowledge(
-            request,
-            control.session.projectId
-          );
-          if (!acknowledged) {
-            return {
-              status: 409,
-              statusText: "Conflict",
-              payload: {
-                error: {
-                  code: "HANDOFF_ACK_CONFLICT",
-                  message: "편집기 인계 완료 상태가 일치하지 않습니다."
-                }
-              }
-            };
-          }
-          fixtureState.handoffAcknowledgements += 1;
-          return {
-            status: 200,
-            payload: {
-              schema: EDITOR_HANDOFF_ACKNOWLEDGEMENT_SCHEMA,
-              status: "acknowledged"
-            }
-          };
-        }
-      }
       if (
         requestUrl.pathname !== "/v1/vod/materializations"
         || control.method !== "POST"
@@ -1358,7 +1282,7 @@ async function main(): Promise<void> {
   const packageMetadata = JSON.parse(
     await readFile(path.join(root, "package.json"), "utf8")
   ) as { readonly name?: unknown; readonly version?: unknown };
-  assert(packageMetadata.name === "kirinuki-app", "package 이름이 Kirinuki 단일 앱이 아닙니다.");
+  assert(packageMetadata.name === "kirinuki-app", "package 이름이 Kirinuki 웹 제품이 아닙니다.");
   assert(
     typeof packageMetadata.version === "string"
       && /^\d+\.\d+\.\d+$/u.test(packageMetadata.version),
@@ -1410,7 +1334,7 @@ async function main(): Promise<void> {
     directDocument.body.includes(Buffer.from('id="local-app-surface"'))
       && directDocument.body.includes(Buffer.from('src="/studio.js?v='))
       && directDocument.body.includes(Buffer.from('href="/studio.css?v='))
-      && directEditorDocument.body.includes(Buffer.from('id="editor-app-gate"'))
+      && directEditorDocument.body.includes(Buffer.from('id="editor-origin-gate"'))
       && directEditorDocument.body.includes(Buffer.from('src="editor/editor.js?v='))
       && directEditorDocument.body.includes(Buffer.from('href="editor/editor.css?v='))
       && !directDocument.body.includes(Buffer.from("kirinuki://open"))
@@ -1420,12 +1344,7 @@ async function main(): Promise<void> {
 
   const proxyRecords: ProxyRequestRecord[] = [];
   const localEngineProbeRecords: LocalEngineProbeRecord[] = [];
-  const handoffBroker = createEditorHandoffBroker({
-    createNonce: () => "H".repeat(43)
-  });
   const semanticFixtureState: LocalEngineSemanticFixtureState = {
-    handoffAcknowledgements: 0,
-    handoffClaims: 0,
     materializationRequests: 0,
     mediaRequests: 0,
     sessionRequests: 0
@@ -1434,8 +1353,7 @@ async function main(): Promise<void> {
   localEngineProbeServer = await createLocalEngineV2ProbeFixture(
     localEngineProbeRecords,
     semanticFixtureMedia,
-    semanticFixtureState,
-    handoffBroker
+    semanticFixtureState
   );
   try {
     await listenLocalEngineProbe(localEngineProbeServer);
@@ -1655,77 +1573,27 @@ async function main(): Promise<void> {
     readonly cacheKeys: readonly string[];
     readonly controlled: boolean;
     readonly databases: readonly { readonly name?: string; readonly version?: number }[];
-    readonly editingSessionCheckpointCount: number;
-    readonly projectCount: number;
     readonly serviceWorkers: number;
-    readonly trustPinCount: number;
   }>(`
     const done = arguments[arguments.length - 1];
-    const countRecords = (databaseName, storeName) => new Promise((resolve, reject) => {
-      const open = indexedDB.open(databaseName);
-      open.onerror = () => reject(open.error || new Error("database open failed"));
-      open.onsuccess = () => {
-        const database = open.result;
-        if (!database.objectStoreNames.contains(storeName)) {
-          database.close();
-          reject(new Error("required object store is absent: " + storeName));
-          return;
-        }
-        const transaction = database.transaction(storeName, "readonly");
-        const count = transaction.objectStore(storeName).count();
-        count.onerror = () => reject(count.error || new Error("record count failed"));
-        transaction.oncomplete = () => {
-          database.close();
-          resolve(count.result);
-        };
-        transaction.onabort = () => {
-          database.close();
-          reject(transaction.error || new Error("record count aborted"));
-        };
-      };
-    });
     Promise.all([
       typeof indexedDB.databases === "function" ? indexedDB.databases() : Promise.reject(new Error("indexedDB.databases unavailable")),
       "serviceWorker" in navigator ? navigator.serviceWorker.getRegistrations() : Promise.resolve([]),
-      "caches" in globalThis ? caches.keys() : Promise.resolve([]),
-      countRecords("chzzk-kirinuki-studio", "projects"),
-      countRecords("chzzk-kirinuki-studio", "editing-session-checkpoints"),
-      countRecords("kirinuki-local-media-engine-trust-v1", "device-pins")
-    ]).then(([
-      databases,
-      registrations,
-      cacheKeys,
-      projectCount,
-      editingSessionCheckpointCount,
-      trustPinCount
-    ]) => done({
+      "caches" in globalThis ? caches.keys() : Promise.resolve([])
+    ]).then(([databases, registrations, cacheKeys]) => done({
       cacheKeys,
       controlled: Boolean("serviceWorker" in navigator && navigator.serviceWorker.controller),
       databases,
-      editingSessionCheckpointCount,
-      projectCount,
-      serviceWorkers: registrations.length,
-      trustPinCount
+      serviceWorkers: registrations.length
     }), (error) => done({ error: String(error) }));
   `);
-  const databaseInventory = Array.isArray(persistentState.databases)
-    ? [...persistentState.databases]
-      .map(({ name, version }) => ({ name, version }))
-      .sort((left, right) => String(left.name).localeCompare(String(right.name)))
-    : [];
   assert(
     Array.isArray(persistentState.databases)
-      && JSON.stringify(databaseInventory) === JSON.stringify([
-        { name: "chzzk-kirinuki-studio", version: 5 },
-        { name: LOCAL_MEDIA_ENGINE_TRUST_DATABASE, version: 1 }
-      ])
-      && persistentState.projectCount === 0
-      && persistentState.editingSessionCheckpointCount === 0
-      && persistentState.trustPinCount === 0
+      && persistentState.databases.every(({ name }) => name === "chzzk-kirinuki-studio")
       && persistentState.serviceWorkers === 0
       && persistentState.controlled === false
       && persistentState.cacheKeys.length === 0,
-    `새 공개 웹이 허용된 빈 프로젝트·기기 pin 저장소 외 영속 상태를 만들었습니다: ${JSON.stringify(persistentState)}`
+    `공개 웹이 사용자 동작 전에 승인되지 않은 IndexedDB 또는 Service Worker·Cache Storage 상태를 만들었습니다: ${JSON.stringify(persistentState)}`
   );
   const cookies = await webdriver<unknown[]>("GET", `/session/${sessionId}/cookie`);
   assert(Array.isArray(cookies) && cookies.length === 0, "공개 웹 browser cookie jar가 비어 있지 않습니다.");
@@ -2027,51 +1895,12 @@ async function main(): Promise<void> {
       && lnaNetworkUrls.every((url) => url === localEngineUrl),
     `permission grant 뒤 브라우저가 정확한 loopback health 외 요청을 만들었습니다: ${JSON.stringify(lnaNetworkUrls)}`
   );
-  const enrolledFixture = localEngineProbeServer;
-  assert(enrolledFixture, "공개 HTTPS v2 engine fixture가 시작되지 않았습니다.");
-  await enrollPublicLocalMediaEngineFixture(enrolledFixture);
-  const persistedTrust = await executeAsync<{
-    readonly error?: string;
-    readonly keys?: readonly unknown[];
-    readonly pin?: unknown;
-  }>(`
-    const done = arguments[arguments.length - 1];
-    const open = indexedDB.open(arguments[0]);
-    open.onerror = () => done({ error: String(open.error || "open failed") });
-    open.onsuccess = () => {
-      const database = open.result;
-      const transaction = database.transaction(arguments[1], "readonly");
-      const store = transaction.objectStore(arguments[1]);
-      const keys = store.getAllKeys();
-      const pin = store.get("active");
-      transaction.oncomplete = () => {
-        database.close();
-        done({ keys: keys.result, pin: pin.result });
-      };
-      transaction.onabort = () => {
-        database.close();
-        done({ error: String(transaction.error || "trust read aborted") });
-      };
-    };
-  `, [LOCAL_MEDIA_ENGINE_TRUST_DATABASE, LOCAL_MEDIA_ENGINE_TRUST_STORE]);
-  const persistedPin = isRecord(persistedTrust.pin)
-    ? persistedTrust.pin
-    : null;
-  assert(
-    !persistedTrust.error
-      && JSON.stringify(persistedTrust.keys) === JSON.stringify(["active"])
-      && persistedPin
-      && Object.keys(persistedPin).sort().join(",")
-        === "algorithm,enrolledAt,keyId,maxSeenVersion,publicKeySpki,schema"
-      && persistedPin.schema === LOCAL_MEDIA_ENGINE_TRUST_SCHEMA
-      && persistedPin.keyId === enrolledFixture.keyId
-      && persistedPin.publicKeySpki === enrolledFixture.publicKeySpki
-      && persistedPin.maxSeenVersion === "3.0.1"
-      && typeof persistedPin.enrolledAt === "string"
-      && new Date(String(persistedPin.enrolledAt)).toISOString()
-        === persistedPin.enrolledAt,
-    `명시적 연결 뒤 브라우저에 exact active device pin 하나만 남지 않았습니다: ${JSON.stringify(persistedTrust)}`
-  );
+  assert(localEngineProbeServer, "공개 HTTPS v2 engine fixture가 시작되지 않았습니다.");
+  await enrollPublicLocalMediaEngineFixture(localEngineProbeServer);
+  // Reload after the explicit, signed enrollment so the ordinary website
+  // continues through the exact first-use state a returning browser sees.
+  await webdriver("POST", `/session/${sessionId}/refresh`, {});
+  await waitForDocument();
 
   const browserLogs = await webdriver<WebDriverLogEntry[]>(
     "POST",
@@ -2091,99 +1920,11 @@ async function main(): Promise<void> {
     `공개 웹 browser console에 오류가 있습니다: ${JSON.stringify(unexpectedBrowserErrors)}`
   );
 
-  // Reload after installing the verified device pin. The ordinary browser owns
-  // only saved-project management and the one-click installed-app launcher;
-  // cut selection and platform-player control remain confined to Electron.
-  await webdriver("POST", `/session/${sessionId}/url`, { url: documentUrl });
-  await waitForDocument();
-  const ordinaryLanding = await waitFor(
-    () => execute<{
-      readonly cutPanelVisible: boolean;
-      readonly formHidden: boolean;
-      readonly formInert: boolean;
-      readonly launcherDisabled: boolean;
-      readonly launcherHref: string;
-      readonly projectManagerVisible: boolean;
-      readonly surface: string;
-    }>(`
-      const cutPanel = document.querySelector("#cut-host-launch-panel");
-      const form = document.querySelector("#start-form");
-      const launcher = document.querySelector("#launch-kirinuki-cut");
-      const projectManager = document.querySelector("#recent-section");
-      return {
-        cutPanelVisible: cutPanel instanceof HTMLElement
-          && !cutPanel.hidden
-          && !cutPanel.inert,
-        formHidden: form instanceof HTMLFormElement && form.hidden,
-        formInert: form instanceof HTMLFormElement && form.inert,
-        launcherDisabled: launcher?.getAttribute("aria-disabled") === "true",
-        launcherHref: launcher instanceof HTMLAnchorElement ? launcher.href : "",
-        projectManagerVisible: projectManager instanceof HTMLElement
-          && !projectManager.hidden
-          && !projectManager.inert,
-        surface: document.body.dataset.kirinukiSurface || ""
-      };
-    `),
-    (value) => (
-      value.surface === "local"
-        && value.cutPanelVisible
-        && value.formHidden
-        && value.formInert
-        && value.projectManagerVisible
-        && !value.launcherDisabled
-        && value.launcherHref === "kirinuki-engine://cut"
-    ),
-    "공개 브라우저가 저장 목록과 설치된 Kirinuki 컷 launcher만 활성화하지 못했습니다.",
-    15_000
-  );
-  assert(
-    ordinaryLanding.formHidden
-      && ordinaryLanding.formInert
-      && ordinaryLanding.projectManagerVisible,
-    "공개 브라우저가 Electron 전용 컷 입력을 노출했습니다."
-  );
-
-  // Electron publishes an opaque, one-use handoff after the user finishes the
-  // cut. Navigating the external browser to that fragment must claim and ACK
-  // the exact capability before creating an isolated browser editor project.
-  const handoffTimestamp = new Date().toISOString();
-  const publishedHandoff = handoffBroker.publish({
-    schema: EDITOR_HANDOFF_SUBMISSION_SCHEMA,
-    confirmedAt: handoffTimestamp,
-    acknowledgements: {
-      vodCovered: true,
-      localAcquisitionAndEditing: true,
-      publicationIsSeparate: true,
-      thirdPartyRights: true,
-      platformTermsAndNoCircumvention: true,
-      userResponsibility: true
-    },
-    captureSeed: {
-      source: {
-        platform: "CHZZK",
-        channelId: "",
-        contentId: "14252987",
-        contentType: "vod",
-        canonicalUrl: "https://chzzk.naver.com/video/14252987",
-        url: "https://chzzk.naver.com/video/14252987",
-        broadcastTitle: "공개 HTTPS semantic 자동 연결 smoke"
-      },
-      projectName: "공개 HTTPS semantic 자동 연결 smoke",
-      segments: [{
-        id: "semantic-browser-segment-0001",
-        startSeconds: 10,
-        endSeconds: 11,
-        description: "",
-        createdAt: handoffTimestamp,
-        updatedAt: handoffTimestamp
-      }]
-    }
-  });
-  assert(
-    handoffBroker.status(publishedHandoff.handoffNonce) === "pending",
-    "Electron 역할의 편집기 인계 fixture가 pending 상태가 아닙니다."
-  );
-
+  // Continue from the untouched public start page through the product's real
+  // UI. This proves that the website does not merely advertise an installer:
+  // it must recognize the exact compatible engine, mint a document-scoped
+  // capability, prepare the selected range, and attach playable loopback
+  // media without exposing a port/endpoint workflow to the user.
   await webdriver(
     "POST",
     `/session/${sessionId}/goog/cdp/execute`,
@@ -2199,71 +1940,102 @@ async function main(): Promise<void> {
       cmd: "Network.setBlockedURLs",
       params: {
         urls: [
-          "https://chzzk.naver.com/video/*",
+          "https://chzzk.naver.com/*",
           "https://www.youtube.com/*",
-          "https://vod.sooplive.com/player/*/embed*"
+          "https://vod.sooplive.com/*"
         ]
       }
     }
   );
-  // A real Electron handoff opens an external browser document. Move away
-  // first so WebDriver cannot collapse the fragment URL into a same-document
-  // hash change on the already-running landing module.
-  await webdriver("POST", `/session/${sessionId}/url`, {
-    url: "data:text/html,%3Ctitle%3EKirinuki%20handoff%20boundary%3C%2Ftitle%3E"
-  });
-  await waitForDocument();
-  await webdriver("POST", `/session/${sessionId}/url`, {
-    url: `${documentUrl}#${EDITOR_HANDOFF_FRAGMENT_KEY}=${publishedHandoff.handoffNonce}`
-  });
-  await waitForDocument();
+  await execute(`
+    const source = document.querySelector("#source-url");
+    const projectName = document.querySelector("#project-name");
+    const row = document.querySelector(".clip-row");
+    const start = row?.querySelector('[data-field="start"]');
+    const end = row?.querySelector('[data-field="end"]');
+    if (!(source instanceof HTMLInputElement)
+      || !(projectName instanceof HTMLInputElement)
+      || !(start instanceof HTMLInputElement)
+      || !(end instanceof HTMLInputElement)) {
+      throw new Error("공개 시작 화면의 semantic 입력 요소가 없습니다.");
+    }
+    source.value = "https://chzzk.naver.com/video/14252987";
+    projectName.value = "공개 HTTPS semantic 자동 연결 smoke";
+    start.value = "00:00:10.000";
+    end.value = "00:00:11.000";
+    for (const input of [source, projectName, start, end]) {
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    for (const checkbox of document.querySelectorAll("[data-ack]")) {
+      if (!(checkbox instanceof HTMLInputElement)) {
+        throw new Error("공개 시작 화면의 확인 항목 형식이 올바르지 않습니다.");
+      }
+      checkbox.checked = true;
+      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return true;
+  `);
+  await waitFor(
+    () => execute<{
+      readonly disabled: boolean;
+      readonly label: string;
+      readonly sourcePlatform: string;
+    }>(`
+      const button = document.querySelector("#start-editor");
+      return {
+        disabled: !(button instanceof HTMLButtonElement) || button.disabled,
+        label: button?.textContent?.trim() || "",
+        sourcePlatform: document.querySelector("#source-platform")?.textContent?.trim() || ""
+      };
+    `),
+    (value) => (
+      !value.disabled
+        && value.label === "편집기 열기"
+        && value.sourcePlatform === "치지직 VOD"
+    ),
+    "공개 시작 화면이 생각 없이 누를 수 있는 편집기 열기 상태가 되지 않았습니다."
+  );
+  await execute(`
+    const button = document.querySelector("#start-editor");
+    if (!(button instanceof HTMLButtonElement) || button.disabled) {
+      throw new Error("공개 편집기 열기 버튼을 누를 수 없습니다.");
+    }
+    button.click();
+    return true;
+  `);
   const semanticEditor = await waitFor(
     () => execute<{
       readonly dialogOpen: boolean;
       readonly duration: number;
+      readonly formStatus: string;
       readonly href: string;
       readonly jobHidden: boolean;
       readonly mediaName: string;
       readonly previewReadyState: number;
       readonly previewUrl: string;
-      readonly projectId: string;
-      readonly projectName: string;
-      readonly sessionProjectId: string;
-      readonly shellVisible: boolean;
-      readonly workspace: string;
+      readonly shellHidden: boolean;
       readonly toast: string;
     }>(`
       const preview = document.querySelector("#preview-video");
       const dialog = document.querySelector("#local-media-engine-dialog");
       const job = document.querySelector("#job-dialog");
-      const shell = document.querySelector("#editor-shell");
-      const url = new URL(location.href);
-      const session = JSON.parse(sessionStorage.getItem(
-        "kirinuki:local-web:active-usage-session"
-      ) || "null");
       return {
         dialogOpen: dialog instanceof HTMLDialogElement && dialog.open,
         duration: preview instanceof HTMLVideoElement ? preview.duration : NaN,
+        formStatus: document.querySelector("#form-status")?.textContent?.trim() || "",
         href: location.href,
         jobHidden: job instanceof HTMLDialogElement && job.hidden && !job.open,
         mediaName: document.querySelector("#media-name")?.textContent?.trim() || "",
         previewReadyState: preview instanceof HTMLVideoElement ? preview.readyState : 0,
         previewUrl: preview instanceof HTMLVideoElement ? preview.currentSrc : "",
-        projectId: url.searchParams.get("project") || "",
-        projectName: document.querySelector("#project-name")?.value || "",
-        sessionProjectId: session?.attestation?.target?.projectId || "",
-        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
-        workspace: shell?.getAttribute("data-workspace") || "",
+        shellHidden: Boolean(document.querySelector("#editor-shell")?.hidden),
         toast: document.querySelector("#toast")?.textContent?.trim() || ""
       };
     `),
     (value) => (
       value.href.startsWith(`https://${PUBLIC_SHELL_CANONICAL_HOST}/editor.html?project=`)
-        && value.projectId.length > 0
-        && value.sessionProjectId === value.projectId
-        && value.projectName === "공개 HTTPS semantic 자동 연결 smoke"
-        && value.shellVisible
-        && value.workspace === "main"
+        && !value.shellHidden
         && !value.dialogOpen
         && value.jobHidden
         && value.mediaName === "치지직 편집 영상 준비됨"
@@ -2289,13 +2061,14 @@ async function main(): Promise<void> {
     );
   });
   assert(
-    semanticFixtureState.handoffClaims === 1
-      && semanticFixtureState.handoffAcknowledgements === 1
-      && handoffBroker.status(publishedHandoff.handoffNonce) === "acknowledged"
-      && semanticFixtureState.sessionRequests === 2
-      && semanticFixtureState.materializationRequests === 1
-      && semanticFixtureState.mediaRequests >= 1,
-    `공개 웹 semantic chain의 handoff·session·prepare·media 호출 수가 다릅니다: ${JSON.stringify(semanticFixtureState)}`
+    // The start page prepares the exact selected range before navigation, and
+    // the editor reacquires that cached materialization under its own
+    // document-scoped capability. The second control request must not imply a
+    // second remote download in the real helper.
+    semanticFixtureState.sessionRequests === 2
+      && semanticFixtureState.materializationRequests === 2
+      && semanticFixtureState.mediaRequests >= 2,
+    `공개 웹 semantic chain의 session·prepare·media 호출 수가 다릅니다: ${JSON.stringify(semanticFixtureState)}`
   );
   assert(
     localEngineProbeRecords.every((record) => (
@@ -2317,113 +2090,36 @@ async function main(): Promise<void> {
   const shortBookmark = await waitFor(
     () => execute<{
       readonly href: string;
-      readonly projectId: string;
-      readonly projectName: string;
-      readonly shellVisible: boolean;
       readonly shortWorkspaceId: string;
       readonly workspace: string;
     }>(`
       const url = new URL(location.href);
-      const shell = document.querySelector("#editor-shell");
       return {
         href: url.href,
-        projectId: url.searchParams.get("project") || "",
-        projectName: document.querySelector("#project-name")?.value || "",
-        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
         shortWorkspaceId: url.searchParams.get("short") || "",
-        workspace: shell?.getAttribute("data-workspace") || ""
+        workspace: document.querySelector("#editor-shell")?.getAttribute("data-workspace") || ""
       };
     `),
     (value) => (
       value.workspace === "short-form"
-        && value.shellVisible
-        && value.projectId === semanticEditor.projectId
-        && value.projectName === `${semanticEditor.projectName} 쇼츠`
         && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value.shortWorkspaceId)
         && new URL(value.href).searchParams.get("workspace") === "short-form"
     ),
     "공개 편집기가 새로고침 가능한 쇼츠 작업공간 URL을 만들지 못했습니다."
   );
-  const publicReloadSessionBefore = await waitFor(
-    () => execute<{
-      readonly activeSessionPresent: boolean;
-      readonly historyProofAbsent: boolean;
-      readonly sessionLeaseId: string;
-      readonly sessionProjectId: string;
-      readonly transitionGeneration: number;
-      readonly urlSession: string;
-    }>(`
-      const url = new URL(location.href);
-      const session = JSON.parse(sessionStorage.getItem(
-        "kirinuki:local-web:active-usage-session"
-      ) || "null");
-      return {
-        activeSessionPresent: session !== null,
-        historyProofAbsent: history.state?.kirinukiEditorReload === undefined,
-        sessionLeaseId: session?.sessionLeaseId || "",
-        sessionProjectId: session?.attestation?.target?.projectId || "",
-        transitionGeneration: Number(session?.transitionGeneration) || 0,
-        urlSession: url.searchParams.get("session") || ""
-      };
-    `),
-    (value) => (
-      value.activeSessionPresent
-      && value.historyProofAbsent
-      && value.sessionProjectId === shortBookmark.projectId
-      && value.urlSession === "resume"
-      && /^[a-f0-9]{64}$/u.test(value.sessionLeaseId)
-      && value.transitionGeneration > 0
-    ),
-    "공개 HTTPS editor가 정상 F5에 사용할 탭 lease와 체크포인트 URL을 만들지 못했습니다."
-  );
   await webdriver("POST", `/session/${sessionId}/refresh`, {});
   await waitForDocument();
   await waitFor(
     () => execute<{
+      readonly editorPresent: boolean;
       readonly href: string;
-      readonly historyProofAbsent: boolean;
-      readonly policyAbsent: boolean;
-      readonly projectId: string;
-      readonly projectName: string;
-      readonly sessionProjectId: string;
-      readonly sessionLeaseId: string;
-      readonly shellVisible: boolean;
-      readonly shortWorkspaceId: string;
-      readonly transitionGeneration: number;
-      readonly workspace: string;
     }>(`
-      const shell = document.querySelector("#editor-shell");
-      const url = new URL(location.href);
-      const session = JSON.parse(sessionStorage.getItem(
-        "kirinuki:local-web:active-usage-session"
-      ) || "null");
       return {
-        href: location.href,
-        historyProofAbsent: history.state?.kirinukiEditorReload === undefined,
-        policyAbsent: document.querySelector("#editor-policy-gate") === null,
-        projectId: url.searchParams.get("project") || "",
-        projectName: document.querySelector("#project-name")?.value || "",
-        sessionProjectId: session?.attestation?.target?.projectId || "",
-        sessionLeaseId: session?.sessionLeaseId || "",
-        shellVisible: shell instanceof HTMLElement && !shell.hidden && !shell.inert,
-        shortWorkspaceId: url.searchParams.get("short") || "",
-        transitionGeneration: Number(session?.transitionGeneration) || 0,
-        workspace: shell?.getAttribute("data-workspace") || ""
+        editorPresent: document.querySelector("#editor-shell") instanceof HTMLElement,
+        href: location.href
       };
     `),
-    (value) => (
-      value.href === shortBookmark.href
-      && value.historyProofAbsent
-      && value.policyAbsent
-      && value.projectId === shortBookmark.projectId
-      && value.sessionProjectId === shortBookmark.projectId
-      && value.sessionLeaseId === publicReloadSessionBefore.sessionLeaseId
-      && value.projectName === shortBookmark.projectName
-      && value.shellVisible
-      && value.shortWorkspaceId === shortBookmark.shortWorkspaceId
-      && value.transitionGeneration === publicReloadSessionBefore.transitionGeneration
-      && value.workspace === "short-form"
-    ),
+    (value) => value.editorPresent && value.href === shortBookmark.href,
     "쇼츠 작업공간 URL을 공개 HTTPS에서 새로고침하지 못했습니다."
   );
   assert(
@@ -2446,9 +2142,8 @@ async function main(): Promise<void> {
       status: "granted-and-loopback-probed",
       semanticEditor: {
         fixture: semanticFixtureState,
-        handoff: "one-use-claimed-and-acknowledged",
         mediaDurationSeconds: semanticEditor.duration,
-        result: "electron-handoff-health-session-prepare-materialize-media-attached",
+        result: "health-session-prepare-materialize-media-attached",
         shortWorkspaceReload: "http-200"
       }
     },

@@ -23,7 +23,7 @@ const destructiveTeardownCalls = [
   "cancelActiveJob()"
 ] as const;
 
-test("외부 앱 딥링크의 beforeunload는 편집 작업을 해체하지 않고 실제 pagehide만 해체한다", async () => {
+test("취소될 수 있는 beforeunload는 편집 작업을 해체하지 않고 실제 pagehide만 해체한다", async () => {
   const source = await readFile(
     new URL("../src/editor/main.ts", import.meta.url),
     "utf8"
@@ -67,13 +67,13 @@ test("외부 앱 딥링크의 beforeunload는 편집 작업을 해체하지 않�
     "BFCache에 남은 편집기는 미디어를 폐기하기 전에 빠져나가야 합니다."
   );
 
-  // Chromium fires beforeunload for a custom-scheme navigation even when the
-  // document remains alive, but pagehide only after a real document exit.
+  // Chromium can fire beforeunload even when the document remains alive, but
+  // pagehide identifies the real document-exit boundary.
   for (const call of destructiveTeardownCalls) {
     assert.doesNotMatch(
       beforeUnload,
       new RegExp(call.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
-      `취소될 수 있는 외부 앱 탐색의 beforeunload에서 ${call}을 실행하면 안 됩니다.`
+      `취소될 수 있는 beforeunload에서 ${call}을 실행하면 안 됩니다.`
     );
     assert.match(
       pageHide,

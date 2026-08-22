@@ -1104,7 +1104,7 @@ test("게이트웨이 설정은 exact Origin과 세션 인증을 강제한다", 
   }
 });
 
-test("내부 자막 엔진은 앱 Origin으로 127.0.0.1에만 bind한다", async (t) => {
+test("내부 자막 엔진은 허용된 웹 Origin으로 127.0.0.1에만 bind한다", async (t) => {
   const reservation = createNetServer();
   await new Promise<void>((resolve, reject) => {
     reservation.once("error", reject);
@@ -1260,7 +1260,7 @@ test("관리형 gateway는 health·문서 capability·Whisper-only 기능을 제
   );
 });
 
-test("gateway CORS에는 앱 Origin과 필요한 접근 헤더만 노출한다", async (t) => {
+test("gateway CORS에는 허용된 웹 Origin과 필요한 접근 헤더만 노출한다", async (t) => {
   const { port } = await listenTestServer(t, { env: TEST_ENV });
   const preflight = await localHttpJson({
     port,

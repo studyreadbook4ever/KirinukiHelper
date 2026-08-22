@@ -6461,6 +6461,21 @@ svg {
   gap: 15px;
 }
 
+.local-media-engine-kicker {
+  width: fit-content;
+  min-height: 27px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid #26785f;
+  border-radius: 999px;
+  color: var(--accent);
+  background: rgba(0, 230, 163, 0.08);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
 .local-media-engine-mark {
   width: 52px;
   height: 52px;
@@ -6484,6 +6499,11 @@ svg {
   letter-spacing: -0.035em;
 }
 
+.local-media-engine-heading {
+  display: grid;
+  gap: 8px;
+}
+
 .local-media-engine-card > p,
 .local-media-engine-card li {
   color: #b8c5ca;
@@ -6492,12 +6512,53 @@ svg {
   word-break: keep-all;
 }
 
-.local-media-engine-card ol {
-  margin: 0;
-  padding: 14px 14px 14px 34px;
+.local-media-engine-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.local-media-engine-step {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 14px 13px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 11px;
   background: rgba(255, 255, 255, 0.025);
+}
+
+.local-media-engine-step-number {
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #2b8d70;
+  border-radius: 50%;
+  color: var(--accent);
+  background: rgba(0, 230, 163, 0.08);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.local-media-engine-step div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.local-media-engine-step strong {
+  color: #eff5f5;
+  font-size: 13px;
+}
+
+.local-media-engine-step span:not(.local-media-engine-step-number) {
+  color: #9eaaaf;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: keep-all;
 }
 
 .local-media-engine-card .local-media-engine-unsupported {
@@ -6522,6 +6583,15 @@ svg {
   color: #ffadb3;
 }
 
+.local-media-engine-download-note {
+  padding: 10px 12px;
+  border-left: 2px solid #2b8d70;
+  color: #9da9ae !important;
+  background: rgba(0, 230, 163, 0.045);
+  font-size: 12px !important;
+  line-height: 1.55 !important;
+}
+
 .local-media-engine-actions {
   display: flex;
   flex-wrap: wrap;
@@ -6540,6 +6610,10 @@ svg {
 }
 
 @media (max-width: 680px) {
+  .local-media-engine-flow {
+    grid-template-columns: 1fr;
+  }
+
   .local-media-engine-actions {
     display: grid;
   }

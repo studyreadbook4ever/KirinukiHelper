@@ -20,6 +20,7 @@ import {
   canReorderClipGroup,
   captionBackgroundEnabled,
   captureStateSourceConflict,
+  captureSegmentEditorClipId,
   captureProjectId,
   createAudioRegion,
   createEditorProjectFromCapture,
@@ -382,6 +383,10 @@ test("캡처 상태를 사용자 권위 컷이 있는 편집 프로젝트로 만
   assert.equal(project.schema, EDITOR_SCHEMA);
   assert.equal(project.id, "project-test");
   assert.equal(project.clips.length, 2);
+  assert.equal(
+    itemAt(project.clips, 0).id,
+    captureSegmentEditorClipId(itemAt(captureState.segments, 0), 0)
+  );
   assert.equal(itemAt(project.clips, 0).authority, "USER");
   assert.equal(itemAt(project.clips, 0).sourceStartMs, 10_125);
   assert.equal(itemAt(project.clips, 0).sourceEndMs, 15_750);

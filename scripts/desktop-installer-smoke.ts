@@ -186,7 +186,7 @@ function installedBrowserSmoke() {
   }
   // ChromeDriver on macOS aborts or drops the public-origin navigation before
   // any request reaches the probe server. The macOS native package smoke still
-  // proves the installed bundle, protocol registration, deep-link handoff, and
+  // proves the installed helper, protocol registration, pairing wake-up, and
   // three-platform media flow; the exact browser-origin proof runs on Windows
   // and Linux against the same website client.
   return process.platform === "darwin"

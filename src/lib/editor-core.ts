@@ -963,6 +963,13 @@ function createBroadcastSession(
   };
 }
 
+export function captureSegmentEditorClipId(
+  segment: Pick<CaptureSegment, "id">,
+  index: number
+): string {
+  return `clip-${segment.id || index + 1}`;
+}
+
 function segmentToClip(segment: CaptureSegment, index: number): EditorClip {
   const sourceStartMs = secondsToMilliseconds(segment.startSeconds);
   const sourceEndMs = Math.max(
@@ -970,7 +977,7 @@ function segmentToClip(segment: CaptureSegment, index: number): EditorClip {
     secondsToMilliseconds(segment.endSeconds)
   );
   return {
-    id: `clip-${segment.id || index + 1}`,
+    id: captureSegmentEditorClipId(segment, index),
     selectionId: String(segment.id || `selection-${index + 1}`),
     authority: "USER",
     sourceStartMs,
