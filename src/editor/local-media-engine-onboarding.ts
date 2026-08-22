@@ -67,9 +67,9 @@ const PAIRING_POLL_INTERVAL_MS = 150;
 const PINNED_ENGINE_WAKE_TIMEOUT_MS = 8_000;
 const INITIAL_HEALTH_PRIME_TIMEOUT_MS = 1_000;
 const ENGINE_UNAVAILABLE_MESSAGE =
-  "이 PC의 영상 준비 도구에 연결하지 못했습니다. 이미 설치했다면 주소창의 사이트 설정에서 로컬 네트워크 접근을 허용한 뒤 다시 확인해 주세요.";
+  "이 PC의 영상 준비 도우미에 연결하지 못했습니다. 이미 설치했다면 주소창의 사이트 설정에서 로컬 네트워크 접근을 허용한 뒤 ‘설치 후 연결 확인’을 눌러 주세요.";
 const ENGINE_RECOVERY_MESSAGE =
-  "이미 설치했다면 ‘앱 깨우고 다시 확인’을 눌러 주세요. 아직 설치하지 않았다면 아래 설치 버튼을 사용한 뒤 ‘이 PC 연결’을 한 번 눌러 주세요.";
+  "아직 이 PC의 영상 준비 도우미가 연결되지 않았습니다. 처음이라면 아래 다운로드부터, 이미 설치했다면 ‘설치 후 연결 확인’을 눌러 주세요.";
 
 export type LocalMediaEngineTarget =
   | "windows-x64"
@@ -813,18 +813,18 @@ export function localMediaEngineInstaller(
   const entry = {
     "windows-x64": {
       fileName: LOCAL_MEDIA_ENGINE_RELEASE_FILES["windows-x64"],
-      installInstruction: "다운로드한 설치 파일을 실행한 뒤 이 화면에서 ‘이 PC 연결’을 한 번 눌러 주세요.",
-      label: "Windows용 한 번 설치"
+      installInstruction: "다운로드를 시작했습니다. 설치가 끝나면 이 화면으로 돌아와 ‘설치 후 연결 확인’을 눌러 주세요.",
+      label: "Windows용 도우미 다운로드"
     },
     "macos-arm64": {
       fileName: LOCAL_MEDIA_ENGINE_RELEASE_FILES["macos-arm64"],
-      installInstruction: "macOS 15 이상의 DMG를 열어 Kirinuki를 응용 프로그램에 넣고 한 번 실행하세요. macOS가 요구하면 시스템 설정의 로그인 항목에서 Kirinuki를 허용한 뒤 이 화면에서 ‘이 PC 연결’을 눌러 주세요.",
-      label: "Apple Silicon macOS 15+용 한 번 설치"
+      installInstruction: "다운로드를 시작했습니다. macOS 15 이상의 DMG를 열어 Kirinuki를 응용 프로그램에 넣고 한 번 실행한 뒤 ‘설치 후 연결 확인’을 눌러 주세요.",
+      label: "macOS용 도우미 다운로드"
     },
     "linux-x64": {
       fileName: LOCAL_MEDIA_ENGINE_RELEASE_FILES["linux-x64"],
-      installInstruction: "deb를 설치한 뒤 이 화면에서 ‘이 PC 연결’을 한 번 눌러 주세요.",
-      label: "Debian/Ubuntu Linux 64비트용 한 번 설치"
+      installInstruction: "다운로드를 시작했습니다. deb를 설치한 뒤 이 화면으로 돌아와 ‘설치 후 연결 확인’을 눌러 주세요.",
+      label: "Linux용 도우미 다운로드"
     }
   }[target as Exclude<LocalMediaEngineTarget, "unsupported">];
   if (!entry || !releaseChannel || target === "unsupported") {
