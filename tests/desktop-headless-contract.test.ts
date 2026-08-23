@@ -6,16 +6,19 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-test("installed desktop main은 window·4320 Studio·extension product UX를 갖지 않는다", async () => {
+test("installed desktop main은 headless 엔진과 격리된 Electron 컷 창만 함께 갖는다", async () => {
   const [main, supervisor, packageFiles, packageScript] = await Promise.all([
     readFile(path.join(root, "src/desktop/main.ts"), "utf8"),
     readFile(path.join(root, "src/desktop/runtime-supervisor.ts"), "utf8"),
     readFile(path.join(root, "scripts/desktop-package-files.ts"), "utf8"),
     readFile(path.join(root, "scripts/package-desktop.ts"), "utf8")
   ]);
+  assert.match(main, /BrowserWindow/u);
+  assert.match(main, /CUT_WINDOW_URL/u);
+  assert.match(main, /CUT_WINDOW_PLAYER_ACTION_CHANNEL/u);
+  assert.match(packageFiles, /preload\.cjs/u);
   for (const source of [main, supervisor, packageFiles, packageScript]) {
-    assert.doesNotMatch(source, /BrowserWindow|window-all-closed/u);
-    assert.doesNotMatch(source, /streaming-companion|Player Bridge/u);
+    assert.doesNotMatch(source, /chrome-extension:\/\/|Player Bridge/u);
   }
   assert.doesNotMatch(supervisor, /4320|createLocalStudioHttpServer/u);
   assert.match(supervisor, /DEFAULT_CAPTION_GATEWAY_PORT/u);
