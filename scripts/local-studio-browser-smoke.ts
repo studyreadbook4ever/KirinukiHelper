@@ -2245,7 +2245,8 @@ async function main(): Promise<void> {
   });
   const extensionlessCaptureState = await execute<{
     semanticCaptureConsolePresent: boolean;
-    localCaptureDisabledUntilPrepared: boolean;
+    captureEnabledWithoutHelper: boolean;
+    manualClockVisible: boolean;
     manualInputsEnabled: boolean;
     iframeVisible: boolean;
   }>(`
@@ -2267,14 +2268,15 @@ async function main(): Promise<void> {
       semanticCaptureConsolePresent: semanticControlIds.every(
         (id) => document.querySelector("#" + id) instanceof HTMLElement
       ),
-      localCaptureDisabledUntilPrepared: [
+      captureEnabledWithoutHelper: [
         "capture-start",
         "capture-end",
         "seek-backward-five",
         "seek-forward-five",
         "playback-rate-quarter",
         "playback-rate-double"
-      ].every((id) => document.querySelector("#" + id)?.disabled === true),
+      ].every((id) => document.querySelector("#" + id)?.disabled === false),
+      manualClockVisible: document.querySelector("#manual-cut-clock-field")?.hidden === false,
       manualInputsEnabled: start instanceof HTMLInputElement
         && end instanceof HTMLInputElement
         && !start.disabled
@@ -2284,10 +2286,11 @@ async function main(): Promise<void> {
   `);
   assert(
     extensionlessCaptureState.semanticCaptureConsolePresent
-      && extensionlessCaptureState.localCaptureDisabledUntilPrepared
+      && extensionlessCaptureState.captureEnabledWithoutHelper
+      && extensionlessCaptureState.manualClockVisible
       && extensionlessCaptureState.manualInputsEnabled
       && extensionlessCaptureState.iframeVisible,
-    `공식 임베드·수동 입력과 준비 뒤 활성화되는 웹 컷 console을 함께 제공하지 못했습니다: ${JSON.stringify(extensionlessCaptureState)}`
+    `공식 임베드·수동 시계·도우미 없는 웹 컷 console을 함께 제공하지 못했습니다: ${JSON.stringify(extensionlessCaptureState)}`
   );
   process.stderr.write("[browser-smoke] SOOP 임베드·수동 입력·웹 컷 console 검증 완료\n");
 
