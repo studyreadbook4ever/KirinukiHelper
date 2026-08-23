@@ -9,7 +9,7 @@
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki</title>
-    <link rel="stylesheet" href="/studio.css?v=3.0.7">
+    <link rel="stylesheet" href="/studio.css?v=3.0.8">
   </head>
   <body>
     <header class="topbar">
@@ -38,9 +38,14 @@
           <h1 id="start-title">VOD에서 편집할 구간을 선택하세요</h1>
           <p>링크를 붙여넣고 이 페이지의 원본 화면에서 바로 컷을 고르세요. 도우미는 선택 사항이며, 연결하면 플랫폼에 관계없이 컷 단축키를 이어서 쓸 수 있습니다.</p>
         </div>
-        <a id="linux-helper-download" class="button secondary helper-download-offer" href="#" target="_blank" rel="noopener noreferrer" hidden>
-          Linux 영상 준비 도우미 (.deb) 미리 받기
-        </a>
+        <div class="helper-download-offers" aria-label="Linux 영상 준비 도우미 다운로드">
+          <a id="linux-helper-download" class="button secondary helper-download-offer" href="#" target="_blank" rel="noopener noreferrer" hidden>
+            Debian/Ubuntu 도우미 (.deb)
+          </a>
+          <a id="arch-helper-download" class="button secondary helper-download-offer" href="#" target="_blank" rel="noopener noreferrer" hidden>
+            Arch Linux 도우미 (.pkg.tar.zst)
+          </a>
+        </div>
       </section>
 
       <section id="recent-section" class="recent-card local-project-manager" aria-labelledby="local-projects-title" aria-busy="true" hidden>
@@ -169,8 +174,13 @@
                     <button id="capture-end" type="button" aria-keyshortcuts="R" title="현재 시각을 끝점으로 캡처 (단축키 R)" disabled><kbd>R</kbd><span>끝 캡처</span></button>
                     <button id="save-segment" type="button" aria-keyshortcuts="T" title="다음 빈 구간 추가 (단축키 T)"><kbd>T</kbd><span>다음 구간</span></button>
                   </div>
+                  <label id="manual-cut-clock-field" class="manual-cut-clock-field" for="manual-cut-clock" hidden>
+                    <span>플레이어에 표시된 시각</span>
+                    <input id="manual-cut-clock" type="text" inputmode="decimal" value="00:00:00" aria-describedby="manual-cut-clock-help">
+                    <small id="manual-cut-clock-help">CHZZK·SOOP은 브라우저가 재생 시각을 읽을 수 없습니다. 플레이어 시각을 한 번 맞추면 E/R로 기록하고 D/F로 5초씩 조절할 수 있습니다.</small>
+                  </label>
                   <p class="stream-cut-console-guide">
-                    YouTube는 이 화면에서 E로 시작, R로 끝을 바로 기록하고 D/F/Y/U로 제어할 수 있습니다. 다른 플랫폼도 도우미가 연결돼 있다면 권리 확인 후 W로 같은 단축키를 연결할 수 있고, 도우미 없이 플레이어 시각을 시작·끝 칸에 직접 입력해도 됩니다.
+                    YouTube는 E/R/D/F/Y/U가 플레이어에 바로 연결됩니다. CHZZK·SOOP은 위 컷 기준 시각으로 E/R/D/F를 바로 쓰고, Y/U를 누르면 플레이어에서 바꿀 위치를 안내합니다. W로 도우미를 연결하면 같은 버튼이 실제 영상과 동기화됩니다.
                   </p>
                 </section>
                 <div id="stream-preview-navigation" class="stream-preview-navigation" hidden>
@@ -291,19 +301,19 @@
         <div id="local-media-engine-flow" class="local-media-engine-flow" aria-label="영상 준비 도우미 연결 순서">
           <div class="local-media-engine-step">
             <span class="local-media-engine-step-number" aria-hidden="true">1</span>
-            <div><strong>Linux 도우미 받기</strong><span>Debian/Ubuntu x64용 테스트 설치 파일을 받습니다.</span></div>
+            <div><strong>Linux 도우미 받기</strong><span>Debian/Ubuntu 또는 Arch Linux x64용 파일을 고릅니다.</span></div>
           </div>
           <div class="local-media-engine-step">
             <span class="local-media-engine-step-number" aria-hidden="true">2</span>
-            <div><strong>다운로드가 끝나면 설치</strong><span>브라우저 다운로드 목록에서 deb 파일을 열어 설치합니다.</span></div>
+            <div><strong>다운로드 후 설치·실행</strong><span>패키지를 설치하고 도우미를 한 번 실행합니다.</span></div>
           </div>
           <div class="local-media-engine-step">
             <span class="local-media-engine-step-number" aria-hidden="true">3</span>
-            <div><strong>이 화면에서 자동 연결</strong><span>설치되는 동안 연결을 확인하고 원래 컷 작업을 그대로 잇습니다.</span></div>
+            <div><strong>이 화면에서 연결 확인</strong><span>도우미 실행을 자동 감지하고, ‘설치 후 연결 확인’ 한 번으로 이 브라우저를 등록합니다.</span></div>
           </div>
         </div>
         <p id="local-media-engine-unsupported" class="local-media-engine-unsupported" hidden>
-          현재 공개 테스트는 Debian/Ubuntu 계열 Linux x64만 지원합니다.
+          현재 공개 테스트는 Debian/Ubuntu·Arch Linux x64를 지원합니다.
         </p>
         <p id="local-media-engine-status" class="local-media-engine-status" role="status" aria-live="polite" aria-atomic="true"></p>
         <p id="local-media-engine-download-note" class="local-media-engine-download-note">
@@ -314,6 +324,7 @@
           <button id="local-media-engine-cancel" class="button ghost" type="button">이번에는 파일로 계속</button>
           <button id="local-media-engine-reset" class="button ghost" type="button" hidden>연결 기억 지우기</button>
           <button id="local-media-engine-retry" class="button secondary" type="button">설치 후 연결 확인</button>
+          <a id="local-media-engine-arch-download" class="button primary" href="#" target="_blank" rel="noopener noreferrer" hidden>Arch Linux용 도우미 (.pkg.tar.zst)</a>
           <a id="local-media-engine-download" class="button primary" href="#" target="_blank" rel="noopener noreferrer">
             <span id="local-media-engine-download-label">내 PC용 도우미 다운로드</span>
           </a>
@@ -322,6 +333,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="/studio.js?v=3.0.7"></script>
+    <script type="module" src="/studio.js?v=3.0.8"></script>
   </body>
 </html>

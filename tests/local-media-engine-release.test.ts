@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
   LOCAL_MEDIA_ENGINE_RELEASE_FILES,
+  LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE,
   LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE,
   parseLocalMediaEngineReleaseChannel
 } from "../src/editor/local-media-engine-release.js";
@@ -44,6 +45,12 @@ function linuxPreviewChannelValue(): LocalMediaEngineReleaseChannel {
     tag,
     commit: "c".repeat(40),
     aggregateManifestSha256: "d".repeat(64),
+    archInstaller: {
+      bytes: 21_000_000,
+      fileName: LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE,
+      sha256: "9".repeat(64),
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/${LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE}`
+    },
     sourceOffer: {
       bytes: 2048,
       fileName: "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt",
@@ -88,12 +95,13 @@ test("web engine release channel은 exact tag-pinned 세 installer만 허용한�
   }
 });
 
-test("Linux preview channel은 exact tag-pinned Linux x64 한 파일만 허용한다", () => {
+test("Linux preview channel은 exact tag-pinned Debian/Ubuntu와 Arch 파일만 허용한다", () => {
   const fixture = linuxPreviewChannelValue();
   assert.deepEqual(parseLocalMediaEngineReleaseChannel(fixture), fixture);
   for (const mutate of [
     (value: Record<string, unknown>) => { value.status = "verified-public-release"; },
     (value: Record<string, unknown>) => { delete value.sourceOffer; },
+    (value: Record<string, unknown>) => { delete value.archInstaller; },
     (value: Record<string, unknown>) => {
       const installers = value.installers as Record<string, unknown>;
       installers["windows-x64"] = {};

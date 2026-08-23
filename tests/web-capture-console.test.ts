@@ -138,7 +138,7 @@ test("A는 화면 아래의 단일 편집기 CTA와 같은 검증 경로를 사�
   assert.doesNotMatch(html, /id="(?:open-editor|create-codex-job)"/u);
 });
 
-test("초기 컷은 웹 플레이어를 기본으로 쓰고 도우미 연결 시 전 플랫폼 단축키를 확장한다", async () => {
+test("초기 컷은 도우미 없이 웹 플레이어와 수동 시계로 모든 컷 단축키를 쓴다", async () => {
   const [html, source, controller, server] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
@@ -155,7 +155,19 @@ test("초기 컷은 웹 플레이어를 기본으로 쓰고 도우미 연결 시
   assert.match(source, /function replaceStreamFrame\(\)/u);
   assert.match(source, /elements\.reloadStream\.addEventListener[\s\S]*reloadActivePlayerFrame\(\)/u);
   assert.match(html, /id="source-capture-workspace"[^>]*hidden/u);
-  assert.match(html, /id="linux-helper-download"[\s\S]*Linux 영상 준비 도우미/u);
+  assert.match(html, /id="linux-helper-download"[\s\S]*Debian\/Ubuntu 도우미/u);
+  assert.match(html, /id="arch-helper-download"[\s\S]*Arch Linux 도우미/u);
+  assert.match(html, /id="manual-cut-clock"[^>]*value="00:00:00"/u);
+  assert.match(source, /function manualCutClockIsActive\(\)/u);
+  assert.match(source, /function syncCaptureConsoleAvailability\(\)[\s\S]*button\.disabled = !sourceReady/u);
+  assert.match(
+    source,
+    /activeStreamPlatform = descriptor\.platform;[\s\S]*elements\.streamFrame\.src = descriptor\.embedUrl;[\s\S]*syncCaptureConsoleAvailability\(\);/u
+  );
+  assert.doesNotMatch(
+    source,
+    /(?:captureStart|captureEnd|seekBackwardFive|seekForwardFive|playbackRateQuarter|playbackRateDouble)\.disabled\s*=\s*!local/u
+  );
   assert.match(source, /case "refresh-source":[\s\S]*SOURCE_PLATFORM_YOUTUBE[\s\S]*reloadActivePlayerFrame\(\)[\s\S]*prepareLocalPreview/u);
   assert.match(source, /monitorHelperDownloadConnection[\s\S]*beginInstallPolling: true/u);
   assert.match(source, /prepareLocalPreview[\s\S]*allowImmediateProtocolLaunch: true/u);

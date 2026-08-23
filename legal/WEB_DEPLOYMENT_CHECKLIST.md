@@ -47,10 +47,10 @@
 - [ ] installer 링크를 여는 배포는 published remote asset 전체의 exact
   size·SHA-256 digest readback 뒤 `npm run build:web:release`로 별도 생성했으며,
   tag-pinned 세 URL만 포함하고 runtime GitHub API/`latest` 조회가 없다.
-- [ ] 임시 Linux 공개 테스트라면 published **prerelease**의 exact 4-file set
-  (`*-preview.deb`, preview manifest, SHA-256, exact source/license offer), GitHub build-provenance attestation,
-  Linux native install/autostart/browser/uninstall smoke를 먼저 확인했다. 이 build는
-  `KIRINUKI_INSTALLER_CHANNEL=linux-preview`로 Linux tag-pinned URL 하나만 넣고
+- [ ] 임시 Linux 공개 테스트라면 published **prerelease**의 exact 5-file set
+  (`*-preview.deb`, `*-preview.pkg.tar.zst`, preview manifest, SHA-256, exact source/license offer), GitHub build-provenance attestation,
+  Debian/Ubuntu·Arch native install/autostart/browser/uninstall smoke를 먼저 확인했다. 이 build는
+  `KIRINUKI_INSTALLER_CHANNEL=linux-preview`로 Linux tag-pinned URL 두 개만 넣고
   Windows/macOS URL과 runtime GitHub API/`latest` 조회를 포함하지 않는다.
 - [ ] `web/`은 full editor allowlist와 고지 파일만 포함하고 source map, test fixture,
   cache, key, `.env`, 설치 executable을 포함하지 않는다.

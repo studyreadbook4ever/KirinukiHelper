@@ -20,6 +20,10 @@ import { promisify } from "node:util";
 
 import {
   DESKTOP_INSTALLER_MANIFEST_SCHEMA,
+  LINUX_PREVIEW_ARCH_INSTALLER_FILE,
+  LINUX_PREVIEW_ARCH_SOURCE_INSTALLER_FILE,
+  LINUX_PREVIEW_ARCH_SOURCE_MANIFEST_FILE,
+  LINUX_PREVIEW_ARCH_SOURCE_MANIFEST_SCHEMA,
   LINUX_PREVIEW_INSTALLER_FILE,
   LINUX_PREVIEW_RELEASE_ASSET_FILES,
   LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
@@ -55,6 +59,7 @@ export interface VerifiedLinuxPreviewRelease {
   readonly commit: string;
   readonly version: string;
   readonly installer: Readonly<FileIdentity>;
+  readonly archInstaller: Readonly<FileIdentity>;
   readonly manifest: Readonly<FileIdentity>;
   readonly sourceOffer: Readonly<FileIdentity>;
 }
@@ -148,7 +153,7 @@ Release: ${tag}
 Version: ${version}
 Commit: ${commit}
 
-This Debian/Ubuntu x64 preview redistributes open-source runtime components.
+These Debian/Ubuntu and Arch Linux x64 preview packages redistribute open-source runtime components.
 The exact Kirinuki source for this binary is available at:
 https://github.com/studyreadbook4ever/KirinukiHelper/tree/${tag}
 https://github.com/studyreadbook4ever/KirinukiHelper/archive/refs/tags/${tag}.tar.gz
@@ -199,11 +204,14 @@ function parsePreviewManifest(value: unknown): {
   readonly commit: string;
   readonly version: string;
   readonly artifact: Readonly<FileIdentity>;
+  readonly archArtifact: Readonly<FileIdentity>;
   readonly sourceOffer: Readonly<FileIdentity>;
 } {
   invariant(
     isRecord(value)
       && exactKeys(value, [
+        "archArtifact",
+        "archSourceEvidence",
         "artifact",
         "channel",
         "commit",
@@ -233,6 +241,13 @@ function parsePreviewManifest(value: unknown): {
       && Number(value.artifact.bytes) > 0
       && typeof value.artifact.sha256 === "string"
       && SHA256_PATTERN.test(value.artifact.sha256)
+      && isRecord(value.archArtifact)
+      && exactKeys(value.archArtifact, ["bytes", "fileName", "sha256"])
+      && value.archArtifact.fileName === LINUX_PREVIEW_ARCH_INSTALLER_FILE
+      && Number.isSafeInteger(value.archArtifact.bytes)
+      && Number(value.archArtifact.bytes) > 0
+      && typeof value.archArtifact.sha256 === "string"
+      && SHA256_PATTERN.test(value.archArtifact.sha256)
       && isRecord(value.sourceEvidence)
       && exactKeys(value.sourceEvidence, [
         "channel",
@@ -247,6 +262,20 @@ function parsePreviewManifest(value: unknown): {
       && typeof value.sourceEvidence.manifestSha256 === "string"
       && SHA256_PATTERN.test(value.sourceEvidence.manifestSha256)
       && value.sourceEvidence.status === "unsigned-ci-test-only-never-publish"
+      && isRecord(value.archSourceEvidence)
+      && exactKeys(value.archSourceEvidence, [
+        "channel",
+        "fileName",
+        "manifestFileName",
+        "manifestSha256",
+        "status"
+      ])
+      && value.archSourceEvidence.channel === "ci-test-only"
+      && value.archSourceEvidence.fileName === LINUX_PREVIEW_ARCH_SOURCE_INSTALLER_FILE
+      && value.archSourceEvidence.manifestFileName === LINUX_PREVIEW_ARCH_SOURCE_MANIFEST_FILE
+      && typeof value.archSourceEvidence.manifestSha256 === "string"
+      && SHA256_PATTERN.test(value.archSourceEvidence.manifestSha256)
+      && value.archSourceEvidence.status === "unsigned-ci-test-only-never-publish"
       && isRecord(value.sourceOffer)
       && exactKeys(value.sourceOffer, ["bytes", "fileName", "sha256"])
       && value.sourceOffer.fileName === LINUX_PREVIEW_SOURCE_OFFER_FILE
@@ -256,15 +285,19 @@ function parsePreviewManifest(value: unknown): {
       && SHA256_PATTERN.test(value.sourceOffer.sha256)
       && isRecord(value.distribution)
       && exactKeys(value.distribution, [
+        "archPackage",
         "buildProvenance",
+        "signedArchPackage",
         "signedDeb",
         "stableRelease",
         "support"
       ])
       && value.distribution.buildProvenance === "github-artifact-attestation"
+      && value.distribution.archPackage === "pacman"
+      && value.distribution.signedArchPackage === false
       && value.distribution.signedDeb === false
       && value.distribution.stableRelease === false
-      && value.distribution.support === "debian-ubuntu-linux-x64-preview",
+      && value.distribution.support === "debian-ubuntu-and-arch-linux-x64-preview",
     "Linux preview manifest가 exact 공개 테스트 계약과 다릅니다."
   );
   return Object.freeze({
@@ -274,6 +307,10 @@ function parsePreviewManifest(value: unknown): {
     artifact: Object.freeze({
       bytes: Number(value.artifact.bytes),
       sha256: value.artifact.sha256
+    }),
+    archArtifact: Object.freeze({
+      bytes: Number(value.archArtifact.bytes),
+      sha256: value.archArtifact.sha256
     }),
     sourceOffer: Object.freeze({
       bytes: Number(value.sourceOffer.bytes),
@@ -291,11 +328,21 @@ export async function verifyLinuxPreviewReleaseAssets(
   const manifestIdentity = await stableFileIdentity(manifestPath);
   const parsed = parsePreviewManifest(JSON.parse(await readFile(manifestPath, "utf8")));
   const installerPath = path.join(canonical, LINUX_PREVIEW_INSTALLER_FILE);
+  const archInstallerPath = path.join(
+    canonical,
+    LINUX_PREVIEW_ARCH_INSTALLER_FILE
+  );
   const installerIdentity = await stableFileIdentity(installerPath);
+  const archInstallerIdentity = await stableFileIdentity(archInstallerPath);
   invariant(
     installerIdentity.bytes === parsed.artifact.bytes
       && installerIdentity.sha256 === parsed.artifact.sha256,
     "Linux preview installer identity가 manifest와 다릅니다."
+  );
+  invariant(
+    archInstallerIdentity.bytes === parsed.archArtifact.bytes
+      && archInstallerIdentity.sha256 === parsed.archArtifact.sha256,
+    "Arch Linux preview installer identity가 manifest와 다릅니다."
   );
   const sourceOfferPath = path.join(canonical, LINUX_PREVIEW_SOURCE_OFFER_FILE);
   const sourceOfferIdentity = await stableFileIdentity(sourceOfferPath);
@@ -314,7 +361,7 @@ export async function verifyLinuxPreviewReleaseAssets(
     "utf8"
   );
   invariant(
-    checksum === `${installerIdentity.sha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${sourceOfferIdentity.sha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`,
+    checksum === `${installerIdentity.sha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${archInstallerIdentity.sha256}  ${LINUX_PREVIEW_ARCH_INSTALLER_FILE}\n${sourceOfferIdentity.sha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`,
     "Linux preview checksum sidecar가 installer와 다릅니다."
   );
   return Object.freeze({
@@ -323,6 +370,7 @@ export async function verifyLinuxPreviewReleaseAssets(
     commit: parsed.commit,
     version: parsed.version,
     installer: installerIdentity,
+    archInstaller: archInstallerIdentity,
     manifest: manifestIdentity,
     sourceOffer: sourceOfferIdentity
   });
@@ -360,11 +408,28 @@ async function assembleLinuxPreviewRelease(): Promise<Readonly<VerifiedLinuxPrev
   const sourceDirectory = await canonicalDirectory(
     path.join(root, "dist", "installers", "linux-x64")
   );
+  const archSourceDirectory = await canonicalDirectory(
+    path.join(root, "dist", "installers", "arch-linux-x64")
+  );
   await exactRegularEntries(sourceDirectory, [SOURCE_INSTALLER_FILE, SOURCE_MANIFEST_FILE]);
+  await exactRegularEntries(archSourceDirectory, [
+    LINUX_PREVIEW_ARCH_SOURCE_INSTALLER_FILE,
+    LINUX_PREVIEW_ARCH_SOURCE_MANIFEST_FILE
+  ]);
   const sourceInstallerPath = path.join(sourceDirectory, SOURCE_INSTALLER_FILE);
   const sourceManifestPath = path.join(sourceDirectory, SOURCE_MANIFEST_FILE);
   const sourceInstaller = await stableFileIdentity(sourceInstallerPath);
   const sourceManifest = await stableFileIdentity(sourceManifestPath);
+  const archSourceInstallerPath = path.join(
+    archSourceDirectory,
+    LINUX_PREVIEW_ARCH_SOURCE_INSTALLER_FILE
+  );
+  const archSourceManifestPath = path.join(
+    archSourceDirectory,
+    LINUX_PREVIEW_ARCH_SOURCE_MANIFEST_FILE
+  );
+  const archSourceInstaller = await stableFileIdentity(archSourceInstallerPath);
+  const archSourceManifest = await stableFileIdentity(archSourceManifestPath);
   const sourceValue = JSON.parse(await readFile(sourceManifestPath, "utf8")) as unknown;
   invariant(
     isRecord(sourceValue)
@@ -384,12 +449,42 @@ async function assembleLinuxPreviewRelease(): Promise<Readonly<VerifiedLinuxPrev
       && sourceValue.releaseSigning.signed === false,
     "Linux preview source installer가 검증된 CI lifecycle artifact가 아닙니다."
   );
+  const archSourceValue = JSON.parse(
+    await readFile(archSourceManifestPath, "utf8")
+  ) as unknown;
+  invariant(
+    isRecord(archSourceValue)
+      && archSourceValue.schema === LINUX_PREVIEW_ARCH_SOURCE_MANIFEST_SCHEMA
+      && archSourceValue.status === "unsigned-test-only"
+      && archSourceValue.channel === "ci-test-only"
+      && archSourceValue.target === "linux-x64"
+      && archSourceValue.distribution === "arch-linux-x64"
+      && archSourceValue.format === "pacman"
+      && archSourceValue.packageName === "kirinuki-engine"
+      && isRecord(archSourceValue.artifact)
+      && archSourceValue.artifact.fileName === LINUX_PREVIEW_ARCH_SOURCE_INSTALLER_FILE
+      && archSourceValue.artifact.bytes === archSourceInstaller.bytes
+      && archSourceValue.artifact.sha256 === archSourceInstaller.sha256
+      && isRecord(archSourceValue.source)
+      && archSourceValue.source.appVersion === version
+      && archSourceValue.release === null,
+    "Arch preview source installer가 검증된 CI lifecycle artifact가 아닙니다."
+  );
 
   const outputDirectory = path.join(root, "dist", "linux-preview-release");
   await mkdir(outputDirectory, { recursive: true, mode: 0o700 });
   invariant((await readdir(outputDirectory)).length === 0, "Linux preview 출력 디렉터리가 비어 있지 않습니다.");
   const installerPath = path.join(outputDirectory, LINUX_PREVIEW_INSTALLER_FILE);
   await copyFile(sourceInstallerPath, installerPath, fsConstants.COPYFILE_EXCL);
+  const archInstallerPath = path.join(
+    outputDirectory,
+    LINUX_PREVIEW_ARCH_INSTALLER_FILE
+  );
+  await copyFile(
+    archSourceInstallerPath,
+    archInstallerPath,
+    fsConstants.COPYFILE_EXCL
+  );
   const sourceOfferPath = path.join(outputDirectory, LINUX_PREVIEW_SOURCE_OFFER_FILE);
   await writeFile(
     sourceOfferPath,
@@ -410,11 +505,23 @@ async function assembleLinuxPreviewRelease(): Promise<Readonly<VerifiedLinuxPrev
       bytes: sourceInstaller.bytes,
       sha256: sourceInstaller.sha256
     }),
+    archArtifact: Object.freeze({
+      fileName: LINUX_PREVIEW_ARCH_INSTALLER_FILE,
+      bytes: archSourceInstaller.bytes,
+      sha256: archSourceInstaller.sha256
+    }),
     sourceEvidence: Object.freeze({
       channel: "ci-test-only",
       fileName: SOURCE_INSTALLER_FILE,
       manifestFileName: SOURCE_MANIFEST_FILE,
       manifestSha256: sourceManifest.sha256,
+      status: "unsigned-ci-test-only-never-publish"
+    }),
+    archSourceEvidence: Object.freeze({
+      channel: "ci-test-only",
+      fileName: LINUX_PREVIEW_ARCH_SOURCE_INSTALLER_FILE,
+      manifestFileName: LINUX_PREVIEW_ARCH_SOURCE_MANIFEST_FILE,
+      manifestSha256: archSourceManifest.sha256,
       status: "unsigned-ci-test-only-never-publish"
     }),
     sourceOffer: Object.freeze({
@@ -423,7 +530,9 @@ async function assembleLinuxPreviewRelease(): Promise<Readonly<VerifiedLinuxPrev
       sha256: sourceOffer.sha256
     }),
     distribution: Object.freeze({
-      support: "debian-ubuntu-linux-x64-preview",
+      support: "debian-ubuntu-and-arch-linux-x64-preview",
+      archPackage: "pacman",
+      signedArchPackage: false,
       signedDeb: false,
       stableRelease: false,
       buildProvenance: "github-artifact-attestation"
@@ -436,7 +545,7 @@ async function assembleLinuxPreviewRelease(): Promise<Readonly<VerifiedLinuxPrev
   );
   await writeFile(
     path.join(outputDirectory, LINUX_PREVIEW_RELEASE_CHECKSUM_FILE),
-    `${sourceInstaller.sha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${sourceOffer.sha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`,
+    `${sourceInstaller.sha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${archSourceInstaller.sha256}  ${LINUX_PREVIEW_ARCH_INSTALLER_FILE}\n${sourceOffer.sha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`,
     { flag: "wx", mode: 0o644 }
   );
   return verifyLinuxPreviewReleaseAssets(outputDirectory);

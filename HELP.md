@@ -39,7 +39,7 @@ Chrome이 처음 한 번 **로컬 네트워크 접근**을 묻는 경우 허용�
 
 - Windows x64
 - Apple Silicon Mac, macOS 15 이상
-- Linux x64 Debian 계열
+- Linux x64 Debian/Ubuntu 또는 Arch Linux
 
 macOS Intel, Windows ARM64, Linux ARM64와 모바일 편집은 현재 지원하지 않습니다.
 모바일에서는 작업을 시작하지 않고 데스크톱에서 다시 열도록 안내합니다.

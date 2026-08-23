@@ -71,7 +71,10 @@ test("매 사용 권리 확인은 여섯 항목이며 개인정보·오픈소스
 
 test("초기 컷은 도우미 없이도 진행하고 연결 시 단축키를 확장한 뒤 같은 탭 편집기로 이동한다", async () => {
   const { html, source } = await studioSources();
-  assert.match(html, /도우미 없이 플레이어 시각을 시작·끝 칸에 직접 입력해도 됩니다/u);
+  assert.match(
+    html,
+    /플레이어 시각을 한 번 맞추면 E\/R로 기록하고 D\/F로 5초씩 조절할 수 있습니다/u
+  );
   assert.match(html, /id="source-capture-workspace"[^>]*hidden/u);
   assert.match(html, /id="recent-section"[^>]*hidden/u);
   assert.match(html, /id="cut-preparation-progress"[\s\S]*도우미는 별도 창을 열지 않습니다/u);
@@ -126,7 +129,11 @@ test("첫 방문 도우미 안내는 다운로드·설치·연결과 진행 상�
     )
   ]);
   for (const html of [indexHtml, editorHtml]) {
-    assert.match(html, /Linux 도우미 받기[\s\S]*다운로드가 끝나면 설치[\s\S]*이 화면에서 자동 연결/u);
+    assert.match(
+      html,
+      /Linux 도우미 받기[\s\S]*다운로드 후 설치·실행[\s\S]*이 화면에서 연결 확인/u
+    );
+    assert.match(html, /Debian\/Ubuntu 또는 Arch Linux x64용 파일/u);
     assert.match(html, /id="local-media-engine-status"[^>]*aria-live="polite"/u);
     assert.match(html, /id="local-media-engine-download-note"[\s\S]*실제 파일 진행률은 브라우저/u);
     assert.match(html, /id="local-media-engine-source-offer"[^>]*hidden[^>]*>Linux 미리보기 소스·라이선스 안내/u);

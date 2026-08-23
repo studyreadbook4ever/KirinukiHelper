@@ -16,6 +16,7 @@ telemetry 또는 analytics를 처리하지 않습니다. 브라우저 확장 프
 | Windows x64 NSIS | 화면 없는 Electron 엔진과 target sidecar | 웹 편집기 창, 브라우저 확장, 자동 업데이트 |
 | macOS arm64 DMG | 화면 없는 Electron 엔진과 target sidecar | 웹 편집기 창, 브라우저 확장, 자동 업데이트 |
 | Linux x64 deb | 화면 없는 Electron 엔진과 target sidecar | 웹 편집기 창, 브라우저 확장, 자동 업데이트 |
+| Arch Linux x64 pkg.tar.zst preview | 같은 화면 없는 Electron 엔진과 target sidecar | 웹 편집기 창, 브라우저 확장, 자동 업데이트 |
 | 저장소 전용 source-run 경로 | 고정 npm 설치와 선택적 로컬 도구 | 일반 사용자용 공개 설치 계약 |
 
 설치 파일 이름은 `Kirinuki-Engine-windows-x64-setup.exe`,

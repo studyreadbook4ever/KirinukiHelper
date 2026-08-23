@@ -95,11 +95,16 @@ test("Linux preview release는 stable gate와 분리해 install E2E·prerelease�
     ".github/workflows/linux-preview-release.yml"
   ), "utf8");
   assert.match(workflow, /workflow_dispatch:/u);
+  assert.match(workflow, /push:[\s\S]*tags:[\s\S]*- "v\*"/u);
   assert.match(workflow, /PUBLISH_LINUX_PREVIEW/u);
+  assert.match(workflow, /git cat-file -t "refs\/tags\/\$REQUESTED_TAG"/u);
+  assert.match(workflow, /git for-each-ref --format='%\(contents\)'/u);
   assert.match(workflow, /test "\$GITHUB_REF_TYPE" = "tag"/u);
   assert.match(workflow, /refs\/remotes\/origin\/main\)" = "\$commit"/u);
   assert.match(workflow, /typescript-quality\.yml\/runs/u);
   assert.match(workflow, /npm run package:desktop:installer/u);
+  assert.match(workflow, /npm run package:desktop:arch/u);
+  assert.match(workflow, /KIRINUKI_ARCH_INSTALLER_SYSTEM_SMOKE=1/u);
   assert.match(workflow, /npm run test:semantic:engine/u);
   assert.match(workflow, /KIRINUKI_INSTALLER_SYSTEM_SMOKE:\s*"1"/u);
   assert.match(workflow, /KIRINUKI_INSTALLED_BROWSER_SMOKE:\s*"1"/u);
@@ -120,7 +125,7 @@ test("Linux preview release는 stable gate와 분리해 install E2E·prerelease�
   assert.match(workflow, /gh release download/u);
   assert.match(workflow, /test:package:desktop:linux-preview/u);
   assert.match(workflow, /\.prerelease'[\s\S]*= true/u);
-  assert.match(workflow, /not a stable signed release/u);
+  assert.match(workflow, /not stable signed releases/u);
   assert.match(workflow, /source\/license offer/u);
   assert.doesNotMatch(workflow, /--latest|releases\/latest\/download/u);
   assert.doesNotMatch(workflow, /KIRINUKI_(?:WINDOWS|APPLE|MACOS)_/u);
