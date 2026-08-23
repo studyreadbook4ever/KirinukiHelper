@@ -31,8 +31,8 @@ test("새 컷은 웹에서 선택하고 확정 범위 준비 완료 뒤 같은 �
     source("src/web/main.ts")
   ]);
 
-  assert.match(html, /링크를 붙여넣으면 이 페이지에서 바로 컷을 고를 수 있습니다/u);
-  assert.match(html, /도우미는 별도 편집 창을 열지 않/u);
+  assert.match(html, /링크를 붙여넣고 이 페이지의 원본 화면에서 바로 컷을 고르세요/u);
+  assert.match(html, /도우미는 컷 선택이 끝나고 편집기를 열 때만/u);
   assert.match(html, /id="cut-preparation-progress"/u);
   assert.match(html, /id="cut-preparation-stage"/u);
   assert.match(webMain, /startChzzkVodMaterialization/u);

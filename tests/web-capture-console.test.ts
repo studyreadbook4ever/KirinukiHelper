@@ -138,27 +138,32 @@ test("A는 화면 아래의 단일 편집기 CTA와 같은 검증 경로를 사�
   assert.doesNotMatch(html, /id="(?:open-editor|create-codex-job)"/u);
 });
 
-test("웹은 짧은 로컬 미리보기와 확정 컷 준비를 무창 도우미에 의미 단위로 요청한다", async () => {
-  const [html, source, server] = await Promise.all([
+test("초기 컷은 웹 플레이어만 쓰고 도우미는 편집기 전환에서만 요청한다", async () => {
+  const [html, source, controller, server] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/web/youtube-embed-controller.ts", import.meta.url), "utf8"),
     readFile(new URL("../scripts/local-studio-server-core.ts", import.meta.url), "utf8")
   ]);
   assert.match(
     html,
-    /링크를 붙여넣으면 이 페이지에서 바로 컷을 고를 수 있습니다\.[\s\S]*도우미는 별도 편집 창을 열지 않[\s\S]*강조된 행에 E로 시작, R로 끝 시각을 기록합니다/u
+    /링크를 붙여넣고 이 페이지의 원본 화면에서 바로 컷을 고르세요\.[\s\S]*도우미는 컷 선택이 끝나고 편집기를 열 때만/u
   );
   assert.match(html, /data-field="start"[^>]*required/u);
   assert.match(html, /data-field="end"[^>]*required/u);
   assert.match(html, /id="start-editor"[^>]*>편집기 열기<\/button>/u);
   assert.match(source, /function replaceStreamFrame\(\)/u);
   assert.match(source, /elements\.reloadStream\.addEventListener[\s\S]*reloadActivePlayerFrame\(\)/u);
-  assert.match(html, /id="stream-preview-video"[\s\S]*id="stream-preview-timeline"/u);
-  assert.match(source, /prepareLocalPreview[\s\S]*captureCurrentPlayerTime[\s\S]*seekPlayerBy[\s\S]*setPlayerRate/u);
-  assert.match(source, /materializeLocalPreviewRange[\s\S]*startChzzkVodMaterialization/u);
+  assert.match(html, /id="source-capture-workspace"[^>]*hidden/u);
+  assert.match(html, /id="linux-helper-download"[\s\S]*Linux 영상 준비 도우미/u);
+  assert.match(source, /case "refresh-source":[\s\S]*reloadActivePlayerFrame\(\)/u);
+  assert.doesNotMatch(source, /case "refresh-source":[\s\S]{0,240}prepareLocalPreview/u);
+  assert.match(source, /YouTubeEmbedController[\s\S]*captureCurrentPlayerTime[\s\S]*seekPlayerBy[\s\S]*setPlayerRate/u);
+  assert.match(controller, /YOUTUBE_PRIVACY_EMBED_ORIGIN[\s\S]*event\.origin !== YOUTUBE_PRIVACY_EMBED_ORIGIN/u);
+  assert.match(controller, /event\.source !== this\.#frame\.contentWindow/u);
   assert.match(source, /prepareSelectedVodForEditor[\s\S]*waitForChzzkVodMaterialization/u);
   assert.doesNotMatch(source, /StreamingBridgeClient|kirinukiCutHost|kirinukiSurface=cut-host/u);
-  assert.doesNotMatch(source, /youtube-iframe-api|window\.YT|onYouTubeIframeAPIReady|new api\.Player/u);
+  assert.doesNotMatch(`${source}\n${controller}`, /youtube-iframe-api|window\.YT|onYouTubeIframeAPIReady|new api\.Player/u);
   assert.doesNotMatch(source, /fetch\([^\n]*(?:youtube|chzzk|soop)/iu);
   assert.match(server, /"script-src 'self'"/u);
   assert.doesNotMatch(server, /script-src[^\n]*youtube/u);

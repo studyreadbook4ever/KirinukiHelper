@@ -11,6 +11,7 @@ import type {
 import { recoverySourceRecord } from "../lib/session-recovery.js";
 import {
   inferSourceIdentifiers,
+  SOURCE_PLATFORM_YOUTUBE,
   sourcePlatformLabel
 } from "../lib/source-platform.js";
 import {
@@ -65,7 +66,9 @@ import {
   pairCaptionAgent
 } from "../editor/caption-agent.js";
 import {
-  ensureLocalMediaEngineReady
+  detectLocalMediaEngineTarget,
+  ensureLocalMediaEngineReady,
+  localMediaEngineInstaller
 } from "../editor/local-media-engine-onboarding.js";
 import {
   cancelChzzkVodMaterialization,
@@ -93,6 +96,9 @@ import {
   localPreviewSourceSeconds,
   planLocalPreviewRange
 } from "./local-preview-range.js";
+import {
+  YouTubeEmbedController
+} from "./youtube-embed-controller.js";
 
 export {
   formatStudioTimecode,
@@ -150,6 +156,9 @@ setDocumentSurface("local");
 
 const elements = {
   form: requiredElement<HTMLFormElement>("#start-form"),
+  helperDownload: requiredElement<HTMLAnchorElement>(
+    "#linux-helper-download"
+  ),
   sourceUrl: requiredElement<HTMLInputElement>("#source-url"),
   sourcePlatform: requiredElement<HTMLElement>("#source-platform"),
   openSource: requiredElement<HTMLButtonElement>("#open-source"),
@@ -160,6 +169,9 @@ const elements = {
     "#session-archive-input"
   ),
   projectName: requiredElement<HTMLInputElement>("#project-name"),
+  sourceCaptureWorkspace: requiredElement<HTMLElement>(
+    "#source-capture-workspace"
+  ),
   streamFrame: requiredElement<HTMLIFrameElement>("#stream-preview-frame"),
   streamVideo: requiredElement<HTMLVideoElement>("#stream-preview-video"),
   streamPlaceholder: requiredElement<HTMLElement>("#stream-preview-placeholder"),
@@ -288,6 +300,22 @@ interface ActiveLocalPreviewOperation {
   jobId: string | null;
 }
 let activeLocalPreviewOperation: ActiveLocalPreviewOperation | null = null;
+let youtubeController: YouTubeEmbedController | null = null;
+
+async function configureHelperDownload(): Promise<void> {
+  const installer = localMediaEngineInstaller(
+    await detectLocalMediaEngineTarget()
+  );
+  if (!installer) {
+    elements.helperDownload.hidden = true;
+    elements.helperDownload.removeAttribute("href");
+    elements.helperDownload.removeAttribute("download");
+    return;
+  }
+  elements.helperDownload.href = installer.url;
+  elements.helperDownload.download = installer.fileName;
+  elements.helperDownload.hidden = false;
+}
 
 function explainMobileEditorBlock(): void {
   const message = "편집기는 모바일에서 사용할 수 없습니다. PC 브라우저에서 열어 주세요.";
@@ -369,6 +397,8 @@ function hideCutPreparation(): void {
 
 function replaceStreamFrame(): void {
   const oldFrame = elements.streamFrame;
+  youtubeController?.destroy();
+  youtubeController = null;
   const replacement = oldFrame.cloneNode(false) as HTMLIFrameElement;
   replacement.removeAttribute("src");
   replacement.hidden = true;
@@ -379,6 +409,35 @@ function replaceStreamFrame(): void {
   }
   elements.streamFrame = replacement;
   installStreamFrameLoadHandler(replacement);
+}
+
+function currentYouTubePlayerSnapshot() {
+  return youtubeController?.snapshot ?? null;
+}
+
+function connectYouTubeEmbedController(frame: HTMLIFrameElement): void {
+  if (
+    activeStreamPlatform !== SOURCE_PLATFORM_YOUTUBE
+    || frame !== elements.streamFrame
+  ) {
+    return;
+  }
+  const contentId = inferSourceIdentifiers(elements.sourceUrl.value.trim()).contentId;
+  youtubeController?.destroy();
+  youtubeController = new YouTubeEmbedController({
+    frame,
+    contentId,
+    onReady: () => {
+      elements.streamCutStatus.textContent =
+        "YouTube 플레이어 연결 완료 · E/R 캡처와 D/F/Y/U 제어를 사용할 수 있습니다.";
+      syncCaptureConsoleAvailability();
+    },
+    onUpdate: () => syncCaptureConsoleAvailability(),
+    onError: (message) => {
+      elements.streamCutStatus.textContent = message;
+      syncCaptureConsoleAvailability();
+    }
+  });
 }
 
 function clipRows(): HTMLElement[] {
@@ -1174,6 +1233,7 @@ function clearStreamPreview(message: string): void {
   elements.streamVideo.hidden = true;
   localPreviewSourceStartSeconds = 0;
   elements.streamPlaceholder.hidden = false;
+  elements.sourceCaptureWorkspace.hidden = true;
   elements.streamKind.textContent = "링크 대기";
   elements.streamKind.classList.remove("valid");
   elements.streamStatus.textContent = message;
@@ -1205,6 +1265,7 @@ function updateStreamPreview({ force = false }: { force?: boolean } = {}): void 
   activeStreamEmbedUrl = descriptor.embedUrl;
   activeStreamPlatform = descriptor.platform;
   replaceStreamFrame();
+  elements.sourceCaptureWorkspace.hidden = false;
   elements.streamKind.textContent = descriptor.label;
   elements.streamKind.classList.add("valid");
   elements.streamStatus.textContent = descriptor.kind === "official-embed"
@@ -1359,6 +1420,7 @@ function renderLocalProjectManagerState(
   state: "loading" | "ready" | "error"
 ): void {
   const hasProjects = localProjectEntries.length > 0;
+  elements.localProjectManager.hidden = state !== "error" && !hasProjects;
   elements.localProjectManager.ariaBusy = String(state === "loading");
   elements.localProjectsLoading.hidden = state !== "loading";
   elements.localProjectsError.hidden = state !== "error";
@@ -1760,18 +1822,25 @@ function currentLocalPreviewSourceTime(): number | null {
   );
 }
 
+function currentWebPlayerSourceTime(): number | null {
+  return currentYouTubePlayerSnapshot()?.currentTime
+    ?? currentLocalPreviewSourceTime();
+}
+
 function updatePlayerClockDisplay(): void {
-  const sourceSeconds = currentLocalPreviewSourceTime();
+  const sourceSeconds = currentWebPlayerSourceTime();
   elements.streamCurrentTime.textContent = sourceSeconds === null
     ? "--:--:--"
     : formatStudioTimecode(sourceSeconds);
 }
 
 function captureCurrentPlayerTime(field: "start" | "end"): void {
-  const sourceSeconds = currentLocalPreviewSourceTime();
+  const sourceSeconds = currentWebPlayerSourceTime();
   if (sourceSeconds === null) {
     elements.streamCutStatus.textContent =
-      "정확한 시각 캡처에는 이 PC의 로컬 미리보기가 필요합니다. W로 연결을 확인해 주세요.";
+      activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
+        ? "YouTube 플레이어가 준비되는 중입니다. 영상을 재생한 뒤 W를 눌러 다시 확인해 주세요."
+        : "이 플랫폼은 브라우저가 재생 시각을 직접 읽을 수 없습니다. 플레이어 시각을 오른쪽 시작·끝 칸에 입력해 주세요.";
     return;
   }
   const row = activeClipRow ?? clipRows().at(-1) ?? addClipRow();
@@ -1786,6 +1855,21 @@ function captureCurrentPlayerTime(field: "start" | "end"): void {
 }
 
 function seekPlayerBy(deltaSeconds: number): void {
+  const youtubeSnapshot = currentYouTubePlayerSnapshot();
+  if (youtubeSnapshot && youtubeController) {
+    const target = Math.max(
+      0,
+      Math.min(
+        youtubeSnapshot.duration ?? Number.MAX_SAFE_INTEGER,
+        youtubeSnapshot.currentTime + deltaSeconds
+      )
+    );
+    youtubeController.seekTo(target);
+    elements.streamCutStatus.textContent =
+      `YouTube 플레이어를 ${formatStudioTimecode(target)}로 이동했습니다.`;
+    window.setTimeout(updatePlayerClockDisplay, 100);
+    return;
+  }
   const sourceSeconds = currentLocalPreviewSourceTime();
   if (sourceSeconds === null) {
     elements.streamCutStatus.textContent =
@@ -1816,6 +1900,14 @@ function seekPlayerBy(deltaSeconds: number): void {
 }
 
 function setPlayerRate(playbackRate: 0.25 | 2): void {
+  if (youtubeController?.snapshot) {
+    youtubeController.setPlaybackRate(playbackRate);
+    elements.playbackRateQuarter.ariaPressed = String(playbackRate === 0.25);
+    elements.playbackRateDouble.ariaPressed = String(playbackRate === 2);
+    elements.streamCutStatus.textContent =
+      `YouTube 재생 속도를 ${playbackRate}배로 바꿨습니다.`;
+    return;
+  }
   if (currentLocalPreviewSourceTime() === null) {
     elements.streamCutStatus.textContent =
       "로컬 미리보기가 준비된 뒤에 재생 속도를 바꿀 수 있습니다.";
@@ -1857,9 +1949,10 @@ function runStudioCaptureAction(action: StudioCaptureAction): void {
       }
       return;
     case "refresh-source":
-      void prepareLocalPreview(
-        Number(elements.streamPreviewTimeline.value || 0)
-      );
+      reloadActivePlayerFrame();
+      elements.streamCutStatus.textContent = activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
+        ? "YouTube 플레이어 연결을 다시 확인하고 있습니다…"
+        : "원본 플레이어를 다시 불러왔습니다. 표시된 시각을 시작·끝 칸에 직접 입력해 주세요.";
       return;
     case "capture-start":
       captureCurrentPlayerTime("start");
@@ -1891,7 +1984,7 @@ function runStudioCaptureAction(action: StudioCaptureAction): void {
 }
 
 function syncCaptureConsoleAvailability(): void {
-  const previewReady = currentLocalPreviewSourceTime() !== null;
+  const previewReady = currentWebPlayerSourceTime() !== null;
   let sourceReady = false;
   try {
     sourceReady = Boolean(sourceEmbedDescriptor(
@@ -1912,6 +2005,12 @@ function syncCaptureConsoleAvailability(): void {
   ]) {
     button.disabled = !previewReady;
   }
+  const playbackRate = currentYouTubePlayerSnapshot()?.playbackRate
+    ?? (currentLocalPreviewSourceTime() === null
+      ? null
+      : elements.streamVideo.playbackRate);
+  elements.playbackRateQuarter.ariaPressed = String(playbackRate === 0.25);
+  elements.playbackRateDouble.ariaPressed = String(playbackRate === 2);
   updatePlayerClockDisplay();
 }
 
@@ -1960,7 +2059,7 @@ function installStudioCaptureConsole(): void {
     );
   });
   elements.loadPreviewWindow.addEventListener("click", () => {
-    void prepareLocalPreview(Number(elements.streamPreviewTimeline.value));
+    reloadActivePlayerFrame();
   });
   syncCaptureConsoleAvailability();
 }
@@ -2097,6 +2196,12 @@ function installStreamFrameLoadHandler(frame: HTMLIFrameElement): void {
     }
     elements.streamStatus.textContent =
       "플랫폼 원본 미리보기를 브라우저에 직접 불러왔습니다.";
+    if (activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
+      connectYouTubeEmbedController(frame);
+    } else {
+      elements.streamCutStatus.textContent =
+        "원본 플레이어의 시각을 보며 오른쪽 시작·끝 칸에 직접 입력할 수 있습니다. 이 단계에는 도우미가 필요하지 않습니다.";
+    }
   });
 }
 elements.form.addEventListener("submit", (event) => {
@@ -2177,6 +2282,10 @@ elements.form.addEventListener("submit", (event) => {
 });
 
 renderMobileEditorAccess();
+void configureHelperDownload().catch(() => {
+  elements.helperDownload.hidden = true;
+  elements.helperDownload.removeAttribute("href");
+});
 addClipRow();
 installStudioCaptureConsole();
 installStreamFrameLoadHandler(elements.streamFrame);

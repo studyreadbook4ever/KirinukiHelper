@@ -17,8 +17,10 @@ Kirinuki는 `https://kirinuki.eff0rtchung.kr`에서 실행되는 일반 브라�
 1. 웹사이트에 CHZZK·YouTube·SOOP 공개 완료 VOD URL을 붙여넣는다.
 2. 같은 웹페이지의 원본 화면에서 W/Y/U/D/F/E/R/T 단축키와 보이는 버튼으로
    시작·끝·메모를 정한다.
-3. 엔진이 없을 때만 웹사이트가 OS에 맞는 설치 안내를 한 번 보여 준다.
-4. **편집기 열기**를 누르면 웹사이트가 엔진에 확정한 구간만 요청하고, 다운로드·
+3. 사용자는 원하면 시작 화면의 보조 링크에서 화면 없는 영상 준비 도우미를 미리
+   받을 수 있지만, URL 입력과 컷 선택은 설치 여부와 무관하게 동작한다.
+4. **편집기 열기**를 누른 뒤 엔진이 없을 때만 웹사이트가 OS에 맞는 설치 안내를
+   보여 주고, 엔진에 확정한 구간만 요청해 다운로드·
    검증·로컬 영상 구성 진행률을 같은 화면에서 설명한다.
 5. 준비가 끝나면 같은 브라우저의 전체 편집기로 이동한다.
 6. 컷·자막·레이어를 검수하고 제목과 저장 위치를 정해 내보낸다.
@@ -295,10 +297,11 @@ AudSeg 기준 구현은 `AudSeg/src/audseg/`, 브라우저 포트는
 - 웹 컷 화면의 단축키는 문서가 직접 소유하고 IME, modifier, repeat, input·textarea·
   contenteditable을 건드리지 않는다. iframe script나 로컬 엔진 응답이 사용자 입력인
   것처럼 컷 경계를 조용히 바꾸면 안 된다.
-- 플랫폼 iframe은 시각 확인용이다. 정확한 시각 제어가 브라우저 SOP 때문에 불가능한
-  플랫폼은 loopback 엔진이 검증한 짧은 로컬 preview를 같은 웹의 `<video>`에 연결해
-  source clock을 유지한다. 공개 서버 proxy나 Electron frame injection으로 우회하지
-  않는다.
+- YouTube 공식 iframe은 exact source window·origin을 검증한 브라우저 메시지 경계로
+  현재 시각과 E/R/D/F/Y/U 제어를 제공한다. CHZZK·SOOP처럼 브라우저 SOP 안에서
+  신뢰할 시각 API가 없는 플랫폼은 플레이어에 표시된 시각을 사용자가 시작·끝 칸에
+  직접 입력한다. 어느 경우에도 초기 컷 선택에서 loopback 엔진 설치를 요구하지
+  않으며, 공개 서버 proxy나 Electron frame injection으로 우회하지 않는다.
 - preview와 확정 구간 준비 요청은 device proof와 ECDH/AES-GCM channel 안에서만
   수행한다. 짧은 TTL, project/source/action scope, replay 방지와 제한된 pending
   개수를 적용한다.

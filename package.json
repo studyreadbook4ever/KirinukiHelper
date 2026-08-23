@@ -2,7 +2,7 @@
   "name": "kirinuki-app",
   "productName": "Kirinuki",
   "desktopName": "kr.eff0rtchung.kirinuki.desktop",
-  "version": "3.0.5",
+  "version": "3.0.6",
   "private": true,
   "license": "Unlicense",
   "type": "module",

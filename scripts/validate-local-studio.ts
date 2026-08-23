@@ -111,8 +111,10 @@ assert(
 );
 assert(
   indexHtml.includes(
-    "도우미는 별도 편집 창을 열지 않고"
+    "도우미 설치는 이 단계에 필요하지 않습니다."
   )
+    && indexHtml.includes('id="linux-helper-download"')
+    && indexHtml.includes("도우미는 별도 창을 열지 않습니다.")
     && indexHtml.includes("확인했습니다")
     && indexHtml.includes("100%")
     && indexHtml.includes('id="import-session-archive"')
@@ -123,7 +125,7 @@ assert(
     && indexHtml.includes('id="capture-end"')
     && indexHtml.includes('id="stream-preview-video"')
     && indexHtml.includes('id="cut-preparation-progress"'),
-  "웹 컷 surface의 player 조작부·부분 준비 진행률 또는 사용자 책임 고지가 없습니다."
+  "웹 컷 surface의 helper-free player 조작부·편집기 전환 준비 진행률 또는 사용자 책임 고지가 없습니다."
 );
 assert(
   !indexHtml.includes('name="basis"')

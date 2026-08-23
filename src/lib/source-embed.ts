@@ -115,11 +115,13 @@ export function sourceEmbedDescriptor(
   }
   const { identifiers, sourceUrl } = supported;
   if (identifiers.platform === SOURCE_PLATFORM_YOUTUBE) {
-    exactStudioOrigin(studioOrigin);
+    const origin = exactStudioOrigin(studioOrigin);
     const embed = new URL(
       `https://www.youtube-nocookie.com/embed/${encodeURIComponent(identifiers.contentId)}`
     );
     embed.searchParams.set("playsinline", "1");
+    embed.searchParams.set("enablejsapi", "1");
+    embed.searchParams.set("origin", origin);
     return Object.freeze({
       platform: SOURCE_PLATFORM_YOUTUBE,
       sourceUrl,
