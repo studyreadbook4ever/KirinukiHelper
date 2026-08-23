@@ -106,6 +106,17 @@ test("Linux preview release는 stable gate와 분리해 install E2E·prerelease�
   assert.match(workflow, /npm run package:desktop:linux-preview/u);
   assert.match(workflow, /attest-build-provenance@[0-9a-f]{40}/u);
   assert.match(workflow, /gh release create[\s\S]*--draft[\s\S]*--prerelease/u);
+  assert.match(workflow, /exact_draft_release_by_tag/u);
+  assert.match(workflow, /releases\?per_page=100/u);
+  assert.match(
+    workflow,
+    /\[\.\[\] \| select\(\.tag_name == \$tag\)\] \| length/u
+  );
+  assert.match(workflow, /test "\$matches" = 1/u);
+  assert.match(
+    workflow,
+    /release_json="\$\(exact_draft_release_by_tag\)"[\s\S]*\.draft'[\s\S]*= true/u
+  );
   assert.match(workflow, /gh release download/u);
   assert.match(workflow, /test:package:desktop:linux-preview/u);
   assert.match(workflow, /\.prerelease'[\s\S]*= true/u);

@@ -71,7 +71,7 @@ function verifiedReleaseChannel(): Readonly<LocalMediaEngineReleaseChannel> {
 }
 
 function linuxPreviewReleaseChannel(): Readonly<LocalMediaEngineReleaseChannel> {
-  const tag = "v3.0.4";
+  const tag = "v3.0.5";
   return Object.freeze({
     schema: LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
     status: "verified-linux-preview",
