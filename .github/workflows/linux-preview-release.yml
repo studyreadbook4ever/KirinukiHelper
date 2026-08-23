@@ -190,7 +190,14 @@ jobs:
           }
           trap rollback ERR
           gh release upload "$tag" dist/linux-preview-release/* --repo "$GITHUB_REPOSITORY"
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")"
+          exact_draft_release_by_tag() {
+            local releases_json matches
+            releases_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+            matches="$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' <<<"$releases_json")"
+            test "$matches" = 1
+            jq -c --arg tag "$tag" '.[] | select(.tag_name == $tag)' <<<"$releases_json"
+          }
+          release_json="$(exact_draft_release_by_tag)"
           test "$(jq -r '.draft' <<<"$release_json")" = true
           test "$(jq -r '.prerelease' <<<"$release_json")" = true
           test "$(jq -r '.tag_name' <<<"$release_json")" = "$tag"

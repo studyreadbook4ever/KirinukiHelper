@@ -29,9 +29,9 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
   const installer = new TextEncoder().encode("linux preview deb fixture");
   const installerSha256 = sha256(installer);
   const sourceOffer = linuxPreviewSourceOfferText(
-    "v3.0.4",
+    "v3.0.5",
     "a".repeat(40),
-    "3.0.4"
+    "3.0.5"
   );
   const sourceOfferSha256 = sha256(sourceOffer);
   const manifest = {
@@ -39,9 +39,9 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
     status: "verified-linux-preview",
     channel: "linux-preview",
     target: "linux-x64",
-    tag: "v3.0.4",
+    tag: "v3.0.5",
     commit: "a".repeat(40),
-    version: "3.0.4",
+    version: "3.0.5",
     artifact: {
       fileName: LINUX_PREVIEW_INSTALLER_FILE,
       bytes: installer.byteLength,
@@ -80,7 +80,7 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
       writeFile(path.join(directory, LINUX_PREVIEW_SOURCE_OFFER_FILE), sourceOffer)
     ]);
     const verified = await verifyLinuxPreviewReleaseAssets(directory);
-    assert.equal(verified.tag, "v3.0.4");
+    assert.equal(verified.tag, "v3.0.5");
     assert.equal(verified.installer.sha256, installerSha256);
 
     const assetNames = [
@@ -110,14 +110,14 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
     const remote = {
       draft: false,
       prerelease: true,
-      tag_name: "v3.0.4",
+      tag_name: "v3.0.5",
       assets: assetNames.map((fileName) => ({
         name: fileName,
         state: "uploaded",
         size: identities.get(fileName)!.bytes,
         digest: `sha256:${identities.get(fileName)!.sha256}`,
         browser_download_url:
-          `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/v3.0.4/${fileName}`
+          `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/v3.0.5/${fileName}`
       }))
     };
     const channel = await loadVerifiedWebEngineLinuxPreviewChannel({
@@ -125,7 +125,7 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
       fetchImpl: async (input) => {
         assert.equal(
           String(input),
-          "https://api.github.com/repos/studyreadbook4ever/KirinukiHelper/releases/tags/v3.0.4"
+          "https://api.github.com/repos/studyreadbook4ever/KirinukiHelper/releases/tags/v3.0.5"
         );
         return new Response(JSON.stringify(remote), { status: 200 });
       }
