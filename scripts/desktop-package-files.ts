@@ -32,6 +32,7 @@ export const DESKTOP_ASAR_PACKAGE_FILES = Object.freeze([
   "UNLICENSE",
   "main.mjs",
   "package.json",
+  "preload.cjs",
   ...DESKTOP_LEGAL_PACKAGE_FILES.map((relativePath) => `legal/${relativePath}`)
 ].sort());
 
