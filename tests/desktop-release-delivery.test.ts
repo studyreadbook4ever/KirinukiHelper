@@ -97,8 +97,10 @@ test("Linux preview release는 stable gate와 분리해 install E2E·prerelease�
   assert.match(workflow, /workflow_dispatch:/u);
   assert.match(workflow, /push:[\s\S]*tags:[\s\S]*- "v\*"/u);
   assert.match(workflow, /PUBLISH_LINUX_PREVIEW/u);
-  assert.match(workflow, /git cat-file -t "refs\/tags\/\$REQUESTED_TAG"/u);
-  assert.match(workflow, /git for-each-ref --format='%\(contents\)'/u);
+  assert.match(
+    workflow,
+    /git log -1 --format=%B[\s\S]*grep -Fxq -- "Release-Confirmation: PUBLISH_LINUX_PREVIEW"/u
+  );
   assert.match(workflow, /test "\$GITHUB_REF_TYPE" = "tag"/u);
   assert.match(workflow, /refs\/remotes\/origin\/main\)" = "\$commit"/u);
   assert.match(workflow, /typescript-quality\.yml\/runs/u);

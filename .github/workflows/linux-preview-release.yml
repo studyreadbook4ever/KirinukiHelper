@@ -56,8 +56,8 @@ jobs:
           case "$GITHUB_EVENT_NAME" in
             push)
               test "$GITHUB_REF_TYPE" = "tag"
-              test "$(git cat-file -t "refs/tags/$REQUESTED_TAG")" = "tag"
-              test "$(git for-each-ref --format='%(contents)' "refs/tags/$REQUESTED_TAG")" = "PUBLISH_LINUX_PREVIEW"
+              git log -1 --format=%B \
+                | grep -Fxq -- "Release-Confirmation: PUBLISH_LINUX_PREVIEW"
               ;;
             workflow_dispatch)
               test "$CONFIRMATION" = "PUBLISH_LINUX_PREVIEW"
