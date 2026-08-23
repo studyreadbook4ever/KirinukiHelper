@@ -1,6 +1,9 @@
 name: Linux x64 preview release
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       release_tag:
@@ -47,10 +50,22 @@ jobs:
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
           GH_TOKEN: ${{ github.token }}
-          REQUESTED_TAG: ${{ inputs.release_tag }}
+          REQUESTED_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
         run: |
           set -euo pipefail
-          test "$CONFIRMATION" = "PUBLISH_LINUX_PREVIEW"
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              test "$GITHUB_REF_TYPE" = "tag"
+              test "$(git cat-file -t "refs/tags/$REQUESTED_TAG")" = "tag"
+              test "$(git for-each-ref --format='%(contents)' "refs/tags/$REQUESTED_TAG")" = "PUBLISH_LINUX_PREVIEW"
+              ;;
+            workflow_dispatch)
+              test "$CONFIRMATION" = "PUBLISH_LINUX_PREVIEW"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
           test "$GITHUB_REF_TYPE" = "tag"
           test "$GITHUB_REF_NAME" = "$REQUESTED_TAG"
           version="$(node -p "require('./package.json').version")"
@@ -143,6 +158,47 @@ jobs:
           KIRINUKI_INSTALLED_BROWSER_SMOKE: "1"
           KIRINUKI_INSTALLER_SYSTEM_SMOKE: "1"
 
+      - name: Build, install-test, and uninstall the Arch Linux package
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_uid="$(stat -c '%u' -- .)"
+          repo_gid="$(stat -c '%g' -- .)"
+          docker run --rm --init --shm-size=2g --cap-add=SYS_ADMIN \
+            -e REPO_UID="$repo_uid" \
+            -e REPO_GID="$repo_gid" \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            archlinux:base \
+            bash -euo pipefail -c '
+              installed=0
+              for attempt in 1 2 3; do
+                if pacman -Syu --noconfirm --needed \
+                  base-devel chromium libarchive nodejs npm sudo \
+                  xorg-server-xvfb xorg-xdpyinfo; then
+                  installed=1
+                  break
+                fi
+              done
+              test "$installed" = 1
+              groupadd --gid "$REPO_GID" kirinuki-runner
+              useradd --create-home --uid "$REPO_UID" \
+                --gid "$REPO_GID" kirinuki-runner
+              install -d -o "$REPO_UID" -g "$REPO_GID" \
+                dist/installers/arch-linux-x64
+              printf "%s\n" \
+                "kirinuki-runner ALL=(root) NOPASSWD: /usr/bin/pacman" \
+                > /etc/sudoers.d/kirinuki-package-smoke
+              chmod 0440 /etc/sudoers.d/kirinuki-package-smoke
+              runuser -u kirinuki-runner -- npm run package:desktop:arch
+              runuser -u kirinuki-runner -- env \
+                CHROMIUM_BINARY=/usr/bin/chromium \
+                CHROMEDRIVER_BINARY=/usr/bin/chromedriver \
+                KIRINUKI_ARCH_INSTALLER_SYSTEM_SMOKE=1 \
+                KIRINUKI_INSTALLED_BROWSER_SMOKE=1 \
+                xvfb-run -a npm run test:package:desktop:arch
+            '
+
       - name: Assemble the explicitly non-stable Linux preview asset set
         run: npm run package:desktop:linux-preview
         env:
@@ -178,7 +234,7 @@ jobs:
             --draft \
             --prerelease \
             --title "Kirinuki Engine $tag · Linux x64 Preview" \
-            --notes "Temporary Debian/Ubuntu Linux x64 public test. The deb is not a stable signed release; verify the SHA-256 file, source/license offer, and GitHub build-provenance attestation. Windows and macOS installers are not included."
+            --notes "Temporary Debian/Ubuntu and Arch Linux x64 public test. The deb and pkg.tar.zst are not stable signed releases; verify the SHA-256 file, source/license offer, and GitHub build-provenance attestation. Windows and macOS installers are not included."
           draft_created=1
           published=0
           rollback() {

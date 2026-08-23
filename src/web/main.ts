@@ -68,6 +68,7 @@ import {
 import {
   detectLocalMediaEngineTarget,
   ensureLocalMediaEngineReady,
+  localMediaEngineArchInstaller,
   localMediaEngineInstaller
 } from "../editor/local-media-engine-onboarding.js";
 import {
@@ -86,6 +87,7 @@ import {
 } from "./session-archive-capture.js";
 import {
   formatStudioTimecode,
+  parseStudioTimecode,
   STUDIO_SELECTION_RANGE_INPUT_ERROR,
   STUDIO_SELECTION_RANGE_ORDER_ERROR,
   validateStudioSelectionRange
@@ -159,6 +161,9 @@ const elements = {
   helperDownload: requiredElement<HTMLAnchorElement>(
     "#linux-helper-download"
   ),
+  archHelperDownload: requiredElement<HTMLAnchorElement>(
+    "#arch-helper-download"
+  ),
   sourceUrl: requiredElement<HTMLInputElement>("#source-url"),
   sourcePlatform: requiredElement<HTMLElement>("#source-platform"),
   openSource: requiredElement<HTMLButtonElement>("#open-source"),
@@ -229,6 +234,10 @@ const elements = {
   streamCurrentTime: requiredElement<HTMLOutputElement>(
     "#stream-current-time"
   ),
+  manualCutClockField: requiredElement<HTMLElement>(
+    "#manual-cut-clock-field"
+  ),
+  manualCutClock: requiredElement<HTMLInputElement>("#manual-cut-clock"),
   streamCutStatus: requiredElement<HTMLElement>(
     "#stream-cut-console-status"
   ),
@@ -304,7 +313,26 @@ let youtubeController: YouTubeEmbedController | null = null;
 let helperDownloadConnectionPending = false;
 
 const HELPER_DOWNLOAD_IDLE_LABEL =
-  "Linux 영상 준비 도우미 (.deb) 미리 받기";
+  "Debian/Ubuntu 도우미 (.deb)";
+const ARCH_HELPER_DOWNLOAD_IDLE_LABEL =
+  "Arch Linux 도우미 (.pkg.tar.zst)";
+
+function renderHelperDownloadLabels(state: "idle" | "checking" | "ready"): void {
+  if (state === "ready") {
+    elements.helperDownload.textContent = "Debian/Ubuntu 도우미 연결됨";
+    elements.archHelperDownload.textContent = "Arch Linux 도우미 연결됨";
+    return;
+  }
+  if (state === "checking") {
+    elements.helperDownload.textContent =
+      "다운로드 요청됨 · 설치 후 연결 확인";
+    elements.archHelperDownload.textContent =
+      "다운로드 요청됨 · 설치 후 연결 확인";
+    return;
+  }
+  elements.helperDownload.textContent = HELPER_DOWNLOAD_IDLE_LABEL;
+  elements.archHelperDownload.textContent = ARCH_HELPER_DOWNLOAD_IDLE_LABEL;
+}
 
 async function monitorHelperDownloadConnection(): Promise<void> {
   if (helperDownloadConnectionPending) {
@@ -312,14 +340,14 @@ async function monitorHelperDownloadConnection(): Promise<void> {
   }
   helperDownloadConnectionPending = true;
   elements.helperDownload.ariaBusy = "true";
-  elements.helperDownload.textContent =
-    "다운로드 중 · 설치되면 이 화면에서 연결 확인";
+  elements.archHelperDownload.ariaBusy = "true";
+  renderHelperDownloadLabels("checking");
   try {
     const readiness = await ensureLocalMediaEngineReady(undefined, {
       beginInstallPolling: true
     });
     if (readiness === "ready") {
-      elements.helperDownload.textContent = "영상 준비 도우미 연결됨";
+      renderHelperDownloadLabels("ready");
       elements.streamCutStatus.textContent = activeStreamPlatform
         ? activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
           ? "도우미도 연결됐습니다. YouTube 컷 제어는 이 웹 플레이어에서 바로 동작합니다."
@@ -327,9 +355,9 @@ async function monitorHelperDownloadConnection(): Promise<void> {
         : "영상 준비 도우미가 연결됐습니다. VOD 주소를 붙여 넣어 컷을 선택하세요.";
       return;
     }
-    elements.helperDownload.textContent = HELPER_DOWNLOAD_IDLE_LABEL;
+    renderHelperDownloadLabels("idle");
   } catch (error) {
-    elements.helperDownload.textContent = HELPER_DOWNLOAD_IDLE_LABEL;
+    renderHelperDownloadLabels("idle");
     if (!(error instanceof DOMException && error.name === "AbortError")) {
       elements.streamCutStatus.textContent =
         `도우미 연결을 확인하지 못했습니다: ${errorMessage(error)}`;
@@ -337,27 +365,41 @@ async function monitorHelperDownloadConnection(): Promise<void> {
   } finally {
     helperDownloadConnectionPending = false;
     elements.helperDownload.removeAttribute("aria-busy");
+    elements.archHelperDownload.removeAttribute("aria-busy");
   }
 }
 
 async function configureHelperDownload(): Promise<void> {
-  const installer = localMediaEngineInstaller(
-    await detectLocalMediaEngineTarget()
-  );
+  const target = await detectLocalMediaEngineTarget();
+  const installer = localMediaEngineInstaller(target);
+  const archInstaller = target === "linux-x64"
+    ? localMediaEngineArchInstaller()
+    : null;
   if (!installer) {
     elements.helperDownload.hidden = true;
     elements.helperDownload.removeAttribute("href");
     elements.helperDownload.removeAttribute("download");
-    return;
+  } else {
+    elements.helperDownload.href = installer.url;
+    elements.helperDownload.download = installer.fileName;
+    elements.helperDownload.hidden = false;
   }
-  elements.helperDownload.href = installer.url;
-  elements.helperDownload.download = installer.fileName;
-  elements.helperDownload.hidden = false;
-  elements.helperDownload.addEventListener("click", () => {
+  if (!archInstaller) {
+    elements.archHelperDownload.hidden = true;
+    elements.archHelperDownload.removeAttribute("href");
+    elements.archHelperDownload.removeAttribute("download");
+  } else {
+    elements.archHelperDownload.href = archInstaller.url;
+    elements.archHelperDownload.download = archInstaller.fileName;
+    elements.archHelperDownload.hidden = false;
+  }
+  const monitor = () => {
     window.setTimeout(() => {
       void monitorHelperDownloadConnection();
     }, 0);
-  });
+  };
+  elements.helperDownload.addEventListener("click", monitor);
+  elements.archHelperDownload.addEventListener("click", monitor);
 }
 
 function explainMobileEditorBlock(): void {
@@ -1324,6 +1366,10 @@ function updateStreamPreview({ force = false }: { force?: boolean } = {}): void 
   elements.streamFrame.hidden = false;
   elements.streamFrame.src = descriptor.embedUrl;
   elements.reloadStream.disabled = false;
+  // CHZZK/SOOP may load slowly or refuse an embed before its load event. The
+  // manual cut clock belongs to the accepted source URL, not to iframe load,
+  // so expose it immediately and keep helperless capture usable.
+  syncCaptureConsoleAvailability();
   if (streamLoadTimer !== null) {
     window.clearTimeout(streamLoadTimer);
   }
@@ -1871,9 +1917,22 @@ function currentLocalPreviewSourceTime(): number | null {
   );
 }
 
+function manualCutClockIsActive(): boolean {
+  return activeStreamPlatform.length > 0
+    && activeStreamPlatform !== SOURCE_PLATFORM_YOUTUBE
+    && currentLocalPreviewSourceTime() === null;
+}
+
+function currentManualCutClockTime(): number | null {
+  return manualCutClockIsActive()
+    ? parseStudioTimecode(elements.manualCutClock.value)
+    : null;
+}
+
 function currentWebPlayerSourceTime(): number | null {
   return currentYouTubePlayerSnapshot()?.currentTime
-    ?? currentLocalPreviewSourceTime();
+    ?? currentLocalPreviewSourceTime()
+    ?? currentManualCutClockTime();
 }
 
 function updatePlayerClockDisplay(): void {
@@ -1886,6 +1945,13 @@ function updatePlayerClockDisplay(): void {
 function captureCurrentPlayerTime(field: "start" | "end"): void {
   const sourceSeconds = currentWebPlayerSourceTime();
   if (sourceSeconds === null) {
+    if (manualCutClockIsActive()) {
+      elements.manualCutClockField.dataset.state = "invalid";
+      elements.streamCutStatus.textContent =
+        "플레이어에 표시된 시각을 00:00:00 형식으로 입력한 뒤 다시 눌러 주세요.";
+      elements.manualCutClock.focus();
+      return;
+    }
     elements.streamCutStatus.textContent =
       activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
         ? "YouTube 플레이어가 준비되는 중입니다. 영상을 재생한 뒤 W를 눌러 다시 확인해 주세요."
@@ -1921,6 +1987,23 @@ function seekPlayerBy(deltaSeconds: number): void {
   }
   const sourceSeconds = currentLocalPreviewSourceTime();
   if (sourceSeconds === null) {
+    const manualSeconds = currentManualCutClockTime();
+    if (manualCutClockIsActive()) {
+      if (manualSeconds === null) {
+        elements.manualCutClockField.dataset.state = "invalid";
+        elements.streamCutStatus.textContent =
+          "플레이어에 표시된 시각을 00:00:00 형식으로 먼저 입력해 주세요.";
+        elements.manualCutClock.focus();
+        return;
+      }
+      const target = Math.max(0, manualSeconds + deltaSeconds);
+      elements.manualCutClock.value = formatStudioTimecode(target);
+      elements.manualCutClockField.dataset.state = "ready";
+      updatePlayerClockDisplay();
+      elements.streamCutStatus.textContent =
+        `컷 기준 시각을 ${formatStudioTimecode(target)}로 옮겼습니다. 원본 플레이어도 같은 시각으로 맞춰 주세요.`;
+      return;
+    }
     elements.streamCutStatus.textContent =
       "로컬 미리보기가 준비된 뒤에 영상 위치를 이동할 수 있습니다.";
     return;
@@ -1958,6 +2041,11 @@ function setPlayerRate(playbackRate: 0.25 | 2): void {
     return;
   }
   if (currentLocalPreviewSourceTime() === null) {
+    if (manualCutClockIsActive()) {
+      elements.streamCutStatus.textContent =
+        `이 플랫폼은 웹페이지가 재생 속도를 직접 바꿀 수 없습니다. 원본 플레이어 설정에서 ${playbackRate}배속을 선택해 주세요. E/R/D/F 컷 기록은 도우미 없이 그대로 쓸 수 있습니다.`;
+      return;
+    }
     elements.streamCutStatus.textContent =
       "로컬 미리보기가 준비된 뒤에 재생 속도를 바꿀 수 있습니다.";
     return;
@@ -2038,7 +2126,6 @@ function runStudioCaptureAction(action: StudioCaptureAction): void {
 }
 
 function syncCaptureConsoleAvailability(): void {
-  const previewReady = currentWebPlayerSourceTime() !== null;
   let sourceReady = false;
   try {
     sourceReady = Boolean(sourceEmbedDescriptor(
@@ -2057,8 +2144,15 @@ function syncCaptureConsoleAvailability(): void {
     elements.playbackRateQuarter,
     elements.playbackRateDouble
   ]) {
-    button.disabled = !previewReady;
+    button.disabled = !sourceReady;
   }
+  const manualClockActive = sourceReady && manualCutClockIsActive();
+  elements.manualCutClockField.hidden = !manualClockActive;
+  elements.manualCutClock.disabled = !manualClockActive;
+  elements.manualCutClockField.dataset.state = manualClockActive
+    && parseStudioTimecode(elements.manualCutClock.value) === null
+    ? "invalid"
+    : "ready";
   const playbackRate = currentYouTubePlayerSnapshot()?.playbackRate
     ?? (currentLocalPreviewSourceTime() === null
       ? null
@@ -2112,6 +2206,13 @@ function installStudioCaptureConsole(): void {
       Number(elements.streamPreviewTimeline.value)
     );
   });
+  elements.manualCutClock.addEventListener("input", () => {
+    elements.manualCutClockField.dataset.state =
+      parseStudioTimecode(elements.manualCutClock.value) === null
+        ? "invalid"
+        : "ready";
+    updatePlayerClockDisplay();
+  });
   elements.loadPreviewWindow.addEventListener("click", () => {
     reloadActivePlayerFrame();
   });
@@ -2140,6 +2241,7 @@ elements.sessionArchiveInput.addEventListener("change", () => {
 elements.sourceUrl.addEventListener("input", () => {
   clearResumeMode();
   resetLocalPreviewSession();
+  elements.manualCutClock.value = "00:00:00";
   activeStreamPlatform = "";
   updateSourcePlatform();
   scheduleStreamPreview();
@@ -2346,6 +2448,8 @@ renderMobileEditorAccess();
 void configureHelperDownload().catch(() => {
   elements.helperDownload.hidden = true;
   elements.helperDownload.removeAttribute("href");
+  elements.archHelperDownload.hidden = true;
+  elements.archHelperDownload.removeAttribute("href");
 });
 addClipRow();
 installStudioCaptureConsole();

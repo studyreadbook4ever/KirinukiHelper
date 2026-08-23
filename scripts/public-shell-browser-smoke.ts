@@ -1691,6 +1691,63 @@ async function main(): Promise<void> {
     assertPublicSecurityHeaders(record.responseHeaders);
   }
 
+  await execute(`
+    const source = document.querySelector("#source-url");
+    if (!(source instanceof HTMLInputElement)) {
+      throw new Error("공개 웹 source input이 없습니다.");
+    }
+    source.value = "https://chzzk.naver.com/video/1234567";
+    source.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  `);
+  const helperlessCaptureControls = await waitFor(
+    () => execute<{
+    readonly disabled: readonly boolean[];
+    readonly manualClockHidden: boolean;
+    }>(`
+    return {
+      disabled: [
+        "capture-start", "capture-end", "seek-backward-five",
+        "seek-forward-five", "playback-rate-quarter", "playback-rate-double"
+      ].map((id) => document.querySelector("#" + id)?.disabled !== false),
+      manualClockHidden: Boolean(document.querySelector("#manual-cut-clock-field")?.hidden)
+    };
+    `),
+    (value) => (
+      value.disabled.every((disabled) => disabled === false)
+        && value.manualClockHidden === false
+    ),
+    "도우미 없는 CHZZK 컷 제어가 입력 debounce 뒤 활성화되지 않았습니다."
+  );
+  assert(
+    helperlessCaptureControls.disabled.every((disabled) => disabled === false)
+      && helperlessCaptureControls.manualClockHidden === false,
+    `도우미 없는 CHZZK 컷에서 E/R/D/F/Y/U 또는 수동 시계가 비활성화됐습니다: ${JSON.stringify(helperlessCaptureControls)}`
+  );
+  await execute(`
+    const source = document.querySelector("#source-url");
+    if (!(source instanceof HTMLInputElement)) {
+      throw new Error("공개 웹 source input이 없습니다.");
+    }
+    source.value = "";
+    source.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  `);
+  await waitFor(
+    () => execute<boolean>(`
+      return Boolean(document.querySelector("#source-capture-workspace")?.hidden);
+    `),
+    (hidden) => hidden,
+    "도우미 없는 컷 검증 뒤 외부 iframe이 정리되지 않았습니다."
+  );
+  // The helperless CHZZK assertion intentionally exercises a real source URL.
+  // Clear those performance entries before the isolated LNA request audit.
+  await webdriver<WebDriverLogEntry[]>(
+    "POST",
+    `/session/${sessionId}/log`,
+    { type: "performance" }
+  );
+
   // Automation stands in for the one Chrome permission confirmation the user
   // accepts during onboarding. Chrome 142-145 uses the compatibility name;
   // newer split-permission builds use the loopback-specific name.
@@ -1933,14 +1990,25 @@ async function main(): Promise<void> {
   // The ordinary fail-closed build intentionally has no installer URL, so it
   // keeps this offer hidden while the rest of the browser product remains
   // usable with the enrolled test engine.
-  const helperDownloadAvailable = await execute<boolean>(`
+  const helperOffers = await execute<{
+    readonly arch: boolean;
+    readonly deb: boolean;
+  }>(`
     const helper = document.querySelector("#linux-helper-download");
-    if (!(helper instanceof HTMLAnchorElement)) {
-      throw new Error("상단 영상 준비 도우미 요소가 없습니다.");
+    const arch = document.querySelector("#arch-helper-download");
+    if (!(helper instanceof HTMLAnchorElement) || !(arch instanceof HTMLAnchorElement)) {
+      throw new Error("상단 Linux 영상 준비 도우미 요소가 없습니다.");
     }
-    return !helper.hidden && helper.href.includes("/releases/download/");
+    return {
+      deb: !helper.hidden && helper.href.endsWith(".deb") && helper.href.includes("/releases/download/"),
+      arch: !arch.hidden && arch.href.endsWith(".pkg.tar.zst") && arch.href.includes("/releases/download/")
+    };
   `);
-  if (helperDownloadAvailable) {
+  assert(
+    helperOffers.deb === helperOffers.arch,
+    `Linux preview의 deb/Arch 다운로드 노출이 서로 다릅니다: ${JSON.stringify(helperOffers)}`
+  );
+  if (helperOffers.deb) {
     await execute(`
     const helper = document.querySelector("#linux-helper-download");
     if (!(helper instanceof HTMLAnchorElement)) {
@@ -1966,7 +2034,7 @@ async function main(): Promise<void> {
       `),
       (value) => (
         value.busy === ""
-          && value.label === "영상 준비 도우미 연결됨"
+          && value.label === "Debian/Ubuntu 도우미 연결됨"
       ),
       "상단 도우미 다운로드 후 같은 화면이 연결 상태를 확인하지 못했습니다."
     );

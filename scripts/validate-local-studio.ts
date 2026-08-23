@@ -110,10 +110,10 @@ assert(
   "일반 브라우저 컷 선택·미리보기·저장 편집 흐름이 없습니다."
 );
 assert(
-  indexHtml.includes(
-    "도우미 없이 플레이어 시각을 시작·끝 칸에 직접 입력해도 됩니다."
-  )
+  indexHtml.includes('id="manual-cut-clock"')
+    && indexHtml.includes("위 컷 기준 시각으로 E/R/D/F를 바로 쓰고")
     && indexHtml.includes('id="linux-helper-download"')
+    && indexHtml.includes('id="arch-helper-download"')
     && indexHtml.includes("도우미는 별도 창을 열지 않습니다.")
     && indexHtml.includes("확인했습니다")
     && indexHtml.includes("100%")

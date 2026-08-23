@@ -6,7 +6,7 @@ Kirinuki는 CHZZK·YouTube·SOOP의 공개 완료 VOD에서 사용자가 직접 
 
 제품의 본체는 [`https://kirinuki.eff0rtchung.kr`](https://kirinuki.eff0rtchung.kr)입니다.
 웹사이트가 선택 구간을 이 PC에 준비해야 할 때 **Kirinuki 영상 준비 도우미**
-설치를 안내합니다. 현재 공개 테스트는 Debian/Ubuntu 계열 Linux x64만 제공하며,
+설치를 안내합니다. 현재 공개 테스트는 Debian/Ubuntu와 Arch Linux x64를 제공하며,
 도우미는 별도 작업
 화면 없이 백그라운드에서 웹사이트가 요청한 구간만 준비합니다.
 URL 입력부터 컷 선택·전체 편집까지 공개 웹사이트가 소유하고, 설치 도구는
@@ -137,11 +137,12 @@ TOFU(first-use) 단계에서는 진짜 설치와 완전히 구별할 수 없습�
 
 ## 지원 설치 대상
 
-현재 웹사이트가 공개 테스트로 자동 선택하는 파일은 다음 하나입니다.
+현재 웹사이트가 공개 테스트로 제공하는 파일은 다음 두 개입니다.
 
 | 운영체제 | 대상 | 설치 파일 |
 |---|---|---|
 | Linux | x64, Debian/Ubuntu 계열 | `Kirinuki-Engine-linux-x64-preview.deb` |
+| Linux | x64, Arch Linux | `Kirinuki-Engine-arch-x64-preview.pkg.tar.zst` |
 
 정식 안정판 계약에는 다음 세 target이 남아 있지만 현재 웹 다운로드에는 노출하지
 않습니다.
@@ -160,7 +161,7 @@ TOFU(first-use) 단계에서는 진짜 설치와 완전히 구별할 수 없습�
 142 이상에서는 공개 사이트가 이 PC의 loopback 엔진에 처음 연결할 때 로컬
 네트워크 접근 권한을 한 번 묻습니다.
 
-Linux preview는 deb 설치 뒤 웹사이트의 **이 PC 연결**이 화면 없는 도우미를 깨우고
+Linux preview는 deb 또는 pkg.tar.zst 설치 뒤 웹사이트의 **이 PC 연결**이 화면 없는 도우미를 깨우고
 자동 시작을 등록합니다. 장기 안정판의 Windows/macOS 구현은 소스와 CI에 유지하지만
 현재 공개 웹은 해당 설치 파일을 제공하지 않습니다. 다운로드 안내에는 같은
 prerelease의 SHA-256과 정확한 소스·라이선스 제공 안내 링크도 함께 표시합니다.

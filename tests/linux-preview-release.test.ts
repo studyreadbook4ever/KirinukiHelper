@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  LINUX_PREVIEW_ARCH_INSTALLER_FILE,
   LINUX_PREVIEW_INSTALLER_FILE,
   LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
   LINUX_PREVIEW_RELEASE_MANIFEST_FILE,
@@ -28,6 +29,8 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
   const directory = await mkdtemp(path.join(os.tmpdir(), "kirinuki-linux-preview-"));
   const installer = new TextEncoder().encode("linux preview deb fixture");
   const installerSha256 = sha256(installer);
+  const archInstaller = new TextEncoder().encode("arch preview package fixture");
+  const archInstallerSha256 = sha256(archInstaller);
   const sourceOffer = linuxPreviewSourceOfferText(
     "v3.0.5",
     "a".repeat(40),
@@ -47,11 +50,23 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
       bytes: installer.byteLength,
       sha256: installerSha256
     },
+    archArtifact: {
+      fileName: LINUX_PREVIEW_ARCH_INSTALLER_FILE,
+      bytes: archInstaller.byteLength,
+      sha256: archInstallerSha256
+    },
     sourceEvidence: {
       channel: "ci-test-only",
       fileName: "UNSIGNED-TEST-ONLY-Kirinuki-Engine-linux-x64.deb",
       manifestFileName: "UNSIGNED-TEST-ONLY-installer-manifest.json",
       manifestSha256: "b".repeat(64),
+      status: "unsigned-ci-test-only-never-publish"
+    },
+    archSourceEvidence: {
+      channel: "ci-test-only",
+      fileName: "UNSIGNED-TEST-ONLY-Kirinuki-Engine-arch-x64.pkg.tar.zst",
+      manifestFileName: "UNSIGNED-TEST-ONLY-arch-installer-manifest.json",
+      manifestSha256: "c".repeat(64),
       status: "unsigned-ci-test-only-never-publish"
     },
     sourceOffer: {
@@ -60,7 +75,9 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
       sha256: sourceOfferSha256
     },
     distribution: {
-      support: "debian-ubuntu-linux-x64-preview",
+      support: "debian-ubuntu-and-arch-linux-x64-preview",
+      archPackage: "pacman",
+      signedArchPackage: false,
       signedDeb: false,
       stableRelease: false,
       buildProvenance: "github-artifact-attestation"
@@ -69,13 +86,14 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
   try {
     await Promise.all([
       writeFile(path.join(directory, LINUX_PREVIEW_INSTALLER_FILE), installer),
+      writeFile(path.join(directory, LINUX_PREVIEW_ARCH_INSTALLER_FILE), archInstaller),
       writeFile(
         path.join(directory, LINUX_PREVIEW_RELEASE_MANIFEST_FILE),
         `${JSON.stringify(manifest, null, 2)}\n`
       ),
       writeFile(
         path.join(directory, LINUX_PREVIEW_RELEASE_CHECKSUM_FILE),
-        `${installerSha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${sourceOfferSha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`
+        `${installerSha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${archInstallerSha256}  ${LINUX_PREVIEW_ARCH_INSTALLER_FILE}\n${sourceOfferSha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`
       ),
       writeFile(path.join(directory, LINUX_PREVIEW_SOURCE_OFFER_FILE), sourceOffer)
     ]);
@@ -85,6 +103,7 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
 
     const assetNames = [
       LINUX_PREVIEW_INSTALLER_FILE,
+      LINUX_PREVIEW_ARCH_INSTALLER_FILE,
       LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
       LINUX_PREVIEW_RELEASE_MANIFEST_FILE,
       LINUX_PREVIEW_SOURCE_OFFER_FILE
@@ -92,9 +111,10 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
     const identities = new Map<string, { bytes: number; sha256: string }>();
     for (const [fileName, contents] of [
       [LINUX_PREVIEW_INSTALLER_FILE, installer],
+      [LINUX_PREVIEW_ARCH_INSTALLER_FILE, archInstaller],
       [
         LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
-        `${installerSha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${sourceOfferSha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`
+        `${installerSha256}  ${LINUX_PREVIEW_INSTALLER_FILE}\n${archInstallerSha256}  ${LINUX_PREVIEW_ARCH_INSTALLER_FILE}\n${sourceOfferSha256}  ${LINUX_PREVIEW_SOURCE_OFFER_FILE}\n`
       ],
       [
         LINUX_PREVIEW_RELEASE_MANIFEST_FILE,
@@ -132,6 +152,7 @@ test("Linux preview readback은 source offer를 포함한 exact unsigned preview
     });
     assert.equal(channel.status, "verified-linux-preview");
     assert.deepEqual(Object.keys(channel.installers), ["linux-x64"]);
+    assert.match(channel.archInstaller?.url || "", /arch-x64-preview\.pkg\.tar\.zst$/u);
     assert.match(channel.sourceOffer?.url || "", /SOURCE-OFFER\.txt$/u);
     await assert.rejects(
       loadVerifiedWebEngineLinuxPreviewChannel({

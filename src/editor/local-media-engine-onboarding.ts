@@ -38,6 +38,7 @@ import type {
   LocalMediaEngineTrustStore
 } from "./local-media-engine-trust.js";
 import {
+  LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE,
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL,
   LOCAL_MEDIA_ENGINE_RELEASE_FILES,
   LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE,
@@ -91,6 +92,7 @@ interface NavigatorUserAgentDataLike {
 interface EngineDialogElements {
   readonly dialog: HTMLDialogElement;
   readonly download: HTMLAnchorElement;
+  readonly archDownload: HTMLAnchorElement;
   readonly downloadLabel: HTMLElement;
   readonly sourceOffer: HTMLAnchorElement;
   readonly retry: HTMLButtonElement;
@@ -141,6 +143,9 @@ function dialogElements(): EngineDialogElements {
   return {
     dialog: requiredElement<HTMLDialogElement>("#local-media-engine-dialog"),
     download: requiredElement<HTMLAnchorElement>("#local-media-engine-download"),
+    archDownload: requiredElement<HTMLAnchorElement>(
+      "#local-media-engine-arch-download"
+    ),
     downloadLabel: requiredElement<HTMLElement>("#local-media-engine-download-label"),
     sourceOffer: requiredElement<HTMLAnchorElement>("#local-media-engine-source-offer"),
     retry: requiredElement<HTMLButtonElement>("#local-media-engine-retry"),
@@ -827,8 +832,8 @@ export function localMediaEngineInstaller(
     },
     "linux-x64": {
       fileName: LOCAL_MEDIA_ENGINE_RELEASE_FILES["linux-x64"],
-      installInstruction: "Linux 설치 파일 다운로드를 요청했습니다. 브라우저 다운로드 표시가 완료되면 deb를 설치하세요. 이 화면은 설치된 도우미를 자동으로 확인하고 있습니다.",
-      label: "Linux용 도우미 다운로드"
+      installInstruction: "Debian/Ubuntu용 다운로드를 요청했습니다. 다운로드가 끝나면 deb를 설치하고 도우미를 한 번 실행한 뒤 이 화면의 ‘설치 후 연결 확인’을 눌러 주세요. 실행 중인 도우미는 자동으로 감지합니다.",
+      label: "Debian/Ubuntu용 도우미 (.deb)"
     }
   }[target as Exclude<LocalMediaEngineTarget, "unsupported">];
   if (!entry || !releaseChannel || target === "unsupported") {
@@ -844,12 +849,34 @@ export function localMediaEngineInstaller(
   const releaseEntry = releaseChannel.status === "verified-linux-preview"
     ? {
         fileName: LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE,
-        installInstruction: "Linux x64 테스트용 도우미 다운로드를 시작했습니다. 브라우저의 다운로드가 끝나면 deb 파일을 열어 설치하세요. 이 화면은 설치와 연결 상태를 계속 확인합니다.",
-        label: "Linux x64 테스트용 도우미 다운로드"
+        installInstruction: "Debian/Ubuntu용 도우미 다운로드를 요청했습니다. 다운로드가 끝나면 deb를 설치하고 도우미를 한 번 실행한 뒤 ‘설치 후 연결 확인’을 눌러 주세요. 실행 중인 도우미는 자동으로 감지합니다.",
+        label: "Debian/Ubuntu용 도우미 (.deb)"
       }
     : entry;
   return artifact.fileName === expectedFileName
     ? { ...releaseEntry, url: artifact.url }
+    : null;
+}
+
+export function localMediaEngineArchInstaller(
+  releaseChannel: Readonly<LocalMediaEngineReleaseChannel> | null =
+    LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL
+): {
+  readonly fileName: string;
+  readonly installInstruction: string;
+  readonly label: string;
+  readonly url: string;
+} | null {
+  const artifact = releaseChannel?.status === "verified-linux-preview"
+    ? releaseChannel.archInstaller
+    : undefined;
+  return artifact?.fileName === LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE
+    ? {
+        fileName: LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE,
+        installInstruction: "Arch Linux용 도우미 다운로드를 요청했습니다. 다운로드가 끝나면 pacman으로 패키지를 설치하고 도우미를 한 번 실행한 뒤 ‘설치 후 연결 확인’을 눌러 주세요. 실행 중인 도우미는 자동으로 감지합니다.",
+        label: "Arch Linux용 도우미 (.pkg.tar.zst)",
+        url: artifact.url
+      }
     : null;
 }
 
@@ -862,7 +889,7 @@ export function localMediaEngineReleaseMessage(
     releaseChannel?.status === "verified-linux-preview"
     && target !== "linux-x64"
   ) {
-    return "현재 공개 테스트는 Debian/Ubuntu 계열 Linux x64에서만 지원합니다. Windows와 macOS용 도우미는 아직 제공하지 않습니다.";
+    return "현재 공개 테스트는 Debian/Ubuntu·Arch Linux x64에서만 지원합니다. Windows와 macOS용 도우미는 아직 제공하지 않습니다.";
   }
   return LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE;
 }
@@ -1009,16 +1036,19 @@ export async function ensureLocalMediaEngineReady(
     const elements = dialogElements();
     const target = await detectLocalMediaEngineTarget();
     const installer = localMediaEngineInstaller(target);
-    const releaseUnavailable = target !== "unsupported" && !installer;
+    const archInstaller = target === "linux-x64"
+      ? localMediaEngineArchInstaller()
+      : null;
+    const releaseUnavailable = target !== "unsupported"
+      && !installer
+      && !archInstaller;
     const releaseMessage = localMediaEngineReleaseMessage(target);
     const permissionMustBeResolved = permissionState === "prompt"
       || permissionState === "denied";
-    elements.unsupported.hidden = Boolean(installer) && target !== "linux-x64";
+    elements.unsupported.hidden = Boolean(installer || archInstaller);
     elements.unsupported.textContent = releaseUnavailable
       ? releaseMessage
-      : target === "linux-x64"
-        ? "Linux 설치 파일은 현재 Debian/Ubuntu x64만 지원합니다. 다른 Linux 배포판에서는 자동 설치를 지원하지 않습니다."
-        : "현재는 Windows 64비트, Apple Silicon macOS 15 이상, Debian/Ubuntu Linux 64비트만 지원합니다.";
+      : "현재는 Windows 64비트, Apple Silicon macOS 15 이상, Debian/Ubuntu·Arch Linux 64비트만 지원합니다.";
     elements.download.hidden = !installer || permissionMustBeResolved;
     if (installer) {
       elements.download.href = installer.url;
@@ -1027,6 +1057,15 @@ export async function ensureLocalMediaEngineReady(
     } else {
       elements.download.removeAttribute("href");
       elements.download.removeAttribute("download");
+    }
+    elements.archDownload.hidden = !archInstaller || permissionMustBeResolved;
+    if (archInstaller) {
+      elements.archDownload.href = archInstaller.url;
+      elements.archDownload.download = archInstaller.fileName;
+      elements.archDownload.textContent = archInstaller.label;
+    } else {
+      elements.archDownload.removeAttribute("href");
+      elements.archDownload.removeAttribute("download");
     }
     const sourceOffer = LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL?.status
       === "verified-linux-preview"
@@ -1080,6 +1119,7 @@ export async function ensureLocalMediaEngineReady(
     const cleanup = () => {
       stopPolling();
       elements.download.removeEventListener("click", beginPolling);
+      elements.archDownload.removeEventListener("click", beginPolling);
       elements.retry.removeEventListener("click", retry);
       elements.reset.removeEventListener("click", resetPairing);
       elements.cancel.removeEventListener("click", useManualFile);
@@ -1132,6 +1172,7 @@ export async function ensureLocalMediaEngineReady(
         const permissionStillBlocked = permissionState === "prompt"
           || permissionState === "denied";
         elements.download.hidden = !installer || permissionStillBlocked;
+        elements.archDownload.hidden = !archInstaller || permissionStillBlocked;
         elements.retry.className = permissionStillBlocked
           ? "button primary"
           : "button secondary";
@@ -1157,6 +1198,9 @@ export async function ensureLocalMediaEngineReady(
             : error instanceof LocalMediaEngineConnectionError
               && error.code === "ENGINE_INCOMPATIBLE"
               ? error.message
+              : error instanceof LocalMediaEngineConnectionError
+                && error.code === "ENGINE_UNPAIRED"
+                ? "도우미 실행을 확인했습니다. ‘이 PC 연결’을 한 번 누르면 이 브라우저 등록과 원래 작업을 이어갑니다."
               : releaseUnavailable
                 ? releaseMessage
                 : ENGINE_RECOVERY_MESSAGE;
@@ -1176,12 +1220,15 @@ export async function ensureLocalMediaEngineReady(
         }
       }).catch(abort);
     };
-    function beginPolling(): void {
+    function beginPolling(event?: Event): void {
       pollingDeadline = Date.now() + INSTALL_POLL_TIMEOUT_MS;
       stopPolling();
       pollingTimer = window.setTimeout(poll, INSTALL_POLL_INTERVAL_MS);
       elements.status.dataset.state = "waiting";
-      elements.status.textContent = installer?.installInstruction
+      const selectedInstaller = event?.currentTarget === elements.archDownload
+        ? archInstaller
+        : installer;
+      elements.status.textContent = selectedInstaller?.installInstruction
         || "설치가 끝난 뒤 다시 확인해 주세요.";
     }
     function retry(): void {
@@ -1258,6 +1305,7 @@ export async function ensureLocalMediaEngineReady(
       ));
     }
     elements.download.addEventListener("click", beginPolling);
+    elements.archDownload.addEventListener("click", beginPolling);
     elements.retry.addEventListener("click", retry);
     elements.reset.addEventListener("click", resetPairing);
     elements.cancel.addEventListener("click", useManualFile);
@@ -1266,7 +1314,7 @@ export async function ensureLocalMediaEngineReady(
     if (!elements.dialog.open) {
       elements.dialog.showModal();
     }
-    if (beginInstallPolling && installer) {
+    if (beginInstallPolling && (installer || archInstaller)) {
       beginPolling();
     }
     elements.retry.focus({ preventScroll: true });

@@ -4,11 +4,13 @@ import { lstat, open } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  LINUX_PREVIEW_ARCH_INSTALLER_FILE,
   LINUX_PREVIEW_INSTALLER_FILE,
   LINUX_PREVIEW_RELEASE_ASSET_FILES,
   LINUX_PREVIEW_SOURCE_OFFER_FILE
 } from "../src/desktop/installer-contract.js";
 import {
+  LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE,
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
   parseLocalMediaEngineReleaseChannel
 } from "../src/editor/local-media-engine-release.js";
@@ -209,8 +211,10 @@ export async function loadVerifiedWebEngineLinuxPreviewChannel({
     );
   }
   const installer = localIdentities.get(LINUX_PREVIEW_INSTALLER_FILE);
+  const archInstaller = localIdentities.get(LINUX_PREVIEW_ARCH_INSTALLER_FILE);
   const sourceOffer = localIdentities.get(LINUX_PREVIEW_SOURCE_OFFER_FILE);
   invariant(installer, "Linux preview installer readback이 없습니다.");
+  invariant(archInstaller, "Arch Linux preview installer readback이 없습니다.");
   invariant(sourceOffer, "Linux preview source offer readback이 없습니다.");
   const channel = parseLocalMediaEngineReleaseChannel({
     schema: LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
@@ -223,6 +227,12 @@ export async function loadVerifiedWebEngineLinuxPreviewChannel({
       fileName: LINUX_PREVIEW_SOURCE_OFFER_FILE,
       sha256: sourceOffer.sha256,
       url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${verified.tag}/${LINUX_PREVIEW_SOURCE_OFFER_FILE}`
+    },
+    archInstaller: {
+      bytes: archInstaller.bytes,
+      fileName: LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE,
+      sha256: archInstaller.sha256,
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${verified.tag}/${LINUX_PREVIEW_ARCH_INSTALLER_FILE}`
     },
     installers: {
       "linux-x64": {

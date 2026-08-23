@@ -17,6 +17,8 @@ export const LOCAL_MEDIA_ENGINE_RELEASE_FILES = Object.freeze({
 
 export const LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE =
   "Kirinuki-Engine-linux-x64-preview.deb" as const;
+export const LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE =
+  "Kirinuki-Engine-arch-x64-preview.pkg.tar.zst" as const;
 export const LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_SOURCE_OFFER_FILE =
   "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt" as const;
 
@@ -37,6 +39,7 @@ export interface LocalMediaEngineReleaseChannel {
   readonly commit: string;
   readonly aggregateManifestSha256: string;
   readonly sourceOffer?: Readonly<LocalMediaEngineReleaseArtifact>;
+  readonly archInstaller?: Readonly<LocalMediaEngineReleaseArtifact>;
   readonly installers: Readonly<Partial<Record<
     LocalMediaEngineReleaseTarget,
     Readonly<LocalMediaEngineReleaseArtifact>
@@ -102,7 +105,7 @@ export function parseLocalMediaEngineReleaseChannel(
       "schema",
       "status",
       "tag",
-      ...(preview ? ["sourceOffer"] : [])
+      ...(preview ? ["archInstaller", "sourceOffer"] : [])
     ])
     || value.schema !== LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA
     || (value.status !== "verified-public-release"
@@ -125,6 +128,7 @@ export function parseLocalMediaEngineReleaseChannel(
     return null;
   }
   let sourceOffer: Readonly<LocalMediaEngineReleaseArtifact> | undefined;
+  let archInstaller: Readonly<LocalMediaEngineReleaseArtifact> | undefined;
   if (preview) {
     const artifact = value.sourceOffer;
     if (
@@ -149,6 +153,30 @@ export function parseLocalMediaEngineReleaseChannel(
       fileName: LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_SOURCE_OFFER_FILE,
       sha256: artifact.sha256,
       url: artifact.url
+    });
+    const archArtifact = value.archInstaller;
+    if (
+      !isRecord(archArtifact)
+      || !exactKeys(archArtifact, ["bytes", "fileName", "sha256", "url"])
+      || archArtifact.fileName !== LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE
+      || !Number.isSafeInteger(archArtifact.bytes)
+      || Number(archArtifact.bytes) <= 0
+      || Number(archArtifact.bytes) > 2 * 1024 * 1024 * 1024
+      || typeof archArtifact.sha256 !== "string"
+      || !SHA256_PATTERN.test(archArtifact.sha256)
+      || !exactReleaseAssetUrl(
+        archArtifact.url,
+        value.tag,
+        LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE
+      )
+    ) {
+      return null;
+    }
+    archInstaller = Object.freeze({
+      bytes: Number(archArtifact.bytes),
+      fileName: LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE,
+      sha256: archArtifact.sha256,
+      url: archArtifact.url
     });
   }
   const installers = {} as Record<
@@ -191,6 +219,7 @@ export function parseLocalMediaEngineReleaseChannel(
     commit: value.commit,
     aggregateManifestSha256: value.aggregateManifestSha256,
     ...(sourceOffer ? { sourceOffer } : {}),
+    ...(archInstaller ? { archInstaller } : {}),
     installers: Object.freeze(installers)
   });
 }

@@ -22,9 +22,17 @@ export const DESKTOP_RELEASE_PROVENANCE_ARCHIVE_FILE =
   "Kirinuki-Engine-source-provenance.tar.gz" as const;
 
 export const LINUX_PREVIEW_RELEASE_MANIFEST_SCHEMA =
-  "kirinuki-linux-preview-release/v2" as const;
+  "kirinuki-linux-preview-release/v3" as const;
 export const LINUX_PREVIEW_INSTALLER_FILE =
   "Kirinuki-Engine-linux-x64-preview.deb" as const;
+export const LINUX_PREVIEW_ARCH_INSTALLER_FILE =
+  "Kirinuki-Engine-arch-x64-preview.pkg.tar.zst" as const;
+export const LINUX_PREVIEW_ARCH_SOURCE_INSTALLER_FILE =
+  "UNSIGNED-TEST-ONLY-Kirinuki-Engine-arch-x64.pkg.tar.zst" as const;
+export const LINUX_PREVIEW_ARCH_SOURCE_MANIFEST_FILE =
+  "UNSIGNED-TEST-ONLY-arch-installer-manifest.json" as const;
+export const LINUX_PREVIEW_ARCH_SOURCE_MANIFEST_SCHEMA =
+  "kirinuki-arch-installer-manifest/v1" as const;
 export const LINUX_PREVIEW_SOURCE_OFFER_FILE =
   "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt" as const;
 export const LINUX_PREVIEW_RELEASE_MANIFEST_FILE =
@@ -33,6 +41,7 @@ export const LINUX_PREVIEW_RELEASE_CHECKSUM_FILE =
   "Kirinuki-Engine-linux-preview-SHA256.txt" as const;
 export const LINUX_PREVIEW_RELEASE_ASSET_FILES = Object.freeze([
   LINUX_PREVIEW_INSTALLER_FILE,
+  LINUX_PREVIEW_ARCH_INSTALLER_FILE,
   LINUX_PREVIEW_RELEASE_CHECKSUM_FILE,
   LINUX_PREVIEW_RELEASE_MANIFEST_FILE,
   LINUX_PREVIEW_SOURCE_OFFER_FILE
