@@ -508,6 +508,7 @@ async function createLocalEngineV2ProbeFixture(
       const clipId = String(clip?.id || "");
       const sourceStartMs = Number(clip?.startMs);
       const sourceEndMs = Number(clip?.endMs);
+      const previewRequest = clipId.startsWith("preview-");
       fixtureState.sessionRequests = fixture?.sessions.length || 0;
       assert(
         control.protocol === CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
@@ -523,12 +524,19 @@ async function createLocalEngineV2ProbeFixture(
           && clipId.length > 0
           && Number.isSafeInteger(sourceStartMs)
           && Number.isSafeInteger(sourceEndMs)
-          && sourceStartMs === 10_000
-          && sourceEndMs === 11_000,
+          && (
+            previewRequest
+              ? sourceStartMs >= 0
+                && sourceEndMs > sourceStartMs
+                && sourceEndMs <= 120_000
+              : sourceStartMs === 10_000
+                && sourceEndMs === 11_000
+          ),
         "공개 편집기의 v2 encrypted VOD prepare 범위·session scope가 다릅니다."
       );
-      const editableSourceStartMs = 0;
-      const editableSourceEndMs = 21_000;
+      const editableSourceStartMs = Math.max(0, sourceStartMs - 10_000);
+      const editableSourceEndMs = Math.min(600_000, sourceEndMs + 10_000);
+      const materializedDurationMs = editableSourceEndMs - editableSourceStartMs;
       const planFingerprint = "b".repeat(64);
       fixtureState.materializationRequests += 1;
       return {
@@ -552,7 +560,7 @@ async function createLocalEngineV2ProbeFixture(
             },
             sourceDurationMs: 600_000,
             handleMs: 10_000,
-            mediaDurationMs: 21_000,
+            mediaDurationMs: materializedDurationMs,
             windows: [{
               id: "semantic-browser-window-1",
               editableSourceStartMs,
@@ -560,7 +568,7 @@ async function createLocalEngineV2ProbeFixture(
               fetchedSourceStartMs: editableSourceStartMs,
               fetchedSourceEndMs: editableSourceEndMs,
               mediaStartMs: 0,
-              mediaEndMs: 21_000,
+              mediaEndMs: materializedDurationMs,
               clipIds: [clipId]
             }],
             clipRanges: [{
@@ -1920,6 +1928,42 @@ async function main(): Promise<void> {
     `공개 웹 browser console에 오류가 있습니다: ${JSON.stringify(unexpectedBrowserErrors)}`
   );
 
+  // The optional top download offer must keep communicating with the same
+  // page after the external GitHub download is requested. Cancel navigation
+  // only inside this smoke; the product click listener must still run and
+  // confirm the already enrolled helper without changing the visible layout.
+  await execute(`
+    const helper = document.querySelector("#linux-helper-download");
+    if (!(helper instanceof HTMLAnchorElement)
+      || helper.hidden
+      || !helper.href.includes("/releases/download/")) {
+      throw new Error("상단 영상 준비 도우미 다운로드 링크가 없습니다.");
+    }
+    helper.addEventListener("click", (event) => event.preventDefault(), {
+      capture: true,
+      once: true
+    });
+    helper.click();
+    return true;
+  `);
+  await waitFor(
+    () => execute<{
+      readonly busy: string;
+      readonly label: string;
+    }>(`
+      const helper = document.querySelector("#linux-helper-download");
+      return {
+        busy: helper?.getAttribute("aria-busy") || "",
+        label: helper?.textContent?.trim() || ""
+      };
+    `),
+    (value) => (
+      value.busy === ""
+        && value.label === "영상 준비 도우미 연결됨"
+    ),
+    "상단 도우미 다운로드 후 같은 화면이 연결 상태를 확인하지 못했습니다."
+  );
+
   // Continue from the untouched public start page through the product's real
   // UI. This proves that the website does not merely advertise an installer:
   // it must recognize the exact compatible engine, mint a document-scoped
@@ -1996,6 +2040,107 @@ async function main(): Promise<void> {
     ),
     "공개 시작 화면이 생각 없이 누를 수 있는 편집기 열기 상태가 되지 않았습니다."
   );
+
+  // CHZZK has no trustworthy cross-origin player clock. Press W through the
+  // real capture console so the optional helper prepares a local preview,
+  // then prove the PR16 keyboard controls become enabled and own the fields.
+  await execute(`
+    const prepare = document.querySelector("#refresh-source");
+    if (!(prepare instanceof HTMLButtonElement) || prepare.disabled) {
+      throw new Error("CHZZK W 도우미 미리보기를 시작할 수 없습니다.");
+    }
+    prepare.click();
+    return true;
+  `);
+  const helperShortcutConsole = await waitFor(
+    () => execute<{
+      readonly disabled: readonly string[];
+      readonly readyState: number;
+      readonly status: string;
+    }>(`
+      const ids = [
+        "capture-start",
+        "capture-end",
+        "seek-backward-five",
+        "seek-forward-five",
+        "playback-rate-quarter",
+        "playback-rate-double"
+      ];
+      const video = document.querySelector("#stream-preview-video");
+      return {
+        disabled: ids.filter((id) => {
+          const button = document.getElementById(id);
+          return !(button instanceof HTMLButtonElement) || button.disabled;
+        }),
+        readyState: video instanceof HTMLVideoElement ? video.readyState : 0,
+        status: document.querySelector("#stream-cut-console-status")?.textContent?.trim() || ""
+      };
+    `),
+    (value) => (
+      value.disabled.length === 0
+        && value.readyState >= 1
+        && value.status.includes("E/R/D/F/Y/U")
+    ),
+    () => "CHZZK 도우미 연결 후 E/R/D/F/Y/U 콘솔이 활성화되지 않았습니다. "
+      + `fixture=${JSON.stringify(semanticFixtureState)} requests=${JSON.stringify(localEngineProbeRecords)}`,
+    30_000
+  );
+  assert(
+    helperShortcutConsole.disabled.length === 0,
+    "CHZZK 도우미 컷 제어 버튼이 모두 활성화되지 않았습니다."
+  );
+  const shortcutJourney = await execute<{
+    readonly doublePressed: string;
+    readonly end: string;
+    readonly quarterPressed: string;
+    readonly start: string;
+  }>(`
+    const row = document.querySelector(".clip-row");
+    const start = row?.querySelector('[data-field="start"]');
+    const end = row?.querySelector('[data-field="end"]');
+    const video = document.querySelector("#stream-preview-video");
+    if (!(start instanceof HTMLInputElement)
+      || !(end instanceof HTMLInputElement)
+      || !(video instanceof HTMLVideoElement)) {
+      throw new Error("컷 단축키 실사용 요소가 없습니다.");
+    }
+    const press = (key) => document.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      code: "Key" + key.toUpperCase(),
+      key
+    }));
+    video.currentTime = 0.25;
+    press("e");
+    video.currentTime = 0.75;
+    press("r");
+    press("y");
+    const quarterPressed = document.querySelector("#playback-rate-quarter")?.getAttribute("aria-pressed") || "";
+    press("u");
+    const doublePressed = document.querySelector("#playback-rate-double")?.getAttribute("aria-pressed") || "";
+    press("d");
+    press("f");
+    const result = {
+      doublePressed,
+      end: end.value,
+      quarterPressed,
+      start: start.value
+    };
+    // Continue the deterministic final prepare with the original exact range.
+    start.value = "00:00:10.000";
+    end.value = "00:00:11.000";
+    for (const input of [start, end]) {
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return result;
+  `);
+  assert(
+    shortcutJourney.start === "00:00:00.250"
+      && shortcutJourney.end === "00:00:00.750"
+      && shortcutJourney.quarterPressed === "true"
+      && shortcutJourney.doublePressed === "true",
+    `CHZZK 도우미 E/R/D/F/Y/U 단축키가 원본 시각·재생 제어를 반영하지 못했습니다: ${JSON.stringify(shortcutJourney)}`
+  );
   await execute(`
     const button = document.querySelector("#start-editor");
     if (!(button instanceof HTMLButtonElement) || button.disabled) {
@@ -2061,13 +2206,13 @@ async function main(): Promise<void> {
     );
   });
   assert(
-    // The start page prepares the exact selected range before navigation, and
-    // the editor reacquires that cached materialization under its own
-    // document-scoped capability. The second control request must not imply a
-    // second remote download in the real helper.
-    semanticFixtureState.sessionRequests === 2
-      && semanticFixtureState.materializationRequests === 2
-      && semanticFixtureState.mediaRequests >= 2,
+    // W owns one preview session with bootstrap+window requests. The start page
+    // then prepares the exact selected range, and the editor reacquires that
+    // cache under a third document-scoped session. Repeated control requests
+    // must not imply repeated remote downloads in the real helper.
+    semanticFixtureState.sessionRequests === 3
+      && semanticFixtureState.materializationRequests === 4
+      && semanticFixtureState.mediaRequests >= 3,
     `공개 웹 semantic chain의 session·prepare·media 호출 수가 다릅니다: ${JSON.stringify(semanticFixtureState)}`
   );
   assert(
@@ -2078,6 +2223,223 @@ async function main(): Promise<void> {
     )),
     `공개 웹 semantic chain에 잘못된 Origin·cookie·경로 요청이 있습니다: ${JSON.stringify(localEngineProbeRecords)}`
   );
+
+  // Exercise the same visible controls a user follows after the selected
+  // range reaches the editor. ChromeDriver cannot approve a native directory
+  // chooser, so the smoke supplies an in-memory File System Access directory
+  // handle. Rendering, MP4 verification, recovery JSON, SRT creation, and the
+  // post-export confirmation all continue through the production code path.
+  await execute(`
+    const files = new Map();
+    class MemoryFileHandle {
+      constructor(name) {
+        this.kind = "file";
+        this.name = name;
+        this.bytes = new Uint8Array();
+        this.lastModified = Date.now();
+      }
+      async getFile() {
+        return new File([this.bytes], this.name, {
+          lastModified: this.lastModified,
+          type: this.name.endsWith(".json")
+            ? "application/json"
+            : this.name.endsWith(".srt")
+              ? "application/x-subrip"
+              : this.name.endsWith(".webm")
+                ? "video/webm"
+                : "video/mp4"
+        });
+      }
+      async createWritable() {
+        const handle = this;
+        let working = handle.bytes.slice();
+        let position = 0;
+        let settled = false;
+        const bytesOf = async (value) => {
+          if (value instanceof Blob) {
+            return new Uint8Array(await value.arrayBuffer());
+          }
+          if (value instanceof ArrayBuffer) {
+            return new Uint8Array(value);
+          }
+          if (ArrayBuffer.isView(value)) {
+            return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+          }
+          throw new TypeError("memory export stream received an unsupported chunk");
+        };
+        const writeBytes = (chunk, offset) => {
+          const end = offset + chunk.byteLength;
+          if (end > working.byteLength) {
+            const grown = new Uint8Array(end);
+            grown.set(working);
+            working = grown;
+          }
+          working.set(chunk, offset);
+          position = end;
+        };
+        return {
+          async write(value) {
+            if (settled) throw new TypeError("memory export stream is closed");
+            if (value && typeof value === "object" && typeof value.type === "string") {
+              if (value.type === "seek") {
+                position = Number(value.position);
+                return;
+              }
+              if (value.type === "truncate") {
+                const size = Number(value.size);
+                const resized = new Uint8Array(size);
+                resized.set(working.subarray(0, Math.min(size, working.byteLength)));
+                working = resized;
+                position = Math.min(position, size);
+                return;
+              }
+              if (value.type === "write") {
+                const offset = value.position === undefined
+                  ? position
+                  : Number(value.position);
+                writeBytes(await bytesOf(value.data), offset);
+                return;
+              }
+            }
+            writeBytes(await bytesOf(value), position);
+          },
+          async seek(nextPosition) {
+            position = Number(nextPosition);
+          },
+          async truncate(size) {
+            const resized = new Uint8Array(Number(size));
+            resized.set(working.subarray(0, Math.min(resized.byteLength, working.byteLength)));
+            working = resized;
+            position = Math.min(position, resized.byteLength);
+          },
+          async close() {
+            if (settled) return;
+            settled = true;
+            handle.bytes = working.slice();
+            handle.lastModified = Date.now();
+          },
+          async abort() {
+            settled = true;
+          }
+        };
+      }
+    }
+    const directory = {
+      kind: "directory",
+      name: "Kirinuki semantic export smoke",
+      files,
+      async getFileHandle(name, options = {}) {
+        const current = files.get(name);
+        if (current) return current;
+        if (!options.create) {
+          throw new DOMException("not found", "NotFoundError");
+        }
+        const created = new MemoryFileHandle(name);
+        files.set(name, created);
+        return created;
+      },
+      async removeEntry(name) {
+        if (!files.delete(name)) {
+          throw new DOMException("not found", "NotFoundError");
+        }
+      }
+    };
+    window.__kirinukiSemanticExportDirectory = directory;
+    window.showDirectoryPicker = async () => directory;
+
+    const addCue = document.querySelector("#add-cue");
+    if (!(addCue instanceof HTMLButtonElement) || addCue.disabled) {
+      throw new Error("실사용 자막 추가 버튼을 누를 수 없습니다.");
+    }
+    addCue.click();
+    const cueText = document.querySelector("#cue-text");
+    if (!(cueText instanceof HTMLTextAreaElement)) {
+      throw new Error("실사용 자막 입력을 찾지 못했습니다.");
+    }
+    cueText.value = "Kirinuki 실사용 검증 자막";
+    cueText.dispatchEvent(new Event("input", { bubbles: true }));
+    cueText.blur();
+
+    const exportButton = document.querySelector("#export-video");
+    if (!(exportButton instanceof HTMLButtonElement) || exportButton.disabled) {
+      throw new Error("실사용 내보내기 버튼을 누를 수 없습니다.");
+    }
+    exportButton.click();
+    const title = document.querySelector("#export-file-title");
+    const confirm = document.querySelector("#confirm-export-options");
+    if (!(title instanceof HTMLInputElement)
+      || !(confirm instanceof HTMLButtonElement)) {
+      throw new Error("실사용 내보내기 확인 UI가 없습니다.");
+    }
+    title.value = "Kirinuki 실사용 검증";
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+    if (confirm.disabled) {
+      throw new Error("실사용 내보내기 확인이 비활성화됐습니다.");
+    }
+    confirm.click();
+    return true;
+  `);
+  const semanticExport = await waitFor(
+    () => execute<{
+      readonly cleanupOpen: boolean;
+      readonly files: readonly {
+        readonly name: string;
+        readonly size: number;
+        readonly text: string;
+      }[];
+      readonly jobHidden: boolean;
+      readonly summary: string;
+      readonly toast: string;
+    }>(`
+      const directory = window.__kirinukiSemanticExportDirectory;
+      const entries = directory
+        ? await Promise.all([...directory.files.entries()].map(async ([name, handle]) => {
+          const file = await handle.getFile();
+          return {
+            name,
+            size: file.size,
+            text: name.endsWith(".srt") ? await file.text() : ""
+          };
+        }))
+        : [];
+      const cleanup = document.querySelector("#cleanup-after-export-dialog");
+      const job = document.querySelector("#job-dialog");
+      return {
+        cleanupOpen: cleanup instanceof HTMLDialogElement && cleanup.open,
+        files: entries,
+        jobHidden: job instanceof HTMLDialogElement && job.hidden && !job.open,
+        summary: document.querySelector("#cleanup-after-export-summary")?.textContent?.trim() || "",
+        toast: document.querySelector("#toast")?.textContent?.trim() || ""
+      };
+    `),
+    (value) => (
+      value.cleanupOpen
+        && value.jobHidden
+        && value.files.length === 3
+        && value.files.some(({ name, size }) => (
+          /[.](?:mp4|webm)$/u.test(name) && size > 0
+        ))
+        && value.files.some(({ name, size }) => (
+          name.endsWith(".kirinuki-session.json") && size > 0
+        ))
+        && value.files.some(({ name, size, text }) => (
+          name.endsWith(".ko.srt")
+            && size > 0
+            && text.includes("Kirinuki 실사용 검증 자막")
+        ))
+        && value.summary.includes("영상")
+    ),
+    () => "공개 HTTPS 실사용 컷·자막·내보내기 경로가 완료되지 않았습니다.",
+    120_000
+  );
+  await execute(`
+    const keep = document.querySelector("#keep-export-session-cache");
+    if (!(keep instanceof HTMLButtonElement)) {
+      throw new Error("내보내기 후 현재 작업 유지 버튼이 없습니다.");
+    }
+    keep.click();
+    return true;
+  `);
 
   await execute(`
     const button = document.querySelector("#open-short-form");
@@ -2144,6 +2506,11 @@ async function main(): Promise<void> {
         fixture: semanticFixtureState,
         mediaDurationSeconds: semanticEditor.duration,
         result: "health-session-prepare-materialize-media-attached",
+        exportFiles: semanticExport.files.map(({ name, size }) => ({
+          name,
+          size
+        })),
+        exportResult: "cut-subtitle-render-video-session-srt-verified",
         shortWorkspaceReload: "http-200"
       }
     },

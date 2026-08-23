@@ -32,7 +32,9 @@ test("새 컷은 웹에서 선택하고 확정 범위 준비 완료 뒤 같은 �
   ]);
 
   assert.match(html, /링크를 붙여넣고 이 페이지의 원본 화면에서 바로 컷을 고르세요/u);
-  assert.match(html, /도우미는 컷 선택이 끝나고 편집기를 열 때만/u);
+  assert.match(html, /도우미는 선택 사항/u);
+  assert.match(webMain, /beginInstallPolling: true/u);
+  assert.match(webMain, /allowImmediateProtocolLaunch: true/u);
   assert.match(html, /id="cut-preparation-progress"/u);
   assert.match(html, /id="cut-preparation-stage"/u);
   assert.match(webMain, /startChzzkVodMaterialization/u);

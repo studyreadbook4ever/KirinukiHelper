@@ -138,7 +138,7 @@ test("A는 화면 아래의 단일 편집기 CTA와 같은 검증 경로를 사�
   assert.doesNotMatch(html, /id="(?:open-editor|create-codex-job)"/u);
 });
 
-test("초기 컷은 웹 플레이어만 쓰고 도우미는 편집기 전환에서만 요청한다", async () => {
+test("초기 컷은 웹 플레이어를 기본으로 쓰고 도우미 연결 시 전 플랫폼 단축키를 확장한다", async () => {
   const [html, source, controller, server] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
@@ -147,7 +147,7 @@ test("초기 컷은 웹 플레이어만 쓰고 도우미는 편집기 전환에�
   ]);
   assert.match(
     html,
-    /링크를 붙여넣고 이 페이지의 원본 화면에서 바로 컷을 고르세요\.[\s\S]*도우미는 컷 선택이 끝나고 편집기를 열 때만/u
+    /링크를 붙여넣고 이 페이지의 원본 화면에서 바로 컷을 고르세요\.[\s\S]*도우미는 선택 사항/u
   );
   assert.match(html, /data-field="start"[^>]*required/u);
   assert.match(html, /data-field="end"[^>]*required/u);
@@ -156,8 +156,11 @@ test("초기 컷은 웹 플레이어만 쓰고 도우미는 편집기 전환에�
   assert.match(source, /elements\.reloadStream\.addEventListener[\s\S]*reloadActivePlayerFrame\(\)/u);
   assert.match(html, /id="source-capture-workspace"[^>]*hidden/u);
   assert.match(html, /id="linux-helper-download"[\s\S]*Linux 영상 준비 도우미/u);
-  assert.match(source, /case "refresh-source":[\s\S]*reloadActivePlayerFrame\(\)/u);
-  assert.doesNotMatch(source, /case "refresh-source":[\s\S]{0,240}prepareLocalPreview/u);
+  assert.match(source, /case "refresh-source":[\s\S]*SOURCE_PLATFORM_YOUTUBE[\s\S]*reloadActivePlayerFrame\(\)[\s\S]*prepareLocalPreview/u);
+  assert.match(source, /monitorHelperDownloadConnection[\s\S]*beginInstallPolling: true/u);
+  assert.match(source, /prepareLocalPreview[\s\S]*allowImmediateProtocolLaunch: true/u);
+  assert.match(source, /streamVideo\.crossOrigin = "anonymous"[\s\S]*streamVideo\.src = status\.media\.url/u);
+  assert.match(source, /if \(!elements\.streamVideo\.hidden && Boolean\(elements\.streamVideo\.src\)\) \{[\s\S]*return;/u);
   assert.match(source, /YouTubeEmbedController[\s\S]*captureCurrentPlayerTime[\s\S]*seekPlayerBy[\s\S]*setPlayerRate/u);
   assert.match(controller, /YOUTUBE_PRIVACY_EMBED_ORIGIN[\s\S]*event\.origin !== YOUTUBE_PRIVACY_EMBED_ORIGIN/u);
   assert.match(controller, /event\.source !== this\.#frame\.contentWindow/u);

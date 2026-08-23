@@ -69,14 +69,14 @@ test("매 사용 권리 확인은 여섯 항목이며 개인정보·오픈소스
   assert.doesNotMatch(html, /name="basis"|id="evidence-fields"|id="confirmation-text"/u);
 });
 
-test("초기 컷은 도우미 없이 진행하고 확정 범위 준비 뒤 같은 탭 편집기로 이동한다", async () => {
+test("초기 컷은 도우미 없이도 진행하고 연결 시 단축키를 확장한 뒤 같은 탭 편집기로 이동한다", async () => {
   const { html, source } = await studioSources();
-  assert.match(html, /도우미 설치는 이 단계에 필요하지 않습니다/u);
+  assert.match(html, /도우미 없이 플레이어 시각을 시작·끝 칸에 직접 입력해도 됩니다/u);
   assert.match(html, /id="source-capture-workspace"[^>]*hidden/u);
   assert.match(html, /id="recent-section"[^>]*hidden/u);
   assert.match(html, /id="cut-preparation-progress"[\s\S]*도우미는 별도 창을 열지 않습니다/u);
-  assert.match(source, /case "refresh-source":[\s\S]*reloadActivePlayerFrame\(\)/u);
-  assert.match(source, /configureHelperDownload[\s\S]*localMediaEngineInstaller/u);
+  assert.match(source, /case "refresh-source":[\s\S]*reloadActivePlayerFrame\(\)[\s\S]*prepareLocalPreview/u);
+  assert.match(source, /configureHelperDownload[\s\S]*monitorHelperDownloadConnection/u);
   const prepare = source.indexOf("await prepareSelectedVodForEditor(");
   const begin = source.indexOf("await beginWebEditorSession({", prepare);
   const navigate = source.indexOf("location.assign(session.editorUrl);", begin);

@@ -882,6 +882,8 @@ export interface LocalMediaEnginePrimeOptions {
 export interface LocalMediaEngineReadinessOptions {
   /** Set only when this function is entered directly from a trusted click. */
   readonly allowImmediateProtocolLaunch?: boolean;
+  /** Start bounded install polling when an external download offer was clicked. */
+  readonly beginInstallPolling?: boolean;
   readonly permissionState?: () => Promise<PermissionState | null>;
   readonly pair?: (
     signal?: AbortSignal,
@@ -926,6 +928,7 @@ export async function ensureLocalMediaEngineReady(
   signal?: AbortSignal,
   {
     allowImmediateProtocolLaunch = false,
+    beginInstallPolling = false,
     permissionState: readPermissionState = () => (
       localMediaEnginePermissionState()
     ),
@@ -1262,6 +1265,9 @@ export async function ensureLocalMediaEngineReady(
     signal?.addEventListener("abort", abort, { once: true });
     if (!elements.dialog.open) {
       elements.dialog.showModal();
+    }
+    if (beginInstallPolling && installer) {
+      beginPolling();
     }
     elements.retry.focus({ preventScroll: true });
     return result;

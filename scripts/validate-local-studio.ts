@@ -111,7 +111,7 @@ assert(
 );
 assert(
   indexHtml.includes(
-    "도우미 설치는 이 단계에 필요하지 않습니다."
+    "도우미 없이 플레이어 시각을 시작·끝 칸에 직접 입력해도 됩니다."
   )
     && indexHtml.includes('id="linux-helper-download"')
     && indexHtml.includes("도우미는 별도 창을 열지 않습니다.")

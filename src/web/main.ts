@@ -301,6 +301,44 @@ interface ActiveLocalPreviewOperation {
 }
 let activeLocalPreviewOperation: ActiveLocalPreviewOperation | null = null;
 let youtubeController: YouTubeEmbedController | null = null;
+let helperDownloadConnectionPending = false;
+
+const HELPER_DOWNLOAD_IDLE_LABEL =
+  "Linux 영상 준비 도우미 (.deb) 미리 받기";
+
+async function monitorHelperDownloadConnection(): Promise<void> {
+  if (helperDownloadConnectionPending) {
+    return;
+  }
+  helperDownloadConnectionPending = true;
+  elements.helperDownload.ariaBusy = "true";
+  elements.helperDownload.textContent =
+    "다운로드 중 · 설치되면 이 화면에서 연결 확인";
+  try {
+    const readiness = await ensureLocalMediaEngineReady(undefined, {
+      beginInstallPolling: true
+    });
+    if (readiness === "ready") {
+      elements.helperDownload.textContent = "영상 준비 도우미 연결됨";
+      elements.streamCutStatus.textContent = activeStreamPlatform
+        ? activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
+          ? "도우미도 연결됐습니다. YouTube 컷 제어는 이 웹 플레이어에서 바로 동작합니다."
+          : "도우미가 연결됐습니다. 권리 확인 후 W를 누르면 E/R/D/F/Y/U 컷 제어가 연결됩니다."
+        : "영상 준비 도우미가 연결됐습니다. VOD 주소를 붙여 넣어 컷을 선택하세요.";
+      return;
+    }
+    elements.helperDownload.textContent = HELPER_DOWNLOAD_IDLE_LABEL;
+  } catch (error) {
+    elements.helperDownload.textContent = HELPER_DOWNLOAD_IDLE_LABEL;
+    if (!(error instanceof DOMException && error.name === "AbortError")) {
+      elements.streamCutStatus.textContent =
+        `도우미 연결을 확인하지 못했습니다: ${errorMessage(error)}`;
+    }
+  } finally {
+    helperDownloadConnectionPending = false;
+    elements.helperDownload.removeAttribute("aria-busy");
+  }
+}
 
 async function configureHelperDownload(): Promise<void> {
   const installer = localMediaEngineInstaller(
@@ -315,6 +353,11 @@ async function configureHelperDownload(): Promise<void> {
   elements.helperDownload.href = installer.url;
   elements.helperDownload.download = installer.fileName;
   elements.helperDownload.hidden = false;
+  elements.helperDownload.addEventListener("click", () => {
+    window.setTimeout(() => {
+      void monitorHelperDownloadConnection();
+    }, 0);
+  });
 }
 
 function explainMobileEditorBlock(): void {
@@ -843,6 +886,10 @@ async function materializeLocalPreviewRange({
   elements.streamFrame.hidden = true;
   elements.streamPlaceholder.hidden = true;
   elements.streamVideo.hidden = false;
+  // The loopback gateway requires the exact public Origin even for media
+  // elements. Anonymous CORS makes Chromium send that Origin while still
+  // keeping cookies and credentials out of the helper request.
+  elements.streamVideo.crossOrigin = "anonymous";
   elements.streamVideo.src = status.media.url;
   elements.streamVideo.load();
   elements.streamVideo.addEventListener("loadedmetadata", () => {
@@ -888,7 +935,9 @@ async function prepareLocalPreview(targetSeconds = 0): Promise<void> {
   try {
     elements.streamCutStatus.textContent =
       "이 PC의 영상 준비 도우미 연결을 확인하고 있습니다…";
-    const readiness = await ensureLocalMediaEngineReady();
+    const readiness = await ensureLocalMediaEngineReady(undefined, {
+      allowImmediateProtocolLaunch: true
+    });
     if (generation !== localPreviewGeneration) {
       throw new DOMException("더 새로운 미리보기 요청이 시작됐습니다.", "AbortError");
     }
@@ -1949,10 +1998,15 @@ function runStudioCaptureAction(action: StudioCaptureAction): void {
       }
       return;
     case "refresh-source":
-      reloadActivePlayerFrame();
-      elements.streamCutStatus.textContent = activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
-        ? "YouTube 플레이어 연결을 다시 확인하고 있습니다…"
-        : "원본 플레이어를 다시 불러왔습니다. 표시된 시각을 시작·끝 칸에 직접 입력해 주세요.";
+      if (activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
+        reloadActivePlayerFrame();
+        elements.streamCutStatus.textContent =
+          "YouTube 플레이어 연결을 다시 확인하고 있습니다…";
+      } else {
+        void prepareLocalPreview(
+          Number(elements.streamPreviewTimeline.value || 0)
+        );
+      }
       return;
     case "capture-start":
       captureCurrentPlayerTime("start");
@@ -2193,6 +2247,13 @@ function installStreamFrameLoadHandler(frame: HTMLIFrameElement): void {
     if (streamLoadTimer !== null) {
       window.clearTimeout(streamLoadTimer);
       streamLoadTimer = null;
+    }
+    // A cross-origin iframe can finish loading after W has already replaced
+    // it with the helper-backed local video. Its late load event must not
+    // overwrite the connected status or make the active shortcut path look
+    // unavailable again.
+    if (!elements.streamVideo.hidden && Boolean(elements.streamVideo.src)) {
+      return;
     }
     elements.streamStatus.textContent =
       "플랫폼 원본 미리보기를 브라우저에 직접 불러왔습니다.";
