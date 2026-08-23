@@ -1928,16 +1928,23 @@ async function main(): Promise<void> {
     `공개 웹 browser console에 오류가 있습니다: ${JSON.stringify(unexpectedBrowserErrors)}`
   );
 
-  // The optional top download offer must keep communicating with the same
-  // page after the external GitHub download is requested. Cancel navigation
-  // only inside this smoke; the product click listener must still run and
-  // confirm the already enrolled helper without changing the visible layout.
-  await execute(`
+  // A verified release-channel build exposes the optional top download offer
+  // and must keep communicating with the same page after GitHub is opened.
+  // The ordinary fail-closed build intentionally has no installer URL, so it
+  // keeps this offer hidden while the rest of the browser product remains
+  // usable with the enrolled test engine.
+  const helperDownloadAvailable = await execute<boolean>(`
     const helper = document.querySelector("#linux-helper-download");
-    if (!(helper instanceof HTMLAnchorElement)
-      || helper.hidden
-      || !helper.href.includes("/releases/download/")) {
-      throw new Error("상단 영상 준비 도우미 다운로드 링크가 없습니다.");
+    if (!(helper instanceof HTMLAnchorElement)) {
+      throw new Error("상단 영상 준비 도우미 요소가 없습니다.");
+    }
+    return !helper.hidden && helper.href.includes("/releases/download/");
+  `);
+  if (helperDownloadAvailable) {
+    await execute(`
+    const helper = document.querySelector("#linux-helper-download");
+    if (!(helper instanceof HTMLAnchorElement)) {
+      throw new Error("상단 영상 준비 도우미 요소가 없습니다.");
     }
     helper.addEventListener("click", (event) => event.preventDefault(), {
       capture: true,
@@ -1945,24 +1952,25 @@ async function main(): Promise<void> {
     });
     helper.click();
     return true;
-  `);
-  await waitFor(
-    () => execute<{
-      readonly busy: string;
-      readonly label: string;
-    }>(`
-      const helper = document.querySelector("#linux-helper-download");
-      return {
-        busy: helper?.getAttribute("aria-busy") || "",
-        label: helper?.textContent?.trim() || ""
-      };
-    `),
-    (value) => (
-      value.busy === ""
-        && value.label === "영상 준비 도우미 연결됨"
-    ),
-    "상단 도우미 다운로드 후 같은 화면이 연결 상태를 확인하지 못했습니다."
-  );
+    `);
+    await waitFor(
+      () => execute<{
+        readonly busy: string;
+        readonly label: string;
+      }>(`
+        const helper = document.querySelector("#linux-helper-download");
+        return {
+          busy: helper?.getAttribute("aria-busy") || "",
+          label: helper?.textContent?.trim() || ""
+        };
+      `),
+      (value) => (
+        value.busy === ""
+          && value.label === "영상 준비 도우미 연결됨"
+      ),
+      "상단 도우미 다운로드 후 같은 화면이 연결 상태를 확인하지 못했습니다."
+    );
+  }
 
   // Continue from the untouched public start page through the product's real
   // UI. This proves that the website does not merely advertise an installer:
