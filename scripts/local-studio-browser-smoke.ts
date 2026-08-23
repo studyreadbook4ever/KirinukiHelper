@@ -2197,7 +2197,8 @@ async function main(): Promise<void> {
   const chzzkUrl = "https://chzzk.naver.com/video/14514980";
   const transitionChzzkUrl = "https://chzzk.naver.com/video/14514981";
   const youtubeUrl = "https://youtu.be/M7lc1UVf-VE?t=5";
-  const youtubeEmbed = "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE?playsinline=1";
+  const youtubeEmbed = "https://www.youtube-nocookie.com/embed/M7lc1UVf-VE?playsinline=1"
+    + `&enablejsapi=1&origin=${encodeURIComponent(studioOrigin)}`;
   const soopUrl = "https://vod.sooplive.co.kr/player/169475287?change_second=3";
   const soopEmbed = "https://vod.sooplive.com/player/169475287/embed?autoPlay=true&showChat=false&mutePlay=true";
   const sessionArchiveJson = await buildSmokeSessionArchive(chzzkUrl);
