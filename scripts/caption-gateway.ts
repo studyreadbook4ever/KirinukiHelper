@@ -1772,7 +1772,6 @@ export function createCaptionGatewayServer({
         ytDlpBinary: String(env.KIRINUKI_YT_DLP_BINARY || ""),
         nodeBinary: String(env.KIRINUKI_YT_DLP_NODE_BINARY || process.execPath),
         processEnv: env,
-        cwd: String(env.KIRINUKI_PACKAGE_ROOT || process.cwd()),
         ...(signal ? { signal } : {})
       })
     )),
