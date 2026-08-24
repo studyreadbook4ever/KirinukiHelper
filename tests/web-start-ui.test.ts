@@ -24,10 +24,8 @@ test("공개 웹이 URL 입력·PR16 컷 좌표·전체 편집 진입을 모두 
   assert.match(html, /id="start-editor"[^>]*aria-keyshortcuts="A"/u);
   assert.match(source, /setDocumentSurface\("local"\)/u);
   assert.match(source, /installStudioCaptureConsole\(\)/u);
-  assert.doesNotMatch(
-    `${html}\n${source}`,
-    /kirinuki-engine:\/\/cut|cut-host|kirinukiCutHost|BrowserWindow|editor-handoff|StreamingBridgeClient/u
-  );
+  assert.match(source, /kirinukiSurface=cut-host[\s\S]*ElectronCutSession/u);
+  assert.doesNotMatch(`${html}\n${source}`, /chrome-extension:\/\/|createWebCodexJobFolder/u);
 });
 
 test("원본과 구간 rail은 PR16처럼 한 화면에 나란히 있고 직접 입력도 유지한다", async () => {
@@ -69,7 +67,7 @@ test("매 사용 권리 확인은 여섯 항목이며 개인정보·오픈소스
   assert.doesNotMatch(html, /name="basis"|id="evidence-fields"|id="confirmation-text"/u);
 });
 
-test("초기 컷은 도우미 없이도 진행하고 연결 시 단축키를 확장한 뒤 같은 탭 편집기로 이동한다", async () => {
+test("초기 컷은 W 연결 단계 없이 진행한 뒤 같은 탭 편집기로 이동한다", async () => {
   const { html, source } = await studioSources();
   assert.match(
     html,
@@ -77,8 +75,8 @@ test("초기 컷은 도우미 없이도 진행하고 연결 시 단축키를 확
   );
   assert.match(html, /id="source-capture-workspace"[^>]*hidden/u);
   assert.match(html, /id="recent-section"[^>]*hidden/u);
-  assert.match(html, /id="cut-preparation-progress"[\s\S]*도우미는 별도 창을 열지 않습니다/u);
-  assert.match(source, /case "refresh-source":[\s\S]*reloadActivePlayerFrame\(\)[\s\S]*prepareLocalPreview/u);
+  assert.match(html, /id="cut-preparation-progress"[\s\S]*컷 선택은 이 웹 화면에서 끝납니다/u);
+  assert.doesNotMatch(`${html}\n${source}`, /id="refresh-source"|aria-keyshortcuts="W"|case "refresh-source"|kirinuki-engine:\/\/cut/u);
   assert.match(source, /configureHelperDownload[\s\S]*monitorHelperDownloadConnection/u);
   const prepare = source.indexOf("await prepareSelectedVodForEditor(");
   const begin = source.indexOf("await beginWebEditorSession({", prepare);

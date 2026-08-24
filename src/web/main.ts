@@ -269,7 +269,6 @@ const elements = {
     "#stream-cut-console-status"
   ),
   activeClipLabel: requiredElement<HTMLElement>("#active-clip-label"),
-  refreshSource: requiredElement<HTMLButtonElement>("#refresh-source"),
   captureStart: requiredElement<HTMLButtonElement>("#capture-start"),
   captureEnd: requiredElement<HTMLButtonElement>("#capture-end"),
   saveSegment: requiredElement<HTMLButtonElement>("#save-segment"),
@@ -338,7 +337,6 @@ interface ActiveLocalPreviewOperation {
 let activeLocalPreviewOperation: ActiveLocalPreviewOperation | null = null;
 let youtubeController: YouTubeEmbedController | null = null;
 let helperDownloadConnectionPending = false;
-let helperCutLauncherArmed = isElectronCutHostSurface;
 const electronCutSession = isElectronCutHostSurface && window.kirinukiCutHost
   ? new ElectronCutSession(window.kirinukiCutHost)
   : null;
@@ -379,12 +377,11 @@ async function monitorHelperDownloadConnection(): Promise<void> {
       beginInstallPolling: true
     });
     if (readiness === "ready") {
-      helperCutLauncherArmed = true;
       renderHelperDownloadLabels("ready");
       elements.streamCutStatus.textContent = activeStreamPlatform
         ? activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
           ? "도우미도 연결됐습니다. YouTube 컷 제어는 이 웹 플레이어에서 바로 동작합니다."
-          : "도우미가 연결됐습니다. 권리 확인 후 W를 누르면 E/R/D/F/Y/U 컷 제어가 연결됩니다."
+          : "도우미가 연결됐습니다. 컷 선택은 이 웹 화면에서 계속하고, 편집기로 넘어갈 때 선택 구간만 준비합니다."
         : "영상 준비 도우미가 연결됐습니다. VOD 주소를 붙여 넣어 컷을 선택하세요.";
       return;
     }
@@ -1066,7 +1063,6 @@ async function prepareLocalPreview(targetSeconds = 0): Promise<void> {
   localPreviewSourceUrl = sourceUrl;
   const generation = ++localPreviewGeneration;
   localPreviewBusy = true;
-  elements.refreshSource.disabled = true;
   elements.loadPreviewWindow.disabled = true;
   try {
     elements.streamCutStatus.textContent =
@@ -2058,7 +2054,7 @@ async function captureCurrentPlayerTime(field: "start" | "end"): Promise<void> {
     }
     elements.streamCutStatus.textContent =
       activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
-        ? "YouTube 플레이어가 준비되는 중입니다. 영상을 재생한 뒤 W를 눌러 다시 확인해 주세요."
+        ? "YouTube 플레이어가 준비되는 중입니다. 영상이 열린 뒤 E/R을 다시 눌러 주세요."
         : "이 플랫폼은 브라우저가 재생 시각을 직접 읽을 수 없습니다. 플레이어 시각을 오른쪽 시작·끝 칸에 입력해 주세요.";
     return;
   }
@@ -2211,26 +2207,6 @@ function runStudioCaptureAction(action: StudioCaptureAction): void {
         void refreshRecentProject();
       }
       return;
-    case "refresh-source":
-      if (electronCutSession) {
-        void connectElectronPlayer();
-        return;
-      }
-      if (helperCutLauncherArmed) {
-        location.href = "kirinuki-engine://cut";
-        return;
-      }
-      void monitorHelperDownloadConnection();
-      if (activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
-        reloadActivePlayerFrame();
-        elements.streamCutStatus.textContent =
-          "YouTube 플레이어 연결을 다시 확인하고 있습니다…";
-      } else {
-        void prepareLocalPreview(
-          Number(elements.streamPreviewTimeline.value || 0)
-        );
-      }
-      return;
     case "capture-start":
       void captureCurrentPlayerTime("start");
       return;
@@ -2270,7 +2246,6 @@ function syncCaptureConsoleAvailability(): void {
   } catch {
     sourceReady = false;
   }
-  elements.refreshSource.disabled = !sourceReady;
   for (const button of [
     elements.captureStart,
     elements.captureEnd,
@@ -2493,7 +2468,7 @@ function installStreamFrameLoadHandler(frame: HTMLIFrameElement): void {
       void connectElectronPlayer();
       return;
     }
-    // A cross-origin iframe can finish loading after W has already replaced
+    // A cross-origin iframe can finish loading after a local preview replaced
     // it with the helper-backed local video. Its late load event must not
     // overwrite the connected status or make the active shortcut path look
     // unavailable again.

@@ -15,12 +15,12 @@ Kirinuki는 `https://kirinuki.eff0rtchung.kr`에서 실행되는 일반 브라�
 일반 사용자는 다음 흐름만 경험해야 한다.
 
 1. 웹사이트에 CHZZK·YouTube·SOOP 공개 완료 VOD URL을 붙여넣는다.
-2. 같은 웹페이지의 원본 화면에서 W/Y/U/D/F/E/R/T 단축키와 보이는 버튼으로
+2. 같은 웹페이지의 원본 화면에서 Y/U/D/F/E/R/T 단축키와 보이는 버튼으로
    시작·끝·메모를 정한다.
 3. 사용자는 원하면 시작 화면의 보조 링크에서 화면 없는 영상 준비 도우미를 미리
-   받을 수 있다. 설치 뒤 같은 웹 화면이 연결 상태를 확인하며, CHZZK·SOOP에서도
-   권리 확인 후 W로 로컬 미리보기를 연결해 Y/U/D/F/E/R을 쓸 수 있다. URL 입력과
-   직접 시간 입력은 설치 여부와 무관하게 동작한다.
+   받을 수 있다. 초기 컷 선택은 도우미와 무관하게 웹에서 끝내며, YouTube는
+   E/R/D/F/Y/U가 공식 iframe 메시지 경계로 동작하고 CHZZK·SOOP은 플레이어 시각과
+   웹의 컷 기준 시각을 맞춰 E/R/D/F를 쓴다.
 4. **편집기 열기**를 누를 때 엔진이 아직 없으면 웹사이트가 같은 설치 안내를
    보여 주고, 엔진에 확정한 구간만 요청해 다운로드·
    검증·로컬 영상 구성 진행률을 같은 화면에서 설명한다.
@@ -467,7 +467,7 @@ fail closed한다. `npm run license:check`는 승인된 dependency와 배포 고
 - [ ] 제품 본체가 URL 입력·컷 선택·full editor를 모두 소유하는 public HTTPS 웹임
 - [ ] 설치 엔진은 `BrowserWindow`, preload 또는 제품 UI 없이 필요한 VOD 범위만 준비함
 - [ ] 설치 뒤 사용자가 포트·endpoint·token·프로세스를 관리하지 않음
-- [ ] Q/W/E/R/T/A/D/F/Y/U가 PR16·최종 Chrome extension과 같은 의미로 웹에서 동작함
+- [ ] Q/E/R/T/A/D/F/Y/U가 PR16·최종 Chrome extension과 같은 의미로 웹에서 동작함
 - [ ] 컷→편집기 전환 전에 확정 구간만 준비하고 같은 탭의 편집기가 cache를 재사용함
 - [ ] CHZZK·YouTube·SOOP 실제 구간이 원본 시각과 정확히 맞음
 - [ ] 새로고침과 A→B 전환이 project/source/generation 단위로 멱등적임

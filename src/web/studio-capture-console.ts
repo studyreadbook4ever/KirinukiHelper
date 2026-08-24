@@ -10,7 +10,6 @@ import type {
 
 export type StudioCaptureAction =
   | "refresh-recovery-sessions"
-  | "refresh-source"
   | "capture-start"
   | "capture-end"
   | "save-segment"
@@ -34,12 +33,6 @@ const RAW_STUDIO_CAPTURE_SHORTCUT_BINDINGS = [
     action: "refresh-recovery-sessions",
     targetId: null,
     label: "저장된 편집 새로고침"
-  },
-  {
-    key: "W",
-    action: "refresh-source",
-    targetId: "refresh-source",
-    label: "현재 플레이어 연결 확인"
   },
   {
     key: "E",

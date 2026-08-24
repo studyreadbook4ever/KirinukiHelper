@@ -17,7 +17,7 @@ test("웹 컷 화면은 PR16 단축키 의미를 소유하는 캡처 콘솔을 �
 
   assert.deepEqual(
     STUDIO_CAPTURE_SHORTCUT_BINDINGS.map(({ key }) => key),
-    ["Q", "W", "E", "R", "T", "A", "D", "F", "Y", "U"]
+    ["Q", "E", "R", "T", "A", "D", "F", "Y", "U"]
   );
   assert.equal(studioCaptureShortcutBinding("Q")?.targetId, null);
   assert.equal(studioCaptureShortcutBinding("A")?.targetId, null);
@@ -138,7 +138,7 @@ test("A는 화면 아래의 단일 편집기 CTA와 같은 검증 경로를 사�
   assert.doesNotMatch(html, /id="(?:open-editor|create-codex-job)"/u);
 });
 
-test("초기 컷은 도우미 없이 웹 플레이어와 수동 시계로 모든 컷 단축키를 쓴다", async () => {
+test("초기 컷은 W 연결 단계 없이 웹 플레이어와 수동 시계로 동작한다", async () => {
   const [html, source, controller, server] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
@@ -168,7 +168,8 @@ test("초기 컷은 도우미 없이 웹 플레이어와 수동 시계로 모든
     source,
     /(?:captureStart|captureEnd|seekBackwardFive|seekForwardFive|playbackRateQuarter|playbackRateDouble)\.disabled\s*=\s*!local/u
   );
-  assert.match(source, /case "refresh-source":[\s\S]*SOURCE_PLATFORM_YOUTUBE[\s\S]*reloadActivePlayerFrame\(\)[\s\S]*prepareLocalPreview/u);
+  assert.doesNotMatch(html, /id="refresh-source"|aria-keyshortcuts="W"/u);
+  assert.equal(studioCaptureShortcutBinding("W"), null);
   assert.match(source, /monitorHelperDownloadConnection[\s\S]*beginInstallPolling: true/u);
   assert.match(source, /prepareLocalPreview[\s\S]*allowImmediateProtocolLaunch: true/u);
   assert.match(source, /streamVideo\.crossOrigin = "anonymous"[\s\S]*streamVideo\.src = status\.media\.url/u);
@@ -177,21 +178,22 @@ test("초기 컷은 도우미 없이 웹 플레이어와 수동 시계로 모든
   assert.match(controller, /YOUTUBE_PRIVACY_EMBED_ORIGIN[\s\S]*event\.origin !== YOUTUBE_PRIVACY_EMBED_ORIGIN/u);
   assert.match(controller, /event\.source !== this\.#frame\.contentWindow/u);
   assert.match(source, /prepareSelectedVodForEditor[\s\S]*waitForChzzkVodMaterialization/u);
-  assert.doesNotMatch(source, /StreamingBridgeClient|kirinukiCutHost|kirinukiSurface=cut-host/u);
+  assert.match(source, /isElectronCutHostSurface[\s\S]*ElectronCutSession/u);
+  assert.match(source, /electronCutSession[\s\S]*connectElectronPlayer/u);
   assert.doesNotMatch(`${source}\n${controller}`, /youtube-iframe-api|window\.YT|onYouTubeIframeAPIReady|new api\.Player/u);
   assert.doesNotMatch(source, /fetch\([^\n]*(?:youtube|chzzk|soop)/iu);
   assert.match(server, /"script-src 'self'"/u);
   assert.doesNotMatch(server, /script-src[^\n]*youtube/u);
 });
 
-test("웹 컷 화면은 PR16 단축키를 직접 쓰되 Electron·구 Codex 작업폴더에는 의존하지 않는다", async () => {
+test("웹 컷 화면은 PR16 단축키를 소유하고 선택적 Electron 브리지만 사용한다", async () => {
   const [html, source] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8")
   ]);
-  assert.equal(studioCaptureShortcutBinding("W")?.action, "refresh-source");
+  assert.equal(studioCaptureShortcutBinding("W"), null);
   assert.equal(studioCaptureShortcutBinding("S"), null);
-  assert.doesNotMatch(source, /Electron|kirinukiCutHost/u);
+  assert.match(source, /kirinukiCutHost[\s\S]*ElectronCutSession/u);
   assert.doesNotMatch(source, /createWebCodexJobFolder|createCodexJobFromCurrentForm/u);
   assert.doesNotMatch(html, /chrome-extension:\/\//u);
 });

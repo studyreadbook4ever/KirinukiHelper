@@ -2256,7 +2256,6 @@ async function main(): Promise<void> {
     const end = row?.querySelector('[data-field="end"]');
     const semanticControlIds = [
       "stream-cut-console",
-      "refresh-source",
       "capture-start",
       "capture-end",
       "seek-backward-five",
@@ -2359,14 +2358,19 @@ async function main(): Promise<void> {
   );
 
   await waitFor(
-    () => execute<{ frameUrl: string; refreshDisabled: boolean }>(`
+    () => execute<{ controlsEnabled: boolean; frameUrl: string }>(`
       const frame = document.querySelector("#stream-preview-frame");
       return {
         frameUrl: frame?.getAttribute("src") || "",
-        refreshDisabled: Boolean(document.querySelector("#refresh-source")?.disabled)
+        controlsEnabled: [
+          "capture-start",
+          "capture-end",
+          "seek-backward-five",
+          "seek-forward-five"
+        ].every((id) => document.querySelector("#" + id)?.disabled === false)
       };
     `),
-    (value) => value.frameUrl === chzzkUrl && !value.refreshDisabled,
+    (value) => value.frameUrl === chzzkUrl && value.controlsEnabled,
     "CHZZK 원본 창이 준비되지 않았습니다."
   );
   await waitFor(
@@ -2519,7 +2523,7 @@ async function main(): Promise<void> {
     }
     secondRemove.click();
     const first = rows()[0];
-    const visibleShortcutHintsComplete = ["Q", "W", "E", "R", "T", "A", "D", "F", "Y", "U"]
+    const visibleShortcutHintsComplete = ["Q", "E", "R", "T", "A", "D", "F", "Y", "U"]
       .every((key) => {
         const button = document.querySelector('[aria-keyshortcuts="' + key + '"]');
         if (!(button instanceof HTMLButtonElement) || !button.title.includes("단축키 " + key)) {
