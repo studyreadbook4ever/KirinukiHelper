@@ -22,6 +22,8 @@
 | --- | --- | --- | --- |
 <!-- attribution-id: mediabunny -->
 | `mediabunny` | Mediabunny | 1.51.0 · MPL-2.0 | 브라우저 media read/encode/mux bundle |
+<!-- attribution-id: hls-js -->
+| `hls-js` | hls.js | 1.7.1 · Apache-2.0 | CHZZK·SOOP 동일 화면 HLS 원본 플레이어 |
 <!-- attribution-id: audseg -->
 | `audseg` | AudSeg browser port | 0.1.0 · MIT | source와 compiled editor/worker 고지 |
 <!-- attribution-id: pretendard -->

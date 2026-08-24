@@ -80,6 +80,10 @@ export async function buildWebDistribution({
       path.join(webRoot, "licenses", "MEDIABUNNY-MPL-2.0.txt")
     ),
     copyFile(
+      path.join(root, "node_modules", "hls.js", "LICENSE"),
+      path.join(webRoot, "licenses", "HLS-JS-APACHE-2.0.txt")
+    ),
+    copyFile(
       path.join(root, "AudSeg", "LICENSE"),
       path.join(webRoot, "licenses", "AUDSEG-MIT.txt")
     ),

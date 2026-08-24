@@ -6,23 +6,23 @@ async function source(path: string): Promise<string> {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-test("제품 본체는 공개 웹이고 초기 컷 선택은 설치·연결 단계가 없다", async () => {
-  const [agents, readme, html, webMain, desktopMain] = await Promise.all([
+test("제품 본체는 공개 웹이고 CHZZK·SOOP도 같은 웹 플레이어에서 제어한다", async () => {
+  const [agents, readme, html, webMain] = await Promise.all([
     source("AGENTS.md"),
     source("README.md"),
     source("web/index.html"),
-    source("src/web/main.ts"),
-    source("src/desktop/main.ts")
+    source("src/web/main.ts")
   ]);
 
   assert.match(agents, /웹사이트가 제품 본체/u);
-  assert.match(agents, /초기 컷 선택에서 loopback 엔진 설치를 요구하지/u);
-  assert.match(readme, /URL 입력부터 컷 선택·전체 편집까지 공개 웹사이트/u);
+  assert.match(agents, /수동 시각 입력을\s*요구하지 않는다/u);
+  assert.match(readme, /별도 창·수동 시각 입력·연결 키는 없습니다/u);
   assert.match(html, /id="source-url"[\s\S]*id="stream-cut-console"[\s\S]*id="start-editor"/u);
   assert.doesNotMatch(html, /id="cut-host-launch-panel"|id="launch-kirinuki-cut"/u);
-  assert.doesNotMatch(`${html}\n${webMain}`, /id="refresh-source"|aria-keyshortcuts="W"|location\.href\s*=\s*"kirinuki-engine:\/\/cut"/u);
-  assert.match(webMain, /kirinukiSurface=cut-host[\s\S]*kirinukiCutHost/u);
-  assert.match(desktopMain, /BrowserWindow[\s\S]*openCutWindow[\s\S]*CUT_WINDOW/u);
+  assert.doesNotMatch(`${html}\n${webMain}`, /id="refresh-source"|aria-keyshortcuts="W"/u);
+  assert.match(webMain, /LocalVodWebPlaybackController[\s\S]*connectLocalVodWebPlayback/u);
+  assert.match(webMain, /localVodPlayback\?\.snapshot\(\)\?\.currentTime/u);
+  assert.doesNotMatch(webMain, /openElectronControlledPlayer|kirinukiCutHost/u);
 });
 
 test("새 컷은 웹에서 선택하고 확정 범위 준비 완료 뒤 같은 브라우저 편집기로 이동한다", async () => {
@@ -31,8 +31,8 @@ test("새 컷은 웹에서 선택하고 확정 범위 준비 완료 뒤 같은 �
     source("src/web/main.ts")
   ]);
 
-  assert.match(html, /링크를 붙여넣고 이 페이지의 원본 화면에서 바로 컷을 고르세요/u);
-  assert.match(html, /도우미는 선택 사항/u);
+  assert.match(html, /링크를 붙여넣고 이 페이지에서 바로 컷을 고르세요/u);
+  assert.match(html, /YouTube는 즉시 열리고, CHZZK·SOOP은 영상 준비 도우미가 연결되면 같은 플레이어/u);
   assert.match(webMain, /beginInstallPolling: true/u);
   assert.match(webMain, /allowImmediateProtocolLaunch: true/u);
   assert.match(html, /id="cut-preparation-progress"/u);

@@ -17,10 +17,10 @@ Kirinuki는 `https://kirinuki.eff0rtchung.kr`에서 실행되는 일반 브라�
 1. 웹사이트에 CHZZK·YouTube·SOOP 공개 완료 VOD URL을 붙여넣는다.
 2. 같은 웹페이지의 원본 화면에서 Y/U/D/F/E/R/T 단축키와 보이는 버튼으로
    시작·끝·메모를 정한다.
-3. 사용자는 원하면 시작 화면의 보조 링크에서 화면 없는 영상 준비 도우미를 미리
-   받을 수 있다. 초기 컷 선택은 도우미와 무관하게 웹에서 끝내며, YouTube는
-   E/R/D/F/Y/U가 공식 iframe 메시지 경계로 동작하고 CHZZK·SOOP은 플레이어 시각과
-   웹의 컷 기준 시각을 맞춰 E/R/D/F를 쓴다.
+3. YouTube는 E/R/D/F/Y/U가 공식 iframe 메시지 경계로 동작한다. CHZZK·SOOP은
+   설치된 Kirinuki가 공개 HLS를 exact loopback 경계로 연결하고 같은 공개 웹 화면의
+   `<video>`에서 재생한다. E/R/D/F/Y/U와 컷 타임스탬프는 그 `<video>`의 실제
+   `currentTime` 하나를 공유한다. 사용자가 시각을 옮겨 적거나 연결 버튼을 누르지 않는다.
 4. **편집기 열기**를 누를 때 엔진이 아직 없으면 웹사이트가 같은 설치 안내를
    보여 주고, 엔진에 확정한 구간만 요청해 다운로드·
    검증·로컬 영상 구성 진행률을 같은 화면에서 설명한다.
@@ -28,9 +28,9 @@ Kirinuki는 `https://kirinuki.eff0rtchung.kr`에서 실행되는 일반 브라�
 6. 컷·자막·레이어를 검수하고 제목과 저장 위치를 정해 내보낸다.
 
 설치 뒤 사용자가 별도 앱 창, 로컬 주소, 포트, 토큰, 실행·종료 상태 또는 브라우저
-확장을 보거나 조작해야 한다면 제품 회귀다. URL 입력부터 컷 선택과 전체 편집까지
-항상 공개 웹사이트가 소유해야 하며, 설치 앱이나 custom protocol이 새 컷의 시작
-화면이 되어서는 안 된다. Chrome이 최초 연결에서 표시하는 Local Network Access
+확장을 조작해야 한다면 제품 회귀다. URL 입력부터 컷 선택과 전체 편집까지 공개 웹
+UI가 소유한다. CHZZK·SOOP 재생 연결은 별도 연결·identity 확인·수동 시각 입력을
+요구하지 않는다. Chrome이 최초 연결에서 표시하는 Local Network Access
 권한은 운영체제·브라우저가 요구하는 한 번의 온보딩으로 설명하고, 그 뒤에는 일반
 웹사이트처럼 동작해야 한다.
 
@@ -51,7 +51,7 @@ CHZZK / YouTube / SOOP ───────────────────
 - Cloudflare Tunnel은 정적 웹 origin에만 연결한다. 사용자 PC의 loopback 엔진을
   Tunnel, LAN 또는 공인 인터페이스에 노출하지 않는다.
 - Electron은 세 OS의 동일한 background engine을 패키징하는 수단일 뿐이다.
-  제품 runtime은 `BrowserWindow`를 만들지 않으며 background autostart도 창을 열지
+  제품 runtime은 `BrowserWindow`를 열지 않으며 background autostart도 창을 열지
   않는다. 컷 선택, 저장본 관리, 자막·렌더 UI는 모두 공개 웹에만 둔다.
 - 엔진은 사용 통계나 업데이트 확인을 위한 독자적 네트워크 polling을 하지 않는다.
   사용자가 요청한 공개 VOD 범위를 원본 플랫폼에서 준비할 때만 외부로 연결한다.
@@ -130,10 +130,11 @@ npm run caption-stack:stop
 - 영상 중간 삭제와 레이어 순서 변경은 명시적인 사용자 동작으로만 실행한다.
 - 삭제나 시간축 변환 뒤 영상에 결속된 자막·이미지·음성은 같은 변환을 적용한다.
 - 원본 전체와 최종 렌더를 Kirinuki 서버로 보내지 않는다.
-- 시작 화면의 원본 frame은 시각 확인용이다. 실제 편집·분석·렌더는 검증된 로컬
-  compact media 또는 사용자가 직접 고른 파일만 사용한다.
-- 시작 화면은 다른 탭의 DOM, 로그인 상태, 쿠키 또는 플레이어를 읽거나 제어하지
-  않는다.
+- 시작 화면의 원본 플레이어는 시각 확인과 컷 제어용이다. 실제 편집·분석·렌더는
+  검증된 로컬 compact media 또는 사용자가 직접 고른 파일만 사용한다.
+- 일반 브라우저 문서는 다른 탭의 DOM, 로그인 상태 또는 쿠키를 읽지 않는다.
+  CHZZK·SOOP은 도우미가 검증한 공개 HLS만 opaque loopback URL로 같은 페이지의
+  `<video>`에 연결하며, snapshot/seek/rate는 모두 그 요소에만 적용한다.
 - 자동 준비가 지원되지 않는 권한 있는 원본에는 실제 파일 선택기를 여는
   **내 파일 직접 연결**을 제공한다.
 
@@ -299,11 +300,13 @@ AudSeg 기준 구현은 `AudSeg/src/audseg/`, 브라우저 포트는
 - 웹 컷 화면의 단축키는 문서가 직접 소유하고 IME, modifier, repeat, input·textarea·
   contenteditable을 건드리지 않는다. iframe script나 로컬 엔진 응답이 사용자 입력인
   것처럼 컷 경계를 조용히 바꾸면 안 된다.
-- YouTube 공식 iframe은 exact source window·origin을 검증한 브라우저 메시지 경계로
-  현재 시각과 E/R/D/F/Y/U 제어를 제공한다. CHZZK·SOOP처럼 브라우저 SOP 안에서
-  신뢰할 시각 API가 없는 플랫폼은 플레이어에 표시된 시각을 사용자가 시작·끝 칸에
-  직접 입력한다. 어느 경우에도 초기 컷 선택에서 loopback 엔진 설치를 요구하지
-  않으며, 공개 서버 proxy나 Electron frame injection으로 우회하지 않는다.
+- YouTube 공식 iframe은 exact source window·origin을 검증한 브라우저 메시지
+  경계로 현재 시각과 E/R/D/F/Y/U 제어를 제공한다. CHZZK·SOOP은 도우미가 yt-dlp로
+  검증한 공개 HLS를 짧은 opaque loopback session으로만 전달하고 웹의 동일한
+  `<video>`가 snapshot/seek/rate를 소유한다. SOOP 다중 파트는
+  `part.startSeconds + video.currentTime`만 전역 시각으로 사용한다. 공개 서버 proxy,
+  Electron 컷 창, 범용 script injection, W 연결 버튼, identity 확인, 수동 시각 입력은
+  허용하지 않는다.
 - preview와 확정 구간 준비 요청은 device proof와 ECDH/AES-GCM channel 안에서만
   수행한다. 짧은 TTL, project/source/action scope, replay 방지와 제한된 pending
   개수를 적용한다.

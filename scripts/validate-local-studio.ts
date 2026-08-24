@@ -110,8 +110,8 @@ assert(
   "일반 브라우저 컷 선택·미리보기·저장 편집 흐름이 없습니다."
 );
 assert(
-  indexHtml.includes('id="manual-cut-clock"')
-    && indexHtml.includes("위 컷 기준 시각으로 E/R/D/F를 바로 쓰고")
+  !indexHtml.includes('id="manual-cut-clock"')
+    && indexHtml.includes("CHZZK·SOOP은 영상 준비 도우미가 연결되면 같은 플레이어")
     && indexHtml.includes('id="linux-helper-download"')
     && indexHtml.includes('id="arch-helper-download"')
     && indexHtml.includes("컷 선택은 이 웹 화면에서 끝납니다.")
@@ -243,6 +243,7 @@ for (const target of [
   "/licenses.html",
   "/licenses.css",
   "/licenses/UNLICENSE.txt",
+  "/licenses/HLS-JS-APACHE-2.0.txt",
   "/THIRD_PARTY_NOTICES.md",
   "/licenses/MEDIABUNNY-MPL-2.0.txt",
   "/editor/fonts/Pretendard-ExtraBold.woff2"

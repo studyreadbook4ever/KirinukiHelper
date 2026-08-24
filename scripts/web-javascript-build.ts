@@ -144,6 +144,9 @@ export async function buildWebJavaScript({
   }
   const common = {
     absWorkingDir: rootDirectory,
+    // TypeScript consumes hls.js' canonical declarations, while the browser
+    // ships the smaller feature-compatible light runtime.
+    alias: { "hls.js": "hls.js/light" },
     bundle: true,
     platform: "browser",
     target: "chrome120",

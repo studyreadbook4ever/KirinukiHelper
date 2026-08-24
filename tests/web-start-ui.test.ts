@@ -24,7 +24,8 @@ test("공개 웹이 URL 입력·PR16 컷 좌표·전체 편집 진입을 모두 
   assert.match(html, /id="start-editor"[^>]*aria-keyshortcuts="A"/u);
   assert.match(source, /setDocumentSurface\("local"\)/u);
   assert.match(source, /installStudioCaptureConsole\(\)/u);
-  assert.match(source, /kirinukiSurface=cut-host[\s\S]*ElectronCutSession/u);
+  assert.match(source, /connectLocalVodWebPlayback[\s\S]*LocalVodWebPlaybackController\.connect/u);
+  assert.doesNotMatch(source, /ElectronCutSession|openElectronControlledPlayer|kirinukiSurface=cut-host/u);
   assert.doesNotMatch(`${html}\n${source}`, /chrome-extension:\/\/|createWebCodexJobFolder/u);
 });
 
@@ -71,12 +72,14 @@ test("초기 컷은 W 연결 단계 없이 진행한 뒤 같은 탭 편집기로
   const { html, source } = await studioSources();
   assert.match(
     html,
-    /플레이어 시각을 한 번 맞추면 E\/R로 기록하고 D\/F로 5초씩 조절할 수 있습니다/u
+    /CHZZK·SOOP은 도우미가 이 자리에 연결한 웹 플레이어/u
   );
+  assert.doesNotMatch(`${html}\n${source}`, /manual-cut-clock|원본 플레이어도 같은 시각/u);
   assert.match(html, /id="source-capture-workspace"[^>]*hidden/u);
   assert.match(html, /id="recent-section"[^>]*hidden/u);
   assert.match(html, /id="cut-preparation-progress"[\s\S]*컷 선택은 이 웹 화면에서 끝납니다/u);
-  assert.doesNotMatch(`${html}\n${source}`, /id="refresh-source"|aria-keyshortcuts="W"|case "refresh-source"|kirinuki-engine:\/\/cut/u);
+  assert.doesNotMatch(`${html}\n${source}`, /id="refresh-source"|aria-keyshortcuts="W"|case "refresh-source"|openElectronControlledPlayer/u);
+  assert.match(source, /ensureLocalVodWebPlayback[\s\S]*captureCurrentPlayerTime/u);
   assert.match(source, /configureHelperDownload[\s\S]*monitorHelperDownloadConnection/u);
   const prepare = source.indexOf("await prepareSelectedVodForEditor(");
   const begin = source.indexOf("await beginWebEditorSession({", prepare);

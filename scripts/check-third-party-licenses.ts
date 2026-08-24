@@ -31,7 +31,7 @@ if (process.argv.slice(2).length > 0) {
   throw new TypeError("사용법: check-third-party-licenses.ts");
 }
 const EXPECTED_NPM_INVENTORY_SHA256 =
-  "ece0d062afa69f625fa4171a00faad395341bafc34281398a0c8f68f3fd2e529";
+  "808ed608329d5afdff6565c499d37fabea7043bd66d07c49b09d4f8eb87a5ac6";
 const EXPECTED_PROJECT_UNLICENSE_SIZE = 1_212;
 const EXPECTED_PROJECT_UNLICENSE_SHA256 =
   "b5065838cbac452dfc855ba6e6e031481ad2c68406f70d21ead9321374653e6c";
@@ -148,6 +148,12 @@ function assertLockPackage(packagePath: string, metadata: LockPackage) {
     assert(version === "1.51.0", "Mediabunny 버전이 승인된 1.51.0과 다릅니다.");
     assert(license === "MPL-2.0", "Mediabunny 라이선스가 MPL-2.0이 아닙니다.");
     assert(metadata.dev !== true, "Mediabunny가 runtime dependency가 아닙니다.");
+    return;
+  }
+  if (packagePath === "node_modules/hls.js") {
+    assert(version === "1.7.1", "hls.js 버전이 승인된 1.7.1과 다릅니다.");
+    assert(license === "Apache-2.0", "hls.js 라이선스가 Apache-2.0이 아닙니다.");
+    assert(metadata.dev !== true, "hls.js가 runtime dependency가 아닙니다.");
     return;
   }
   if (packagePath === "node_modules/esbuild") {
@@ -281,11 +287,13 @@ assert(
   "관리형 runtime을 우회하는 전체 YouTube 다운로드 script가 남아 있습니다."
 );
 const mediabunnyLock = packageLock.packages?.["node_modules/mediabunny"];
+const hlsJsLock = packageLock.packages?.["node_modules/hls.js"];
 
 assertExactObject(
   packageJson.dependencies,
   {
     esbuild: "0.28.1",
+    "hls.js": "1.7.1",
     mediabunny: "1.51.0",
     tsx: "4.23.1"
   },
@@ -324,6 +332,13 @@ assert(
     === "sha512-u327374xU8Ho0gCaMII7fUK8t0PnqkabCox1k8uUwvgvGb9o6YQGZEG2Qr4DTe7nTMpzfL7ukgnHDvDROySZ+Q==",
   "Mediabunny 대응 소스 package integrity가 고정값과 다릅니다."
 );
+assert(
+  hlsJsLock?.resolved
+    === "https://registry.npmjs.org/hls.js/-/hls.js-1.7.1.tgz"
+    && hlsJsLock?.integrity
+      === "sha512-DlzIkeBAS9IIQ432k3BUf3HlwbsR0+trB1i2lDdN2gUkNkrehFurh0/48M5c1/EjlDkdGng1gwZIpwyPxvdZ/g==",
+  "hls.js 대응 소스 package URL 또는 integrity가 고정값과 다릅니다."
+);
 for (const [packagePath, metadata] of Object.entries(packageLock.packages || {})) {
   if (!packagePath) {
     continue;
@@ -353,6 +368,8 @@ const [
   distributedProjectLicense,
   mediabunnyInstalledLicense,
   mediabunnyDistributedLicense,
+  hlsJsInstalledLicense,
+  hlsJsDistributedLicense,
   audSegSourceLicense,
   audSegDistributedLicense,
   webNotices,
@@ -375,6 +392,8 @@ const [
   bytes("licenses/UNLICENSE.txt", webRoot),
   bytes("node_modules/mediabunny/LICENSE"),
   bytes("licenses/MEDIABUNNY-MPL-2.0.txt", webRoot),
+  bytes("node_modules/hls.js/LICENSE"),
+  bytes("licenses/HLS-JS-APACHE-2.0.txt", webRoot),
   bytes("LICENSE", embeddedAudSegRoot),
   bytes("licenses/AUDSEG-MIT.txt", webRoot),
   bytes("THIRD_PARTY_NOTICES.md", webRoot),
@@ -417,12 +436,17 @@ assert(
   "Mediabunny MPL-2.0 원문과 web 배포 사본이 다릅니다."
 );
 assert(
+  hlsJsInstalledLicense.equals(hlsJsDistributedLicense),
+  "hls.js Apache-2.0 원문과 web 배포 사본이 다릅니다."
+);
+assert(
   audSegSourceLicense.equals(audSegDistributedLicense),
   "AudSeg MIT 원문과 web 배포 사본이 다릅니다."
 );
 for (const [label, licenseText] of [
   ["KirinukiHelper Unlicense", projectLicense],
   ["Mediabunny MPL-2.0", mediabunnyInstalledLicense],
+  ["hls.js Apache-2.0", hlsJsInstalledLicense],
   ["AudSeg MIT", audSegSourceLicense]
 ] as const) {
   const restrictiveMarker = commercialUseRestrictiveLicenseMarker(
@@ -442,6 +466,7 @@ assert(
   "web 정적 고지와 전체 runtime 고지는 서로 다른 배포 범위를 가져야 합니다."
 );
 await access(path.join(root, "node_modules", "mediabunny", "src", "index.ts"));
+await access(path.join(root, "node_modules", "hls.js", "src", "hls.ts"));
 
 for (const font of [PRETENDARD_FONT, PAPERLOGY_FONT]) {
   const [
@@ -473,6 +498,7 @@ for (const requiredPath of [
   "licenses.css",
   "licenses.html",
   "licenses/AUDSEG-MIT.txt",
+  "licenses/HLS-JS-APACHE-2.0.txt",
   "licenses/MEDIABUNNY-MPL-2.0.txt",
   "licenses/UNLICENSE.txt",
   PRETENDARD_FONT.webLicensePath,
@@ -522,6 +548,7 @@ assert(
 
 const expectedAttributionIds = [
   "mediabunny",
+  "hls-js",
   "pretendard",
   "paperlogy",
   "audseg",
@@ -949,6 +976,7 @@ console.log(JSON.stringify({
   ],
   distributedLicenses: [
     "Mediabunny MPL-2.0",
+    "hls.js Apache-2.0",
     "AudSeg MIT",
     "Pretendard OFL-1.1",
     "Paperlogy OFL-1.1"

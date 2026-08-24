@@ -138,7 +138,7 @@ test("A는 화면 아래의 단일 편집기 CTA와 같은 검증 경로를 사�
   assert.doesNotMatch(html, /id="(?:open-editor|create-codex-job)"/u);
 });
 
-test("초기 컷은 W 연결 단계 없이 웹 플레이어와 수동 시계로 동작한다", async () => {
+test("초기 컷은 W·수동 시계 없이 YouTube와 CHZZK·SOOP 웹 플레이어를 제어한다", async () => {
   const [html, source, controller, server] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
@@ -147,7 +147,7 @@ test("초기 컷은 W 연결 단계 없이 웹 플레이어와 수동 시계로 
   ]);
   assert.match(
     html,
-    /링크를 붙여넣고 이 페이지의 원본 화면에서 바로 컷을 고르세요\.[\s\S]*도우미는 선택 사항/u
+    /링크를 붙여넣고 이 페이지에서 바로 컷을 고르세요\.[\s\S]*CHZZK·SOOP은 영상 준비 도우미가 연결되면 같은 플레이어/u
   );
   assert.match(html, /data-field="start"[^>]*required/u);
   assert.match(html, /data-field="end"[^>]*required/u);
@@ -157,8 +157,8 @@ test("초기 컷은 W 연결 단계 없이 웹 플레이어와 수동 시계로 
   assert.match(html, /id="source-capture-workspace"[^>]*hidden/u);
   assert.match(html, /id="linux-helper-download"[\s\S]*Debian\/Ubuntu 도우미/u);
   assert.match(html, /id="arch-helper-download"[\s\S]*Arch Linux 도우미/u);
-  assert.match(html, /id="manual-cut-clock"[^>]*value="00:00:00"/u);
-  assert.match(source, /function manualCutClockIsActive\(\)/u);
+  assert.doesNotMatch(html, /manual-cut-clock/u);
+  assert.doesNotMatch(source, /manualCutClock|원본 플레이어도 같은 시각/u);
   assert.match(source, /function syncCaptureConsoleAvailability\(\)[\s\S]*button\.disabled = !sourceReady/u);
   assert.match(
     source,
@@ -173,27 +173,30 @@ test("초기 컷은 W 연결 단계 없이 웹 플레이어와 수동 시계로 
   assert.match(source, /monitorHelperDownloadConnection[\s\S]*beginInstallPolling: true/u);
   assert.match(source, /prepareLocalPreview[\s\S]*allowImmediateProtocolLaunch: true/u);
   assert.match(source, /streamVideo\.crossOrigin = "anonymous"[\s\S]*streamVideo\.src = status\.media\.url/u);
-  assert.match(source, /if \(!elements\.streamVideo\.hidden && Boolean\(elements\.streamVideo\.src\)\) \{[\s\S]*return;/u);
+  assert.match(source, /if \(!elements\.streamVideo\.hidden && localVodPlayback\) \{[\s\S]*return;/u);
   assert.match(source, /YouTubeEmbedController[\s\S]*captureCurrentPlayerTime[\s\S]*seekPlayerBy[\s\S]*setPlayerRate/u);
   assert.match(controller, /YOUTUBE_PRIVACY_EMBED_ORIGIN[\s\S]*event\.origin !== YOUTUBE_PRIVACY_EMBED_ORIGIN/u);
   assert.match(controller, /event\.source !== this\.#frame\.contentWindow/u);
   assert.match(source, /prepareSelectedVodForEditor[\s\S]*waitForChzzkVodMaterialization/u);
-  assert.match(source, /isElectronCutHostSurface[\s\S]*ElectronCutSession/u);
-  assert.match(source, /electronCutSession[\s\S]*connectElectronPlayer/u);
+  assert.match(source, /LocalVodWebPlaybackController[\s\S]*connectLocalVodWebPlayback/u);
+  assert.match(source, /localVodPlayback\?\.snapshot\(\)\?\.currentTime/u);
+  assert.match(source, /await controller\.seekAbsolute/u);
+  assert.doesNotMatch(source, /ElectronCutSession|openElectronControlledPlayer|kirinukiCutHost/u);
   assert.doesNotMatch(`${source}\n${controller}`, /youtube-iframe-api|window\.YT|onYouTubeIframeAPIReady|new api\.Player/u);
   assert.doesNotMatch(source, /fetch\([^\n]*(?:youtube|chzzk|soop)/iu);
   assert.match(server, /"script-src 'self'"/u);
   assert.doesNotMatch(server, /script-src[^\n]*youtube/u);
 });
 
-test("웹 컷 화면은 PR16 단축키를 소유하고 선택적 Electron 브리지만 사용한다", async () => {
+test("웹 컷 화면은 PR16 단축키를 소유하고 로컬 HLS 브리지만 사용한다", async () => {
   const [html, source] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/web/main.ts", import.meta.url), "utf8")
   ]);
   assert.equal(studioCaptureShortcutBinding("W"), null);
   assert.equal(studioCaptureShortcutBinding("S"), null);
-  assert.match(source, /kirinukiCutHost[\s\S]*ElectronCutSession/u);
+  assert.match(source, /LocalVodWebPlaybackController[\s\S]*ensureLocalVodWebPlayback/u);
+  assert.doesNotMatch(source, /kirinukiCutHost|ElectronCutSession/u);
   assert.doesNotMatch(source, /createWebCodexJobFolder|createCodexJobFromCurrentForm/u);
   assert.doesNotMatch(html, /chrome-extension:\/\//u);
 });

@@ -39,6 +39,23 @@ Mediabunny는 브라우저의 로컬 미디어 read/encode/mux 경로에 사용�
 upstream 코드는 로컬 patch 없이 번들되며, MPL-2.0 대응 소스는 위의 고정
 npm source package에서 받을 수 있습니다.
 
+<!-- attribution-id: hls-js -->
+### hls.js 1.7.1
+
+- License: Apache License 2.0 (`Apache-2.0`)
+- Upstream: https://github.com/video-dev/hls.js
+- Exact corresponding source:
+  https://registry.npmjs.org/hls.js/-/hls.js-1.7.1.tgz
+- npm integrity:
+  `sha512-DlzIkeBAS9IIQ432k3BUf3HlwbsR0+trB1i2lDdN2gUkNkrehFurh0/48M5c1/EjlDkdGng1gwZIpwyPxvdZ/g==`
+- Distributed license: `web/licenses/HLS-JS-APACHE-2.0.txt`
+- License file size: `1338` bytes
+- License SHA-256:
+  `ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db`
+
+hls.js는 CHZZK·SOOP HLS를 브라우저의 동일한 원본 플레이어에서 재생하는 데
+사용되며 컴파일된 `web/studio.js`에 포함됩니다.
+
 <!-- attribution-id: audseg -->
 ### AudSeg browser port 0.1.0
 

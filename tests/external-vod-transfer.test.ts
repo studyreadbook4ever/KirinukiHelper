@@ -77,7 +77,8 @@ test("선택 source의 공개 헤더만 전달하고 자격 증명은 폐기한�
   }), {
     "accept-encoding": "identity",
     "user-agent": "Kirinuki test",
-    accept: "application/vnd.apple.mpegurl"
+    accept: "application/vnd.apple.mpegurl",
+    range: "bytes=0-10"
   });
   assert.throws(
     () => safeExternalVodRequestHeaders({ "User-Agent": "safe\r\nCookie: bad" }),

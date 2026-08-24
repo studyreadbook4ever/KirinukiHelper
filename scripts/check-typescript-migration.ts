@@ -487,7 +487,7 @@ async function assertTypeScriptSyntaxPolicy(
 }
 
 export function assertGeneratedBuildInputs(inputs: readonly string[]): void {
-  const approvedDependencyInput = /^(?:\(disabled\):)?node_modules\/mediabunny\/dist\/modules\/.+\.js$/u;
+  const approvedDependencyInput = /^(?:\(disabled\):)?node_modules\/(?:mediabunny\/dist\/modules\/.+\.js|hls\.js\/dist\/hls\.light\.mjs)$/u;
   const invalidInputs = inputs.filter((inputPath) => (
     !(inputPath.startsWith("src/") && typeScriptFamilyPattern.test(inputPath))
     && !approvedDependencyInput.test(inputPath)

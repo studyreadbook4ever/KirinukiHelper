@@ -17,8 +17,10 @@ test("웹 컷 화면은 공식 iframe과 같은 페이지의 검증된 로컬 vi
   assert.match(source, /function cancelActiveLocalPreviewOperation/u);
   assert.match(source, /cancelChzzkVodMaterialization\(\{/u);
   assert.match(source, /signal: operation\.controller\.signal/u);
-  assert.match(source, /ElectronCutSession/u);
-  assert.match(source, /connectElectronPlayer/u);
+  assert.match(source, /connectLocalVodWebPlayback/u);
+  assert.match(source, /currentWebPlayerSourceTime[\s\S]*localVodPlayback\?\.snapshot\(\)\?\.currentTime/u);
+  assert.match(source, /controller\.seekAbsolute/u);
+  assert.doesNotMatch(source, /ElectronCutSession|connectElectronPlayer|openElectronControlledPlayer/u);
   assert.doesNotMatch(`${source}\n${bundle}`, /chrome-extension:\/\//u);
 });
 
@@ -38,20 +40,7 @@ test("확정 구간 요청은 사용자 선택을 millisecond 범위로 그대�
   assert.match(source, /status\.state !== "completed"[\s\S]*waitForChzzkVodMaterialization/u);
 });
 
-test("desktop package는 headless 엔진과 격리된 컷 창 preload·frame action을 묶는다", async () => {
-  const [build, packageFiles, manifest] = await Promise.all([
-    readFile(new URL("../scripts/build-desktop.ts", import.meta.url), "utf8"),
-    readFile(new URL("../scripts/desktop-package-files.ts", import.meta.url), "utf8"),
-    readFile(new URL("../package.json", import.meta.url), "utf8")
-  ]);
-  assert.match(build, /entryPoints: \["src\/desktop\/main\.ts"\]/u);
-  assert.match(build, /src\/desktop\/cut-window-preload\.ts/u);
-  assert.match(build, /src\/streaming-electron-frame-action\.ts/u);
-  assert.match(packageFiles, /preload\.cjs/u);
-  assert.doesNotMatch(manifest, /chrome-extension:\/\//u);
-});
-
-test("구 Extension은 없고 Electron 컷 호스트는 desktop 경계에만 있다", async () => {
+test("구 Extension과 Electron 컷 호스트는 웹 제품 경계에 없다", async () => {
   const [validator, migration] = await Promise.all([
     readFile(new URL("../scripts/validate-local-studio.ts", import.meta.url), "utf8"),
     readFile(new URL("../scripts/check-typescript-migration.ts", import.meta.url), "utf8")
