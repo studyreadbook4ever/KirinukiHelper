@@ -3036,8 +3036,15 @@ async function prepareRenderSource(
     throw new Error("원본의 음성 트랙을 현재 Chrome에서 디코딩할 수 없습니다.");
   }
 
-  const [timeline, sourceWidth, sourceHeight, packetStats] = await Promise.all([
+  const [
+    timeline,
+    videoTimeline,
+    sourceWidth,
+    sourceHeight,
+    packetStats
+  ] = await Promise.all([
     readMediaTimeline(input, [videoTrack, audioTrack]),
+    readMediaTimeline(input, [videoTrack]),
     videoTrack?.getDisplayWidth() ?? null,
     videoTrack?.getDisplayHeight() ?? null,
     videoTrack?.computePacketStats(100) ?? null
@@ -3078,6 +3085,7 @@ async function prepareRenderSource(
     videoTrack,
     audioTrack,
     timeline,
+    videoTimeline,
     settings,
     clips,
     shortFormCanvas
@@ -3698,6 +3706,15 @@ export function requireRenderBaseVideoSample<T>(
   return sourceSample;
 }
 
+export function isLeadingRenderVideoGap(
+  sourceSample: unknown,
+  sourceTimestampSeconds: number,
+  videoOriginSeconds: number
+): boolean {
+  return (sourceSample === null || sourceSample === undefined)
+    && sourceTimestampSeconds < videoOriginSeconds;
+}
+
 /** A black gap is valid, but an active v7 visual may never disappear silently. */
 export function requireRenderShortFormVideoAssetSample<T>(
   sourceSample: T | null | undefined,
@@ -4127,6 +4144,7 @@ async function renderProjectVideoAttempt(
       videoTrack,
       audioTrack,
       timeline,
+      videoTimeline,
       settings,
       clips,
       shortFormCanvas
@@ -4434,6 +4452,7 @@ async function renderProjectVideoAttempt(
               + frameIndex / frameRate;
           }
         })();
+        const pendingLeadingFrameIndices: number[] = [];
         let frameIndex = firstFrameIndex;
         try {
           for await (const sourceSample of videoSink.samplesAtTimestamps(sourceTimestamps)) {
@@ -4442,117 +4461,139 @@ async function renderProjectVideoAttempt(
                 return;
               }
               throwIfAborted(signal);
+              const sourceTimestamp = timeline.originSeconds
+                + clip.sourceStartMs / 1000
+                + frameIndex / frameRate;
+              const sourceFrameIndex = frameIndex;
+              frameIndex += 1;
+              if (isLeadingRenderVideoGap(
+                sourceSample,
+                sourceTimestamp,
+                videoTimeline.originSeconds
+              )) {
+                pendingLeadingFrameIndices.push(sourceFrameIndex);
+                continue;
+              }
               const baseVideoSample = requireRenderBaseVideoSample(
                 sourceSample,
                 clip.id || clip.selectionId
               );
-              const timing = cfrFrameTiming(clip, frameIndex, frameRate);
-              frameIndex += 1;
-              if (timing.duration <= 0) {
-                continue;
-              }
-              context.fillStyle = RENDER_LETTERBOX_COLOR;
-              context.fillRect(0, 0, width, height);
-              if (shortFormScene) {
-                const geometry = shortFormVideoDrawGeometry(
-                  baseVideoSample.displayWidth,
-                  baseVideoSample.displayHeight,
-                  width,
-                  height,
-                  shortFormScene
-                );
-                drawShortFormVideoSample(
-                  baseVideoSample,
-                  context,
-                  geometry,
-                  adaptiveShortFormRenderer,
-                  1
-                );
-              } else {
-                baseVideoSample.drawWithFit(context, { fit: "contain" });
-              }
-              if (shortFormScene) {
-                const acquiredGroups: Array<{
-                  sample: VideoSample;
-                  layers: ShortFormVideoLayer[];
-                }> = [];
-                try {
-                  for (const group of additionalLayerStreamGroups) {
-                    const activeLayers = group.layers.filter((layer) => (
-                      shortFormVideoLayerSourceTimeMs(
-                        layer,
-                        timing.localTimestamp * 1_000
-                      ) !== null
-                    ));
-                    if (activeLayers.length === 0) {
-                      continue;
+              const renderFrameIndices = [
+                ...pendingLeadingFrameIndices,
+                sourceFrameIndex
+              ];
+              pendingLeadingFrameIndices.length = 0;
+              for (const renderFrameIndex of renderFrameIndices) {
+                const timing = cfrFrameTiming(clip, renderFrameIndex, frameRate);
+                if (timing.duration <= 0) {
+                  continue;
+                }
+                context.fillStyle = RENDER_LETTERBOX_COLOR;
+                context.fillRect(0, 0, width, height);
+                if (shortFormScene) {
+                  const geometry = shortFormVideoDrawGeometry(
+                    baseVideoSample.displayWidth,
+                    baseVideoSample.displayHeight,
+                    width,
+                    height,
+                    shortFormScene
+                  );
+                  drawShortFormVideoSample(
+                    baseVideoSample,
+                    context,
+                    geometry,
+                    adaptiveShortFormRenderer,
+                    1
+                  );
+                } else {
+                  baseVideoSample.drawWithFit(context, { fit: "contain" });
+                }
+                if (shortFormScene) {
+                  const acquiredGroups: Array<{
+                    sample: VideoSample;
+                    layers: ShortFormVideoLayer[];
+                  }> = [];
+                  try {
+                    for (const group of additionalLayerStreamGroups) {
+                      const activeLayers = group.layers.filter((layer) => (
+                        shortFormVideoLayerSourceTimeMs(
+                          layer,
+                          timing.localTimestamp * 1_000
+                        ) !== null
+                      ));
+                      if (activeLayers.length === 0) {
+                        continue;
+                      }
+                      const next = await group.iterator.next();
+                      if (next.done || !next.value) {
+                        throw new Error(
+                          `${activeLayers[0]!.id} 추가 영상의 원본 프레임을 읽지 못했습니다.`
+                        );
+                      }
+                      acquiredGroups.push({ sample: next.value, layers: activeLayers });
                     }
-                    const next = await group.iterator.next();
-                    if (next.done || !next.value) {
-                      throw new Error(
-                        `${activeLayers[0]!.id} 추가 영상의 원본 프레임을 읽지 못했습니다.`
+                    const draws = acquiredGroups
+                      .flatMap(({ sample, layers }) => layers.map((layer) => ({
+                        layer,
+                        sample
+                      })))
+                      .sort((left, right) => (
+                        left.layer.zIndex - right.layer.zIndex
+                        || left.layer.id.localeCompare(right.layer.id)
+                      ));
+                    for (const { layer, sample } of draws) {
+                      drawShortFormVideoSample(
+                        sample,
+                        context,
+                        shortFormVideoLayerDrawGeometry(
+                          sample.displayWidth,
+                          sample.displayHeight,
+                          width,
+                          height,
+                          layer
+                        ),
+                        adaptiveShortFormRenderer,
+                        layer.opacity
                       );
                     }
-                    acquiredGroups.push({ sample: next.value, layers: activeLayers });
-                  }
-                  const draws = acquiredGroups
-                    .flatMap(({ sample, layers }) => layers.map((layer) => ({
-                      layer,
-                      sample
-                    })))
-                    .sort((left, right) => (
-                      left.layer.zIndex - right.layer.zIndex
-                      || left.layer.id.localeCompare(right.layer.id)
-                    ));
-                  for (const { layer, sample } of draws) {
-                    drawShortFormVideoSample(
-                      sample,
-                      context,
-                      shortFormVideoLayerDrawGeometry(
-                        sample.displayWidth,
-                        sample.displayHeight,
-                        width,
-                        height,
-                        layer
-                      ),
-                      adaptiveShortFormRenderer,
-                      layer.opacity
-                    );
-                  }
-                } finally {
-                  for (const { sample } of acquiredGroups) {
-                    sample.close();
+                  } finally {
+                    for (const { sample } of acquiredGroups) {
+                      sample.close();
+                    }
                   }
                 }
+                const activeImageAssets = await activeImageAssetCache.prepareAt(
+                  timing.outputTimestamp
+                );
+                for (const { asset, image } of activeImageAssets) {
+                  drawImageAsset(context, canvas, asset, image);
+                }
+                activeImageAssetCache.releaseThrough(
+                  timing.outputTimestamp + timing.duration
+                );
+                for (const cue of activeCuesAt(project, timing.outputTimestamp)) {
+                  drawCaption(context, canvas, project, cue);
+                }
+                const outputSample = new VideoSample(canvas, {
+                  timestamp: timing.outputTimestamp,
+                  duration: timing.duration
+                });
+                try {
+                  await videoSource.add(outputSample);
+                } finally {
+                  outputSample.close();
+                }
+                onProgress(
+                  Math.min(0.98, (timing.outputTimestamp * 1000) / totalDurationMs),
+                  "video"
+                );
               }
-              const activeImageAssets = await activeImageAssetCache.prepareAt(
-                timing.outputTimestamp
-              );
-              for (const { asset, image } of activeImageAssets) {
-                drawImageAsset(context, canvas, asset, image);
-              }
-              activeImageAssetCache.releaseThrough(
-                timing.outputTimestamp + timing.duration
-              );
-              for (const cue of activeCuesAt(project, timing.outputTimestamp)) {
-                drawCaption(context, canvas, project, cue);
-              }
-              const outputSample = new VideoSample(canvas, {
-                timestamp: timing.outputTimestamp,
-                duration: timing.duration
-              });
-              try {
-                await videoSource.add(outputSample);
-              } finally {
-                outputSample.close();
-              }
-              onProgress(
-                Math.min(0.98, (timing.outputTimestamp * 1000) / totalDurationMs),
-                "video"
-              );
             } finally {
               sourceSample?.close();
             }
+          }
+          if (pendingLeadingFrameIndices.length > 0) {
+            requireRenderBaseVideoSample(null, clip.id || clip.selectionId);
           }
         } finally {
           await Promise.all(additionalLayerStreamGroups.map(async ({ iterator }) => {

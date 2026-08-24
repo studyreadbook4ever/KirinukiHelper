@@ -38,6 +38,7 @@ import {
   fallbackCaptionPlacementHints,
   fitSingleLineCaptionFontSize,
   imageAssetDrawRect,
+  isLeadingRenderVideoGap,
   LOCAL_MEDIA_BLOB_SOURCE_OPTIONS,
   MAX_ACTIVE_IMAGE_ASSET_RGBA_BYTES,
   mixShortFormAudioContributions,
@@ -667,6 +668,14 @@ test("최종 렌더는 기본 영상 원본 프레임 누락을 검은 화면으
     () => requireRenderBaseVideoSample(undefined, ""),
     /현재 컷 기본 영상의 원본 프레임을 읽지 못했습니다/u
   );
+});
+
+test("영상 트랙이 늦게 시작하는 첫 순간만 첫 프레임을 유지하고 이후 누락은 숨기지 않는다", () => {
+  const decoded = { frame: "decoded" };
+  assert.equal(isLeadingRenderVideoGap(null, 0, 0.042), true);
+  assert.equal(isLeadingRenderVideoGap(undefined, 0.016, 0.042), true);
+  assert.equal(isLeadingRenderVideoGap(decoded, 0.016, 0.042), false);
+  assert.equal(isLeadingRenderVideoGap(null, 0.05, 0.042), false);
 });
 
 test("긴 자막 박스 중심은 5% 위치에서도 캔버스 안으로 이동한다", () => {

@@ -127,7 +127,6 @@ export async function resolveLocalVodPlayback(
     ytDlpBinary,
     nodeBinary = process.execPath,
     processEnv = process.env,
-    cwd = process.cwd(),
     runProcess = runExternalProcess,
     fetchImpl = globalThis.fetch,
     signal
@@ -135,7 +134,6 @@ export async function resolveLocalVodPlayback(
     readonly ytDlpBinary: string;
     readonly nodeBinary?: string;
     readonly processEnv?: NodeJS.ProcessEnv;
-    readonly cwd?: string;
     readonly runProcess?: ExternalProcessRunner;
     readonly fetchImpl?: typeof globalThis.fetch;
     readonly signal?: AbortSignal;
@@ -184,7 +182,7 @@ export async function resolveLocalVodPlayback(
     ytDlpBinary,
     playbackProbeArgs(sourceUrl, platform, nodeBinary),
     {
-      cwd,
+      cwd: path.dirname(ytDlpBinary),
       env: processEnv,
       shell: false,
       timeoutMs: RESOLVE_TIMEOUT_MS,

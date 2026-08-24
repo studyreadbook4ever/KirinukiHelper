@@ -173,6 +173,62 @@ test("구형 CHZZK VOD 상태는 기존 yt-dlp HLS fallback을 보존한다", as
   );
 });
 
+test("SOOP 재생 probe는 packaged app.asar가 아니라 검증된 yt-dlp 디렉터리에서 실행한다", async () => {
+  const calls: Array<{
+    readonly args: readonly string[];
+    readonly cwd: string;
+  }> = [];
+  const resolved = await resolveLocalVodPlayback(
+    "https://vod.sooplive.com/player/200568293",
+    {
+      ytDlpBinary: "/opt/Kirinuki/resources/desktop-tools/linux-x64/yt-dlp",
+      nodeBinary: "/opt/Kirinuki/Kirinuki",
+      runProcess: async (_command, args, options) => {
+        calls.push({ args, cwd: options.cwd });
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            entries: [{
+              duration: 12,
+              formats: [{
+                protocol: "m3u8_native",
+                url: "https://vod-archive-kr-cdn-z01.sooplive.com/part-1/index.m3u8",
+                vcodec: "h264",
+                acodec: "aac",
+                height: 1080,
+                tbr: 5_000
+              }]
+            }, {
+              duration: 8,
+              formats: [{
+                protocol: "m3u8_native",
+                url: "https://vod-archive-kr-cdn-z01.sooplive.com/part-2/index.m3u8",
+                vcodec: "h264",
+                acodec: "aac",
+                height: 720,
+                tbr: 3_000
+              }]
+            }]
+          }),
+          stderr: ""
+        };
+      }
+    }
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0]?.cwd,
+    "/opt/Kirinuki/resources/desktop-tools/linux-x64"
+  );
+  assert.ok(calls[0]?.args.includes("node:/opt/Kirinuki/Kirinuki"));
+  assert.equal(resolved.platform, "SOOP");
+  assert.equal(resolved.durationSeconds, 20);
+  assert.deepEqual(
+    resolved.parts.map(({ durationSeconds }) => durationSeconds),
+    [12, 8]
+  );
+});
+
 test("현재 CHZZK HLS의 상대 조각은 재생목록의 일회성 CDN 서명만 상속한다", () => {
   const base = "https://b01-kr-naver-vod.pstatic.net/path/index.m3u8?_lsu_sa_=runtime-only";
   const resolved = resolveExternalVodPlaylistResourceUrl(
