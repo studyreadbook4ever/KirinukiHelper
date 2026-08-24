@@ -1072,7 +1072,9 @@ export function buildExternalConcatArgs({
       ? ["-c", "copy"]
       : [
         "-c:v", "libx264",
-        "-preset", "medium",
+        // A fallback concat is still an intermediate local editing root. Do
+        // not make the user wait for archival compression before web editing.
+        "-preset", "veryfast",
         "-crf", "18",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
@@ -1331,10 +1333,18 @@ export function parseExternalVodMetadata(
       });
       sourceCursorMs += durationMs;
     }
-    // Root and entries come from the same official yt-dlp resolution. Any
-    // difference means the playlist is partial, reordered, or was replaced
-    // while resolving; never round or invent the global player clock.
-    if (rootDurationMs !== sourceCursorMs) {
+    // SOOP exposes each entry as an integer second while its root duration is
+    // rounded once across the complete multi-video. The root can therefore be
+    // ahead of the sum of the individually truncated entries by at most one
+    // second per boundary. Keep the ordered entry vector as the canonical
+    // player clock, but reject fractional roots and every larger discrepancy
+    // so a missing, reordered, or replaced part still fails closed.
+    const maximumRootRoundingRemainderMs = (entries.length - 1) * 1_000;
+    if (
+      rootDurationMs % 1_000 !== 0
+      || rootDurationMs < sourceCursorMs
+      || rootDurationMs - sourceCursorMs > maximumRootRoundingRemainderMs
+    ) {
       fail(
         "SOOP VOD 전체 길이와 공개 파트 합계가 달라 완전한 원본 시간축을 증명할 수 없습니다.",
         "INVALID_METADATA"
@@ -1358,7 +1368,7 @@ export function parseExternalVodMetadata(
   const sourceClockIdentity = source.platform === "SOOP"
     ? deriveSoopVodSourceClockIdentity({
       contentId: source.contentId,
-      totalDurationSeconds: rootDurationMs / 1_000,
+      totalDurationSeconds: sourceCursorMs / 1_000,
       parts: parts.map((part) => ({
         id: part.id,
         durationSeconds: part.durationMs / 1_000

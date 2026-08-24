@@ -18,6 +18,10 @@ import {
 import type {
   ExternalProcessRunner
 } from "./external-vod-materializer.js";
+import {
+  ChzzkVodMaterializationError,
+  resolveChzzkVodPlaybackSource
+} from "./chzzk-vod-materializer.js";
 
 const MAXIMUM_PARTS = 512;
 const MAXIMUM_DURATION_SECONDS = 2_592_000;
@@ -125,6 +129,7 @@ export async function resolveLocalVodPlayback(
     processEnv = process.env,
     cwd = process.cwd(),
     runProcess = runExternalProcess,
+    fetchImpl = globalThis.fetch,
     signal
   }: {
     readonly ytDlpBinary: string;
@@ -132,6 +137,7 @@ export async function resolveLocalVodPlayback(
     readonly processEnv?: NodeJS.ProcessEnv;
     readonly cwd?: string;
     readonly runProcess?: ExternalProcessRunner;
+    readonly fetchImpl?: typeof globalThis.fetch;
     readonly signal?: AbortSignal;
   }
 ): Promise<ResolvedLocalVodPlayback> {
@@ -148,6 +154,32 @@ export async function resolveLocalVodPlayback(
   }
   const platform: typeof SOURCE_PLATFORM_CHZZK | typeof SOURCE_PLATFORM_SOOP =
     identifiers.platform;
+  if (platform === SOURCE_PLATFORM_CHZZK) {
+    try {
+      const source = await resolveChzzkVodPlaybackSource(sourceUrl, {
+        fetchImpl,
+        ...(signal ? { signal } : {})
+      });
+      return Object.freeze({
+        platform,
+        contentId: source.contentId,
+        sourceUrl,
+        durationSeconds: source.durationSeconds,
+        parts: Object.freeze([Object.freeze({
+          durationSeconds: source.durationSeconds,
+          manifestUrl: source.manifestUrl,
+          requestHeaders: safeExternalVodRequestHeaders(source.requestHeaders)
+        })])
+      });
+    } catch (error) {
+      if (
+        !(error instanceof ChzzkVodMaterializationError)
+        || error.code !== "VOD_UNAVAILABLE"
+      ) {
+        throw error;
+      }
+    }
+  }
   const result = await runProcess(
     ytDlpBinary,
     playbackProbeArgs(sourceUrl, platform, nodeBinary),

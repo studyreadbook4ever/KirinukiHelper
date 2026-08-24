@@ -24,7 +24,7 @@ import { rootCertificates } from "node:tls";
 export const EXTERNAL_VOD_DIRECT_SECTION_EVIDENCE_SCHEMA =
   "chzzk-kirinuki/external-vod-direct-section-evidence-v2";
 export const EXTERNAL_VOD_DIRECT_ENCODING_PROFILE =
-  "h264-yuv420p-crf18-medium+aac-192k-faststart-v1";
+  "h264-yuv420p-crf18-veryfast+aac-192k-faststart-v2";
 export const EXTERNAL_VOD_DIRECT_ENCODING_PROFILE_SHA256 = sha256(
   EXTERNAL_VOD_DIRECT_ENCODING_PROFILE
 );
@@ -609,7 +609,10 @@ export function buildExternalVodDirectFfmpegArgs({
     "-vf", "setpts=PTS-STARTPTS",
     "-af", "asetpts=PTS-STARTPTS",
     "-c:v", "libx264",
-    "-preset", "medium",
+    // The browser performs the creative edit and final export. This helper
+    // output is only a local, exact-range editing root, so prioritize getting
+    // the user into the editor while retaining CRF 18 and yuv420p.
+    "-preset", "veryfast",
     "-crf", "18",
     "-pix_fmt", "yuv420p",
     "-c:a", "aac",

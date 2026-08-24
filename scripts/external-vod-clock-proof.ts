@@ -346,9 +346,29 @@ export function parseYtDlpSelectedInputsDump(
     partId?: string;
   }
 ): ParsedYtDlpSelectedInputs {
-  const payload = parseSelectedJson(rawJson);
   const expectedContentId = safeId(contentId, "VOD 원본 ID");
   const expectedPartId = safeId(partId, "VOD 파트 ID");
+  const rootPayload = parseSelectedJson(rawJson);
+  let payload = rootPayload;
+  if (platform === "SOOP" && Array.isArray(rootPayload.entries)) {
+    const requestedEntries = rootPayload.requested_entries;
+    const entry = rootPayload.entries[0];
+    if (
+      rootPayload._type !== "multi_video"
+      || String(rootPayload.extractor ?? "").toLowerCase() !== "soop"
+      || String(rootPayload.id ?? "") !== expectedContentId
+      || rootPayload.entries.length !== 1
+      || !isRecord(entry)
+      || !Array.isArray(requestedEntries)
+      || requestedEntries.length !== 1
+      || !Number.isSafeInteger(requestedEntries[0])
+      || Number(requestedEntries[0]) <= 0
+      || entry.playlist_index !== requestedEntries[0]
+    ) {
+      fail("SOOP 선택 파트 wrapper가 요청한 원본·순서와 다릅니다.", "SOURCE_CHANGED");
+    }
+    payload = entry;
+  }
   const extractor = String(payload.extractor ?? "").toLowerCase();
   const expectedExtractor = platform === "YOUTUBE"
     ? "youtube"

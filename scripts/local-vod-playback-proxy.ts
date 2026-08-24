@@ -22,6 +22,7 @@ import type {
 const SESSION_TTL_MS = 30 * 60 * 1_000;
 const MAXIMUM_SESSIONS = 8;
 const MAXIMUM_RESOURCES_PER_SESSION = 100_000;
+const CHZZK_PLAYLIST_SIGNATURE_PARAMETER = "_lsu_sa_";
 
 interface PlaybackResource {
   readonly platform: ExternalVodTransferPlatform;
@@ -78,6 +79,36 @@ function exactRangeHeader(value: unknown): string | undefined {
   }
   const normalized = String(value);
   return /^bytes=\d+-\d*$/u.test(normalized) ? normalized : undefined;
+}
+
+export function resolveExternalVodPlaylistResourceUrl(
+  platform: ExternalVodTransferPlatform,
+  rawUrl: string,
+  baseUrl: string
+): URL {
+  const base = assertExternalVodTransferUrl(platform, baseUrl);
+  const resolved = assertExternalVodTransferUrl(
+    platform,
+    new URL(rawUrl, base)
+  );
+  if (
+    platform === "CHZZK"
+    && !resolved.search
+    && resolved.origin === base.origin
+    && base.searchParams.has(CHZZK_PLAYLIST_SIGNATURE_PARAMETER)
+  ) {
+    const signatures = base.searchParams.getAll(
+      CHZZK_PLAYLIST_SIGNATURE_PARAMETER
+    );
+    if (signatures.length !== 1 || !signatures[0]) {
+      throw new Error("CHZZK HLS 재생목록 서명이 올바르지 않습니다.");
+    }
+    resolved.searchParams.set(
+      CHZZK_PLAYLIST_SIGNATURE_PARAMETER,
+      signatures[0]
+    );
+  }
+  return resolved;
 }
 
 export function createLocalVodPlaybackProxy({
@@ -167,9 +198,10 @@ export function createLocalVodPlaybackProxy({
     rawUrl: string,
     baseUrl: string
   ): string => {
-    const url = assertExternalVodTransferUrl(
+    const url = resolveExternalVodPlaylistResourceUrl(
       session.resolved.platform,
-      new URL(rawUrl, baseUrl)
+      rawUrl,
+      baseUrl
     ).href;
     const existing = part.resourceKeyByUrl.get(url);
     if (existing) {

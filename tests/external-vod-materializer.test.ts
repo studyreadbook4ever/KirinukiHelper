@@ -1286,6 +1286,61 @@ test("SOOP multi-video는 root 길이·완전한 고유 part vector로만 전역
   }
 });
 
+test("SOOP multi-video는 각 파트 초 단위 절삭으로 생긴 root 반올림 잔여만 허용한다", () => {
+  const metadata = parseExternalVodMetadata(SOOP_URL, JSON.stringify({
+    _type: "multi_video",
+    id: SOOP_ID,
+    extractor: "soop",
+    webpage_url: SOOP_URL,
+    original_url: SOOP_URL,
+    availability: "public",
+    live_status: "was_live",
+    duration: 32_540,
+    playlist_count: 2,
+    entries: [
+      {
+        id: "20260704_7B477857_295318609_1",
+        duration: 16_935,
+        playlist_index: 1,
+        availability: "public"
+      },
+      {
+        id: "20260704_63BB4E48_295318609_2",
+        duration: 15_604,
+        playlist_index: 2,
+        availability: "public"
+      }
+    ]
+  }));
+
+  assert.equal(metadata.durationMs, 32_539_000);
+  assert.equal(metadata.sourceClockIdentity?.totalDurationSeconds, 32_539);
+  assert.deepEqual(metadata.parts.map((part) => ({
+    sourceStartMs: part.sourceStartMs,
+    sourceEndMs: part.sourceEndMs
+  })), [
+    { sourceStartMs: 0, sourceEndMs: 16_935_000 },
+    { sourceStartMs: 16_935_000, sourceEndMs: 32_539_000 }
+  ]);
+
+  assert.throws(
+    () => parseExternalVodMetadata(SOOP_URL, JSON.stringify({
+      id: SOOP_ID,
+      extractor: "soop",
+      webpage_url: SOOP_URL,
+      original_url: SOOP_URL,
+      availability: "public",
+      live_status: "was_live",
+      duration: 32_541,
+      entries: [
+        { id: "part-1", duration: 16_935, availability: "public" },
+        { id: "part-2", duration: 15_604, availability: "public" }
+      ]
+    })),
+    /완전한 원본 시간축/u
+  );
+});
+
 test("SOOP multi-video를 연속 원본 시간축 파트로 만들고 ±10초 합집합을 파트 경계에서 나눈다", () => {
   const metadata = soopMetadata();
   assert.deepEqual(metadata.parts, [
@@ -1624,6 +1679,8 @@ test("strict packet-copy 검증이 없으면 최종 concat은 안전하게 재�
   });
   assert.equal(optionValue(args, "-c:v"), "libx264");
   assert.equal(optionValue(args, "-c:a"), "aac");
+  assert.equal(optionValue(args, "-preset"), "veryfast");
+  assert(!args.includes("medium"));
   assert(!args.includes("copy"));
 });
 

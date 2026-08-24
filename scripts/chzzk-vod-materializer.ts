@@ -73,6 +73,7 @@ const MAX_XML_BYTES = 16 * 1024 * 1024;
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
 const MAX_XML_NODES = 250_000;
 const MAX_XML_DEPTH = 128;
+const MAX_PLAYBACK_DURATION_MS = 2_592_000_000;
 const MIN_TS_PACKETS = 3;
 const TS_PACKET_BYTES = 188;
 const MAX_SEGMENT_BYTES = 256 * 1024 * 1024;
@@ -121,6 +122,14 @@ export interface ParsedChzzkMpdRepresentation extends ChzzkVodQuality {
 export interface ParsedChzzkMpd {
   durationMs: number;
   representations: readonly ParsedChzzkMpdRepresentation[];
+}
+
+export interface ChzzkVodPlaybackSource {
+  readonly canonicalUrl: string;
+  readonly contentId: string;
+  readonly durationSeconds: number;
+  readonly manifestUrl: string;
+  readonly requestHeaders: Readonly<Record<string, string>>;
 }
 
 export interface ChzzkVodMaterializationArtifact {
@@ -872,6 +881,108 @@ export function parseChzzkMpd(xml: string): ParsedChzzkMpd {
   };
 }
 
+export function parseChzzkPlaybackHls(
+  xml: string,
+  manifestValue: URL | string
+): Readonly<{
+  durationSeconds: number;
+  manifestUrl: string;
+}> {
+  let manifestUrl: URL;
+  try {
+    manifestUrl = manifestValue instanceof URL
+      ? new URL(manifestValue.href)
+      : new URL(manifestValue);
+  } catch {
+    fail("CHZZK 재생 정보 주소가 올바르지 않습니다.", "INVALID_MPD");
+  }
+  assertInternalTransferUrl(manifestUrl);
+  const root = parseXml(xml);
+  const presentationType = attribute(root, "type")?.toLowerCase();
+  if (presentationType && presentationType !== "static") {
+    fail("동적/live MPD는 CHZZK VOD 원본 플레이어로 연결하지 않습니다.", "UNSUPPORTED_MPD");
+  }
+  const durationMs = parseIsoDuration(attribute(root, "mediaPresentationDuration"));
+  if (durationMs <= 0 || durationMs > MAX_PLAYBACK_DURATION_MS) {
+    fail("CHZZK VOD 재생 시간이 허용 범위를 벗어났습니다.", "INVALID_MPD");
+  }
+  const candidates: Array<{
+    bandwidth: number;
+    frameRate: number;
+    height: number;
+    id: string;
+    manifestUrl: URL;
+    width: number;
+  }> = [];
+  for (const period of directChildren(root, "Period")) {
+    for (const adaptation of directChildren(period, "AdaptationSet")) {
+      const adaptationMimeType = attribute(adaptation, "mimeType")?.toLowerCase() ?? "";
+      if (adaptationMimeType !== "video/mp2t") {
+        continue;
+      }
+      for (const representation of directChildren(adaptation, "Representation")) {
+        const chain = [root, period, adaptation, representation];
+        const codecs = (inheritedAttribute(chain, "codecs") ?? "").toLowerCase();
+        const id = inheritedAttribute(chain, "id")?.trim() ?? "";
+        const width = nonNegativeInteger(inheritedAttribute(chain, "width"), 0);
+        const height = nonNegativeInteger(inheritedAttribute(chain, "height"), 0);
+        const bandwidth = nonNegativeInteger(
+          inheritedAttribute(chain, "bandwidth"),
+          0
+        );
+        const frameRate = parseFrameRate(inheritedAttribute(chain, "frameRate"));
+        const hlsValue = inheritedAttribute(chain, "m3u")?.trim() ?? "";
+        if (
+          !id
+          || !/^[A-Za-z0-9._-]+$/u.test(id)
+          || id.length > 128
+          || width <= 0
+          || height <= 0
+          || height > 1_080
+          || !/(?:^|,)\s*(?:avc1|avc3|h264)/u.test(codecs)
+          || !/(?:^|,)\s*(?:mp4a|aac)/u.test(codecs)
+          || !hlsValue
+        ) {
+          continue;
+        }
+        let hlsUrl: URL;
+        try {
+          hlsUrl = new URL(hlsValue, manifestUrl);
+        } catch {
+          fail("CHZZK HLS 재생목록 주소가 올바르지 않습니다.", "INVALID_MPD");
+        }
+        assertInternalTransferUrl(hlsUrl);
+        if (!/\.m3u8$/u.test(hlsUrl.pathname)) {
+          fail("CHZZK HLS 재생목록 경로가 올바르지 않습니다.", "INVALID_MPD");
+        }
+        candidates.push({
+          bandwidth,
+          frameRate,
+          height,
+          id,
+          manifestUrl: hlsUrl,
+          width
+        });
+      }
+    }
+  }
+  candidates.sort((left, right) => (
+    right.height - left.height
+    || right.width - left.width
+    || right.bandwidth - left.bandwidth
+    || right.frameRate - left.frameRate
+    || left.id.localeCompare(right.id)
+  ));
+  const selected = candidates[0];
+  if (!selected) {
+    fail("CHZZK의 1080p 이하 muxed H.264/AAC HLS를 찾지 못했습니다.", "UNSUPPORTED_MPD");
+  }
+  return Object.freeze({
+    durationSeconds: durationMs / 1_000,
+    manifestUrl: selected.manifestUrl.href
+  });
+}
+
 export function normalizeChzzkVodUrl(value: unknown): string {
   const raw = String(value);
   if (!/^https:\/\/chzzk\.naver\.com\/video\/\d+\/?$/u.test(raw)) {
@@ -1327,6 +1438,47 @@ async function resolveChzzkVod(
     segments: representation.segments,
     segmentUrls: buildSegmentUrls(representation)
   };
+}
+
+export async function resolveChzzkVodPlaybackSource(
+  sourceValue: unknown,
+  {
+    fetchImpl = globalThis.fetch,
+    signal
+  }: {
+    readonly fetchImpl?: typeof globalThis.fetch;
+    readonly signal?: AbortSignal;
+  } = {}
+): Promise<ChzzkVodPlaybackSource> {
+  const canonicalUrl = normalizeChzzkVodUrl(sourceValue);
+  const contentId = CHZZK_VIDEO_PATH_PATTERN.exec(new URL(canonicalUrl).pathname)?.[1];
+  if (!contentId) {
+    fail("정규화된 CHZZK VOD 주소가 필요합니다.", "INVALID_SOURCE_URL");
+  }
+  const payload = objectRecord(await fetchMetadataJson(fetchImpl, contentId, signal));
+  const content = objectRecord(payload?.content);
+  if (!content) {
+    fail("공개 CHZZK VOD 메타데이터가 없습니다.", "INVALID_METADATA");
+  }
+  if (content.vodStatus !== "ABR_HLS") {
+    fail("현재 HLS 원본 플레이어로 연결할 수 있는 CHZZK VOD가 아닙니다.", "VOD_UNAVAILABLE");
+  }
+  const videoId = requiredMetadataString(content, "videoId");
+  const inKey = requiredMetadataString(content, "inKey");
+  const playback = await fetchPlaybackMpd(fetchImpl, videoId, inKey, signal);
+  const selected = parseChzzkPlaybackHls(playback.xml, playback.manifestUrl);
+  return Object.freeze({
+    canonicalUrl,
+    contentId,
+    durationSeconds: selected.durationSeconds,
+    manifestUrl: selected.manifestUrl,
+    requestHeaders: Object.freeze({
+      ...chzzkPublicRequestHeaders(
+        "application/vnd.apple.mpegurl, application/x-mpegURL;q=0.9, */*;q=0.8"
+      ),
+      referer: canonicalUrl
+    })
+  });
 }
 
 function validatedHandleMs(value: unknown): number {
