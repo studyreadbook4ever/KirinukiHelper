@@ -89,7 +89,6 @@ import {
 } from "./session-archive-capture.js";
 import {
   formatStudioTimecode,
-  parseStudioTimecode,
   STUDIO_SELECTION_RANGE_INPUT_ERROR,
   STUDIO_SELECTION_RANGE_ORDER_ERROR,
   validateStudioSelectionRange
@@ -104,14 +103,8 @@ import {
   YouTubeEmbedController
 } from "./youtube-embed-controller.js";
 import {
-  ElectronCutSession
-} from "./electron-cut-session.js";
-import {
-  createStreamingBridgeSourceIdentity
-} from "./streaming-bridge-protocol.js";
-import type {
-  StreamingBridgeSourceIdentity
-} from "./streaming-bridge-protocol.js";
+  LocalVodWebPlaybackController
+} from "./local-vod-playback.js";
 
 export {
   formatStudioTimecode,
@@ -123,22 +116,6 @@ const activeStudioOrigin = assertKirinukiStudioDocumentOrigin(
   document.querySelector<HTMLMetaElement>(
     `meta[name="${KIRINUKI_STUDIO_ORIGIN_META_NAME}"]`
   )?.content
-);
-
-declare global {
-  interface Window {
-    kirinukiCutHost?: Readonly<{
-      playerAction: (request: unknown) => Promise<unknown>;
-      onTrustedShortcut?: (
-        listener: (message: Readonly<{ key: string }>) => void
-      ) => () => void;
-    }>;
-  }
-}
-
-const isElectronCutHostSurface = Boolean(
-  location.search === "?kirinukiSurface=cut-host"
-  && window.kirinukiCutHost
 );
 
 const publicLaunchShell = requiredElement<HTMLElement>("#public-launch-shell");
@@ -261,10 +238,6 @@ const elements = {
   streamCurrentTime: requiredElement<HTMLOutputElement>(
     "#stream-current-time"
   ),
-  manualCutClockField: requiredElement<HTMLElement>(
-    "#manual-cut-clock-field"
-  ),
-  manualCutClock: requiredElement<HTMLInputElement>("#manual-cut-clock"),
   streamCutStatus: requiredElement<HTMLElement>(
     "#stream-cut-console-status"
   ),
@@ -337,10 +310,12 @@ interface ActiveLocalPreviewOperation {
 let activeLocalPreviewOperation: ActiveLocalPreviewOperation | null = null;
 let youtubeController: YouTubeEmbedController | null = null;
 let helperDownloadConnectionPending = false;
-const electronCutSession = isElectronCutHostSurface && window.kirinukiCutHost
-  ? new ElectronCutSession(window.kirinukiCutHost)
-  : null;
-let electronCutClockPollInFlight = false;
+let localVodPlayback: LocalVodWebPlaybackController | null = null;
+let localVodPlaybackSourceUrl = "";
+let localVodPlaybackGeneration = 0;
+let localVodPlaybackConnectPromise:
+  Promise<LocalVodWebPlaybackController | null> | null = null;
+let streamTimelineInteracting = false;
 
 const HELPER_DOWNLOAD_IDLE_LABEL =
   "Debian/Ubuntu 도우미 (.deb)";
@@ -555,65 +530,122 @@ function connectYouTubeEmbedController(frame: HTMLIFrameElement): void {
   });
 }
 
-function currentElectronStreamingSource(): StreamingBridgeSourceIdentity | null {
-  const identifiers = inferSourceIdentifiers(elements.sourceUrl.value.trim());
+function resetLocalVodWebPlayback(): void {
+  localVodPlaybackGeneration += 1;
+  localVodPlayback?.dispose();
+  localVodPlayback = null;
+  localVodPlaybackSourceUrl = "";
+  localVodPlaybackConnectPromise = null;
+  streamTimelineInteracting = false;
+}
+
+function updateLocalVodTimeline(): void {
+  const snapshot = localVodPlayback?.snapshot();
+  if (!snapshot || streamTimelineInteracting) {
+    return;
+  }
+  elements.streamPreviewTimeline.value = String(snapshot.currentTime);
+  elements.streamPreviewTarget.textContent = formatStudioTimecode(
+    snapshot.currentTime
+  );
+}
+
+function connectLocalVodWebPlayback(
+  sourceUrl: string,
+  { force = false }: { force?: boolean } = {}
+): Promise<LocalVodWebPlaybackController | null> {
   if (
-    !electronCutSession
-    || (
-      identifiers.platform !== SOURCE_PLATFORM_CHZZK
-      && identifiers.platform !== SOURCE_PLATFORM_SOOP
-      && identifiers.platform !== SOURCE_PLATFORM_YOUTUBE
-    )
-    || identifiers.contentType !== "vod"
-    || !identifiers.contentId
+    !force
+    && localVodPlayback
+    && localVodPlaybackSourceUrl === sourceUrl
+  ) {
+    return Promise.resolve(localVodPlayback);
+  }
+  if (
+    !force
+    && localVodPlaybackConnectPromise
+    && localVodPlaybackSourceUrl === sourceUrl
+  ) {
+    return localVodPlaybackConnectPromise;
+  }
+  resetLocalVodWebPlayback();
+  const generation = localVodPlaybackGeneration;
+  localVodPlaybackSourceUrl = sourceUrl;
+  elements.streamCutStatus.textContent =
+    "이 PC의 영상 준비 도우미에서 원본 플레이어를 연결하는 중입니다…";
+  elements.streamStatus.textContent =
+    "처음 한 번 브라우저가 로컬 네트워크 연결 허용을 요청할 수 있습니다.";
+  elements.streamVideo.crossOrigin = "anonymous";
+  const pending = LocalVodWebPlaybackController.connect({
+    sourceUrl,
+    video: elements.streamVideo
+  }).then((controller) => {
+    if (
+      generation !== localVodPlaybackGeneration
+      || localVodPlaybackSourceUrl !== sourceUrl
+    ) {
+      controller.dispose();
+      return null;
+    }
+    localVodPlayback = controller;
+    const snapshot = controller.snapshot();
+    elements.streamFrame.hidden = true;
+    elements.streamPlaceholder.hidden = true;
+    elements.streamVideo.hidden = false;
+    elements.streamPreviewNavigation.hidden = false;
+    elements.streamPreviewTimeline.disabled = false;
+    elements.loadPreviewWindow.disabled = false;
+    elements.streamPreviewTimeline.min = "0";
+    elements.streamPreviewTimeline.max = String(controller.session.durationSeconds);
+    elements.streamPreviewTimeline.value = String(snapshot?.currentTime ?? 0);
+    elements.streamPreviewTarget.textContent = formatStudioTimecode(
+      snapshot?.currentTime ?? 0
+    );
+    elements.streamStatus.textContent =
+      "도우미가 연결한 원본 VOD를 이 웹 플레이어에서 재생합니다.";
+    elements.streamCutStatus.textContent =
+      "연결 완료 · 보이는 영상과 E/R/D/F/Y/U 타임스탬프가 같은 재생 시계를 사용합니다.";
+    syncCaptureConsoleAvailability();
+    return controller;
+  }).catch((error: unknown) => {
+    if (
+      generation === localVodPlaybackGeneration
+      && localVodPlaybackSourceUrl === sourceUrl
+    ) {
+      elements.streamCutStatus.textContent =
+        `웹 원본 플레이어를 연결하지 못했습니다: ${errorMessage(error)} 도우미를 실행한 뒤 다시 시도해 주세요.`;
+      syncCaptureConsoleAvailability();
+    }
+    return null;
+  }).finally(() => {
+    if (localVodPlaybackConnectPromise === pending) {
+      localVodPlaybackConnectPromise = null;
+    }
+  });
+  localVodPlaybackConnectPromise = pending;
+  return pending;
+}
+
+async function ensureLocalVodWebPlayback(): Promise<LocalVodWebPlaybackController | null> {
+  if (localVodPlayback) {
+    return localVodPlayback;
+  }
+  let descriptor: ReturnType<typeof sourceEmbedDescriptor>;
+  try {
+    descriptor = sourceEmbedDescriptor(elements.sourceUrl.value.trim(), {
+      studioOrigin: location.origin
+    });
+  } catch {
+    return null;
+  }
+  if (
+    !descriptor
+    || (descriptor.platform !== SOURCE_PLATFORM_CHZZK
+      && descriptor.platform !== SOURCE_PLATFORM_SOOP)
   ) {
     return null;
   }
-  return createStreamingBridgeSourceIdentity({
-    platform: identifiers.platform,
-    contentType: "vod",
-    contentId: identifiers.contentId
-  });
-}
-
-async function connectElectronPlayer(): Promise<void> {
-  const source = currentElectronStreamingSource();
-  if (!electronCutSession || !source || !activeStreamEmbedUrl) {
-    return;
-  }
-  elements.streamCutStatus.textContent =
-    "Electron 원본 플레이어와 컷 버튼을 연결하는 중입니다…";
-  try {
-    await electronCutSession.connect(source);
-    elements.streamCutStatus.textContent =
-      "Electron 연결 완료 · E/R/D/F/Y/U가 원본 플레이어와 양방향 동기화됩니다.";
-  } catch (error) {
-    elements.streamCutStatus.textContent =
-      `Electron 플레이어를 연결하지 못했습니다: ${errorMessage(error)}`;
-  }
-  syncCaptureConsoleAvailability();
-}
-
-function installElectronTrustedShortcuts(): void {
-  const subscribe = window.kirinukiCutHost?.onTrustedShortcut;
-  if (!isElectronCutHostSurface || typeof subscribe !== "function") {
-    return;
-  }
-  const unsubscribe = subscribe(({ key }) => {
-    const binding = studioCaptureShortcutBinding(key);
-    if (!binding) {
-      return;
-    }
-    if (binding.targetId) {
-      const button = document.getElementById(binding.targetId);
-      if (button instanceof HTMLButtonElement && !button.disabled) {
-        button.click();
-      }
-      return;
-    }
-    runStudioCaptureAction(binding.action);
-  });
-  window.addEventListener("pagehide", unsubscribe, { once: true });
+  return connectLocalVodWebPlayback(descriptor.sourceUrl, { force: true });
 }
 
 function clipRows(): HTMLElement[] {
@@ -1405,6 +1437,7 @@ function clearStreamPreview(message: string): void {
   }
   activeStreamEmbedUrl = "";
   activeStreamPlatform = "";
+  resetLocalVodWebPlayback();
   replaceStreamFrame();
   elements.streamFrame.removeAttribute("src");
   elements.streamFrame.hidden = true;
@@ -1443,6 +1476,8 @@ function updateStreamPreview({ force = false }: { force?: boolean } = {}): void 
   ) {
     return;
   }
+  resetLocalVodWebPlayback();
+  resetLocalPreviewSession();
   activeStreamEmbedUrl = descriptor.embedUrl;
   activeStreamPlatform = descriptor.platform;
   replaceStreamFrame();
@@ -1456,18 +1491,24 @@ function updateStreamPreview({ force = false }: { force?: boolean } = {}): void 
   elements.streamFrame.hidden = false;
   elements.streamFrame.src = descriptor.embedUrl;
   elements.reloadStream.disabled = false;
-  // CHZZK/SOOP may load slowly or refuse an embed before its load event. The
-  // manual cut clock belongs to the accepted source URL, not to iframe load,
-  // so expose it immediately and keep helperless capture usable.
+  if (
+    descriptor.platform === SOURCE_PLATFORM_CHZZK
+    || descriptor.platform === SOURCE_PLATFORM_SOOP
+  ) {
+    void connectLocalVodWebPlayback(descriptor.sourceUrl);
+  }
   syncCaptureConsoleAvailability();
   if (streamLoadTimer !== null) {
     window.clearTimeout(streamLoadTimer);
   }
   streamLoadTimer = window.setTimeout(() => {
     streamLoadTimer = null;
-    if (activeStreamEmbedUrl === descriptor.embedUrl) {
+    if (
+      activeStreamEmbedUrl === descriptor.embedUrl
+      && !localVodPlayback
+    ) {
       elements.streamStatus.textContent =
-        "원본 미리보기 응답을 아직 확인하지 못했습니다. ‘원본 미리보기 다시 불러오기’ 또는 ‘원본 페이지 열기’를 사용하세요.";
+        "원본 플레이어 연결을 아직 확인하지 못했습니다. 도우미 실행 상태를 확인한 뒤 ‘플레이어 다시 시작’을 눌러 주세요.";
     }
   }, 12_000);
 }
@@ -1995,7 +2036,9 @@ async function confirmLocalProjectDeletion(): Promise<void> {
 
 function currentLocalPreviewSourceTime(): number | null {
   if (
-    elements.streamVideo.hidden
+    localVodPlaybackSourceUrl
+    || localVodPlaybackConnectPromise
+    || elements.streamVideo.hidden
     || elements.streamVideo.readyState < HTMLMediaElement.HAVE_METADATA
     || !Number.isFinite(elements.streamVideo.currentTime)
   ) {
@@ -2007,23 +2050,10 @@ function currentLocalPreviewSourceTime(): number | null {
   );
 }
 
-function manualCutClockIsActive(): boolean {
-  return activeStreamPlatform.length > 0
-    && activeStreamPlatform !== SOURCE_PLATFORM_YOUTUBE
-    && currentLocalPreviewSourceTime() === null;
-}
-
-function currentManualCutClockTime(): number | null {
-  return manualCutClockIsActive()
-    ? parseStudioTimecode(elements.manualCutClock.value)
-    : null;
-}
-
 function currentWebPlayerSourceTime(): number | null {
-  return electronCutSession?.snapshot?.currentTime
+  return localVodPlayback?.snapshot()?.currentTime
     ?? currentYouTubePlayerSnapshot()?.currentTime
-    ?? currentLocalPreviewSourceTime()
-    ?? currentManualCutClockTime();
+    ?? currentLocalPreviewSourceTime();
 }
 
 function updatePlayerClockDisplay(): void {
@@ -2036,26 +2066,25 @@ function updatePlayerClockDisplay(): void {
 async function captureCurrentPlayerTime(field: "start" | "end"): Promise<void> {
   let sourceSeconds: number | null;
   try {
-    sourceSeconds = electronCutSession
-      ? (await electronCutSession.refresh()).currentTime
-      : currentWebPlayerSourceTime();
+    if (
+      activeStreamPlatform === SOURCE_PLATFORM_CHZZK
+      || activeStreamPlatform === SOURCE_PLATFORM_SOOP
+    ) {
+      const controller = await ensureLocalVodWebPlayback();
+      sourceSeconds = controller?.snapshot()?.currentTime ?? null;
+    } else {
+      sourceSeconds = currentWebPlayerSourceTime();
+    }
   } catch (error) {
     elements.streamCutStatus.textContent = errorMessage(error);
     syncCaptureConsoleAvailability();
     return;
   }
   if (sourceSeconds === null) {
-    if (manualCutClockIsActive()) {
-      elements.manualCutClockField.dataset.state = "invalid";
-      elements.streamCutStatus.textContent =
-        "플레이어에 표시된 시각을 00:00:00 형식으로 입력한 뒤 다시 눌러 주세요.";
-      elements.manualCutClock.focus();
-      return;
-    }
     elements.streamCutStatus.textContent =
       activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
         ? "YouTube 플레이어가 준비되는 중입니다. 영상이 열린 뒤 E/R을 다시 눌러 주세요."
-        : "이 플랫폼은 브라우저가 재생 시각을 직접 읽을 수 없습니다. 플레이어 시각을 오른쪽 시작·끝 칸에 입력해 주세요.";
+        : "웹 원본 플레이어가 아직 시각을 확정하지 못했습니다. 재생 또는 이동이 끝난 뒤 다시 눌러 주세요.";
     return;
   }
   const row = activeClipRow ?? clipRows().at(-1) ?? addClipRow();
@@ -2070,17 +2099,6 @@ async function captureCurrentPlayerTime(field: "start" | "end"): Promise<void> {
 }
 
 async function seekPlayerBy(deltaSeconds: -5 | 5): Promise<void> {
-  if (electronCutSession) {
-    try {
-      const snapshot = await electronCutSession.seekBy(deltaSeconds);
-      elements.streamCutStatus.textContent =
-        `Electron 원본 플레이어를 ${formatStudioTimecode(snapshot.currentTime ?? 0)}로 이동했습니다.`;
-    } catch (error) {
-      elements.streamCutStatus.textContent = errorMessage(error);
-    }
-    syncCaptureConsoleAvailability();
-    return;
-  }
   const youtubeSnapshot = currentYouTubePlayerSnapshot();
   if (youtubeSnapshot && youtubeController) {
     const target = Math.max(
@@ -2096,25 +2114,31 @@ async function seekPlayerBy(deltaSeconds: -5 | 5): Promise<void> {
     window.setTimeout(updatePlayerClockDisplay, 100);
     return;
   }
+  if (
+    activeStreamPlatform === SOURCE_PLATFORM_CHZZK
+    || activeStreamPlatform === SOURCE_PLATFORM_SOOP
+  ) {
+    try {
+      const controller = await ensureLocalVodWebPlayback();
+      const snapshot = controller?.snapshot();
+      if (!controller || !snapshot) {
+        throw new Error("웹 원본 플레이어가 아직 재생 시각을 확정하지 못했습니다.");
+      }
+      const moved = await controller.seekAbsolute(
+        Math.max(0, Math.min(snapshot.duration, snapshot.currentTime + deltaSeconds))
+      );
+      elements.streamCutStatus.textContent =
+        `원본 영상을 ${formatStudioTimecode(moved.currentTime)}로 이동했고 컷 시각도 일치합니다.`;
+      updateLocalVodTimeline();
+      updatePlayerClockDisplay();
+    } catch (error) {
+      elements.streamCutStatus.textContent = errorMessage(error);
+    }
+    syncCaptureConsoleAvailability();
+    return;
+  }
   const sourceSeconds = currentLocalPreviewSourceTime();
   if (sourceSeconds === null) {
-    const manualSeconds = currentManualCutClockTime();
-    if (manualCutClockIsActive()) {
-      if (manualSeconds === null) {
-        elements.manualCutClockField.dataset.state = "invalid";
-        elements.streamCutStatus.textContent =
-          "플레이어에 표시된 시각을 00:00:00 형식으로 먼저 입력해 주세요.";
-        elements.manualCutClock.focus();
-        return;
-      }
-      const target = Math.max(0, manualSeconds + deltaSeconds);
-      elements.manualCutClock.value = formatStudioTimecode(target);
-      elements.manualCutClockField.dataset.state = "ready";
-      updatePlayerClockDisplay();
-      elements.streamCutStatus.textContent =
-        `컷 기준 시각을 ${formatStudioTimecode(target)}로 옮겼습니다. 원본 플레이어도 같은 시각으로 맞춰 주세요.`;
-      return;
-    }
     elements.streamCutStatus.textContent =
       "로컬 미리보기가 준비된 뒤에 영상 위치를 이동할 수 있습니다.";
     return;
@@ -2143,17 +2167,6 @@ async function seekPlayerBy(deltaSeconds: -5 | 5): Promise<void> {
 }
 
 async function setPlayerRate(playbackRate: 0.25 | 2): Promise<void> {
-  if (electronCutSession) {
-    try {
-      await electronCutSession.setPlaybackRate(playbackRate);
-      elements.streamCutStatus.textContent =
-        `Electron 원본 플레이어를 ${playbackRate}배속으로 설정했습니다.`;
-    } catch (error) {
-      elements.streamCutStatus.textContent = errorMessage(error);
-    }
-    syncCaptureConsoleAvailability();
-    return;
-  }
   if (youtubeController?.snapshot) {
     youtubeController.setPlaybackRate(playbackRate);
     elements.playbackRateQuarter.ariaPressed = String(playbackRate === 0.25);
@@ -2162,12 +2175,27 @@ async function setPlayerRate(playbackRate: 0.25 | 2): Promise<void> {
       `YouTube 재생 속도를 ${playbackRate}배로 바꿨습니다.`;
     return;
   }
-  if (currentLocalPreviewSourceTime() === null) {
-    if (manualCutClockIsActive()) {
+  if (
+    activeStreamPlatform === SOURCE_PLATFORM_CHZZK
+    || activeStreamPlatform === SOURCE_PLATFORM_SOOP
+  ) {
+    try {
+      const controller = await ensureLocalVodWebPlayback();
+      if (!controller) {
+        throw new Error("웹 원본 플레이어가 아직 준비되지 않았습니다.");
+      }
+      const snapshot = controller.setPlaybackRate(playbackRate);
+      elements.playbackRateQuarter.ariaPressed = String(playbackRate === 0.25);
+      elements.playbackRateDouble.ariaPressed = String(playbackRate === 2);
       elements.streamCutStatus.textContent =
-        `이 플랫폼은 웹페이지가 재생 속도를 직접 바꿀 수 없습니다. 원본 플레이어 설정에서 ${playbackRate}배속을 선택해 주세요. E/R/D/F 컷 기록은 도우미 없이 그대로 쓸 수 있습니다.`;
-      return;
+        `원본 영상과 컷 시계를 함께 ${snapshot.playbackRate}배속으로 바꿨습니다.`;
+    } catch (error) {
+      elements.streamCutStatus.textContent = errorMessage(error);
     }
+    syncCaptureConsoleAvailability();
+    return;
+  }
+  if (currentLocalPreviewSourceTime() === null) {
     elements.streamCutStatus.textContent =
       "로컬 미리보기가 준비된 뒤에 재생 속도를 바꿀 수 있습니다.";
     return;
@@ -2256,15 +2284,8 @@ function syncCaptureConsoleAvailability(): void {
   ]) {
     button.disabled = !sourceReady;
   }
-  const manualClockActive = sourceReady && manualCutClockIsActive();
-  elements.manualCutClockField.hidden = !manualClockActive;
-  elements.manualCutClock.disabled = !manualClockActive;
-  elements.manualCutClockField.dataset.state = manualClockActive
-    && parseStudioTimecode(elements.manualCutClock.value) === null
-    ? "invalid"
-    : "ready";
   const playbackRate = currentYouTubePlayerSnapshot()?.playbackRate
-    ?? electronCutSession?.snapshot?.playbackRate
+    ?? localVodPlayback?.snapshot()?.playbackRate
     ?? (currentLocalPreviewSourceTime() === null
       ? null
       : elements.streamVideo.playbackRate);
@@ -2303,7 +2324,15 @@ function installStudioCaptureConsole(): void {
     runStudioCaptureAction(binding.action);
   });
   elements.streamVideo.addEventListener("loadedmetadata", syncCaptureConsoleAvailability);
-  elements.streamVideo.addEventListener("timeupdate", updatePlayerClockDisplay);
+  elements.streamVideo.addEventListener("timeupdate", () => {
+    updatePlayerClockDisplay();
+    updateLocalVodTimeline();
+  });
+  elements.streamVideo.addEventListener("seeking", updatePlayerClockDisplay);
+  elements.streamVideo.addEventListener("seeked", () => {
+    updatePlayerClockDisplay();
+    updateLocalVodTimeline();
+  });
   elements.streamVideo.addEventListener("ratechange", () => {
     elements.playbackRateQuarter.ariaPressed = String(
       elements.streamVideo.playbackRate === 0.25
@@ -2312,20 +2341,52 @@ function installStudioCaptureConsole(): void {
       elements.streamVideo.playbackRate === 2
     );
   });
+  elements.streamPreviewTimeline.addEventListener("pointerdown", () => {
+    streamTimelineInteracting = true;
+  });
   elements.streamPreviewTimeline.addEventListener("input", () => {
+    streamTimelineInteracting = true;
     elements.streamPreviewTarget.textContent = formatStudioTimecode(
       Number(elements.streamPreviewTimeline.value)
     );
   });
-  elements.manualCutClock.addEventListener("input", () => {
-    elements.manualCutClockField.dataset.state =
-      parseStudioTimecode(elements.manualCutClock.value) === null
-        ? "invalid"
-        : "ready";
-    updatePlayerClockDisplay();
+  elements.streamPreviewTimeline.addEventListener("change", () => {
+    const target = Number(elements.streamPreviewTimeline.value);
+    void (async () => {
+      try {
+        if (localVodPlayback) {
+          const snapshot = await localVodPlayback.seekAbsolute(target);
+          elements.streamCutStatus.textContent =
+            `원본 영상과 컷 시각을 ${formatStudioTimecode(snapshot.currentTime)}로 맞췄습니다.`;
+        } else {
+          await prepareLocalPreview(target);
+        }
+      } catch (error) {
+        elements.streamCutStatus.textContent = errorMessage(error);
+      } finally {
+        streamTimelineInteracting = false;
+        updateLocalVodTimeline();
+        updatePlayerClockDisplay();
+      }
+    })();
   });
   elements.loadPreviewWindow.addEventListener("click", () => {
-    reloadActivePlayerFrame();
+    const target = Number(elements.streamPreviewTimeline.value);
+    void (async () => {
+      try {
+        if (localVodPlayback) {
+          const snapshot = await localVodPlayback.seekAbsolute(target);
+          elements.streamCutStatus.textContent =
+            `원본 영상과 컷 시각을 ${formatStudioTimecode(snapshot.currentTime)}로 맞췄습니다.`;
+        } else {
+          await prepareLocalPreview(target);
+        }
+      } catch (error) {
+        elements.streamCutStatus.textContent = errorMessage(error);
+      }
+      updateLocalVodTimeline();
+      updatePlayerClockDisplay();
+    })();
   });
   syncCaptureConsoleAvailability();
 }
@@ -2351,9 +2412,8 @@ elements.sessionArchiveInput.addEventListener("change", () => {
 });
 elements.sourceUrl.addEventListener("input", () => {
   clearResumeMode();
-  electronCutSession?.destroy();
+  resetLocalVodWebPlayback();
   resetLocalPreviewSession();
-  elements.manualCutClock.value = "00:00:00";
   activeStreamPlatform = "";
   updateSourcePlatform();
   scheduleStreamPreview();
@@ -2462,17 +2522,11 @@ function installStreamFrameLoadHandler(frame: HTMLIFrameElement): void {
       window.clearTimeout(streamLoadTimer);
       streamLoadTimer = null;
     }
-    if (electronCutSession) {
-      elements.streamStatus.textContent =
-        "플랫폼 원본을 Electron 재생 창에 불러왔습니다.";
-      void connectElectronPlayer();
-      return;
-    }
     // A cross-origin iframe can finish loading after a local preview replaced
     // it with the helper-backed local video. Its late load event must not
     // overwrite the connected status or make the active shortcut path look
     // unavailable again.
-    if (!elements.streamVideo.hidden && Boolean(elements.streamVideo.src)) {
+    if (!elements.streamVideo.hidden && localVodPlayback) {
       return;
     }
     elements.streamStatus.textContent =
@@ -2481,7 +2535,7 @@ function installStreamFrameLoadHandler(frame: HTMLIFrameElement): void {
       connectYouTubeEmbedController(frame);
     } else {
       elements.streamCutStatus.textContent =
-        "원본 플레이어의 시각을 보며 오른쪽 시작·끝 칸에 직접 입력할 수 있습니다. 이 단계에는 도우미가 필요하지 않습니다.";
+        "CHZZK·SOOP 원본을 이 웹 플레이어에 연결하고 있습니다…";
     }
   });
 }
@@ -2571,24 +2625,9 @@ void configureHelperDownload().catch(() => {
 });
 addClipRow();
 installStudioCaptureConsole();
-installElectronTrustedShortcuts();
 installStreamFrameLoadHandler(elements.streamFrame);
 prefillSourceFromLocation();
 updateStreamPreview();
-if (electronCutSession) {
-  window.setInterval(() => {
-    if (!electronCutSession.ready || electronCutClockPollInFlight) {
-      return;
-    }
-    electronCutClockPollInFlight = true;
-    void electronCutSession.refresh().then(() => {
-      updatePlayerClockDisplay();
-      syncCaptureConsoleAvailability();
-    }).catch(() => undefined).finally(() => {
-      electronCutClockPollInFlight = false;
-    });
-  }, 500);
-}
 window.addEventListener("focus", scheduleLocalProjectLifecycleRefresh);
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) {

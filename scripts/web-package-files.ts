@@ -12,6 +12,7 @@ export const WEB_PACKAGE_FILES = Object.freeze([
   "licenses.css",
   "licenses.html",
   "licenses/AUDSEG-MIT.txt",
+  "licenses/HLS-JS-APACHE-2.0.txt",
   "licenses/MEDIABUNNY-MPL-2.0.txt",
   "licenses/PAPERLOGY-OFL-1.1.txt",
   "licenses/PRETENDARD-OFL-1.1.txt",

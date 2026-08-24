@@ -153,6 +153,9 @@
 <!-- attribution-id: mediabunny -->
 - [ ] Mediabunny 1.51.0 MPL-2.0 원문, 수정 여부, exact corresponding source를
   웹 ZIP과 함께 제공한다.
+<!-- attribution-id: hls-js -->
+- [ ] hls.js 1.7.1 Apache-2.0 원문과 exact corresponding source를 웹 ZIP과
+  함께 제공하고, 실제 재생 bundle 포함 여부를 확인한다.
 <!-- attribution-id: audseg -->
 - [ ] AudSeg 0.1.0 MIT 원문과 compiled editor/worker의 `@license`를 보존한다.
 <!-- attribution-id: pretendard -->

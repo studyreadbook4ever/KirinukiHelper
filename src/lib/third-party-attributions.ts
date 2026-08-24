@@ -310,6 +310,24 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
       "https://registry.npmjs.org/mediabunny/-/mediabunny-1.51.0.tgz"
   },
   {
+    id: "hls-js",
+    kind: "web-bundled",
+    name: "hls.js",
+    version: "1.7.1",
+    license: "Apache-2.0",
+    upstream: "https://github.com/video-dev/hls.js",
+    purpose: "CHZZK·SOOP 원본 HLS를 같은 웹 플레이어에서 재생합니다.",
+    bundledFiles: [{
+      path: "web/licenses/HLS-JS-APACHE-2.0.txt",
+      size: 1_338,
+      sha256:
+        "ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db"
+    }],
+    licenseTextPath: "web/licenses/HLS-JS-APACHE-2.0.txt",
+    correspondingSource:
+      "https://registry.npmjs.org/hls.js/-/hls.js-1.7.1.tgz"
+  },
+  {
     id: "pretendard",
     kind: "web-bundled",
     name: "Pretendard ExtraBold",

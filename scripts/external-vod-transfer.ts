@@ -10,6 +10,7 @@ const SAFE_REQUEST_HEADER_NAMES = new Set([
   "accept",
   "accept-language",
   "origin",
+  "range",
   "referer",
   "sec-fetch-mode",
   "user-agent"
@@ -152,6 +153,7 @@ export function safeExternalVodRequestHeaders(
       || rawValue.length === 0
       || rawValue.length > 4_096
       || /[\0\r\n]/u.test(rawValue)
+      || (name === "range" && !/^bytes=\d+-\d*$/u.test(rawValue))
     ) {
       fail("외부 VOD 요청 헤더가 올바르지 않습니다.", "UNSAFE_TRANSFER_HEADERS");
     }
@@ -179,7 +181,7 @@ function responseUrl(response: Response, fallback: URL): URL {
   }
 }
 
-async function fetchExternalVodResponse({
+export async function fetchExternalVodResponse({
   platform,
   url: initialValue,
   headers,

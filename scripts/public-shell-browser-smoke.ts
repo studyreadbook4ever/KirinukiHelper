@@ -1703,26 +1703,26 @@ async function main(): Promise<void> {
   const helperlessCaptureControls = await waitFor(
     () => execute<{
     readonly disabled: readonly boolean[];
-    readonly manualClockHidden: boolean;
+    readonly manualClockAbsent: boolean;
     }>(`
     return {
       disabled: [
         "capture-start", "capture-end", "seek-backward-five",
         "seek-forward-five", "playback-rate-quarter", "playback-rate-double"
       ].map((id) => document.querySelector("#" + id)?.disabled !== false),
-      manualClockHidden: Boolean(document.querySelector("#manual-cut-clock-field")?.hidden)
+      manualClockAbsent: document.querySelector("#manual-cut-clock-field") === null
     };
     `),
     (value) => (
       value.disabled.every((disabled) => disabled === false)
-        && value.manualClockHidden === false
+        && value.manualClockAbsent
     ),
-    "도우미 없는 CHZZK 컷 제어가 입력 debounce 뒤 활성화되지 않았습니다."
+    "CHZZK 원본 제어 진입 버튼이 입력 debounce 뒤 활성화되지 않았습니다."
   );
   assert(
     helperlessCaptureControls.disabled.every((disabled) => disabled === false)
-      && helperlessCaptureControls.manualClockHidden === false,
-    `도우미 없는 CHZZK 컷에서 E/R/D/F/Y/U 또는 수동 시계가 비활성화됐습니다: ${JSON.stringify(helperlessCaptureControls)}`
+      && helperlessCaptureControls.manualClockAbsent,
+    `CHZZK 컷에서 E/R/D/F/Y/U 또는 수동 시계 제거 계약이 다릅니다: ${JSON.stringify(helperlessCaptureControls)}`
   );
   await execute(`
     const source = document.querySelector("#source-url");
@@ -2117,15 +2117,13 @@ async function main(): Promise<void> {
     "공개 시작 화면이 생각 없이 누를 수 있는 편집기 열기 상태가 되지 않았습니다."
   );
 
-  // CHZZK exposes no trustworthy cross-origin player clock. The initial cut
-  // must nevertheless stay fully usable without installing or connecting a
-  // helper: the user mirrors the visible player clock once, then E/R/D/F own
-  // the web fields. Y/U keep explicit platform guidance instead of pretending
-  // that the parent page can bypass the iframe boundary.
-  const helperlessShortcutConsole = await waitFor(
+  // The helper-backed HLS journey is covered by the real loopback playback
+  // acceptance. This fixture proves controls remain available while the
+  // removed manual clock and separate Electron cut window never return.
+  const externalPlayerConsole = await waitFor(
     () => execute<{
       readonly disabled: readonly string[];
-      readonly manualClockVisible: boolean;
+      readonly manualClockAbsent: boolean;
       readonly status: string;
     }>(`
       const ids = [
@@ -2141,77 +2139,39 @@ async function main(): Promise<void> {
           const button = document.getElementById(id);
           return !(button instanceof HTMLButtonElement) || button.disabled;
         }),
-        manualClockVisible: document.querySelector("#manual-cut-clock-field")?.hidden === false,
+        manualClockAbsent: document.querySelector("#manual-cut-clock-field") === null,
         status: document.querySelector("#stream-cut-console-status")?.textContent?.trim() || ""
       };
     `),
     (value) => (
       value.disabled.length === 0
-        && value.manualClockVisible
+        && value.manualClockAbsent
     ),
-    () => "CHZZK 도우미 없는 E/R/D/F/Y/U 콘솔이 활성화되지 않았습니다. "
+    () => "CHZZK E/R/D/F/Y/U 원본 제어 진입 콘솔이 활성화되지 않았습니다. "
       + `fixture=${JSON.stringify(semanticFixtureState)} requests=${JSON.stringify(localEngineProbeRecords)}`,
     10_000
   );
   assert(
-    helperlessShortcutConsole.disabled.length === 0,
-    "CHZZK 도우미 없는 컷 제어 버튼이 모두 활성화되지 않았습니다."
+    externalPlayerConsole.disabled.length === 0
+      && externalPlayerConsole.manualClockAbsent,
+    "CHZZK 컷 제어 버튼 또는 수동 시계 제거 계약이 다릅니다."
   );
-  const shortcutJourney = await execute<{
-    readonly end: string;
-    readonly manualClock: string;
-    readonly start: string;
-    readonly status: string;
-  }>(`
+  await execute(`
     const row = document.querySelector(".clip-row");
     const start = row?.querySelector('[data-field="start"]');
     const end = row?.querySelector('[data-field="end"]');
-    const clock = document.querySelector("#manual-cut-clock");
     if (!(start instanceof HTMLInputElement)
-      || !(end instanceof HTMLInputElement)
-      || !(clock instanceof HTMLInputElement)) {
-      throw new Error("컷 단축키 실사용 요소가 없습니다.");
+      || !(end instanceof HTMLInputElement)) {
+      throw new Error("컷 범위 입력 요소가 없습니다.");
     }
-    const press = (key) => document.dispatchEvent(new KeyboardEvent("keydown", {
-      bubbles: true,
-      code: "Key" + key.toUpperCase(),
-      key
-    }));
-    const setClock = (value) => {
-      clock.value = value;
-      clock.dispatchEvent(new Event("input", { bubbles: true }));
-      clock.dispatchEvent(new Event("change", { bubbles: true }));
-    };
-    setClock("00:00:00.250");
-    press("e");
-    setClock("00:00:00.750");
-    press("r");
-    press("d");
-    press("f");
-    press("y");
-    press("u");
-    const result = {
-      end: end.value,
-      manualClock: clock.value,
-      start: start.value,
-      status: document.querySelector("#stream-cut-console-status")?.textContent?.trim() || ""
-    };
-    // Continue the deterministic final prepare with the original exact range.
     start.value = "00:00:10.000";
     end.value = "00:00:11.000";
     for (const input of [start, end]) {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    return result;
+    return true;
   `);
-  assert(
-    shortcutJourney.start === "00:00:00.250"
-      && shortcutJourney.end === "00:00:00.750"
-      && shortcutJourney.manualClock === "00:00:05"
-      && shortcutJourney.status.includes("원본 플레이어 설정에서 2배속"),
-    `CHZZK 도우미 없는 E/R/D/F/Y/U 단축키가 컷 시각·안내를 반영하지 못했습니다: ${JSON.stringify(shortcutJourney)}`
-  );
   await execute(`
     const button = document.querySelector("#start-editor");
     if (!(button instanceof HTMLButtonElement) || button.disabled) {

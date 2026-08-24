@@ -2246,7 +2246,7 @@ async function main(): Promise<void> {
   const extensionlessCaptureState = await execute<{
     semanticCaptureConsolePresent: boolean;
     captureEnabledWithoutHelper: boolean;
-    manualClockVisible: boolean;
+    manualClockAbsent: boolean;
     manualInputsEnabled: boolean;
     iframeVisible: boolean;
   }>(`
@@ -2275,7 +2275,7 @@ async function main(): Promise<void> {
         "playback-rate-quarter",
         "playback-rate-double"
       ].every((id) => document.querySelector("#" + id)?.disabled === false),
-      manualClockVisible: document.querySelector("#manual-cut-clock-field")?.hidden === false,
+      manualClockAbsent: document.querySelector("#manual-cut-clock-field") === null,
       manualInputsEnabled: start instanceof HTMLInputElement
         && end instanceof HTMLInputElement
         && !start.disabled
@@ -2286,12 +2286,12 @@ async function main(): Promise<void> {
   assert(
     extensionlessCaptureState.semanticCaptureConsolePresent
       && extensionlessCaptureState.captureEnabledWithoutHelper
-      && extensionlessCaptureState.manualClockVisible
+      && extensionlessCaptureState.manualClockAbsent
       && extensionlessCaptureState.manualInputsEnabled
       && extensionlessCaptureState.iframeVisible,
-    `공식 임베드·수동 시계·도우미 없는 웹 컷 console을 함께 제공하지 못했습니다: ${JSON.stringify(extensionlessCaptureState)}`
+    `공식 임베드·원본 제어 진입 console·수동 시계 제거를 함께 제공하지 못했습니다: ${JSON.stringify(extensionlessCaptureState)}`
   );
-  process.stderr.write("[browser-smoke] SOOP 임베드·수동 입력·웹 컷 console 검증 완료\n");
+  process.stderr.write("[browser-smoke] SOOP 임베드·원본 제어 진입·웹 컷 console 검증 완료\n");
 
   await execute(`
     const input = document.querySelector("#source-url");
@@ -2447,26 +2447,53 @@ async function main(): Promise<void> {
     `/session/${sessionId}/log`,
     { type: "performance" }
   );
-  const acquisitionRequests = capturePerformanceLogs.filter((entry) => {
+  const localGatewayRequests = capturePerformanceLogs.flatMap((entry) => {
     try {
       const envelope: unknown = JSON.parse(String(entry.message || ""));
       if (!isRecord(envelope) || !isRecord(envelope.message)) {
-        return false;
+        return [];
       }
       const event = envelope.message;
       if (event.method !== "Network.requestWillBeSent" || !isRecord(event.params)) {
-        return false;
+        return [];
       }
       const request = event.params.request;
-      return isRecord(request)
-        && String(request.url || "").startsWith("http://127.0.0.1:4319/");
+      if (!isRecord(request)) {
+        return [];
+      }
+      const url = String(request.url || "");
+      if (!url.startsWith("http://127.0.0.1:4319/")) {
+        return [];
+      }
+      return [{ method: String(request.method || ""), url }];
     } catch {
-      return false;
+      return [];
     }
-  }).length;
+  });
+  const playbackRequests = localGatewayRequests.filter(({ method, url }) => (
+    method === "POST" && new URL(url).pathname === "/v1/playback"
+  ));
+  const legacyAcquisitionRequests = localGatewayRequests.filter(({ url }) => (
+    new URL(url).pathname.startsWith("/v1/vod/materializations")
+  ));
+  const unexpectedGatewayRequests = localGatewayRequests.filter(({ method, url }) => {
+    const pathname = new URL(url).pathname;
+    return !(
+      (method === "GET" && pathname === "/v1/health")
+      || (method === "POST" && pathname === "/v1/playback")
+    );
+  });
   assert(
-    acquisitionRequests === 0,
-    `컷 캡처 단계에서 로컬 VOD acquisition이 ${acquisitionRequests}회 발생했습니다.`
+    playbackRequests.length >= 3,
+    `CHZZK·SOOP 입력이 자동 로컬 HLS 재생을 요청하지 않았습니다: ${JSON.stringify(localGatewayRequests)}`
+  );
+  assert(
+    legacyAcquisitionRequests.length === 0,
+    `컷 캡처 단계에서 legacy VOD materialization이 ${legacyAcquisitionRequests.length}회 발생했습니다.`
+  );
+  assert(
+    unexpectedGatewayRequests.length === 0,
+    `컷 캡처 단계에서 예상 밖 loopback 요청이 발생했습니다: ${JSON.stringify(unexpectedGatewayRequests)}`
   );
   const clipInitialState = await execute<{
     initialDisabled: boolean;

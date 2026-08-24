@@ -98,6 +98,10 @@ import {
   canonicalSupportedVodSourceUrl
 } from "../src/lib/source-embed.js";
 import {
+  LOCAL_VOD_PLAYBACK_CREATE_PROTOCOL,
+  parseLocalVodPlaybackCreateRequest
+} from "../src/lib/local-vod-playback.js";
+import {
   SOURCE_PLATFORM_CHZZK,
   SOURCE_PLATFORM_SOOP,
   SOURCE_PLATFORM_YOUTUBE,
@@ -166,6 +170,15 @@ import type {
 import {
   normalizeVodConsumerId
 } from "./vod-consumer-scope.js";
+import {
+  createLocalVodPlaybackProxy
+} from "./local-vod-playback-proxy.js";
+import type {
+  LocalVodPlaybackResolver
+} from "./local-vod-playback-proxy.js";
+import {
+  resolveLocalVodPlayback
+} from "./local-vod-playback-resolver.js";
 
 export const CAPTION_AGENT_CAPABILITY_SCHEMA_ID =
   "chzzk-kirinuki-caption-agent/capability-v2";
@@ -1705,6 +1718,7 @@ export function createCaptionGatewayServer({
   chzzkMaterializer = materializeChzzkVod,
   externalMaterializer = materializeExternalVod,
   editorHandoffBroker,
+  playbackResolver,
   vodObserverLeaseTtlMs,
   vodObserverLeaseScheduler,
   randomBytesImpl = randomBytes,
@@ -1718,6 +1732,7 @@ export function createCaptionGatewayServer({
   chzzkMaterializer?: ChzzkVodMaterializerImplementation;
   externalMaterializer?: ExternalVodMaterializerImplementation;
   editorHandoffBroker?: Readonly<EditorHandoffBroker>;
+  playbackResolver?: LocalVodPlaybackResolver;
   vodObserverLeaseTtlMs?: number;
   vodObserverLeaseScheduler?: ChzzkVodObserverLeaseScheduler;
   randomBytesImpl?: typeof randomBytes;
@@ -1751,6 +1766,20 @@ export function createCaptionGatewayServer({
       chzzkMaterializer,
       externalMaterializer
     });
+  const localVodPlayback = createLocalVodPlaybackProxy({
+    resolvePlayback: playbackResolver ?? ((sourceUrl, signal) => (
+      resolveLocalVodPlayback(sourceUrl, {
+        ytDlpBinary: String(env.KIRINUKI_YT_DLP_BINARY || ""),
+        nodeBinary: String(env.KIRINUKI_YT_DLP_NODE_BINARY || process.execPath),
+        processEnv: env,
+        cwd: String(env.KIRINUKI_PACKAGE_ROOT || process.cwd()),
+        ...(signal ? { signal } : {})
+      })
+    )),
+    fetchImpl,
+    randomBytesImpl,
+    now
+  });
   const chzzkVodJobs = createChzzkVodJobManager({
     runner: selectedMaterializationRunner,
     ...(config.vodStateDir ? { artifactRoot: config.vodStateDir } : {}),
@@ -2431,6 +2460,15 @@ export function createCaptionGatewayServer({
     const isCaptionRequest = requestUrl.pathname === "/v1/captions";
     const isEditorHandoffRequest =
       requestUrl.pathname === "/v1/editor-handoff";
+    const isPlaybackCollection = requestUrl.pathname === "/v1/playback";
+    const playbackSessionMatch =
+      /^\/v1\/playback\/([A-Za-z0-9_-]{43})$/u.exec(requestUrl.pathname);
+    const playbackManifestMatch =
+      /^\/v1\/playback\/([A-Za-z0-9_-]{43})\/part\/(\d{1,3})\/index\.m3u8$/u
+        .exec(requestUrl.pathname);
+    const playbackResourceMatch =
+      /^\/v1\/playback\/([A-Za-z0-9_-]{43})\/resource\/([0-9a-z]{1,8})$/u
+        .exec(requestUrl.pathname);
     const materializationCollectionMatch =
       /^\/v1\/(chzzk-vod|vod)\/materializations$/u
         .exec(requestUrl.pathname);
@@ -2464,6 +2502,10 @@ export function createCaptionGatewayServer({
       && !isSessionStatusRequest
       && !isCaptionRequest
       && !isEditorHandoffRequest
+      && !isPlaybackCollection
+      && !playbackSessionMatch
+      && !playbackManifestMatch
+      && !playbackResourceMatch
       && !isMaterializationCollection
       && !materializationJobMatch
       && !materializationPurgeMatch
@@ -2481,6 +2523,12 @@ export function createCaptionGatewayServer({
     if (request.method === "OPTIONS") {
       const preflightMethods = isHealthRequest
         ? ["GET"]
+        : isPlaybackCollection
+          ? ["POST"]
+          : playbackSessionMatch
+            ? ["DELETE"]
+          : playbackManifestMatch || playbackResourceMatch
+            ? ["GET"]
         : isPairingPollRequest
           ? ["GET"]
         : isPairingRequest
@@ -2544,6 +2592,10 @@ export function createCaptionGatewayServer({
       && !isPairingPollRequest
       && !(isPairingRequest && request.method === "POST")
       && !materializationMediaMatch
+      && !isPlaybackCollection
+      && !playbackSessionMatch
+      && !playbackManifestMatch
+      && !playbackResourceMatch
     ) {
       const maximumPlaintextBytes = isCaptionRequest
         ? config.maxBodyBytes
@@ -2561,6 +2613,99 @@ export function createCaptionGatewayServer({
       })) {
         return;
       }
+    }
+    if (playbackSessionMatch) {
+      if (
+        request.method !== "DELETE"
+        || requestUrl.search !== ""
+        || protocol !== ""
+      ) {
+        rejectJson(request, response, 404, {
+          error: { code: "PLAYBACK_NOT_FOUND", message: "원본 재생 경로를 찾지 못했습니다." }
+        });
+        return;
+      }
+      discardUnreadRequestBody(request, response);
+      if (!localVodPlayback.removeSession(playbackSessionMatch[1]!)) {
+        rejectJson(request, response, 404, {
+          error: { code: "PLAYBACK_NOT_FOUND", message: "원본 재생 경로를 찾지 못했습니다." }
+        });
+        return;
+      }
+      response.statusCode = 204;
+      response.setHeader("cache-control", "no-store");
+      response.end();
+      return;
+    }
+    if (playbackManifestMatch || playbackResourceMatch) {
+      if (requestUrl.search !== "" || protocol !== "") {
+        rejectJson(request, response, 404, {
+          error: { code: "PLAYBACK_NOT_FOUND", message: "원본 재생 경로를 찾지 못했습니다." }
+        });
+        return;
+      }
+      const served = playbackManifestMatch
+        ? await localVodPlayback.serveManifest({
+          accessToken: playbackManifestMatch[1]!,
+          partIndex: Number(playbackManifestMatch[2]),
+          request,
+          response
+        })
+        : await localVodPlayback.serveResource({
+          accessToken: playbackResourceMatch![1]!,
+          resourceKey: playbackResourceMatch![2]!,
+          request,
+          response
+        });
+      if (!served) {
+        rejectJson(request, response, 404, {
+          error: { code: "PLAYBACK_NOT_FOUND", message: "원본 재생 경로를 찾지 못했습니다." }
+        });
+      }
+      return;
+    }
+    if (isPlaybackCollection) {
+      if (
+        request.method !== "POST"
+        || requestUrl.search !== ""
+        || protocol !== LOCAL_VOD_PLAYBACK_CREATE_PROTOCOL
+      ) {
+        rejectJson(request, response, 404, {
+          error: { code: "PLAYBACK_NOT_FOUND", message: "원본 재생 경로를 찾지 못했습니다." }
+        });
+        return;
+      }
+      const body = parseLocalVodPlaybackCreateRequest(
+        await readJsonRequest(request, 4 * 1024)
+      );
+      if (!body) {
+        rejectJson(request, response, 400, {
+          error: { code: "INVALID_PLAYBACK_REQUEST", message: "원본 재생 요청이 올바르지 않습니다." }
+        });
+        return;
+      }
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      try {
+        const session = await localVodPlayback.createSession(
+          body.sourceUrl,
+          controller.signal
+        );
+        sendJson(response, 200, session);
+      } catch {
+        if (!response.headersSent && !response.writableEnded) {
+          rejectJson(request, response, 502, {
+            error: {
+              code: "PLAYBACK_UNAVAILABLE",
+              message: "공개 VOD 재생 정보를 준비하지 못했습니다."
+            }
+          });
+        }
+      } finally {
+        request.removeListener("aborted", abort);
+      }
+      return;
     }
     if (isEditorHandoffRequest) {
       if (
@@ -3764,6 +3909,7 @@ export function createCaptionGatewayServer({
       encryptedTransports.clear();
       sessionEncryptionGrants.clear();
       pendingPairingResponses.clear();
+      localVodPlayback.shutdown();
       // Job cancellation starts before HTTP draining so yt-dlp/ffmpeg process
       // groups get their TERM -> KILL cleanup window in full.
       const jobsSettled = chzzkVodJobs.close();

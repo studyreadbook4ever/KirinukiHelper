@@ -2,7 +2,7 @@
   "name": "kirinuki-app",
   "productName": "Kirinuki",
   "desktopName": "kr.eff0rtchung.kirinuki.desktop",
-  "version": "3.0.12",
+  "version": "3.0.13",
   "private": true,
   "license": "Unlicense",
   "type": "module",
@@ -73,6 +73,7 @@
   },
   "dependencies": {
     "esbuild": "0.28.1",
+    "hls.js": "1.7.1",
     "mediabunny": "1.51.0",
     "tsx": "4.23.1"
   },

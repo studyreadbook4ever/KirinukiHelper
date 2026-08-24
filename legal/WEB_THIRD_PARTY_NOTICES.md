@@ -34,6 +34,23 @@ Mediabunny는 브라우저에서 로컬 미디어를 읽고 인코딩·mux하는
 포함되어 있습니다. Kirinuki의 adapter와 upstream Mediabunny의
 MPL-2.0 코드를 구분해 관리합니다.
 
+<!-- attribution-id: hls-js -->
+## hls.js 1.7.1
+
+- License: Apache License 2.0 (`Apache-2.0`)
+- Upstream: https://github.com/video-dev/hls.js
+- Exact corresponding source package:
+  https://registry.npmjs.org/hls.js/-/hls.js-1.7.1.tgz
+- npm integrity:
+  `sha512-DlzIkeBAS9IIQ432k3BUf3HlwbsR0+trB1i2lDdN2gUkNkrehFurh0/48M5c1/EjlDkdGng1gwZIpwyPxvdZ/g==`
+- License file size: `1338` bytes
+- License SHA-256:
+  `ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db`
+- Full license text: `licenses/HLS-JS-APACHE-2.0.txt`
+
+hls.js는 CHZZK·SOOP 공개 VOD의 HLS를 이 페이지의 동일한 `<video>`에서
+재생합니다. 컷 타임스탬프는 이 플레이어의 실제 재생 시각을 그대로 사용합니다.
+
 <!-- attribution-id: audseg -->
 ## AudSeg browser port 0.1.0
 
@@ -93,9 +110,11 @@ Kirinuki 웹 편집기의 원본 확인 화면은 해당 주소를 연 경우에
 Google의 공식 `https://www.youtube-nocookie.com` embed에 직접 연결합니다.
 원격 JavaScript를 프로젝트·파일 권한이 있는 Kirinuki parent 문서에서 실행하지
 않습니다. CHZZK와 SOOP도 사용자가 해당 공개 VOD 주소를 입력했을 때만 각 공식
-재생 페이지를 격리된 iframe으로 엽니다. YouTube의 현재 서비스 약관·
+재생 페이지를 격리된 iframe으로 엽니다. 영상 준비 도우미가 실행 중이면
+CHZZK·SOOP HLS는 사용자 PC의 loopback 전달 경계를 통해 같은 웹 플레이어에서
+재생되며 Kirinuki 공개 서버를 거치지 않습니다. YouTube의 현재 서비스 약관·
 개발자 정책과 콘텐츠 권리는 위 오픈소스 라이선스와 별도로 적용됩니다.
-Kirinuki 서버는 플레이어나 VOD를 proxy하지 않습니다. 사용자가 편집 영상 준비를
+Kirinuki 공개 서버는 플레이어나 VOD를 proxy하지 않습니다. 사용자가 편집 영상 준비를
 요청하면 설치된 로컬 엔진이 공개 원본에서 선택 범위에 필요한 부분만 이 기기로
 직접 받습니다.
 
