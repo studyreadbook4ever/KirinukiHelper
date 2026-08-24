@@ -123,13 +123,12 @@ input:focus { border-color: #1aa781; box-shadow: 0 0 0 3px rgb(0 230 163 / .1); 
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-template-areas:
-    "refresh refresh quarter double"
+    "quarter quarter double double"
     "back back forward forward"
     "capture-start capture-start capture-end capture-end"
     "save save save save";
   gap: 5px;
 }
-#refresh-source { grid-area: refresh; }
 #capture-start { grid-area: capture-start; }
 #capture-end { grid-area: capture-end; }
 #save-segment { grid-area: save; }
@@ -282,7 +281,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .stream-cut-buttons {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-areas:
-      "refresh refresh"
       "quarter double"
       "back forward"
       "capture-start capture-end"

@@ -2117,21 +2117,15 @@ async function main(): Promise<void> {
     "공개 시작 화면이 생각 없이 누를 수 있는 편집기 열기 상태가 되지 않았습니다."
   );
 
-  // CHZZK has no trustworthy cross-origin player clock. Press W through the
-  // real capture console so the optional helper prepares a local preview,
-  // then prove the PR16 keyboard controls become enabled and own the fields.
-  await execute(`
-    const prepare = document.querySelector("#refresh-source");
-    if (!(prepare instanceof HTMLButtonElement) || prepare.disabled) {
-      throw new Error("CHZZK W 도우미 미리보기를 시작할 수 없습니다.");
-    }
-    prepare.click();
-    return true;
-  `);
-  const helperShortcutConsole = await waitFor(
+  // CHZZK exposes no trustworthy cross-origin player clock. The initial cut
+  // must nevertheless stay fully usable without installing or connecting a
+  // helper: the user mirrors the visible player clock once, then E/R/D/F own
+  // the web fields. Y/U keep explicit platform guidance instead of pretending
+  // that the parent page can bypass the iframe boundary.
+  const helperlessShortcutConsole = await waitFor(
     () => execute<{
       readonly disabled: readonly string[];
-      readonly readyState: number;
+      readonly manualClockVisible: boolean;
       readonly status: string;
     }>(`
       const ids = [
@@ -2142,42 +2136,40 @@ async function main(): Promise<void> {
         "playback-rate-quarter",
         "playback-rate-double"
       ];
-      const video = document.querySelector("#stream-preview-video");
       return {
         disabled: ids.filter((id) => {
           const button = document.getElementById(id);
           return !(button instanceof HTMLButtonElement) || button.disabled;
         }),
-        readyState: video instanceof HTMLVideoElement ? video.readyState : 0,
+        manualClockVisible: document.querySelector("#manual-cut-clock-field")?.hidden === false,
         status: document.querySelector("#stream-cut-console-status")?.textContent?.trim() || ""
       };
     `),
     (value) => (
       value.disabled.length === 0
-        && value.readyState >= 1
-        && value.status.includes("E/R/D/F/Y/U")
+        && value.manualClockVisible
     ),
-    () => "CHZZK 도우미 연결 후 E/R/D/F/Y/U 콘솔이 활성화되지 않았습니다. "
+    () => "CHZZK 도우미 없는 E/R/D/F/Y/U 콘솔이 활성화되지 않았습니다. "
       + `fixture=${JSON.stringify(semanticFixtureState)} requests=${JSON.stringify(localEngineProbeRecords)}`,
-    30_000
+    10_000
   );
   assert(
-    helperShortcutConsole.disabled.length === 0,
-    "CHZZK 도우미 컷 제어 버튼이 모두 활성화되지 않았습니다."
+    helperlessShortcutConsole.disabled.length === 0,
+    "CHZZK 도우미 없는 컷 제어 버튼이 모두 활성화되지 않았습니다."
   );
   const shortcutJourney = await execute<{
-    readonly doublePressed: string;
     readonly end: string;
-    readonly quarterPressed: string;
+    readonly manualClock: string;
     readonly start: string;
+    readonly status: string;
   }>(`
     const row = document.querySelector(".clip-row");
     const start = row?.querySelector('[data-field="start"]');
     const end = row?.querySelector('[data-field="end"]');
-    const video = document.querySelector("#stream-preview-video");
+    const clock = document.querySelector("#manual-cut-clock");
     if (!(start instanceof HTMLInputElement)
       || !(end instanceof HTMLInputElement)
-      || !(video instanceof HTMLVideoElement)) {
+      || !(clock instanceof HTMLInputElement)) {
       throw new Error("컷 단축키 실사용 요소가 없습니다.");
     }
     const press = (key) => document.dispatchEvent(new KeyboardEvent("keydown", {
@@ -2185,21 +2177,24 @@ async function main(): Promise<void> {
       code: "Key" + key.toUpperCase(),
       key
     }));
-    video.currentTime = 0.25;
+    const setClock = (value) => {
+      clock.value = value;
+      clock.dispatchEvent(new Event("input", { bubbles: true }));
+      clock.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    setClock("00:00:00.250");
     press("e");
-    video.currentTime = 0.75;
+    setClock("00:00:00.750");
     press("r");
-    press("y");
-    const quarterPressed = document.querySelector("#playback-rate-quarter")?.getAttribute("aria-pressed") || "";
-    press("u");
-    const doublePressed = document.querySelector("#playback-rate-double")?.getAttribute("aria-pressed") || "";
     press("d");
     press("f");
+    press("y");
+    press("u");
     const result = {
-      doublePressed,
       end: end.value,
-      quarterPressed,
-      start: start.value
+      manualClock: clock.value,
+      start: start.value,
+      status: document.querySelector("#stream-cut-console-status")?.textContent?.trim() || ""
     };
     // Continue the deterministic final prepare with the original exact range.
     start.value = "00:00:10.000";
@@ -2213,9 +2208,9 @@ async function main(): Promise<void> {
   assert(
     shortcutJourney.start === "00:00:00.250"
       && shortcutJourney.end === "00:00:00.750"
-      && shortcutJourney.quarterPressed === "true"
-      && shortcutJourney.doublePressed === "true",
-    `CHZZK 도우미 E/R/D/F/Y/U 단축키가 원본 시각·재생 제어를 반영하지 못했습니다: ${JSON.stringify(shortcutJourney)}`
+      && shortcutJourney.manualClock === "00:00:05"
+      && shortcutJourney.status.includes("원본 플레이어 설정에서 2배속"),
+    `CHZZK 도우미 없는 E/R/D/F/Y/U 단축키가 컷 시각·안내를 반영하지 못했습니다: ${JSON.stringify(shortcutJourney)}`
   );
   await execute(`
     const button = document.querySelector("#start-editor");
@@ -2282,13 +2277,13 @@ async function main(): Promise<void> {
     );
   });
   assert(
-    // W owns one preview session with bootstrap+window requests. The start page
-    // then prepares the exact selected range, and the editor reacquires that
-    // cache under a third document-scoped session. Repeated control requests
-    // must not imply repeated remote downloads in the real helper.
-    semanticFixtureState.sessionRequests === 3
-      && semanticFixtureState.materializationRequests === 4
-      && semanticFixtureState.mediaRequests >= 3,
+    // Initial cut selection is helperless. Only editor entry prepares the
+    // exact selected range, and the editor reacquires that cache under its own
+    // document-scoped session. Repeated control requests must not imply
+    // repeated remote downloads in the real helper.
+    semanticFixtureState.sessionRequests === 2
+      && semanticFixtureState.materializationRequests === 2
+      && semanticFixtureState.mediaRequests >= 1,
     `공개 웹 semantic chain의 session·prepare·media 호출 수가 다릅니다: ${JSON.stringify(semanticFixtureState)}`
   );
   assert(

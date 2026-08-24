@@ -6,7 +6,7 @@ async function source(path: string): Promise<string> {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
-test("제품 본체는 공개 웹이고 설치 도우미는 화면 없는 부분 VOD 엔진이다", async () => {
+test("제품 본체는 공개 웹이고 초기 컷 선택은 설치·연결 단계가 없다", async () => {
   const [agents, readme, html, webMain, desktopMain] = await Promise.all([
     source("AGENTS.md"),
     source("README.md"),
@@ -16,13 +16,13 @@ test("제품 본체는 공개 웹이고 설치 도우미는 화면 없는 부분
   ]);
 
   assert.match(agents, /웹사이트가 제품 본체/u);
-  assert.match(agents, /제품 runtime은 `BrowserWindow`를 만들지 않/u);
+  assert.match(agents, /초기 컷 선택에서 loopback 엔진 설치를 요구하지/u);
   assert.match(readme, /URL 입력부터 컷 선택·전체 편집까지 공개 웹사이트/u);
   assert.match(html, /id="source-url"[\s\S]*id="stream-cut-console"[\s\S]*id="start-editor"/u);
   assert.doesNotMatch(html, /id="cut-host-launch-panel"|id="launch-kirinuki-cut"/u);
-  assert.doesNotMatch(webMain, /kirinukiSurface=cut-host|kirinuki-engine:\/\/cut/u);
-  assert.doesNotMatch(webMain, /kirinukiCutHost|EditorHandoff/u);
-  assert.doesNotMatch(desktopMain, /BrowserWindow|openCutWindow|CUT_WINDOW/u);
+  assert.doesNotMatch(`${html}\n${webMain}`, /id="refresh-source"|aria-keyshortcuts="W"|location\.href\s*=\s*"kirinuki-engine:\/\/cut"/u);
+  assert.match(webMain, /kirinukiSurface=cut-host[\s\S]*kirinukiCutHost/u);
+  assert.match(desktopMain, /BrowserWindow[\s\S]*openCutWindow[\s\S]*CUT_WINDOW/u);
 });
 
 test("새 컷은 웹에서 선택하고 확정 범위 준비 완료 뒤 같은 브라우저 편집기로 이동한다", async () => {
@@ -50,19 +50,18 @@ test("새 컷은 웹에서 선택하고 확정 범위 준비 완료 뒤 같은 �
   assert.ok(navigationIndex > sessionIndex, "준비·session 뒤 브라우저 이동이 없습니다.");
 });
 
-test("PR16·확장프로그램의 컷 단축키 열 개는 웹 문서에서 같은 동작으로 유지된다", async () => {
+test("컷 화면은 별도 연결 키 없이 편집 단축키 아홉 개를 웹 문서에서 소유한다", async () => {
   const [html, webMain, bindings] = await Promise.all([
     source("web/index.html"),
     source("src/web/main.ts"),
     source("src/web/studio-capture-console.ts")
   ]);
 
-  for (const key of ["Q", "W", "E", "R", "T", "A", "D", "F", "Y", "U"]) {
+  for (const key of ["Q", "E", "R", "T", "A", "D", "F", "Y", "U"]) {
     assert.match(bindings, new RegExp(`key: "${key}"`, "u"));
   }
   for (const id of [
     "stream-preview-video",
-    "refresh-source",
     "capture-start",
     "capture-end",
     "save-segment",
@@ -73,6 +72,8 @@ test("PR16·확장프로그램의 컷 단축키 열 개는 웹 문서에서 같�
   ]) {
     assert.match(html, new RegExp(`id="${id}"`, "u"));
   }
+  assert.doesNotMatch(html, /id="refresh-source"|aria-keyshortcuts="W"/u);
+  assert.doesNotMatch(bindings, /key: "W"|action: "refresh-source"/u);
   assert.match(webMain, /installStudioCaptureConsole/u);
   assert.match(webMain, /HTMLVideoElement/u);
   assert.match(webMain, /captureCurrentPlayerTime/u);
@@ -98,7 +99,7 @@ test("세 설치 대상과 headless 자동 시작 계약은 그대로 고정된�
   assert.match(desktopMain, /ensureEngineAutostart/u);
   assert.match(desktopMain, /startDesktopRuntimeSupervisor/u);
   assert.match(desktopMain, /webContents\.getAllWebContents\(\)\.length/u);
-  assert.doesNotMatch(packageFiles, /preload\.cjs/u);
+  assert.match(packageFiles, /preload\.cjs/u);
   assert.doesNotMatch(
     qualityWorkflow,
     /test:electron:cut-window|sandboxed cut host/u
