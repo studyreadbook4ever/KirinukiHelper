@@ -193,6 +193,8 @@ test("concat manifest and FFmpeg args retain microsecond clock precision", () =>
   });
   assert.equal(args[args.indexOf("-ss") + 1], "0.699576");
   assert.equal(args[args.indexOf("-t") + 1], "5.000000");
+  assert.equal(args[args.indexOf("-preset") + 1], "veryfast");
+  assert.ok(!args.includes("medium"));
   assert.ok(args.includes("-map_metadata"));
   assert.ok(args.includes("yuv420p"));
 });

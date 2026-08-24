@@ -29,6 +29,7 @@ import {
   chzzkVodConsumerScopeHash,
   materializeChzzkVod as materializeChzzkVodImplementation,
   normalizeChzzkVodUrl,
+  parseChzzkPlaybackHls,
   parseChzzkMpd,
   planChzzkVodMaterialization,
   reopenChzzkVodMaterialization as reopenChzzkVodMaterializationImplementation,
@@ -231,6 +232,22 @@ function advancedMpdFixture(): string {
     </AdaptationSet>
   </Period>
 </MPD>`;
+}
+
+function playbackMpdFixture(): string {
+  return mpdFixture()
+    .replace(
+      'xmlns:dash="urn:mpeg:dash:schema:mpd:2011"',
+      'xmlns:dash="urn:mpeg:dash:schema:mpd:2011" xmlns:nvod="urn:naver:vod"'
+    )
+    .replace(
+      'id="720p"',
+      'id="720p" nvod:m3u="https://vod.pstatic.net/media/hls/720p.m3u8?sig=runtime-720"'
+    )
+    .replace(
+      'id="1080p60"',
+      'id="1080p60" nvod:m3u="https://vod.pstatic.net/media/hls/1080p60.m3u8?sig=runtime-1080"'
+    );
 }
 
 function transportStreamBytes(segmentNumber: number): Uint8Array {
@@ -517,6 +534,31 @@ test("최고 muxed H264/AAC TS 품질과 full-segment 합집합을 계획한다"
     clipIds: ["clip-a", "clip-b"]
   });
   assert.deepEqual(plan.runs[0]?.segments.map((segment) => segment.number), [1, 2, 3]);
+});
+
+test("현재 CHZZK MPD의 namespaced HLS에서 1080p 이하 최고 품질과 원본 시계를 고른다", () => {
+  const selected = parseChzzkPlaybackHls(
+    playbackMpdFixture(),
+    "https://apis.naver.com/neonplayer/vodplay/v1/playback/internal-id"
+  );
+  assert.deepEqual(selected, {
+    durationSeconds: 20,
+    manifestUrl:
+      "https://vod.pstatic.net/media/hls/1080p60.m3u8?sig=runtime-1080"
+  });
+  assert.throws(
+    () => parseChzzkPlaybackHls(
+      playbackMpdFixture().replace(
+        "https://vod.pstatic.net/media/hls/1080p60.m3u8",
+        "https://attacker.example/media/hls/1080p60.m3u8"
+      ),
+      "https://apis.naver.com/neonplayer/vodplay/v1/playback/internal-id"
+    ),
+    (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "UNSAFE_TRANSFER_HOST"
+    )
+  );
 });
 
 test("명시한 확장 편집 범위를 handle 재적용 없이 정확히 계획한다", () => {

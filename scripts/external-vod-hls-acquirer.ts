@@ -700,7 +700,10 @@ export function buildExternalVodHlsTrimArgs({
     "-sn",
     "-dn",
     "-c:v", "libx264",
-    "-preset", "medium",
+    // This is a local, disposable editing root rather than the user's final
+    // export. Keep CRF 18 and the exact frame boundary, but favor interactive
+    // preparation latency over archival compression efficiency.
+    "-preset", "veryfast",
     "-crf", "18",
     "-pix_fmt", "yuv420p",
     "-c:a", "aac",

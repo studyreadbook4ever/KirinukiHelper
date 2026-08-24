@@ -132,6 +132,45 @@ test("selected HLS dump keeps signed URLs runtime-only", () => {
   assert.doesNotMatch(first.playlistSemanticIdentity, /first-secret|token=/u);
 });
 
+test("SOOP selector의 단일 multi-video wrapper를 정확한 선택 파트로 푼다", () => {
+  const entry = JSON.parse(hlsDump("soop-runtime")) as Record<string, unknown>;
+  entry.id = "part_20260704_1";
+  entry.extractor = "soop";
+  entry.playlist_index = 1;
+  const wrapped = {
+    _type: "multi_video",
+    id: "200568293",
+    extractor: "soop",
+    requested_entries: [1],
+    playlist_count: 2,
+    entries: [entry]
+  };
+  const selected = parseYtDlpSelectedInputsDump(JSON.stringify(wrapped), {
+    platform: "SOOP",
+    contentId: "200568293",
+    partId: "part_20260704_1"
+  });
+  assert.equal(selected.kind, "hls");
+  assert.equal(selected.contentId, "200568293");
+  assert.equal(selected.partId, "part_20260704_1");
+
+  assert.throws(
+    () => parseYtDlpSelectedInputsDump(JSON.stringify({
+      ...wrapped,
+      requested_entries: [2]
+    }), {
+      platform: "SOOP",
+      contentId: "200568293",
+      partId: "part_20260704_1"
+    }),
+    (error: unknown) => {
+      assert(error instanceof ExternalVodClockProofError);
+      assert.equal(error.code, "SOURCE_CHANGED");
+      return true;
+    }
+  );
+});
+
 test("HLS parser uses cumulative EXTINF and ignores signed URL rotation", () => {
   const first = parseVodHlsMediaPlaylist(playlist("one"), {
     playlistUrl: "https://vod.example.akamaized.net/hdntl=one/media.m3u8?token=one",
