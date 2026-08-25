@@ -1,5 +1,6 @@
 import {
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
+  LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA,
   parseLocalMediaEngineReleaseChannel,
   parseLocalMediaEngineWindowsPreviewChannel,
   type LocalMediaEngineReleaseChannel,
@@ -45,9 +46,32 @@ if (!verifiedLinuxPreview) {
 export const PINNED_WEB_ENGINE_RELEASE_CHANNEL:
   Readonly<LocalMediaEngineReleaseChannel> = verifiedLinuxPreview;
 
-// The Windows preview is pinned only after GitHub Actions has built the exact
-// tagged source, exercised the installed lifecycle on Windows, published a
-// prerelease, and the remote asset identities have been read back.
+const verifiedWindowsPreview = parseLocalMediaEngineWindowsPreviewChannel({
+  schema: LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA,
+  status: "verified-windows-preview",
+  tag: "windows-preview-v3.0.20",
+  commit: "859a6f8df83c920545f2a5457c63cc188d4f4522",
+  aggregateManifestSha256:
+    "0fc6814910a2862a43340cf8bb45ad857ccdd7689c0fe59a511346bc62038a56",
+  sourceOffer: {
+    bytes: 919,
+    fileName: "Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt",
+    sha256:
+      "7b6eb1110668c516f0acef5c27390dba387d15172d438d1240189cf58b0f139a",
+    url: "https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/windows-preview-v3.0.20/Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt"
+  },
+  installer: {
+    bytes: 128384206,
+    fileName: "Kirinuki-Engine-windows-x64-preview-setup.exe",
+    sha256:
+      "bf016482d81fcf209761112892a871c3561feae4530ee7c0791843c2b61dca76",
+    url: "https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/windows-preview-v3.0.20/Kirinuki-Engine-windows-x64-preview-setup.exe"
+  }
+});
+
+if (!verifiedWindowsPreview) {
+  throw new Error("고정된 Windows 도우미 preview channel이 검증 형식과 다릅니다.");
+}
+
 export const PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL:
-  Readonly<LocalMediaEngineWindowsPreviewChannel> | null =
-    parseLocalMediaEngineWindowsPreviewChannel(null);
+  Readonly<LocalMediaEngineWindowsPreviewChannel> = verifiedWindowsPreview;

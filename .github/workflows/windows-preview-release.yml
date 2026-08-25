@@ -219,7 +219,8 @@ jobs:
             if (release.draft !== false || release.prerelease !== true || release.tag_name !== expectedTag) {
               throw new Error("published Windows preview release flags or tag differ");
             }
-            const localAssets = fs.readdirSync(assetDirectory).sort();
+            const localAssets = fs.readdirSync(assetDirectory)
+              .sort((left, right) => left.localeCompare(right));
             const remoteAssets = [...release.assets].sort((left, right) => left.name.localeCompare(right.name));
             if (remoteAssets.length !== localAssets.length) {
               throw new Error("published Windows preview release asset count differs");
