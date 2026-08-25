@@ -161,9 +161,14 @@ test("Windows helper preview는 main quality와 native lifecycle 뒤에만 GitHu
   assert.match(workflow, /npm run package:desktop:windows-preview/u);
   assert.match(workflow, /attest-build-provenance@[0-9a-f]{40}/u);
   assert.match(workflow, /gh release create[\s\S]*--draft[\s\S]*--prerelease/u);
-  assert.match(workflow, /gh release download/u);
-  assert.match(workflow, /for attempt in \$\(seq 1 24\)[\s\S]*release_match_count[\s\S]*draft release discovery pending[\s\S]*remote_digest_count[\s\S]*sleep 5/u);
-  assert.match(workflow, /digest_ready[\s\S]*GitHub did not expose every asset digest/u);
+  assert.match(
+    workflow,
+    /gh release upload[\s\S]*gh release download[\s\S]*test:package:desktop:windows-preview[\s\S]*Get-AuthenticodeSignature[\s\S]*gh release edit/u
+  );
+  assert.match(
+    workflow,
+    /releases\/tags\/\$tag[\s\S]*release\.draft !== false[\s\S]*release\.prerelease !== true[\s\S]*remote\.digest !== `sha256:\$\{sha256\}`/u
+  );
   assert.match(workflow, /test:package:desktop:windows-preview/u);
   assert.match(workflow, /SmartScreen/u);
   assert.doesNotMatch(workflow, /--latest|releases\/latest\/download/u);

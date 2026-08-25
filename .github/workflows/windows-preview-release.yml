@@ -200,53 +200,6 @@ jobs:
           }
           trap rollback ERR
           gh release upload "$tag" dist/windows-preview/* --repo "$GITHUB_REPOSITORY"
-          printf '%s\n' 'Windows preview assets uploaded; waiting for GitHub SHA-256 digest readback.'
-          local_asset_count="$(find dist/windows-preview -maxdepth 1 -type f | wc -l | tr -d ' ')"
-          digest_ready=0
-          for attempt in $(seq 1 24); do
-            if ! release_list_json="$(gh api \
-              "repos/$GITHUB_REPOSITORY/releases?per_page=100" 2>/dev/null)"; then
-              printf 'GitHub release list readback pending (%s/24).\n' "$attempt"
-              sleep 5
-              continue
-            fi
-            release_match_count="$(jq --arg tag "$tag" \
-              '[.[] | select(.tag_name == $tag)] | length' \
-              <<<"$release_list_json")"
-            if [ "$release_match_count" -ne 1 ]; then
-              printf 'GitHub draft release discovery pending (%s/24).\n' "$attempt"
-              sleep 5
-              continue
-            fi
-            release_json="$(jq -c --arg tag "$tag" \
-              '[.[] | select(.tag_name == $tag)][0]' \
-              <<<"$release_list_json")"
-            remote_digest_count="$(jq '[.assets[] | select(
-              (.digest | type) == "string"
-              and (.digest | startswith("sha256:"))
-            )] | length' <<<"$release_json")"
-            if [ "$remote_digest_count" = "$local_asset_count" ]; then
-              digest_ready=1
-              break
-            fi
-            printf 'GitHub asset digest readback pending (%s/24).\n' "$attempt"
-            sleep 5
-          done
-          if [ "$digest_ready" -ne 1 ]; then
-            echo 'GitHub did not expose every asset digest before the readback deadline.' >&2
-            exit 1
-          fi
-          test "$(jq -r '.draft' <<<"$release_json")" = true
-          test "$(jq -r '.prerelease' <<<"$release_json")" = true
-          mapfile -t remote_assets < <(jq -r '.assets[].name' <<<"$release_json" | sort)
-          mapfile -t local_assets < <(find dist/windows-preview -maxdepth 1 -type f -printf '%f\n' | sort)
-          test "${remote_assets[*]}" = "${local_assets[*]}"
-          for file in "${local_assets[@]}"; do
-            local_size="$(stat -c '%s' -- "dist/windows-preview/$file")"
-            local_sha="$(sha256sum -- "dist/windows-preview/$file" | cut -d' ' -f1)"
-            test "$(jq -r --arg file "$file" '.assets[] | select(.name == $file) | .size' <<<"$release_json")" = "$local_size"
-            test "$(jq -r --arg file "$file" '.assets[] | select(.name == $file) | .digest' <<<"$release_json")" = "sha256:$local_sha"
-          done
           readback="$RUNNER_TEMP/kirinuki-windows-preview-readback"
           mkdir -m 700 -- "$readback"
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$readback"
@@ -255,8 +208,30 @@ jobs:
             '$signature=Get-AuthenticodeSignature -LiteralPath (Join-Path $env:RUNNER_TEMP "kirinuki-windows-preview-readback/Kirinuki-Engine-windows-x64-preview-setup.exe"); if($signature.Status.ToString() -cne "NotSigned"){throw "remote installer signature state changed"}'
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
           published=1
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")"
-          test "$(jq -r '.draft' <<<"$release_json")" = false
-          test "$(jq -r '.prerelease' <<<"$release_json")" = true
-          test "$(jq -r '.tag_name' <<<"$release_json")" = "$tag"
+          release_json="$RUNNER_TEMP/kirinuki-windows-preview-release.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > "$release_json"
+          node -e '
+            const crypto = require("node:crypto");
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const [releasePath, assetDirectory, expectedTag] = process.argv.slice(1);
+            const release = JSON.parse(fs.readFileSync(releasePath, "utf8"));
+            if (release.draft !== false || release.prerelease !== true || release.tag_name !== expectedTag) {
+              throw new Error("published Windows preview release flags or tag differ");
+            }
+            const localAssets = fs.readdirSync(assetDirectory).sort();
+            const remoteAssets = [...release.assets].sort((left, right) => left.name.localeCompare(right.name));
+            if (remoteAssets.length !== localAssets.length) {
+              throw new Error("published Windows preview release asset count differs");
+            }
+            localAssets.forEach((fileName, index) => {
+              const filePath = path.join(assetDirectory, fileName);
+              const bytes = fs.statSync(filePath).size;
+              const sha256 = crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+              const remote = remoteAssets[index];
+              if (remote.name !== fileName || remote.size !== bytes || remote.digest !== `sha256:${sha256}`) {
+                throw new Error(`published Windows preview identity differs: ${fileName}`);
+              }
+            });
+          ' "$release_json" dist/windows-preview "$tag"
           trap - ERR
