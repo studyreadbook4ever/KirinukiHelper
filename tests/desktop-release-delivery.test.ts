@@ -147,6 +147,11 @@ test("Windows helper preview는 main quality와 native lifecycle 뒤에만 GitHu
   assert.match(workflow, /Release-Confirmation: PUBLISH_WINDOWS_PREVIEW/u);
   assert.match(workflow, /refs\/remotes\/origin\/main\)" = "\$commit"/u);
   assert.match(workflow, /typescript-quality\.yml\/runs/u);
+  assert.match(workflow, /authorize:[\s\S]*runs-on:\s*ubuntu-24\.04/u);
+  assert.match(
+    workflow,
+    /authorize:[\s\S]*verify:upstream-tool-provenance[\s\S]*publish:[\s\S]*needs:\s*authorize/u
+  );
   assert.match(workflow, /runs-on:\s*windows-2025/u);
   assert.match(workflow, /npm run test:windows:job-launcher/u);
   assert.match(workflow, /npm run test:package:desktop && npm run test:semantic:engine/u);
