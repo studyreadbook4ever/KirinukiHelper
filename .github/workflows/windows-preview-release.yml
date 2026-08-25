@@ -200,8 +200,27 @@ jobs:
           }
           trap rollback ERR
           gh release upload "$tag" dist/windows-preview/* --repo "$GITHUB_REPOSITORY"
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            | jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag)] as $matches | if ($matches|length)==1 then $matches[0] else error("expected one exact draft release") end')"
+          printf '%s\n' 'Windows preview assets uploaded; waiting for GitHub SHA-256 digest readback.'
+          local_asset_count="$(find dist/windows-preview -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          digest_ready=0
+          for attempt in $(seq 1 24); do
+            release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              | jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag)] as $matches | if ($matches|length)==1 then $matches[0] else error("expected one exact draft release") end')"
+            remote_digest_count="$(jq '[.assets[] | select(
+              (.digest | type) == "string"
+              and (.digest | startswith("sha256:"))
+            )] | length' <<<"$release_json")"
+            if [ "$remote_digest_count" = "$local_asset_count" ]; then
+              digest_ready=1
+              break
+            fi
+            printf 'GitHub asset digest readback pending (%s/24).\n' "$attempt"
+            sleep 5
+          done
+          if [ "$digest_ready" -ne 1 ]; then
+            echo 'GitHub did not expose every asset digest before the readback deadline.' >&2
+            exit 1
+          fi
           test "$(jq -r '.draft' <<<"$release_json")" = true
           test "$(jq -r '.prerelease' <<<"$release_json")" = true
           mapfile -t remote_assets < <(jq -r '.assets[].name' <<<"$release_json" | sort)
