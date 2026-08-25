@@ -67,8 +67,9 @@ test("원본과 구간 rail은 PR16처럼 한 화면에 나란히 있고 직접 
     css,
     /\.source-capture-workspace \{[^}]*grid-template-columns: minmax\(720px, 2fr\) minmax\(360px, \.75fr\)/u
   );
+  assert.match(css, /\.source-capture-workspace \{[^}]*align-items: start;/u);
   assert.match(css, /\.selection-sidebar \{[^}]*gap: 24px;/u);
-  assert.match(css, /\.selection-rail \{[^}]*height: clamp\(300px, 38vh, 420px\)/u);
+  assert.match(css, /\.selection-rail \{[^}]*height: clamp\(520px, 72vh, 660px\)/u);
   assert.match(css, /\.clip-list \{[^}]*overflow-y: auto/u);
   assert.match(html, /data-field="start"[^>]*inputmode="decimal"/u);
   assert.match(html, /data-field="end"[^>]*inputmode="decimal"/u);

@@ -2678,6 +2678,8 @@ async function main(): Promise<void> {
     adAlignedTop: boolean;
     adSize: boolean;
     railBelowAd: boolean;
+    railBottomGap: number;
+    railHeight: number;
     railScrollable: boolean;
     railScrolled: boolean;
     captureConsolePresent: boolean;
@@ -2730,6 +2732,8 @@ async function main(): Promise<void> {
       adAlignedTop: Math.abs(adRect.top - streamRect.top) <= 1,
       adSize: Math.abs(adRect.width - 300) <= 1 && Math.abs(adRect.height - 250) <= 1,
       railBelowAd: railRect.top >= adRect.bottom + 23,
+      railBottomGap: streamRect.bottom - railRect.bottom,
+      railHeight: railRect.height,
       railScrollable: list.scrollHeight > list.clientHeight,
       railScrolled: list.scrollTop > 0,
       captureConsolePresent: bridgeConsole instanceof HTMLElement,
@@ -2752,6 +2756,9 @@ async function main(): Promise<void> {
       && layout.adAlignedTop
       && layout.adSize
       && layout.railBelowAd
+      && layout.railBottomGap >= -1
+      && layout.railBottomGap <= 90
+      && layout.railHeight >= 500
       && layout.railScrollable
       && layout.railScrolled
       && layout.captureConsolePresent
