@@ -204,8 +204,12 @@ jobs:
           local_asset_count="$(find dist/windows-preview -maxdepth 1 -type f | wc -l | tr -d ' ')"
           digest_ready=0
           for attempt in $(seq 1 24); do
-            release_list_json="$(gh api \
-              "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+            if ! release_list_json="$(gh api \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" 2>/dev/null)"; then
+              printf 'GitHub release list readback pending (%s/24).\n' "$attempt"
+              sleep 5
+              continue
+            fi
             release_match_count="$(jq --arg tag "$tag" \
               '[.[] | select(.tag_name == $tag)] | length' \
               <<<"$release_list_json")"
