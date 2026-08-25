@@ -55,13 +55,14 @@ tag-pinned Linux URL 두 개만 포함해야 합니다.
 시작합니다. 현재 저장소에 아래 서명·공증·provenance secret과 사람이 승인한 묶음이
 없으면 public asset을 만들거나 Release를 publish하지 못하는 것이 정상입니다.
 
-일반 `npm run build`는 설치 파일 URL을 싣지 않습니다. Release를 publish한 뒤에도
-웹 링크는 자동으로 열리지 않습니다. 최종 remote asset 전체의 tag·size·SHA-256
-digest와 이 문서의 signed readback을 다시 대조한 배포 작업만, absolute
+일반 `npm run build`는 아직 검증·고정되지 않은 설치 파일 URL을 싣지 않습니다.
+최종 remote asset 전체의 tag·size·SHA-256 digest와 이 문서의 readback을 대조한
+배포 작업만 release channel을 소스에 고정할 수 있습니다. 고정 전에는 absolute
 `KIRINUKI_WEB_ENGINE_RELEASE_READBACK`을 주고 `npm run build:web:release`를 실행해
-tag에 고정된 세 installer URL을 정적 bundle에 넣을 수 있습니다. 이 검증이
-실패하거나 입력이 없으면 웹은 **설치 파일 준비 중** 상태를 유지합니다. 브라우저
-runtime은 GitHub API나 `latest` alias를 조회하지 않습니다.
+tag에 고정된 installer URL을 검증합니다. 검증이 실패하거나 source pin이 없으면
+웹은 **설치 파일 준비 중** 상태를 유지합니다. 검증된 source pin은 이후 일반
+build도 같은 정적 bytes를 재현하게 하며, 브라우저 runtime은 GitHub API나
+`latest` alias를 조회하지 않습니다.
 
 - Windows: PFX/password, exact SHA-1 thumbprint·publisher subject
 - macOS: Developer ID P12/password, exact identity·Team ID, App Store Connect API key

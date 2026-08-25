@@ -54,6 +54,9 @@ import {
   type LocalMediaEngineV2FixtureRecord
 } from "./local-media-engine-v2-fixture.js";
 import { buildWebJavaScript } from "./web-javascript-build.js";
+import {
+  PINNED_WEB_ENGINE_RELEASE_CHANNEL
+} from "./pinned-web-engine-release.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const studioOrigin = "http://127.0.0.1:4320";
@@ -1781,7 +1784,8 @@ async function main(): Promise<void> {
   const freshWebBuild = await buildWebJavaScript({
     rootDirectory: root,
     write: false,
-    logLevel: "silent"
+    logLevel: "silent",
+    engineRelease: PINNED_WEB_ENGINE_RELEASE_CHANNEL
   });
   const serverMode = await ensureStudioServer();
   for (const relativePath of ["web/studio.js", "web/editor/editor.js"]) {

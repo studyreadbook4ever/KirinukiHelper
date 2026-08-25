@@ -7,6 +7,9 @@ import ts from "typescript";
 
 import { GENERATED_JAVASCRIPT_BANNER } from "./generated-javascript.js";
 import {
+  PINNED_WEB_ENGINE_RELEASE_CHANNEL
+} from "./pinned-web-engine-release.js";
+import {
   WEB_JAVASCRIPT_PATHS,
   WEB_JAVASCRIPT_TARGETS,
   buildWebJavaScript
@@ -490,6 +493,7 @@ export function assertGeneratedBuildInputs(inputs: readonly string[]): void {
   const approvedDependencyInput = /^(?:\(disabled\):)?node_modules\/(?:mediabunny\/dist\/modules\/.+\.js|hls\.js\/dist\/hls\.light\.mjs)$/u;
   const invalidInputs = inputs.filter((inputPath) => (
     !(inputPath.startsWith("src/") && typeScriptFamilyPattern.test(inputPath))
+    && inputPath !== "<define:__KIRINUKI_LOCAL_MEDIA_ENGINE_RELEASE__>"
     && !approvedDependencyInput.test(inputPath)
   ));
   assert(
@@ -549,7 +553,8 @@ async function assertGeneratedJavaScript(
     result: await buildWebJavaScript({
       rootDirectory,
       write: false,
-      logLevel: "silent"
+      logLevel: "silent",
+      engineRelease: PINNED_WEB_ENGINE_RELEASE_CHANNEL
     })
   }];
   for (const built of builds) {

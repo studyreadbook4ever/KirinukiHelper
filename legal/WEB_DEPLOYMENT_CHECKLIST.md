@@ -42,8 +42,9 @@
 ## 3. 공개 정적 웹 배포
 
 - [ ] `npm run build` 뒤 `npm run package:web`으로 만든 검증 ZIP만 배포한다.
-- [ ] 서명된 엔진 Release 전의 일반 build에는 installer URL이 없고 **설치 파일
-  준비 중**으로 표시된다.
+- [ ] 검증된 source-pinned 엔진 Release 전의 일반 build에는 installer URL이 없고
+  **설치 파일 준비 중**으로 표시된다. source pin 뒤 일반 build는 같은 tag-pinned
+  URL과 정적 bytes를 재현한다.
 - [ ] installer 링크를 여는 배포는 published remote asset 전체의 exact
   size·SHA-256 digest readback 뒤 `npm run build:web:release`로 별도 생성했으며,
   tag-pinned 세 URL만 포함하고 runtime GitHub API/`latest` 조회가 없다.
