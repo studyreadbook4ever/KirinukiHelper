@@ -2,11 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  formatStudioDurationSummary,
   formatStudioTimecode,
   parseStudioTimecode,
   STUDIO_SELECTION_RANGE_ORDER_ERROR,
   validateStudioSelectionRange
 } from "../src/web/studio-timecode.js";
+
+test("컷 합계는 비어 있을 때 대시, 분·초와 시·분·초를 간결하게 표시한다", () => {
+  assert.equal(formatStudioDurationSummary(null), "--:--");
+  assert.equal(formatStudioDurationSummary(95.4), "01:35");
+  assert.equal(formatStudioDurationSummary(3_661), "01:01:01");
+});
 
 test("studio timecode는 밀리초까지 정확히 왕복한다", () => {
   for (const seconds of [0, 0.001, 80.5, 3_723.456, 604_800]) {
