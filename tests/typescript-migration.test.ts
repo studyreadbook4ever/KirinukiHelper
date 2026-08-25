@@ -247,6 +247,8 @@ test("production 이중 타입 단언은 괄호와 unknown 별칭으로 우회�
 test("생성물 provenance와 바이트 drift를 검증한다", () => {
   assert.doesNotThrow(() => assertGeneratedBuildInputs([
     "src/editor/main.ts",
+    "<define:__KIRINUKI_LOCAL_MEDIA_ENGINE_RELEASE__>",
+    "<define:__KIRINUKI_LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW__>",
     "node_modules/mediabunny/dist/modules/src/index.js",
     "(disabled):node_modules/mediabunny/dist/modules/src/node.js"
   ]));

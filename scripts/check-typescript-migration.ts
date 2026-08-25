@@ -495,6 +495,7 @@ export function assertGeneratedBuildInputs(inputs: readonly string[]): void {
   const invalidInputs = inputs.filter((inputPath) => (
     !(inputPath.startsWith("src/") && typeScriptFamilyPattern.test(inputPath))
     && inputPath !== "<define:__KIRINUKI_LOCAL_MEDIA_ENGINE_RELEASE__>"
+    && inputPath !== "<define:__KIRINUKI_LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW__>"
     && !approvedDependencyInput.test(inputPath)
   ));
   assert(
