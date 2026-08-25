@@ -2677,6 +2677,10 @@ async function main(): Promise<void> {
     mainLeftGap: number;
     mainRightGap: number;
     rightHandRail: boolean;
+    leaderboardAboveStream: boolean;
+    leaderboardSize: boolean;
+    projectRightOfLeaderboard: boolean;
+    projectAlignedWithLeaderboard: boolean;
     adAlignedTop: boolean;
     adSize: boolean;
     railBelowAd: boolean;
@@ -2693,6 +2697,8 @@ async function main(): Promise<void> {
     const main = document.querySelector("#local-app-surface");
     const workspace = document.querySelector(".source-capture-workspace");
     const stream = document.querySelector(".stream-preview");
+    const leaderboard = document.querySelector("#cut-leaderboard-ad-slot");
+    const projectName = document.querySelector(".source-project-name");
     const rectangleAd = document.querySelector("#cut-rectangle-ad-slot");
     const rail = document.querySelector(".selection-rail");
     const list = document.querySelector("#clip-list");
@@ -2700,11 +2706,13 @@ async function main(): Promise<void> {
     const timeInputs = [...document.querySelectorAll(
       '.clip-row [data-field="start"], .clip-row [data-field="end"]'
     )];
-    if (!main || !workspace || !stream || !rectangleAd || !rail || !list) {
+    if (!main || !workspace || !stream || !leaderboard || !projectName || !rectangleAd || !rail || !list) {
       throw new Error("compact source workspace 요소 없음");
     }
     const mainRect = main.getBoundingClientRect();
     const streamRect = stream.getBoundingClientRect();
+    const leaderboardRect = leaderboard.getBoundingClientRect();
+    const projectNameRect = projectName.getBoundingClientRect();
     const adRect = rectangleAd.getBoundingClientRect();
     const railRect = rail.getBoundingClientRect();
     const listRect = list.getBoundingClientRect();
@@ -2731,6 +2739,12 @@ async function main(): Promise<void> {
       mainLeftGap: mainRect.left,
       mainRightGap: document.documentElement.clientWidth - mainRect.right,
       rightHandRail: railRect.left > streamRect.right,
+      leaderboardAboveStream: leaderboardRect.bottom <= streamRect.top - 17,
+      leaderboardSize: Math.abs(leaderboardRect.width - 728) <= 1
+        && Math.abs(leaderboardRect.height - 90) <= 1,
+      projectRightOfLeaderboard: projectNameRect.left > leaderboardRect.right,
+      projectAlignedWithLeaderboard: Math.abs(projectNameRect.top - leaderboardRect.top) <= 1
+        && Math.abs(projectNameRect.height - leaderboardRect.height) <= 1,
       adAlignedTop: Math.abs(adRect.top - streamRect.top) <= 1,
       adSize: Math.abs(adRect.width - 300) <= 1 && Math.abs(adRect.height - 250) <= 1,
       railBelowAd: railRect.top >= adRect.bottom + 23,
@@ -2755,6 +2769,10 @@ async function main(): Promise<void> {
       && layout.mainLeftGap <= 24
       && layout.mainRightGap <= 24
       && layout.rightHandRail
+      && layout.leaderboardAboveStream
+      && layout.leaderboardSize
+      && layout.projectRightOfLeaderboard
+      && layout.projectAlignedWithLeaderboard
       && layout.adAlignedTop
       && layout.adSize
       && layout.railBelowAd
@@ -2768,7 +2786,7 @@ async function main(): Promise<void> {
       && layout.timesInside
       && layout.timesUnclipped
       && !layout.horizontalOverflow,
-    `넓은 PC 화면의 원본 미리보기·오른쪽 광고·수동 구간 rail 배치가 깨졌습니다: ${JSON.stringify(layout)}`
+    `넓은 PC 화면의 상단 광고·프로젝트 이름·원본 미리보기·오른쪽 광고·수동 구간 rail 배치가 깨졌습니다: ${JSON.stringify(layout)}`
   );
 
   const policyUi = await execute<{
