@@ -16161,9 +16161,7 @@ function renderCaptionModeControls() {
   elements.audseg_provider_panel.hidden = !audseg;
   elements.whisper_provider_panel.hidden = audseg;
   elements.caption_advanced_settings.hidden = audseg;
-  elements.generate_captions.lastChild!.textContent = audseg
-    ? " 활성 컷 전체 빈 타이밍 만들기"
-    : " 활성 컷 전체 자막 초안 만들기";
+  elements.generate_captions.lastChild!.textContent = " 자막 위치 자동으로 넣기";
   elements.generate_captions.disabled = Boolean(activeJobController);
   elements.connect_local_whisper.disabled = Boolean(
     activeJobController

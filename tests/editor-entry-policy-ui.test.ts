@@ -82,8 +82,9 @@ test("편집기는 내장 미디어 엔진 주소를 사용자 설정으로 노�
     /caption-agent-endpoint|PC 도우미|companion|gateway|caption-stack:setup|caption-stack:start/iu
   );
   assert.doesNotMatch(html, /<(?:input|select)[^>]+(?:localhost|127\.0\.0\.1|4319)/iu);
+  assert.match(html, /class="caption-auto-compatibility" hidden aria-hidden="true"/u);
   assert.match(html, /id="whisper-provider-tab"[^>]*aria-hidden="true"[^>]*hidden[^>]*disabled/u);
-  assert.match(html, /id="test-caption-agent"[^>]*disabled[^>]*>Whisper 미지원/u);
+  assert.match(html, /id="test-caption-agent"[^>]*disabled[^>]*>Whisper 확인/u);
   assert.match(
     source,
     /function readCaptionAgentConfig\(\)[\s\S]*endpoint: DEFAULT_CAPTION_AGENT_SETTINGS\.endpoint/u

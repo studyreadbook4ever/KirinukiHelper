@@ -488,6 +488,15 @@ svg {
   transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
+.caption-auto-action {
+  margin: 13px 0;
+}
+
+.caption-auto-action .ai-button {
+  height: 38px;
+  margin-top: 0;
+}
+
 .button:hover:not(:disabled),
 .icon-action:hover:not(:disabled),
 .transport-button:hover:not(:disabled),

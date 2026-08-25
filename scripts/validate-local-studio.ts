@@ -168,9 +168,13 @@ assert(
   "웹 편집기의 정책 복귀 경로가 localhost 시작 화면을 가리키지 않습니다."
 );
 assert(
-  editorHtml.includes("최대 4초 분할은 AudSeg가 처음 만드는 빈 칸에만 적용")
-    && editorHtml.includes("Whisper 자동 자막과 만들어진 모든 자막의 시작·끝에는 전역 최대 표시 시간을 강제하지 않습니다"),
-  "웹 편집기가 AudSeg 전용 4초 분할과 Whisper·전역 자막 정책을 구분하지 않습니다."
+  editorHtml.includes('class="caption-auto-action"')
+    && editorHtml.includes("자막 위치 자동으로 넣기")
+    && editorHtml.includes('class="caption-auto-compatibility" hidden aria-hidden="true"')
+    && !editorHtml.includes("자막 타이밍 자동 만들기")
+    && !editorHtml.includes("AudSeg로 빈 타이밍 만들기")
+    && !editorHtml.includes("Whisper 자동 자막"),
+  "웹 편집기의 자막 자동 배치가 단일 사용자 동작으로 정리되지 않았습니다."
 );
 for (const forbiddenMarker of [
   "확장 프로그램 데이터를",

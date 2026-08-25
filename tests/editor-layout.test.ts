@@ -113,7 +113,19 @@ test("편집기 chrome은 장식 문구와 중복 상태 표시를 없애고 저
   assert.match(html, /id="local-draft-status"[^>]*>편집 중 임시 복구 · 탭 종료 시 폐기</u);
   assert.match(html, /탭 종료 뒤에는 ‘지금 저장’으로 만든 버전만 남습니다/u);
   assert.match(html, /이 복구본도 탭 종료 시 폐기됩니다/u);
-  assert.match(html, /현재 공개용 영상 준비 도구는 VOD 구간 준비만 담당/u);
+  const captionAutoStart = html.indexOf('<section class="caption-auto-action"');
+  const captionAutoEnd = html.indexOf('<section class="caption-sheet-launch"');
+  assert.ok(captionAutoStart >= 0 && captionAutoEnd > captionAutoStart);
+  const captionAuto = html.slice(captionAutoStart, captionAutoEnd);
+  assert.match(
+    captionAuto,
+    /id="generate-captions"[^>]*>[\s\S]*자막 위치 자동으로 넣기[\s\S]*<\/button>/u
+  );
+  assert.match(captionAuto, /class="caption-auto-compatibility" hidden aria-hidden="true"/u);
+  assert.doesNotMatch(
+    captionAuto,
+    /자막 타이밍 자동 만들기|AudSeg 이용하기|Whisper 자동 자막|자막 스타일|자동 생성 자막을 기본 위치로 정렬/u
+  );
   assert.match(html, /id="whisper-provider-tab"[^>]*aria-hidden="true"[^>]*hidden[^>]*disabled/u);
   assert.doesNotMatch(html, /\.\/setup\.sh --mode whisper/u);
   assert.match(main, /local_draft_status\.dataset\.state = state/u);
