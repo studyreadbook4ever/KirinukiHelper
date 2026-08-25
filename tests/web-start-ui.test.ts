@@ -16,11 +16,23 @@ async function studioSources(): Promise<{
 }
 
 test("공개 웹이 URL 입력·PR16 컷 좌표·전체 편집 진입을 모두 소유한다", async () => {
-  const { html, source } = await studioSources();
+  const { html, css, source } = await studioSources();
   assert.match(html, /id="source-url"[^>]*type="url"/u);
   assert.match(html, /id="stream-preview-frame"/u);
   assert.match(html, /id="stream-preview-video"/u);
   assert.match(html, /id="stream-cut-console"[\s\S]*id="clip-list"/u);
+  assert.match(
+    html,
+    /현재 편집본 영상 길이: <output id="current-edit-duration"[^>]*>--:--<\/output>/u
+  );
+  assert.match(
+    html,
+    /id="cut-leaderboard-ad-slot" class="cut-leaderboard-ad-slot" aria-hidden="true"><\/div>/u
+  );
+  assert.match(
+    css,
+    /\.cut-leaderboard-ad-slot \{[^}]*width: 728px;[^}]*height: 90px;/u
+  );
   assert.match(html, /id="start-editor"[^>]*aria-keyshortcuts="A"/u);
   assert.match(source, /setDocumentSurface\("local"\)/u);
   assert.match(source, /installStudioCaptureConsole\(\)/u);

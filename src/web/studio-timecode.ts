@@ -52,6 +52,23 @@ export function formatStudioTimecode(value: number): string {
     .join(":") + (fraction ? `.${String(fraction).padStart(3, "0")}` : "");
 }
 
+export function formatStudioDurationSummary(value: number | null): string {
+  if (value === null || !Number.isFinite(value) || value <= 0) {
+    return "--:--";
+  }
+  const totalSeconds = Math.max(1, Math.round(value));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? [hours, minutes, seconds]
+      .map((part) => String(part).padStart(2, "0"))
+      .join(":")
+    : [minutes, seconds]
+      .map((part) => String(part).padStart(2, "0"))
+      .join(":");
+}
+
 export function validateStudioSelectionRange(
   startValue: unknown,
   endValue: unknown

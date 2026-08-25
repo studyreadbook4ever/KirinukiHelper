@@ -23,6 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { createRequire } from "node:module";
+import { Worker } from "node:worker_threads";
 
 import {
   CHZZK_VOD_MATERIALIZATION_SCHEMA,
@@ -54,6 +55,9 @@ import {
 import {
   terminatePosixProcessGroup
 } from "./process-tree-termination.js";
+import {
+  CHZZK_JOB_LEASE_HEARTBEAT_WORKER_SOURCE
+} from "./chzzk-job-lease-heartbeat-worker-source.js";
 
 export const LEGACY_CHZZK_VOD_MATERIALIZATION_SCHEMA_ID =
   "chzzk-kirinuki/chzzk-vod-materialization-v1";
@@ -81,7 +85,7 @@ const MAX_SAFE_REDIRECTS = 5;
 const CHZZK_JOB_LEASE_SCHEMA_ID = "chzzk-kirinuki/chzzk-vod-job-lease-v3";
 const CHZZK_JOB_LEASE_DATABASE_FILENAME = ".materializing-lock.sqlite3";
 const CHZZK_STORAGE_GENERATION = "v3";
-const CHZZK_JOB_LOCK_HEARTBEAT_INTERVAL_MS = 1_000;
+const CHZZK_JOB_LOCK_HEARTBEAT_INTERVAL_MS = 5_000;
 const CHZZK_JOB_LOCK_LEASE_MS = 30_000;
 const CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS = 5_000;
 const CHZZK_PUBLIC_ORIGIN = `https://${CHZZK_PAGE_HOST}`;
@@ -240,6 +244,8 @@ export interface ChzzkVodMaterializerDependencies {
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   /** Deterministic concurrency barrier used by the lock protocol tests. */
   beforeStaleJobLeaseCompareAndSwap?: () => Promise<void>;
+  /** Shorter cadence used only by deterministic lock protocol tests. */
+  jobLeaseHeartbeatIntervalMs?: number;
 }
 
 export class ChzzkVodMaterializationError extends Error {
@@ -3790,73 +3796,111 @@ function jobLockFailure(cause?: unknown): ChzzkVodMaterializationError {
   );
 }
 
-function createJobLockLease(
+async function createJobLockLease(
   database: JobLeaseSqliteDatabase,
+  databasePath: string,
   ownerId: string,
-  initialRevision: number
-): JobLockLease {
+  initialRevision: number,
+  heartbeatIntervalMs: number
+): Promise<JobLockLease> {
   const leaseAbort = new AbortController();
-  let revision = initialRevision;
   let failure: Error | undefined;
   let stopped = false;
-  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let releasePromise: Promise<void> | undefined;
+  const worker = new Worker(new URL(
+    `data:text/javascript;charset=utf-8,${encodeURIComponent(
+      CHZZK_JOB_LEASE_HEARTBEAT_WORKER_SOURCE
+    )}`
+  ), {
+    workerData: {
+      databasePath,
+      schemaId: CHZZK_JOB_LEASE_SCHEMA_ID,
+      ownerId,
+      initialRevision,
+      intervalMs: heartbeatIntervalMs,
+      busyTimeoutMs: CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS
+    }
+  });
+  let resolveReady: (() => void) | undefined;
+  let rejectReady: ((error: Error) => void) | undefined;
+  let ready = false;
+  const readyPromise = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
   const recordHeartbeatFailure = (error: unknown): void => {
     if (failure) {
       return;
     }
     failure = error instanceof Error ? error : new Error("Job lease heartbeat failed.");
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-    }
+    rejectReady?.(failure);
     leaseAbort.abort(failure);
   };
-  const renewOwnership = (): void => {
+  worker.on("message", (message: unknown) => {
+    const type = objectRecord(message)?.type;
+    if (type === "ready" && !ready) {
+      ready = true;
+      resolveReady?.();
+      return;
+    }
+    if (type === "failure") {
+      recordHeartbeatFailure(new Error("Job lease heartbeat worker failed."));
+    }
+  });
+  worker.on("error", recordHeartbeatFailure);
+  worker.on("exit", (code) => {
+    if (!stopped) {
+      recordHeartbeatFailure(new Error(
+        `Job lease heartbeat worker exited unexpectedly (${code}).`
+      ));
+    }
+  });
+  try {
+    await readyPromise;
+  } catch (error) {
+    stopped = true;
+    await worker.terminate().catch(() => undefined);
+    throw error;
+  }
+
+  const assertOwned = (): void => {
     if (stopped || failure) {
       throw failure ?? new Error("Job lease has already stopped.");
     }
     try {
+      const snapshot = readJobLeaseSnapshot(database);
       const now = jobLeaseBootClockMs();
-      if (!Number.isSafeInteger(revision + 1)) {
-        throw new Error("Job lease revision overflowed.");
+      if (
+        !snapshot
+        || snapshot.ownerId !== ownerId
+        || snapshot.heartbeatAtBootMs > now
+        || now - snapshot.heartbeatAtBootMs > CHZZK_JOB_LOCK_LEASE_MS
+      ) {
+        throw new Error("Job lease ownership was lost before publication.");
       }
-      const updated = sqliteChanges(database.prepare(`
-        UPDATE materialization_job_lease
-        SET heartbeat_at_boot_ms = ?, revision = revision + 1
-        WHERE singleton = 1 AND schema_id = ? AND owner_id = ? AND revision = ?
-      `).run(now, CHZZK_JOB_LEASE_SCHEMA_ID, ownerId, revision));
-      if (updated !== 1) {
-        throw new Error("Job lease ownership was lost before heartbeat.");
-      }
-      revision += 1;
     } catch (error) {
       recordHeartbeatFailure(error);
       throw failure;
     }
   };
-  const heartbeat = (): void => {
-    try {
-      renewOwnership();
-    } catch {
-      // renewOwnership recorded and broadcast the ownership failure.
-    }
-  };
-  heartbeatTimer = setInterval(heartbeat, CHZZK_JOB_LOCK_HEARTBEAT_INTERVAL_MS);
-  heartbeatTimer.unref?.();
 
   return {
     signal: leaseAbort.signal,
     get failure() {
       return failure;
     },
-    assertOwned: renewOwnership,
+    assertOwned,
     release: () => {
       releasePromise ??= (async () => {
         stopped = true;
-        if (heartbeatTimer) {
-          clearInterval(heartbeatTimer);
-        }
         let releaseError = failure;
+        try {
+          await worker.terminate();
+        } catch (error) {
+          releaseError ??= error instanceof Error
+            ? error
+            : new Error("Job lease heartbeat worker termination failed.");
+        }
         try {
           const removed = sqliteChanges(database.prepare(`
             DELETE FROM materialization_job_lease
@@ -3889,8 +3933,16 @@ function createJobLockLease(
 async function acquireJobLock(
   databasePath: string,
   stateDirectory: string,
-  beforeStaleCompareAndSwap?: () => Promise<void>
+  beforeStaleCompareAndSwap?: () => Promise<void>,
+  heartbeatIntervalMs = CHZZK_JOB_LOCK_HEARTBEAT_INTERVAL_MS
 ): Promise<JobLockLease> {
+  if (
+    !Number.isSafeInteger(heartbeatIntervalMs)
+    || heartbeatIntervalMs < 50
+    || heartbeatIntervalMs > Math.floor(CHZZK_JOB_LOCK_LEASE_MS / 3)
+  ) {
+    throw new RangeError("Job lease heartbeat interval is outside its safety margin.");
+  }
   const processStartMarker = await linuxProcessStartMarker(process.pid);
   const ownerId = randomBytes(24).toString("hex");
   const createdAtUnixMs = Date.now();
@@ -3923,7 +3975,13 @@ async function acquireJobLock(
         processStartMarker ?? null
       ));
       if (inserted === 1) {
-        return createJobLockLease(database, ownerId, 1);
+        return await createJobLockLease(
+          database,
+          databasePath,
+          ownerId,
+          1,
+          heartbeatIntervalMs
+        );
       }
       if (inserted !== 0) {
         throw new Error("Job lease insert changed an unexpected number of rows.");
@@ -3969,7 +4027,13 @@ async function acquireJobLock(
         observed.revision
       ));
       if (replaced === 1) {
-        return createJobLockLease(database, ownerId, replacementRevision);
+        return await createJobLockLease(
+          database,
+          databasePath,
+          ownerId,
+          replacementRevision,
+          heartbeatIntervalMs
+        );
       }
       if (replaced !== 0) {
         throw new Error("Job lease CAS changed an unexpected number of rows.");
@@ -4185,7 +4249,8 @@ export async function materializeChzzkVod(
   const lockLease = await acquireJobLock(
     lockDatabasePath,
     stateDirectory,
-    dependencies.beforeStaleJobLeaseCompareAndSwap
+    dependencies.beforeStaleJobLeaseCompareAndSwap,
+    dependencies.jobLeaseHeartbeatIntervalMs
   );
   const jobSignal = request.signal
     ? AbortSignal.any([request.signal, lockLease.signal])

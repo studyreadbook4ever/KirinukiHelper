@@ -60,6 +60,7 @@ interface TestSqliteStatement {
 
 interface TestSqliteDatabase {
   close(): void;
+  exec(sql: string): void;
   prepare(sql: string): TestSqliteStatement;
 }
 
@@ -76,6 +77,7 @@ function withJobLeaseDatabase<T>(
   const sqlite = testRequireNodeBuiltin("node:sqlite") as TestNodeSqlite;
   const database = new sqlite.DatabaseSync(databasePath);
   try {
+    database.exec("PRAGMA busy_timeout = 5000");
     return callback(database);
   } finally {
     database.close();
@@ -2302,14 +2304,15 @@ test("장기 작업 heartbeat revision은 갱신되고 CAS로 교체된 owner를
         }
         return await slowHarness.runProcess(command, args, options);
       },
-      sleep: async () => undefined
+      sleep: async () => undefined,
+      jobLeaseHeartbeatIntervalMs: 100
     });
     for (let attempt = 0; attempt < 100 && !processEntered; attempt += 1) {
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
     }
     assert.equal(processEntered, true);
     const initial = readJobLeaseRow(fixture.databasePath);
-    await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
     const heartbeated = readJobLeaseRow(fixture.databasePath);
     assert.equal(typeof initial?.revision, "number");
     assert.equal(typeof heartbeated?.revision, "number");
@@ -2329,7 +2332,7 @@ test("장기 작업 heartbeat revision은 갱신되고 CAS로 교체된 owner를
       );
       assert.equal(Number(result.changes), 1);
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
     releaseProcess?.();
     await assert.rejects(pending, (error: unknown) => (
       error instanceof ChzzkVodMaterializationError

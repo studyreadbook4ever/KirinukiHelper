@@ -88,6 +88,7 @@ import {
   sessionArchiveCaptureFromJson
 } from "./session-archive-capture.js";
 import {
+  formatStudioDurationSummary,
   formatStudioTimecode,
   STUDIO_SELECTION_RANGE_INPUT_ERROR,
   STUDIO_SELECTION_RANGE_ORDER_ERROR,
@@ -185,6 +186,9 @@ const elements = {
   streamVideo: requiredElement<HTMLVideoElement>("#stream-preview-video"),
   streamPlaceholder: requiredElement<HTMLElement>("#stream-preview-placeholder"),
   streamKind: requiredElement<HTMLElement>("#stream-preview-kind"),
+  editorDuration: requiredElement<HTMLOutputElement>(
+    "#current-edit-duration"
+  ),
   streamStatus: requiredElement<HTMLElement>("#stream-preview-status"),
   reloadStream: requiredElement<HTMLButtonElement>("#reload-stream"),
   clipList: requiredElement<HTMLElement>("#clip-list"),
@@ -654,6 +658,8 @@ function clipRows(): HTMLElement[] {
 
 function updateClipRows(): void {
   const rows = clipRows();
+  let validDurationSeconds = 0;
+  let validRangeCount = 0;
   rows.forEach((row, index) => {
     const indexLabel = row.querySelector<HTMLElement>(".clip-index");
     const remove = row.querySelector<HTMLButtonElement>('[data-action="remove"]');
@@ -678,6 +684,10 @@ function updateClipRows(): void {
         : "이 구간 삭제";
     }
     const validation = validateStudioSelectionRange(start?.value, end?.value);
+    if (validation.status === "valid") {
+      validDurationSeconds += validation.endSeconds! - validation.startSeconds!;
+      validRangeCount += 1;
+    }
     const populated = Boolean(
       start?.value.trim() || end?.value.trim() || note?.value.trim()
     );
@@ -712,6 +722,12 @@ function updateClipRows(): void {
             : "시작과 끝을 기록하면 편집기에서 준비할 범위를 보여드립니다.";
     }
   });
+  elements.editorDuration.textContent = formatStudioDurationSummary(
+    validRangeCount > 0 ? validDurationSeconds : null
+  );
+  elements.editorDuration.title = validRangeCount > 0
+    ? `정확한 편집본 길이 ${formatStudioTimecode(validDurationSeconds)}`
+    : "시작과 끝이 정해진 구간이 아직 없습니다.";
   const activeIndex = Math.max(0, rows.indexOf(activeClipRow ?? rows[0]!));
   elements.activeClipLabel.textContent =
     `현재 입력 #${String(activeIndex + 1).padStart(2, "0")}`;
