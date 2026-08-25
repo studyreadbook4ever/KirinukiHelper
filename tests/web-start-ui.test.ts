@@ -33,6 +33,14 @@ test("공개 웹이 URL 입력·PR16 컷 좌표·전체 편집 진입을 모두 
     css,
     /\.cut-leaderboard-ad-slot \{[^}]*width: 728px;[^}]*height: 90px;/u
   );
+  assert.match(
+    html,
+    /id="cut-rectangle-ad-slot" class="cut-rectangle-ad-slot" aria-hidden="true"><\/div>/u
+  );
+  assert.match(
+    css,
+    /\.cut-rectangle-ad-slot \{[^}]*width: 300px;[^}]*height: 250px;/u
+  );
   assert.match(html, /id="start-editor"[^>]*aria-keyshortcuts="A"/u);
   assert.match(source, /setDocumentSurface\("local"\)/u);
   assert.match(source, /installStudioCaptureConsole\(\)/u);
@@ -45,12 +53,22 @@ test("원본과 구간 rail은 PR16처럼 한 화면에 나란히 있고 직접 
   const { html, css } = await studioSources();
   const workspace = html.indexOf('class="source-capture-workspace"');
   const stream = html.indexOf('class="stream-preview"', workspace);
+  const sidebar = html.indexOf('class="selection-sidebar"', workspace);
+  const rectangleAd = html.indexOf('id="cut-rectangle-ad-slot"', workspace);
   const rail = html.indexOf('class="selection-rail"', workspace);
-  assert.ok(workspace >= 0 && stream > workspace && rail > stream);
+  assert.ok(
+    workspace >= 0
+      && stream > workspace
+      && sidebar > stream
+      && rectangleAd > sidebar
+      && rail > rectangleAd
+  );
   assert.match(
     css,
-    /\.source-capture-workspace \{[^}]*grid-template-columns: minmax\(720px, 2fr\) minmax\(420px, \.9fr\)/u
+    /\.source-capture-workspace \{[^}]*grid-template-columns: minmax\(720px, 2fr\) minmax\(360px, \.75fr\)/u
   );
+  assert.match(css, /\.selection-sidebar \{[^}]*gap: 24px;/u);
+  assert.match(css, /\.selection-rail \{[^}]*height: clamp\(300px, 38vh, 420px\)/u);
   assert.match(css, /\.clip-list \{[^}]*overflow-y: auto/u);
   assert.match(html, /data-field="start"[^>]*inputmode="decimal"/u);
   assert.match(html, /data-field="end"[^>]*inputmode="decimal"/u);
