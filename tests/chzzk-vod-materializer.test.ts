@@ -60,6 +60,7 @@ interface TestSqliteStatement {
 
 interface TestSqliteDatabase {
   close(): void;
+  exec(sql: string): void;
   prepare(sql: string): TestSqliteStatement;
 }
 
@@ -76,6 +77,7 @@ function withJobLeaseDatabase<T>(
   const sqlite = testRequireNodeBuiltin("node:sqlite") as TestNodeSqlite;
   const database = new sqlite.DatabaseSync(databasePath);
   try {
+    database.exec("PRAGMA busy_timeout = 5000");
     return callback(database);
   } finally {
     database.close();
