@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 import { PAPERLOGY_FONT } from "./paperlogy-font.js";
 import { PRETENDARD_FONT } from "./pretendard-font.js";
 import { buildWebJavaScript } from "./web-javascript-build.js";
+import {
+  PINNED_WEB_ENGINE_RELEASE_CHANNEL
+} from "./pinned-web-engine-release.js";
 import type {
   LocalMediaEngineReleaseChannel
 } from "../src/editor/local-media-engine-release.js";
@@ -29,7 +32,7 @@ async function assertSha256(
 }
 
 export async function buildWebDistribution({
-  engineRelease = null
+  engineRelease = PINNED_WEB_ENGINE_RELEASE_CHANNEL
 }: {
   readonly engineRelease?: Readonly<LocalMediaEngineReleaseChannel> | null;
 } = {}): Promise<void> {
