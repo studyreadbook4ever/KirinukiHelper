@@ -140,7 +140,11 @@ test("Windows helper preview는 main quality와 native lifecycle 뒤에만 GitHu
   ), "utf8");
   assert.match(workflow, /push:[\s\S]*tags:[\s\S]*windows-preview-v\*/u);
   assert.match(workflow, /PUBLISH_WINDOWS_PREVIEW/u);
-  assert.match(workflow, /git cat-file -t[\s\S]*= tag/u);
+  assert.match(workflow, /git\/ref\/tags\/\$tag/u);
+  assert.match(workflow, /\.object\.type'[\s\S]*= tag/u);
+  assert.match(workflow, /git\/tags\/\$tag_object_sha/u);
+  assert.match(workflow, /\.object\.type'[\s\S]*= commit/u);
+  assert.match(workflow, /Release-Confirmation: PUBLISH_WINDOWS_PREVIEW/u);
   assert.match(workflow, /refs\/remotes\/origin\/main\)" = "\$commit"/u);
   assert.match(workflow, /typescript-quality\.yml\/runs/u);
   assert.match(workflow, /runs-on:\s*windows-2025/u);
