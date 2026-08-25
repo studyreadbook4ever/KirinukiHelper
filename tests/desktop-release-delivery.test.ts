@@ -133,6 +133,32 @@ test("Linux preview release는 stable gate와 분리해 install E2E·prerelease�
   assert.doesNotMatch(workflow, /KIRINUKI_(?:WINDOWS|APPLE|MACOS)_/u);
 });
 
+test("Windows helper preview는 main quality와 native lifecycle 뒤에만 GitHub prerelease를 만든다", async () => {
+  const workflow = await readFile(path.join(
+    root,
+    ".github/workflows/windows-preview-release.yml"
+  ), "utf8");
+  assert.match(workflow, /push:[\s\S]*tags:[\s\S]*windows-preview-v\*/u);
+  assert.match(workflow, /PUBLISH_WINDOWS_PREVIEW/u);
+  assert.match(workflow, /git cat-file -t[\s\S]*= tag/u);
+  assert.match(workflow, /refs\/remotes\/origin\/main\)" = "\$commit"/u);
+  assert.match(workflow, /typescript-quality\.yml\/runs/u);
+  assert.match(workflow, /runs-on:\s*windows-2025/u);
+  assert.match(workflow, /npm run test:windows:job-launcher/u);
+  assert.match(workflow, /npm run test:package:desktop && npm run test:semantic:engine/u);
+  assert.match(workflow, /KIRINUKI_INSTALLER_SYSTEM_SMOKE:\s*"1"/u);
+  assert.match(workflow, /KIRINUKI_INSTALLED_BROWSER_SMOKE:\s*"1"/u);
+  assert.match(workflow, /Get-AuthenticodeSignature[\s\S]*NotSigned/gu);
+  assert.match(workflow, /npm run package:desktop:windows-preview/u);
+  assert.match(workflow, /attest-build-provenance@[0-9a-f]{40}/u);
+  assert.match(workflow, /gh release create[\s\S]*--draft[\s\S]*--prerelease/u);
+  assert.match(workflow, /gh release download/u);
+  assert.match(workflow, /test:package:desktop:windows-preview/u);
+  assert.match(workflow, /SmartScreen/u);
+  assert.doesNotMatch(workflow, /--latest|releases\/latest\/download/u);
+  assert.doesNotMatch(workflow, /KIRINUKI_(?:APPLE|MACOS)_/u);
+});
+
 test("release assembler는 exact remote set, native evidence, hashes, GPG readback을 모두 강제한다", async () => {
   const source = await readFile(path.join(
     root,

@@ -56,8 +56,9 @@ CHZZK / YouTube / SOOP ───────────────────
 - 엔진은 사용 통계나 업데이트 확인을 위한 독자적 네트워크 polling을 하지 않는다.
   사용자가 요청한 공개 VOD 범위를 원본 플랫폼에서 준비할 때만 외부로 연결한다.
 - 장기 제품 설치 대상은 Windows x64, macOS arm64, Linux x64다. 현재 임시 공개
-  테스트 배포는 Debian/Ubuntu와 Arch Linux x64만 제공하며 Windows/macOS에서는
-  설치 링크를 숨기고 현재 지원 범위를 명확히 설명한다. 모바일은 편집 진입을
+  테스트 배포는 Windows x64, Debian/Ubuntu와 Arch Linux x64를 제공하며 macOS에서는
+  설치 링크를 숨기고 현재 지원 범위를 명확히 설명한다. Windows preview는 unsigned
+  GitHub prerelease와 SmartScreen 가능성을 버튼과 release에서 명확히 표시한다. 모바일은 편집 진입을
   막고 데스크톱 안내만 제공한다.
 - 공개 installer 이름과 지원 범위는 `src/desktop/installer-contract.ts`가
   canonical 기록이다.
@@ -451,9 +452,11 @@ fail closed한다. `npm run license:check`는 승인된 dependency와 배포 고
 - Electron/Chromium/Node, FFmpeg·ffprobe, yt-dlp standalone은 target별 최종
   artifact inventory, notice, source·build provenance를 별도로 검증한다.
 - 일반 CI가 만든 `UNSIGNED-TEST-ONLY-*` artifact는 계속 test-only이며 그대로
-  업로드하지 않는다. 임시 Linux 공개 테스트만 native install/autostart/browser/
-  uninstall smoke를 통과한 동일 byte를 별도 `*-preview.deb` 이름, exact manifest,
-  SHA-256, GitHub build-provenance attestation과 prerelease 표기로 공개할 수 있다.
+  업로드하지 않는다. 임시 Linux/Windows 공개 테스트 workflow만 각 native
+  install/autostart/browser/uninstall smoke를 통과한 동일 byte를 별도 `*-preview.*`
+  이름, exact manifest, SHA-256, GitHub build-provenance attestation과 prerelease
+  표기로 공개할 수 있다. Windows에는 Job Object와 Authenticode `NotSigned` readback,
+  SmartScreen 고지를 추가로 강제한다.
   이 예외를 stable signed release, 자동 업데이트 또는 다른 OS 지원으로 표현하지
   않는다.
 - Windows Authenticode와 timestamp, macOS Developer ID·hardened runtime·
@@ -485,7 +488,8 @@ fail closed한다. `npm run license:check`는 승인된 dependency와 배포 고
 - [ ] 서명·공증·source 제공 의무와 실제 artifact readback이 모두 완료됨
 - [ ] `npm run check`, 필요한 browser/native E2E와 `git diff --check`가 통과함
 
-임시 Linux 공개 테스트에서는 마지막 세 OS installer 항목 대신 Debian/Ubuntu deb와
-Arch pkg.tar.zst의 실제 install→autostart→웹 연결→remove, exact prerelease asset readback,
-SHA-256과 GitHub attestation을 같은 commit에서 통과해야 한다. Windows/macOS 링크는
-0개여야 하며 이 한정 승인은 위의 정식 세 OS 안정판 gate를 완료 처리하지 않는다.
+임시 공개 테스트에서는 마지막 세 OS installer 항목 대신 Linux는 Debian/Ubuntu deb와
+Arch pkg.tar.zst, Windows는 x64 NSIS의 실제 install→autostart→웹 연결→remove, exact
+prerelease asset readback, SHA-256과 GitHub attestation을 같은 commit에서 통과해야 한다.
+macOS 링크는 0개여야 하며 이 한정 승인은 위의 정식 세 OS 안정판 gate를 완료 처리하지
+않는다.

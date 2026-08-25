@@ -7,7 +7,8 @@ import ts from "typescript";
 
 import { GENERATED_JAVASCRIPT_BANNER } from "./generated-javascript.js";
 import {
-  PINNED_WEB_ENGINE_RELEASE_CHANNEL
+  PINNED_WEB_ENGINE_RELEASE_CHANNEL,
+  PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL
 } from "./pinned-web-engine-release.js";
 import {
   WEB_JAVASCRIPT_PATHS,
@@ -554,7 +555,8 @@ async function assertGeneratedJavaScript(
       rootDirectory,
       write: false,
       logLevel: "silent",
-      engineRelease: PINNED_WEB_ENGINE_RELEASE_CHANNEL
+      engineRelease: PINNED_WEB_ENGINE_RELEASE_CHANNEL,
+      windowsPreviewRelease: PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL
     })
   }];
   for (const built of builds) {

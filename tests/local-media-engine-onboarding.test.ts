@@ -43,10 +43,13 @@ import {
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
   LOCAL_MEDIA_ENGINE_RELEASE_FILES,
   LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE,
-  LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE
+  LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE,
+  LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE,
+  LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA
 } from "../src/editor/local-media-engine-release.js";
 import type {
-  LocalMediaEngineReleaseChannel
+  LocalMediaEngineReleaseChannel,
+  LocalMediaEngineWindowsPreviewChannel
 } from "../src/editor/local-media-engine-release.js";
 
 function verifiedReleaseChannel(): Readonly<LocalMediaEngineReleaseChannel> {
@@ -99,6 +102,30 @@ function linuxPreviewReleaseChannel(): Readonly<LocalMediaEngineReleaseChannel> 
         sha256: "f".repeat(64),
         url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/${LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE}`
       })
+    })
+  });
+}
+
+function windowsPreviewReleaseChannel():
+Readonly<LocalMediaEngineWindowsPreviewChannel> {
+  const tag = "windows-preview-v3.0.20";
+  return Object.freeze({
+    schema: LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA,
+    status: "verified-windows-preview",
+    tag,
+    commit: "6".repeat(40),
+    aggregateManifestSha256: "7".repeat(64),
+    sourceOffer: Object.freeze({
+      bytes: 2048,
+      fileName: "Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt",
+      sha256: "8".repeat(64),
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt`
+    }),
+    installer: Object.freeze({
+      bytes: 20_000_000,
+      fileName: LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE,
+      sha256: "9".repeat(64),
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/${LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE}`
     })
   });
 }
@@ -341,6 +368,23 @@ test("Linux preview 온보딩은 Linux만 다운로드하고 다른 OS에 범위
     localMediaEngineReleaseMessage("windows-x64", releaseChannel),
     /Debian\/Ubuntu·Arch Linux[\s\S]*Windows와 macOS용 도우미는 아직 제공하지 않습니다/u
   );
+});
+
+test("Windows preview 온보딩은 같은 자리에서 GitHub exe를 열고 자동 연결을 안내한다", () => {
+  const windowsPreview = windowsPreviewReleaseChannel();
+  const installer = localMediaEngineInstaller(
+    "windows-x64",
+    linuxPreviewReleaseChannel(),
+    windowsPreview
+  );
+  assert.equal(installer?.fileName, LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE);
+  assert.equal(installer?.label, "Windows 도우미 미리보기 (.exe)");
+  assert.match(installer?.url || "", /windows-preview-v3\.0\.20/u);
+  assert.match(
+    installer?.installInstruction || "",
+    /exe를 실행[\s\S]*추가 정보[\s\S]*자동으로 시작[\s\S]*연결/u
+  );
+  assert.doesNotMatch(installer?.label || "", /앱|application/iu);
 });
 
 test("LNA 권한은 프롬프트를 띄우지 않고 표준 이름과 Chromium alias 순으로 읽는다", async () => {

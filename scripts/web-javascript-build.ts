@@ -10,7 +10,8 @@ import type {
 
 import { GENERATED_JAVASCRIPT_BANNER } from "./generated-javascript.js";
 import {
-  parseLocalMediaEngineReleaseChannel
+  parseLocalMediaEngineReleaseChannel,
+  parseLocalMediaEngineWindowsPreviewChannel
 } from "../src/editor/local-media-engine-release.js";
 
 interface WebJavaScriptTarget {
@@ -42,6 +43,7 @@ export interface WebJavaScriptBuildOptions {
   readonly write?: boolean;
   readonly logLevel?: LogLevel;
   readonly engineRelease?: unknown;
+  readonly windowsPreviewRelease?: unknown;
 }
 
 export interface WebJavaScriptBuildResult {
@@ -127,7 +129,8 @@ export async function buildWebJavaScript({
   rootDirectory,
   write = true,
   logLevel = write ? "info" : "silent",
-  engineRelease = null
+  engineRelease = null,
+  windowsPreviewRelease = null
 }: WebJavaScriptBuildOptions): Promise<WebJavaScriptBuildResult> {
   const webRoot = path.join(rootDirectory, "web");
   const subtitleSyncSkill = await readFile(
@@ -140,6 +143,13 @@ export async function buildWebJavaScript({
   if (engineRelease !== null && !verifiedEngineRelease) {
     throw new Error(
       "웹 빌드에 전달된 local media engine release channel이 검증 형식과 다릅니다."
+    );
+  }
+  const verifiedWindowsPreview =
+    parseLocalMediaEngineWindowsPreviewChannel(windowsPreviewRelease);
+  if (windowsPreviewRelease !== null && !verifiedWindowsPreview) {
+    throw new Error(
+      "웹 빌드에 전달된 Windows helper preview channel이 검증 형식과 다릅니다."
     );
   }
   const common = {
@@ -162,6 +172,9 @@ export async function buildWebJavaScript({
       __KIRINUKI_SUBTITLE_SYNC_SKILL_MARKDOWN__: JSON.stringify(subtitleSyncSkill),
       __KIRINUKI_LOCAL_MEDIA_ENGINE_RELEASE__: JSON.stringify(
         verifiedEngineRelease
+      ),
+      __KIRINUKI_LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW__: JSON.stringify(
+        verifiedWindowsPreview
       )
     },
     logLevel,

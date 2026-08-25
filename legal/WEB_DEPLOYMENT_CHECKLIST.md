@@ -53,6 +53,11 @@
   Debian/Ubuntu·Arch native install/autostart/browser/uninstall smoke를 먼저 확인했다. 이 build는
   `KIRINUKI_INSTALLER_CHANNEL=linux-preview`로 Linux tag-pinned URL 두 개만 넣고
   Windows/macOS URL과 runtime GitHub API/`latest` 조회를 포함하지 않는다.
+- [ ] 임시 Windows 공개 테스트라면 exact annotated main tag, green quality CI,
+  Windows x64 NSIS install→HKCU autostart→브라우저 loopback→semantic 준비→Job Object
+  cleanup→uninstall을 거친 published **prerelease**의 exact 4-file set(exe, manifest,
+  SHA-256, source/license offer)과 GitHub attestation을 readback했다. 웹에는 tag-pinned
+  URL만 넣고 unsigned/SmartScreen 가능성을 명확히 표시하며 macOS URL은 넣지 않는다.
 - [ ] `web/`은 full editor allowlist와 고지 파일만 포함하고 source map, test fixture,
   cache, key, `.env`, 설치 executable을 포함하지 않는다.
 - [ ] 시작 화면과 `editor.html` deep link가 모두 exact HTTPS origin에서 직접
@@ -240,5 +245,5 @@
 - [ ] 승인자는 이 체크리스트가 법적 보증이 아니라 evidence gate임을 이해하고
   실제 산출물 기준으로 서명했다.
 
-위 Windows/macOS 항목은 정식 안정판 승인 기준이다. 임시 Linux preview는 별도
-prerelease이며 해당 항목을 완료했다고 표시하지 않는다.
+위 Windows/macOS 항목은 정식 안정판 승인 기준이다. 임시 Linux/Windows preview는
+별도 prerelease이며 해당 항목을 완료했다고 표시하지 않는다.
