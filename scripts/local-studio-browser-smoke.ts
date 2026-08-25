@@ -55,7 +55,8 @@ import {
 } from "./local-media-engine-v2-fixture.js";
 import { buildWebJavaScript } from "./web-javascript-build.js";
 import {
-  PINNED_WEB_ENGINE_RELEASE_CHANNEL
+  PINNED_WEB_ENGINE_RELEASE_CHANNEL,
+  PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL
 } from "./pinned-web-engine-release.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -1785,7 +1786,8 @@ async function main(): Promise<void> {
     rootDirectory: root,
     write: false,
     logLevel: "silent",
-    engineRelease: PINNED_WEB_ENGINE_RELEASE_CHANNEL
+    engineRelease: PINNED_WEB_ENGINE_RELEASE_CHANNEL,
+    windowsPreviewRelease: PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL
   });
   const serverMode = await ensureStudioServer();
   for (const relativePath of ["web/studio.js", "web/editor/editor.js"]) {

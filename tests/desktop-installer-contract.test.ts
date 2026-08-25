@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   DESKTOP_PUBLIC_RELEASE_ASSET_FILES,
   DESKTOP_INSTALLER_TARGETS,
+  WINDOWS_PREVIEW_RELEASE_ASSET_FILES,
   desktopInstallerArtifactFileName,
   desktopInstallerBuilderArtifactFileName,
   desktopInstallerManifestFileName,
@@ -31,6 +32,16 @@ test("installer support matrix와 latest release 파일명은 정확히 세 targ
   );
   assert.equal(Object.isFrozen(DESKTOP_INSTALLER_TARGETS), true);
   assert.equal(Object.isFrozen(desktopInstallerTarget("linux-x64")), true);
+});
+
+test("Windows preview 공개 파일은 installer·checksum·manifest·source offer 네 개뿐이다", () => {
+  assert.deepEqual(WINDOWS_PREVIEW_RELEASE_ASSET_FILES, [
+    "Kirinuki-Engine-windows-preview-SHA256.txt",
+    "Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt",
+    "Kirinuki-Engine-windows-preview-manifest.json",
+    "Kirinuki-Engine-windows-x64-preview-setup.exe"
+  ]);
+  assert.equal(Object.isFrozen(WINDOWS_PREVIEW_RELEASE_ASSET_FILES), true);
 });
 
 test("unsigned CI artifact 이름은 public latest asset과 혼동할 수 없다", () => {

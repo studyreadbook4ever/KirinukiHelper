@@ -42,10 +42,13 @@ import {
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL,
   LOCAL_MEDIA_ENGINE_RELEASE_FILES,
   LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE,
-  LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE
+  LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE,
+  LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_CHANNEL,
+  LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE
 } from "./local-media-engine-release.js";
 import type {
-  LocalMediaEngineReleaseChannel
+  LocalMediaEngineReleaseChannel,
+  LocalMediaEngineWindowsPreviewChannel
 } from "./local-media-engine-release.js";
 
 export const LOCAL_MEDIA_ENGINE_ORIGIN = "http://127.0.0.1:4319";
@@ -812,13 +815,27 @@ export async function localMediaEnginePermissionState(
 export function localMediaEngineInstaller(
   target: LocalMediaEngineTarget,
   releaseChannel: Readonly<LocalMediaEngineReleaseChannel> | null =
-    LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL
+    LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL,
+  windowsPreviewChannel:
+    Readonly<LocalMediaEngineWindowsPreviewChannel> | null =
+      LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_CHANNEL
 ): {
   readonly fileName: string;
   readonly installInstruction: string;
   readonly label: string;
   readonly url: string;
 } | null {
+  if (target === "windows-x64" && windowsPreviewChannel) {
+    const artifact = windowsPreviewChannel.installer;
+    return artifact.fileName === LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE
+      ? {
+          fileName: artifact.fileName,
+          installInstruction: "Windows 도우미 미리보기 다운로드를 요청했습니다. 다운로드한 exe를 실행하세요. Windows가 앱 보호 화면을 표시하면 ‘추가 정보’에서 실행을 선택할 수 있습니다. 설치가 끝나면 도우미가 자동으로 시작되고 이 화면이 연결을 계속 확인합니다.",
+          label: "Windows 도우미 미리보기 (.exe)",
+          url: artifact.url
+        }
+      : null;
+  }
   const entry = {
     "windows-x64": {
       fileName: LOCAL_MEDIA_ENGINE_RELEASE_FILES["windows-x64"],
@@ -883,12 +900,21 @@ export function localMediaEngineArchInstaller(
 export function localMediaEngineReleaseMessage(
   target: LocalMediaEngineTarget,
   releaseChannel: Readonly<LocalMediaEngineReleaseChannel> | null =
-    LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL
+    LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL,
+  windowsPreviewChannel:
+    Readonly<LocalMediaEngineWindowsPreviewChannel> | null =
+      LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_CHANNEL
 ): string {
+  if (target === "windows-x64" && windowsPreviewChannel) {
+    return LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE;
+  }
   if (
     releaseChannel?.status === "verified-linux-preview"
     && target !== "linux-x64"
   ) {
+    if (windowsPreviewChannel) {
+      return "현재 공개 테스트는 Windows x64·Debian/Ubuntu·Arch Linux x64를 지원합니다. macOS용 도우미는 아직 제공하지 않습니다.";
+    }
     return "현재 공개 테스트는 Debian/Ubuntu·Arch Linux x64에서만 지원합니다. Windows와 macOS용 도우미는 아직 제공하지 않습니다.";
   }
   return LOCAL_MEDIA_ENGINE_RELEASE_UNAVAILABLE_MESSAGE;

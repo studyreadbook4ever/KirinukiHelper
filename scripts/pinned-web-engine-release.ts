@@ -1,7 +1,9 @@
 import {
   LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL_SCHEMA,
   parseLocalMediaEngineReleaseChannel,
-  type LocalMediaEngineReleaseChannel
+  parseLocalMediaEngineWindowsPreviewChannel,
+  type LocalMediaEngineReleaseChannel,
+  type LocalMediaEngineWindowsPreviewChannel
 } from "../src/editor/local-media-engine-release.js";
 
 const verifiedLinuxPreview = parseLocalMediaEngineReleaseChannel({
@@ -42,3 +44,10 @@ if (!verifiedLinuxPreview) {
 
 export const PINNED_WEB_ENGINE_RELEASE_CHANNEL:
   Readonly<LocalMediaEngineReleaseChannel> = verifiedLinuxPreview;
+
+// The Windows preview is pinned only after GitHub Actions has built the exact
+// tagged source, exercised the installed lifecycle on Windows, published a
+// prerelease, and the remote asset identities have been read back.
+export const PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL:
+  Readonly<LocalMediaEngineWindowsPreviewChannel> | null =
+    parseLocalMediaEngineWindowsPreviewChannel(null);

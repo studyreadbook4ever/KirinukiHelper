@@ -21,6 +21,12 @@ export const LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE =
   "Kirinuki-Engine-arch-x64-preview.pkg.tar.zst" as const;
 export const LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_SOURCE_OFFER_FILE =
   "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt" as const;
+export const LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA =
+  "kirinuki-web/windows-helper-preview-v1" as const;
+export const LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE =
+  "Kirinuki-Engine-windows-x64-preview-setup.exe" as const;
+export const LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SOURCE_OFFER_FILE =
+  "Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt" as const;
 
 export type LocalMediaEngineReleaseTarget =
   keyof typeof LOCAL_MEDIA_ENGINE_RELEASE_FILES;
@@ -46,7 +52,18 @@ export interface LocalMediaEngineReleaseChannel {
   >>>;
 }
 
+export interface LocalMediaEngineWindowsPreviewChannel {
+  readonly schema: typeof LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA;
+  readonly status: "verified-windows-preview";
+  readonly tag: string;
+  readonly commit: string;
+  readonly aggregateManifestSha256: string;
+  readonly sourceOffer: Readonly<LocalMediaEngineReleaseArtifact>;
+  readonly installer: Readonly<LocalMediaEngineReleaseArtifact>;
+}
+
 declare const __KIRINUKI_LOCAL_MEDIA_ENGINE_RELEASE__: unknown;
+declare const __KIRINUKI_LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW__: unknown;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -224,6 +241,84 @@ export function parseLocalMediaEngineReleaseChannel(
   });
 }
 
+export function parseLocalMediaEngineWindowsPreviewChannel(
+  value: unknown
+): Readonly<LocalMediaEngineWindowsPreviewChannel> | null {
+  if (
+    !isRecord(value)
+    || !exactKeys(value, [
+      "aggregateManifestSha256",
+      "commit",
+      "installer",
+      "schema",
+      "sourceOffer",
+      "status",
+      "tag"
+    ])
+    || value.schema !== LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA
+    || value.status !== "verified-windows-preview"
+    || typeof value.tag !== "string"
+    || !/^windows-preview-v\d+\.\d+\.\d+$/u.test(value.tag)
+    || typeof value.commit !== "string"
+    || !COMMIT_PATTERN.test(value.commit)
+    || typeof value.aggregateManifestSha256 !== "string"
+    || !SHA256_PATTERN.test(value.aggregateManifestSha256)
+    || !isRecord(value.installer)
+    || !isRecord(value.sourceOffer)
+  ) {
+    return null;
+  }
+  const installer = value.installer;
+  const sourceOffer = value.sourceOffer;
+  if (
+    !exactKeys(installer, ["bytes", "fileName", "sha256", "url"])
+    || installer.fileName !== LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE
+    || !Number.isSafeInteger(installer.bytes)
+    || Number(installer.bytes) <= 0
+    || Number(installer.bytes) > 2 * 1024 * 1024 * 1024
+    || typeof installer.sha256 !== "string"
+    || !SHA256_PATTERN.test(installer.sha256)
+    || !exactReleaseAssetUrl(
+      installer.url,
+      value.tag,
+      LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE
+    )
+    || !exactKeys(sourceOffer, ["bytes", "fileName", "sha256", "url"])
+    || sourceOffer.fileName !== LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SOURCE_OFFER_FILE
+    || !Number.isSafeInteger(sourceOffer.bytes)
+    || Number(sourceOffer.bytes) <= 0
+    || Number(sourceOffer.bytes) > 1024 * 1024
+    || typeof sourceOffer.sha256 !== "string"
+    || !SHA256_PATTERN.test(sourceOffer.sha256)
+    || !exactReleaseAssetUrl(
+      sourceOffer.url,
+      value.tag,
+      LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SOURCE_OFFER_FILE
+    )
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    schema: LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA,
+    status: "verified-windows-preview",
+    tag: value.tag,
+    commit: value.commit,
+    aggregateManifestSha256: value.aggregateManifestSha256,
+    sourceOffer: Object.freeze({
+      bytes: Number(sourceOffer.bytes),
+      fileName: LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SOURCE_OFFER_FILE,
+      sha256: sourceOffer.sha256,
+      url: sourceOffer.url
+    }),
+    installer: Object.freeze({
+      bytes: Number(installer.bytes),
+      fileName: LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE,
+      sha256: installer.sha256,
+      url: installer.url
+    })
+  });
+}
+
 const embeddedValue = typeof __KIRINUKI_LOCAL_MEDIA_ENGINE_RELEASE__ === "undefined"
   ? null
   : __KIRINUKI_LOCAL_MEDIA_ENGINE_RELEASE__;
@@ -232,3 +327,13 @@ export const LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL =
   embeddedValue === null
     ? null
     : parseLocalMediaEngineReleaseChannel(embeddedValue);
+
+const embeddedWindowsPreview =
+  typeof __KIRINUKI_LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW__ === "undefined"
+    ? null
+    : __KIRINUKI_LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW__;
+
+export const LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_CHANNEL =
+  embeddedWindowsPreview === null
+    ? null
+    : parseLocalMediaEngineWindowsPreviewChannel(embeddedWindowsPreview);

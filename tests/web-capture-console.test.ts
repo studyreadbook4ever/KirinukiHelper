@@ -155,7 +155,7 @@ test("초기 컷은 W·수동 시계 없이 YouTube와 CHZZK·SOOP 웹 플레이
   assert.match(source, /function replaceStreamFrame\(\)/u);
   assert.match(source, /elements\.reloadStream\.addEventListener[\s\S]*reloadActivePlayerFrame\(\)/u);
   assert.match(html, /id="source-capture-workspace"[^>]*hidden/u);
-  assert.match(html, /id="linux-helper-download"[\s\S]*Debian\/Ubuntu 도우미/u);
+  assert.match(html, /id="linux-helper-download"[\s\S]*내 PC용 도우미 다운로드/u);
   assert.match(html, /id="arch-helper-download"[\s\S]*Arch Linux 도우미/u);
   assert.doesNotMatch(html, /manual-cut-clock/u);
   assert.doesNotMatch(source, /manualCutClock|원본 플레이어도 같은 시각/u);

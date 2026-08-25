@@ -321,14 +321,14 @@ let localVodPlaybackConnectPromise:
   Promise<LocalVodWebPlaybackController | null> | null = null;
 let streamTimelineInteracting = false;
 
-const HELPER_DOWNLOAD_IDLE_LABEL =
-  "Debian/Ubuntu 도우미 (.deb)";
+let helperDownloadIdleLabel = "내 PC용 도우미 다운로드";
+let helperDownloadReadyLabel = "영상 준비 도우미 연결됨";
 const ARCH_HELPER_DOWNLOAD_IDLE_LABEL =
   "Arch Linux 도우미 (.pkg.tar.zst)";
 
 function renderHelperDownloadLabels(state: "idle" | "checking" | "ready"): void {
   if (state === "ready") {
-    elements.helperDownload.textContent = "Debian/Ubuntu 도우미 연결됨";
+    elements.helperDownload.textContent = helperDownloadReadyLabel;
     elements.archHelperDownload.textContent = "Arch Linux 도우미 연결됨";
     return;
   }
@@ -339,7 +339,7 @@ function renderHelperDownloadLabels(state: "idle" | "checking" | "ready"): void 
       "다운로드 요청됨 · 설치 후 연결 확인";
     return;
   }
-  elements.helperDownload.textContent = HELPER_DOWNLOAD_IDLE_LABEL;
+  elements.helperDownload.textContent = helperDownloadIdleLabel;
   elements.archHelperDownload.textContent = ARCH_HELPER_DOWNLOAD_IDLE_LABEL;
 }
 
@@ -389,6 +389,11 @@ async function configureHelperDownload(): Promise<void> {
     elements.helperDownload.removeAttribute("href");
     elements.helperDownload.removeAttribute("download");
   } else {
+    helperDownloadIdleLabel = installer.label;
+    helperDownloadReadyLabel = target === "windows-x64"
+      ? "Windows 도우미 연결됨"
+      : "Debian/Ubuntu 도우미 연결됨";
+    renderHelperDownloadLabels("idle");
     elements.helperDownload.href = installer.url;
     elements.helperDownload.download = installer.fileName;
     elements.helperDownload.hidden = false;

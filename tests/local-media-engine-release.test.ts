@@ -9,10 +9,14 @@ import {
   LOCAL_MEDIA_ENGINE_RELEASE_FILES,
   LOCAL_MEDIA_ENGINE_ARCH_PREVIEW_FILE,
   LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE,
-  parseLocalMediaEngineReleaseChannel
+  LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE,
+  LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA,
+  parseLocalMediaEngineReleaseChannel,
+  parseLocalMediaEngineWindowsPreviewChannel
 } from "../src/editor/local-media-engine-release.js";
 import type {
-  LocalMediaEngineReleaseChannel
+  LocalMediaEngineReleaseChannel,
+  LocalMediaEngineWindowsPreviewChannel
 } from "../src/editor/local-media-engine-release.js";
 import { buildWebJavaScript } from "../scripts/web-javascript-build.js";
 
@@ -64,6 +68,29 @@ function linuxPreviewChannelValue(): LocalMediaEngineReleaseChannel {
         sha256: "e".repeat(64),
         url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/${LOCAL_MEDIA_ENGINE_LINUX_PREVIEW_FILE}`
       }
+    }
+  };
+}
+
+function windowsPreviewChannelValue(): LocalMediaEngineWindowsPreviewChannel {
+  const tag = "windows-preview-v3.0.20";
+  return {
+    schema: LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA,
+    status: "verified-windows-preview",
+    tag,
+    commit: "1".repeat(40),
+    aggregateManifestSha256: "2".repeat(64),
+    sourceOffer: {
+      bytes: 2048,
+      fileName: "Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt",
+      sha256: "3".repeat(64),
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt`
+    },
+    installer: {
+      bytes: 20_000_000,
+      fileName: LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE,
+      sha256: "4".repeat(64),
+      url: `https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/${tag}/${LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE}`
     }
   };
 }
@@ -122,6 +149,27 @@ test("Linux preview channel은 exact tag-pinned Debian/Ubuntu와 Arch 파일만 
   }
 });
 
+test("Windows preview channel은 exact tag-pinned exe와 source offer만 허용한다", () => {
+  const fixture = windowsPreviewChannelValue();
+  assert.deepEqual(parseLocalMediaEngineWindowsPreviewChannel(fixture), fixture);
+  for (const mutate of [
+    (value: Record<string, unknown>) => { value.extra = true; },
+    (value: Record<string, unknown>) => { value.tag = "v3.0.20"; },
+    (value: Record<string, unknown>) => {
+      (value.installer as Record<string, unknown>).fileName = "unsigned.exe";
+    },
+    (value: Record<string, unknown>) => {
+      (value.installer as Record<string, unknown>).url =
+        `https://github.com/studyreadbook4ever/KirinukiHelper/releases/latest/download/${LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_FILE}`;
+    },
+    (value: Record<string, unknown>) => { delete value.sourceOffer; }
+  ]) {
+    const candidate = structuredClone(fixture) as unknown as Record<string, unknown>;
+    mutate(candidate);
+    assert.equal(parseLocalMediaEngineWindowsPreviewChannel(candidate), null);
+  }
+});
+
 test("ordinary web build는 installer URL을 싣지 않고 verified build만 tag-pinned URL을 싣는다", async () => {
   const ordinary = await buildWebJavaScript({
     rootDirectory: root,
@@ -169,6 +217,18 @@ test("ordinary web build는 installer URL을 싣지 않고 verified build만 tag
     /releases\/download\/v3\.0\.4\/Kirinuki-Engine-(?:windows|macos)/u
   );
   assert.doesNotMatch(verifiedEditor, /api\.github\.com|releases\/latest\/download/u);
+  const windowsPreview = windowsPreviewChannelValue();
+  const windowsPreviewBuild = await buildWebJavaScript({
+    rootDirectory: root,
+    write: false,
+    logLevel: "silent",
+    windowsPreviewRelease: windowsPreview
+  });
+  const windowsPreviewSource = [...windowsPreviewBuild.outputs.values()]
+    .map((output) => new TextDecoder().decode(output))
+    .join("\n");
+  assert.ok(windowsPreviewSource.includes(windowsPreview.installer.url));
+  assert.ok(windowsPreviewSource.includes(windowsPreview.sourceOffer.url));
   await assert.rejects(
     buildWebJavaScript({
       rootDirectory: root,
@@ -177,6 +237,15 @@ test("ordinary web build는 installer URL을 싣지 않고 verified build만 tag
       engineRelease: { ...channel, status: "unverified" }
     }),
     /release channel이 검증 형식과 다릅니다/u
+  );
+  await assert.rejects(
+    buildWebJavaScript({
+      rootDirectory: root,
+      write: false,
+      logLevel: "silent",
+      windowsPreviewRelease: { ...windowsPreview, status: "unverified" }
+    }),
+    /Windows helper preview channel이 검증 형식과 다릅니다/u
   );
 });
 

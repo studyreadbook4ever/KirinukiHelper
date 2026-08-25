@@ -7,10 +7,12 @@ import { PAPERLOGY_FONT } from "./paperlogy-font.js";
 import { PRETENDARD_FONT } from "./pretendard-font.js";
 import { buildWebJavaScript } from "./web-javascript-build.js";
 import {
-  PINNED_WEB_ENGINE_RELEASE_CHANNEL
+  PINNED_WEB_ENGINE_RELEASE_CHANNEL,
+  PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL
 } from "./pinned-web-engine-release.js";
 import type {
-  LocalMediaEngineReleaseChannel
+  LocalMediaEngineReleaseChannel,
+  LocalMediaEngineWindowsPreviewChannel
 } from "../src/editor/local-media-engine-release.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -32,9 +34,12 @@ async function assertSha256(
 }
 
 export async function buildWebDistribution({
-  engineRelease = PINNED_WEB_ENGINE_RELEASE_CHANNEL
+  engineRelease = PINNED_WEB_ENGINE_RELEASE_CHANNEL,
+  windowsPreviewRelease = PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL
 }: {
   readonly engineRelease?: Readonly<LocalMediaEngineReleaseChannel> | null;
+  readonly windowsPreviewRelease?:
+    Readonly<LocalMediaEngineWindowsPreviewChannel> | null;
 } = {}): Promise<void> {
   await Promise.all([
     mkdir(path.join(webRoot, "editor", "fonts"), { recursive: true }),
@@ -66,7 +71,8 @@ export async function buildWebDistribution({
 
   await buildWebJavaScript({
     rootDirectory: root,
-    engineRelease
+    engineRelease,
+    windowsPreviewRelease
   });
 
   await Promise.all([

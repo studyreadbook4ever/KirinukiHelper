@@ -47,6 +47,23 @@ export const LINUX_PREVIEW_RELEASE_ASSET_FILES = Object.freeze([
   LINUX_PREVIEW_SOURCE_OFFER_FILE
 ].sort());
 
+export const WINDOWS_PREVIEW_RELEASE_MANIFEST_SCHEMA =
+  "kirinuki-windows-preview-release/v1" as const;
+export const WINDOWS_PREVIEW_INSTALLER_FILE =
+  "Kirinuki-Engine-windows-x64-preview-setup.exe" as const;
+export const WINDOWS_PREVIEW_SOURCE_OFFER_FILE =
+  "Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt" as const;
+export const WINDOWS_PREVIEW_RELEASE_MANIFEST_FILE =
+  "Kirinuki-Engine-windows-preview-manifest.json" as const;
+export const WINDOWS_PREVIEW_RELEASE_CHECKSUM_FILE =
+  "Kirinuki-Engine-windows-preview-SHA256.txt" as const;
+export const WINDOWS_PREVIEW_RELEASE_ASSET_FILES = Object.freeze([
+  WINDOWS_PREVIEW_INSTALLER_FILE,
+  WINDOWS_PREVIEW_RELEASE_CHECKSUM_FILE,
+  WINDOWS_PREVIEW_RELEASE_MANIFEST_FILE,
+  WINDOWS_PREVIEW_SOURCE_OFFER_FILE
+].sort());
+
 export interface DesktopInstallerTarget {
   readonly target: DesktopBundleTarget;
   readonly platform: "linux" | "darwin" | "win32";

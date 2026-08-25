@@ -11,6 +11,9 @@ import { loadVerifiedWebEngineReleaseChannel } from "./web-engine-release-channe
 import {
   loadVerifiedWebEngineLinuxPreviewChannel
 } from "./web-engine-linux-preview-channel.js";
+import {
+  PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL
+} from "./pinned-web-engine-release.js";
 
 export const WEB_ENGINE_RELEASE_READBACK_ENV =
   "KIRINUKI_WEB_ENGINE_RELEASE_READBACK" as const;
@@ -48,7 +51,10 @@ export async function buildVerifiedEngineReleaseWeb(): Promise<void> {
     : await loadVerifiedWebEngineReleaseChannel({
         directory: readbackDirectory
       });
-  await buildWebDistribution({ engineRelease: channel });
+  await buildWebDistribution({
+    engineRelease: channel,
+    windowsPreviewRelease: PINNED_WEB_ENGINE_WINDOWS_PREVIEW_CHANNEL
+  });
   const editorBundle = await readFile(
     path.join(repositoryRoot, "web", "editor", "editor.js"),
     "utf8"

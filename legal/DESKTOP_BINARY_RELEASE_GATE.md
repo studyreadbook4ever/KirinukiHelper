@@ -50,6 +50,22 @@ attestation을 발급하며, release와 웹 UI 모두 **unsigned Linux preview**
 `KIRINUKI_INSTALLER_CHANNEL=linux-preview npm run build:web:release`로만 열 수 있고,
 tag-pinned Linux URL 두 개만 포함해야 합니다.
 
+### 임시 Windows x64 공개 테스트 예외
+
+Microsoft Store나 코드 서명 준비와 독립적으로 실제 Windows 사용자 흐름을 확인하기
+위해 `Windows x64 helper preview release` workflow만 별도 prerelease를 만들 수
+있습니다. exact annotated main tag와 green quality CI를 확인하고 GitHub-hosted
+Windows 2025에서 per-user NSIS 설치, HKCU 자동 시작, 실제 Chrome↔loopback 연결,
+semantic VOD 준비, Job Object descendant cleanup, 실행 중 제거를 모두 통과한 동일
+byte만 `Kirinuki-Engine-windows-x64-preview-setup.exe`로 복사합니다. exact manifest,
+SHA-256, source/license offer, GitHub build-provenance attestation과 remote digest
+readback을 함께 요구합니다.
+
+이는 signed stable release가 아닙니다. 웹 버튼과 release notes에 **unsigned Windows
+preview** 및 SmartScreen 가능성을 표시하고 exact tag URL만 사용합니다. 일반 CI의
+`UNSIGNED-TEST-ONLY-*` 이름은 공개하지 않으며 Microsoft Store, `latest` alias,
+자동 업데이트와 macOS 지원을 암시하지 않습니다.
+
 `Signed desktop installer release` workflow는 수동 dispatch, exact existing tag,
 `PUBLISH_SIGNED_INSTALLERS`, protected `installer-release` environment가 모두 맞을 때만
 시작합니다. 현재 저장소에 아래 서명·공증·provenance secret과 사람이 승인한 묶음이
