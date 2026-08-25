@@ -201,7 +201,7 @@ jobs:
           trap rollback ERR
           gh release upload "$tag" dist/windows-preview/* --repo "$GITHUB_REPOSITORY"
           readback="$RUNNER_TEMP/kirinuki-windows-preview-readback"
-          mkdir -m 700 -- "$readback"
+          mkdir -p -- "$readback"
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$readback"
           npm run test:package:desktop:windows-preview -- "$readback"
           powershell.exe -NoLogo -NoProfile -NonInteractive -Command \
