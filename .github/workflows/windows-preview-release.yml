@@ -204,8 +204,19 @@ jobs:
           local_asset_count="$(find dist/windows-preview -maxdepth 1 -type f | wc -l | tr -d ' ')"
           digest_ready=0
           for attempt in $(seq 1 24); do
-            release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              | jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag)] as $matches | if ($matches|length)==1 then $matches[0] else error("expected one exact draft release") end')"
+            release_list_json="$(gh api \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+            release_match_count="$(jq --arg tag "$tag" \
+              '[.[] | select(.tag_name == $tag)] | length' \
+              <<<"$release_list_json")"
+            if [ "$release_match_count" -ne 1 ]; then
+              printf 'GitHub draft release discovery pending (%s/24).\n' "$attempt"
+              sleep 5
+              continue
+            fi
+            release_json="$(jq -c --arg tag "$tag" \
+              '[.[] | select(.tag_name == $tag)][0]' \
+              <<<"$release_list_json")"
             remote_digest_count="$(jq '[.assets[] | select(
               (.digest | type) == "string"
               and (.digest | startswith("sha256:"))
