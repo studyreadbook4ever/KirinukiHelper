@@ -9,7 +9,7 @@
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki 영상 편집기</title>
-    <link rel="stylesheet" href="editor/editor.css?v=3.0.15">
+    <link rel="stylesheet" href="editor/editor.css?v=3.0.16">
   </head>
   <body>
     <main id="editor-origin-gate" class="editor-policy-gate" aria-labelledby="editor-origin-gate-title" hidden>
@@ -479,183 +479,44 @@
           </div>
 
           <div id="caption-inspector-content" role="tabpanel" aria-labelledby="caption-mode-tab">
-            <section class="ai-card">
-            <div class="ai-title">
-              <div>
-                <strong>자막 타이밍 자동 만들기</strong>
-                <span>설치 없이 소리가 있는 구간을 찾아 빈 자막 타이밍을 만듭니다</span>
+            <section class="caption-auto-action" aria-label="자막 위치 자동 배치">
+            <button id="generate-captions" class="button ai-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M8 7v10M4 10v4M16 6v12M20 9v6"/></svg>
+              자막 위치 자동으로 넣기
+            </button>
+            <div id="ai-progress" class="ai-progress" hidden>
+              <div class="progress-track"><span></span></div>
+              <div class="progress-label">
+                <span id="ai-progress-label">자막 위치를 찾는 중</span>
+                <strong id="ai-progress-value">0%</strong>
               </div>
             </div>
-            <label class="select-field">
-              <span>자막 스타일</span>
-              <select id="caption-style-preset">
+            <p id="caption-agent-warning" class="caption-agent-warning" role="status" hidden></p>
+            <div class="caption-auto-compatibility" hidden aria-hidden="true">
+              <select id="caption-style-preset" tabindex="-1">
                 <option value="kr-vtuber-clean-v1" selected>완성본 기준 · Pretendard 클린</option>
                 <option value="kr-vtuber-black-box-v1">흰 자막 · 검은 사각 배경</option>
                 <option value="kr-vtuber-paperlogy-v1">OFL 대안 · Paperlogy 클린</option>
                 <option value="pretendard-legacy-v1">기존 프로젝트 사용자 설정</option>
               </select>
-            </label>
-            <input id="caption-model" type="hidden" value="audseg-local">
-            <div class="caption-provider-tabs" role="tablist" aria-label="자막 타이밍 만들기 방식">
-              <button
-                id="audseg-provider-tab"
-                class="caption-provider-tab caption-provider-tab-audseg"
-                type="button"
-                role="tab"
-                aria-selected="true"
-                aria-controls="audseg-provider-panel"
-              >
-                <span class="caption-provider-tab-copy">
-                  <strong>AudSeg 이용하기</strong>
-                  <small>설치 없이 빈 타이밍 만들기</small>
-                </span>
-                <span class="caption-provider-ready-badge">기본</span>
-              </button>
-              <button
-                id="whisper-provider-tab"
-                class="caption-provider-tab caption-provider-tab-whisper"
-                type="button"
-                role="tab"
-                aria-selected="false"
-                aria-controls="whisper-provider-panel"
-                aria-expanded="false"
-                aria-hidden="true"
-                tabindex="-1"
-                hidden
-                disabled
-              >
-                <strong>Whisper</strong>
-                <small>내 PC 연결</small>
-              </button>
-            </div>
-
-            <section
-              id="audseg-provider-panel"
-              class="caption-provider-panel audseg-provider-panel"
-              role="tabpanel"
-              aria-labelledby="audseg-provider-tab"
-              tabindex="0"
-            >
-              <p id="caption-mode-description" class="caption-provider-description">
-                이 탭 안에서 소리가 있는 구간을 찾아 빈 자막 타이밍을 만듭니다.
-                음성을 글로 바꾸지는 않으므로 원음을 듣고 문구를 채워 주세요.
-              </p>
-              <p
-                id="caption-local-status"
-                class="caption-local-status"
-                data-state="ready"
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-              >AudSeg는 별도 설치 없이 바로 사용할 수 있습니다</p>
-            </section>
-
-            <section
-              id="whisper-provider-panel"
-              class="caption-provider-panel whisper-provider-panel"
-              role="tabpanel"
-              aria-labelledby="whisper-provider-tab"
-              hidden
-            >
-              <div class="whisper-connect-heading">
-                <strong>Whisper 자동 자막</strong>
-                <p>
-                  현재 공개용 영상 준비 도구는 VOD 구간 준비만 담당하며
-                  Whisper 모델을 포함하지 않습니다.
-                </p>
-              </div>
-              <button
-                id="connect-local-whisper"
-                class="button whisper-connect-button"
-                type="button"
-                aria-describedby="whisper-connection-help"
-                disabled
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5M20 4v5h-5M20 12a8 8 0 0 1-14 5M4 20v-5h5"/></svg>
-                현재 공개판에서 제공하지 않음
-              </button>
-              <p id="whisper-connection-help" class="whisper-connection-help">
-                AudSeg로 빈 타이밍을 만든 뒤 직접 문구를 채우거나,
-                ‘에이전트로 자막 넣기’ 프롬프트를 사용해 주세요.
-              </p>
-              <details class="whisper-connection-location">
-                <summary>왜 사용할 수 없나요?</summary>
-                <div>
-                  <p>
-                    최초 한 번 설치하는 도구를 작고 예측 가능하게 유지하기 위해
-                    공개 설치판은 영상 구간 취득과 검증만 포함합니다.
-                  </p>
-                </div>
-              </details>
-              <p
-                id="whisper-connection-status"
-                class="caption-local-status whisper-connection-status"
-                data-state="idle"
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-              >현재 공개 설치판에서 제공하지 않습니다</p>
-
-              <div class="whisper-model-card" aria-labelledby="whisper-model-label">
-                <span id="whisper-model-label">연결된 모델</span>
+              <input id="caption-model" type="hidden" value="audseg-local">
+              <button id="audseg-provider-tab" type="button" role="tab" aria-selected="true" tabindex="-1">AudSeg</button>
+              <button id="whisper-provider-tab" type="button" role="tab" aria-selected="false" aria-expanded="false" aria-hidden="true" tabindex="-1" hidden disabled>Whisper</button>
+              <section id="audseg-provider-panel" role="tabpanel">
+                <p id="caption-mode-description">소리가 있는 구간의 빈 자막 위치를 찾습니다.</p>
+                <p id="caption-local-status" data-state="ready" role="status" aria-live="polite" aria-atomic="true">준비됨</p>
+              </section>
+              <section id="whisper-provider-panel" role="tabpanel" hidden>
+                <button id="connect-local-whisper" type="button" tabindex="-1" disabled>Whisper 확인</button>
+                <p id="whisper-connection-status" data-state="idle" role="status" aria-live="polite" aria-atomic="true">사용하지 않음</p>
                 <strong id="whisper-model-summary">연결된 모델 없음</strong>
-                <small>공개용 영상 준비 도구에는 Whisper 모델이 포함되지 않습니다.</small>
-              </div>
-
-              <details id="whisper-model-catalog" class="caption-agent-policy whisper-model-catalog">
-                <summary>지원되는 Whisper 모델 보기 <em>자동 감지</em></summary>
-                <div class="whisper-model-catalog-body">
-                  <p>여기에서 모델을 바꾸는 것은 아닙니다. 현재 이 PC에서 실행 중인 모델을 연결할 때 자동으로 구분합니다.</p>
-                  <ul>
-                    <li><strong>Tiny</strong><span>빠른 초안</span><code>tiny-q5_1</code></li>
-                    <li><strong>Base</strong><span>가벼운 작업</span><code>base-q5_1</code></li>
-                    <li><strong>Small</strong><span>속도와 품질의 균형</span><code>small-q5_1</code></li>
-                    <li><strong>Medium</strong><span>정확도 우선</span><code>medium-q5_0</code></li>
-                  </ul>
-                </div>
-              </details>
-
-              <details id="caption-advanced-settings" class="caption-agent-policy caption-provider-settings">
-                <summary>Whisper 개발 기능 정보</summary>
-                <div class="caption-provider-fields">
-                  <p class="caption-agent-advanced-intro">
-                    이 영역은 기존 로컬 개발 빌드와 저장본의 호환성을 위해 남아 있으며
-                    공개 웹 편집기에서는 선택할 수 없습니다.
-                  </p>
-                  <button id="test-caption-agent" class="small-action caption-agent-test" type="button" disabled>Whisper 미지원</button>
-                  <input id="caption-agent-token" type="hidden" value="">
-                  <strong class="caption-agent-rules-title">자동 자막 원칙</strong>
-                  <ul>
-                    <li>Whisper가 만든 자막은 알아듣기 어려운 발화도 확인 대상으로 남깁니다.</li>
-                    <li>AudSeg는 소리가 있는 구간을 찾으므로 음악·효과음이 포함될 수 있고 모든 문구를 사람이 채워야 합니다.</li>
-                    <li>완성본 기준 한 줄·하단 고정이며, 20자 폭을 넘으면 다음 시간 자막으로 나눕니다.</li>
-                    <li>최대 4초 분할은 AudSeg가 처음 만드는 빈 칸에만 적용됩니다. Whisper 자동 자막과 만들어진 모든 자막의 시작·끝에는 전역 최대 표시 시간을 강제하지 않습니다.</li>
-                    <li>문장 끝 마침표는 빼고 물음표·느낌표는 필요한 경우 유지합니다.</li>
-                    <li>화자별 색은 이 기기에서 일관되게 배정하며 기존 수동 자막은 보존합니다.</li>
-                  </ul>
-                  <p class="caption-agent-privacy">
-                    원본 음성·영상·프레임·이미지는 인터넷 서비스로 보내지 않습니다.
-                    연결용 비밀값은 프로젝트·저장본·브라우저 저장소에 기록하지 않습니다.
-                  </p>
-                </div>
-              </details>
-            </section>
-            <button id="generate-captions" class="button ai-button" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M8 7v10M4 10v4M16 6v12M20 9v6"/></svg>
-              AudSeg로 빈 타이밍 만들기
-            </button>
-            <button id="reset-ai-caption-positions" class="small-action ai-reset-button" type="button">
-              자동 생성 자막을 기본 위치로 정렬
-            </button>
-            <p class="ai-reset-help">자동 생성 자막의 글·시간·색상은 두고 화면 위치만 아래 중앙으로 맞춥니다.</p>
-            <div id="ai-progress" class="ai-progress" hidden>
-              <div class="progress-track"><span></span></div>
-              <div class="progress-label">
-                <span id="ai-progress-label">에이전트 연결 준비 중</span>
-                <strong id="ai-progress-value">0%</strong>
-              </div>
+                <details id="whisper-model-catalog"><summary>Whisper 모델</summary></details>
+                <details id="caption-advanced-settings"><summary>Whisper 개발 기능</summary></details>
+              </section>
+              <button id="test-caption-agent" type="button" tabindex="-1" disabled>Whisper 확인</button>
+              <input id="caption-agent-token" type="hidden" value="">
+              <button id="reset-ai-caption-positions" type="button" tabindex="-1">자동 위치 초기화</button>
             </div>
-            <p id="caption-agent-warning" class="caption-agent-warning" role="status" hidden></p>
             </section>
 
             <section class="caption-sheet-launch" aria-labelledby="caption-sheet-launch-title">
@@ -1522,6 +1383,6 @@
       </article>
     </template>
 
-    <script type="module" src="editor/editor.js?v=3.0.15"></script>
+    <script type="module" src="editor/editor.js?v=3.0.16"></script>
   </body>
 </html>
