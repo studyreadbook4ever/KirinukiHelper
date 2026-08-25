@@ -13,15 +13,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Build, install-test, attest, and publish Windows x64 helper preview
-    runs-on: windows-2025
-    timeout-minutes: 70
+  authorize:
+    name: Authorize exact Windows preview source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       actions: read
-      attestations: write
-      contents: write
-      id-token: write
+      contents: read
+    outputs:
+      commit: ${{ steps.contract.outputs.commit }}
+      tag: ${{ steps.contract.outputs.tag }}
+      version: ${{ steps.contract.outputs.version }}
     steps:
       - name: Check out the exact tagged source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -33,6 +35,12 @@ jobs:
         with:
           node-version: "22.17.0"
           cache: npm
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Verify pinned native tool provenance
+        run: npm run verify:upstream-tool-provenance
 
       - name: Authorize exact annotated tag and quality-approved main source
         id: contract
@@ -81,11 +89,30 @@ jobs:
           printf 'commit=%s\ntag=%s\nversion=%s\n' \
             "$commit" "$tag" "$version" >> "$GITHUB_OUTPUT"
 
+  publish:
+    name: Build, install-test, attest, and publish Windows x64 helper preview
+    needs: authorize
+    runs-on: windows-2025
+    timeout-minutes: 70
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out the exact tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.17.0"
+          cache: npm
+
       - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
-
-      - name: Verify pinned native tool provenance
-        run: npm run verify:upstream-tool-provenance
 
       - name: Materialize the pinned Electron runtime
         run: node node_modules/electron/install.js
@@ -127,8 +154,8 @@ jobs:
       - name: Assemble the explicitly unsigned Windows helper preview
         run: npm run package:desktop:windows-preview
         env:
-          KIRINUKI_WINDOWS_PREVIEW_COMMIT: ${{ steps.contract.outputs.commit }}
-          KIRINUKI_WINDOWS_PREVIEW_TAG: ${{ steps.contract.outputs.tag }}
+          KIRINUKI_WINDOWS_PREVIEW_COMMIT: ${{ needs.authorize.outputs.commit }}
+          KIRINUKI_WINDOWS_PREVIEW_TAG: ${{ needs.authorize.outputs.tag }}
 
       - name: Prove packaging kept tracked source clean
         shell: bash
@@ -146,8 +173,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          KIRINUKI_WINDOWS_PREVIEW_COMMIT: ${{ steps.contract.outputs.commit }}
-          KIRINUKI_WINDOWS_PREVIEW_TAG: ${{ steps.contract.outputs.tag }}
+          KIRINUKI_WINDOWS_PREVIEW_COMMIT: ${{ needs.authorize.outputs.commit }}
+          KIRINUKI_WINDOWS_PREVIEW_TAG: ${{ needs.authorize.outputs.tag }}
         run: |
           set -euo pipefail
           tag="$KIRINUKI_WINDOWS_PREVIEW_TAG"
