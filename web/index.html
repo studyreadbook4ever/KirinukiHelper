@@ -48,8 +48,6 @@
         </div>
       </section>
 
-      <div id="cut-leaderboard-ad-slot" class="cut-leaderboard-ad-slot" aria-hidden="true"></div>
-
       <section id="recent-section" class="recent-card local-project-manager" aria-labelledby="local-projects-title" aria-busy="true" hidden>
         <header class="local-project-manager-header">
           <div>
@@ -121,10 +119,13 @@
               <small id="source-cache-status" class="source-cache-status" role="status" hidden></small>
             </label>
             <input id="session-archive-input" type="file" accept="application/json,.json" hidden>
-            <label class="field full">
-              <span>프로젝트 이름</span>
-              <input id="project-name" name="project-name" type="text" minlength="1" maxlength="160" placeholder="예: 0520 히오스" required>
-            </label>
+            <div class="source-capture-toolbar">
+              <div id="cut-leaderboard-ad-slot" class="cut-leaderboard-ad-slot" aria-hidden="true"></div>
+              <label class="field source-project-name">
+                <span>프로젝트 이름</span>
+                <input id="project-name" name="project-name" type="text" minlength="1" maxlength="160" placeholder="예: 0520 히오스" required>
+              </label>
+            </div>
             <div id="source-capture-workspace" class="source-capture-workspace" hidden>
               <section class="stream-preview" aria-labelledby="stream-preview-title">
                 <div class="stream-preview-heading">

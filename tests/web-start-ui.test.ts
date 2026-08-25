@@ -51,17 +51,31 @@ test("공개 웹이 URL 입력·PR16 컷 좌표·전체 편집 진입을 모두 
 
 test("원본과 구간 rail은 PR16처럼 한 화면에 나란히 있고 직접 입력도 유지한다", async () => {
   const { html, css } = await studioSources();
+  const toolbar = html.indexOf('class="source-capture-toolbar"');
+  const leaderboardAd = html.indexOf('id="cut-leaderboard-ad-slot"', toolbar);
+  const projectName = html.indexOf('class="field source-project-name"', toolbar);
   const workspace = html.indexOf('class="source-capture-workspace"');
   const stream = html.indexOf('class="stream-preview"', workspace);
   const sidebar = html.indexOf('class="selection-sidebar"', workspace);
   const rectangleAd = html.indexOf('id="cut-rectangle-ad-slot"', workspace);
   const rail = html.indexOf('class="selection-rail"', workspace);
   assert.ok(
-    workspace >= 0
+    toolbar >= 0
+      && leaderboardAd > toolbar
+      && projectName > leaderboardAd
+      && workspace > projectName
       && stream > workspace
       && sidebar > stream
       && rectangleAd > sidebar
       && rail > rectangleAd
+  );
+  assert.match(
+    css,
+    /\.source-capture-toolbar \{[^}]*grid-template-columns: minmax\(720px, 2fr\) minmax\(360px, \.75fr\)/u
+  );
+  assert.match(
+    css,
+    /\.source-project-name \{[^}]*height: 90px;/u
   );
   assert.match(
     css,
