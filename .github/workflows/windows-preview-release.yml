@@ -45,10 +45,19 @@ jobs:
           tag="$GITHUB_REF_NAME"
           version="$(node -p "require('./package.json').version")"
           test "$tag" = "windows-preview-v$version"
-          test "$(git cat-file -t "refs/tags/$tag")" = tag
-          git cat-file -p "refs/tags/$tag" \
-            | grep -Fxq -- "Release-Confirmation: PUBLISH_WINDOWS_PREVIEW"
-          commit="$(git rev-list -n 1 "refs/tags/$tag")"
+          tag_ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag")"
+          test "$(jq -r '.object.type' <<<"$tag_ref_json")" = tag
+          tag_object_sha="$(jq -r '.object.sha' <<<"$tag_ref_json")"
+          test -n "$tag_object_sha"
+          test "$tag_object_sha" != null
+          tag_object_json="$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/tags/$tag_object_sha")"
+          test "$(jq -r '.tag' <<<"$tag_object_json")" = "$tag"
+          test "$(jq -r '.object.type' <<<"$tag_object_json")" = commit
+          jq -er \
+            '.message | split("\n") | index("Release-Confirmation: PUBLISH_WINDOWS_PREVIEW") != null' \
+            <<<"$tag_object_json" >/dev/null
+          commit="$(jq -r '.object.sha' <<<"$tag_object_json")"
           test "$commit" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=no)"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
