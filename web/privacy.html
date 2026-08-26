@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'none'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; media-src 'none'; worker-src 'none'">
+    <title>개인정보 처리 안내 — Kirinuki</title>
+    <link rel="stylesheet" href="licenses.css?v=3.0.21">
+  </head>
+  <body>
+    <a class="skip-link" href="#privacy-content">개인정보 처리 안내로 건너뛰기</a>
+    <header class="page-header">
+      <p class="eyebrow">KIRINUKI PRIVACY</p>
+      <h1>개인정보 처리 안내</h1>
+      <p>
+        Kirinuki 웹사이트, 브라우저 저장소, 영상 준비 도우미와 외부
+        제공자가 각각 어떤 범위에서 정보를 처리하는지 설명합니다.
+      </p>
+    </header>
+
+    <main id="privacy-content">
+      <section class="scope" aria-labelledby="operator-title">
+        <h2 id="operator-title">운영자와 적용 범위</h2>
+        <p>
+          이 안내는 <strong>Kirinuki</strong> 웹사이트와 Kirinuki 영상 준비
+          도우미에 적용됩니다. 문의는
+          <a href="mailto:lostfragment@naver.com">lostfragment@naver.com</a>으로
+          받을 수 있습니다.
+        </p>
+        <p>시행일: 2026년 8월 26일 · 안내 버전: 1.0</p>
+      </section>
+
+      <section class="notice" aria-labelledby="server-title">
+        <h2 id="server-title">Kirinuki 운영 서버</h2>
+        <p>
+          Kirinuki는 정적 웹 앱입니다. 회원 계정·로그인이나 서버 프로젝트
+          데이터베이스가 없으며, 원본 VOD 주소·선택한 컷·자막·편집 프로젝트와
+          원본 영상 파일을 Kirinuki 애플리케이션 기록으로 업로드하거나
+          보관하는 기능을 두지 않습니다.
+        </p>
+        <p>
+          웹 요청은 사이트 전달과 보안을 위해 Cloudflare와 Kirinuki 원본
+          서버를 통과합니다. 이 과정에서는 IP 주소, 요청 시각, 요청 경로,
+          브라우저·네트워크 정보 같은 통신 정보가 처리될 수 있습니다.
+          따라서 Kirinuki는 이 전달 계층의 정보 처리가 0이라고 단정하지
+          않습니다.
+        </p>
+      </section>
+
+      <section class="notice" aria-labelledby="source-title">
+        <h2 id="source-title">VOD 주소와 주소창 정리</h2>
+        <p>
+          주소에 <code>source</code>가 포함된 링크로 들어오면 Kirinuki는 그 값을
+          원본 VOD 입력칸에 한 번 반영하고, 페이지를 다시 불러오지 않은 채
+          주소창을 <code>/</code>로 즉시 정리합니다. 그 뒤에 광고 스크립트를
+          시작합니다. 입력칸의 값과 편집 흐름은 그대로 유지됩니다.
+        </p>
+        <p>
+          <code>#source=…</code> 형태의 fragment는 최초 HTTP 요청에 포함되지
+          않습니다. 기존 <code>?source=…</code> 링크도 계속 지원하지만, query는
+          최초 페이지 요청 때 전달 인프라에 도달한 뒤 브라우저에서 제거된다는
+          차이가 있습니다.
+        </p>
+      </section>
+
+      <section class="notice" aria-labelledby="local-title">
+        <h2 id="local-title">브라우저와 이 PC에서 처리하는 정보</h2>
+        <p>
+          저장한 편집, 복구본, 컷과 자막은 브라우저 저장소에 남습니다. 영상
+          준비 도우미는 사용자가 선택한 구간을 이 PC로 받아 웹 편집기에
+          제공하며, 준비한 영상과 캐시는 이 PC에 남습니다. 이 데이터는
+          Kirinuki 운영 서버의 프로젝트 데이터베이스로 전송되지 않습니다.
+        </p>
+        <p>
+          웹사이트의 저장된 편집 삭제·작업 끝내기 기능, 브라우저의 사이트
+          데이터 삭제, 운영체제의 도우미 제거 기능으로 각 로컬 데이터를
+          정리할 수 있습니다.
+        </p>
+      </section>
+
+      <section aria-labelledby="providers-title">
+        <h2 id="providers-title">외부 제공자</h2>
+        <div class="license-grid">
+          <article class="license-card">
+            <div class="card-heading"><h3>Cloudflare</h3><strong>전달·보안</strong></div>
+            <p>사이트 전송, TLS와 네트워크 보안 과정에서 통신 정보를 처리할 수 있습니다.</p>
+            <ul><li><a href="https://www.cloudflare.com/policies/privacy/" target="_blank" rel="noreferrer noopener">Cloudflare Privacy Policy</a></li></ul>
+          </article>
+
+          <article class="license-card">
+            <div class="card-heading"><h3>YouTube·CHZZK·SOOP</h3><strong>원본 미리보기</strong></div>
+            <p>원본 페이지나 플레이어를 열고 재생할 때 각 플랫폼이 접속·재생 정보를 자체 정책에 따라 처리할 수 있습니다.</p>
+            <ul>
+              <li><a href="https://policies.google.com/privacy?hl=ko" target="_blank" rel="noreferrer noopener">Google 개인정보처리방침</a></li>
+              <li><a href="https://policy.naver.com/policy/privacy.html" target="_blank" rel="noreferrer noopener">NAVER 개인정보처리방침</a></li>
+              <li><a href="https://www.sooplive.com/policy/policy2.html" target="_blank" rel="noreferrer noopener">SOOP 개인정보처리방침</a></li>
+            </ul>
+          </article>
+
+          <article class="license-card">
+            <div class="card-heading"><h3>Kakao AdFit</h3><strong>광고</strong></div>
+            <p>
+              광고가 표시되는 화면에서는 Kakao AdFit 스크립트가 같은 웹 문서에서
+              실행되며, 브라우저와 광고 이용 정보를 Kakao 정책에 따라 처리할 수
+              있습니다. AdFit은 Kirinuki의 저장 편집이나 프로젝트 데이터베이스가
+              아닙니다.
+            </p>
+            <ul>
+              <li><a href="https://adfit.kakao.com/web/html/stipulation.html" target="_blank" rel="noreferrer noopener">AdFit 이용약관</a></li>
+              <li><a href="https://adfit.kakao.com/web/html/use.html" target="_blank" rel="noreferrer noopener">AdFit 운영정책</a></li>
+              <li><a href="https://business.kakao.com/policy/privacy/" target="_blank" rel="noreferrer noopener">Kakao 비즈니스 개인정보처리방침</a></li>
+              <li><a href="https://info.ds.kakao.com/optout.do?lang=ko" target="_blank" rel="noreferrer noopener">맞춤형 광고 안내·거부</a></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="notice" aria-labelledby="retention-title">
+        <h2 id="retention-title">보관과 변경</h2>
+        <p>
+          Kirinuki 애플리케이션 서버에는 사용자별 편집 프로젝트 보관 기간이
+          없습니다. 브라우저·이 PC의 로컬 데이터는 사용자가 삭제할 때까지 남을
+          수 있고, 외부 제공자의 처리와 보관은 각 제공자의 최신 정책을 따릅니다.
+        </p>
+        <p>
+          이 안내가 바뀌면 이 페이지의 시행일과 안내 버전을 갱신합니다.
+          <a href="/">Kirinuki 시작 화면으로 돌아가기</a>
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

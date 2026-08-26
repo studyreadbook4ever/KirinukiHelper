@@ -6618,6 +6618,10 @@ svg {
   font-size: 10px;
 }
 
+.local-media-engine-card .local-media-engine-privacy a {
+  color: var(--accent);
+}
+
 @media (max-width: 680px) {
   .local-media-engine-flow {
     grid-template-columns: 1fr;

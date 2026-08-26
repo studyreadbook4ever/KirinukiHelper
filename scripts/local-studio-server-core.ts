@@ -507,6 +507,9 @@ export function resolveStudioStaticAsset(
   if (target === "/licenses.html") {
     return asset("web/licenses.html", { html: true });
   }
+  if (target === "/privacy.html") {
+    return asset("web/privacy.html", { html: true });
+  }
   if (target === "/licenses.css") {
     return asset("web/licenses.css");
   }

@@ -1547,7 +1547,8 @@ async function main(): Promise<void> {
       && page.formPresent
       && page.editorButtonText === "편집기 열기"
       && /CHZZK·YouTube·SOOP 공개 VOD 주소/u.test(page.sourceInputLabel)
-      && /사용기록과 개인정보를 일절 수집하지 않/u.test(page.privacyText)
+      && /운영 서버는 원본 VOD 주소, 컷, 자막과 편집 프로젝트를 애플리케이션 기록으로 보관하지 않/u.test(page.privacyText)
+      && /개인정보 처리 안내/u.test(page.privacyText)
       && /오픈소스/u.test(page.privacyText),
     "공개 HTTPS에서 전체 VOD 구간 선택·편집기 진입·개인정보 안내 UI가 렌더링되지 않았습니다."
   );

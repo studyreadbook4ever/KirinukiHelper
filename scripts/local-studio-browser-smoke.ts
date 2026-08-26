@@ -2813,7 +2813,8 @@ async function main(): Promise<void> {
   assert(
     policyUi.acknowledgementCount === 6
       && !policyUi.legacyControlsPresent
-      && policyUi.privacyText.includes("사용기록과 개인정보를 일절 수집하지 않으며")
+      && policyUi.privacyText.includes("운영 서버는 원본 VOD 주소, 컷, 자막과 편집 프로젝트를 애플리케이션 기록으로 보관하지 않습니다")
+      && policyUi.privacyText.includes("개인정보 처리 안내")
       && policyUi.emailHref === "mailto:lostfragment@naver.com"
       && policyUi.openSourceText.includes("이 프로젝트는 오픈소스입니다")
       && policyUi.githubHref === "https://github.com/studyreadbook4ever/KirinukiHelper",
