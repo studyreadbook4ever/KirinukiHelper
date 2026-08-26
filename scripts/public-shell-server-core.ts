@@ -506,6 +506,7 @@ async function validatePublicShellIdentityFiles(
   }
   const indexHtml = htmlDocuments[0]!.html;
   const editorHtml = htmlDocuments[1]!.html;
+  const privacyHtml = loadedAssets.get("/privacy.html")?.bytes.toString("utf8") || "";
   if (
     !/href="\/studio\.css\?v=\d+\.\d+\.\d+"/u.test(indexHtml)
     || !/src="\/studio\.js\?v=\d+\.\d+\.\d+"/u.test(indexHtml)
@@ -514,6 +515,16 @@ async function validatePublicShellIdentityFiles(
     || /kirinuki:\/\/open/iu.test(`${indexHtml}\n${editorHtml}`)
   ) {
     throw new Error("공개 배포물이 전체 브라우저 편집기 진입점과 다릅니다.");
+  }
+  if (
+    !privacyHtml.includes("개인정보 처리 안내")
+    || !privacyHtml.includes("Kakao AdFit")
+    || !privacyHtml.includes("Cloudflare")
+    || !privacyHtml.includes("script-src 'none'")
+    || !privacyHtml.includes("connect-src 'none'")
+    || /<script\b/iu.test(privacyHtml)
+  ) {
+    throw new Error("공개 개인정보 처리 안내가 정적·무스크립트 계약과 다릅니다.");
   }
 }
 

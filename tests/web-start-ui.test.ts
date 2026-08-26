@@ -6,13 +6,15 @@ async function studioSources(): Promise<{
   html: string;
   css: string;
   source: string;
+  sourceLocation: string;
 }> {
-  const [html, css, source] = await Promise.all([
+  const [html, css, source, sourceLocation] = await Promise.all([
     readFile(new URL("../web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../web/studio.css", import.meta.url), "utf8"),
-    readFile(new URL("../src/web/main.ts", import.meta.url), "utf8")
+    readFile(new URL("../src/web/main.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/web/source-location.ts", import.meta.url), "utf8")
   ]);
-  return { html, css, source };
+  return { html, css, source, sourceLocation };
 }
 
 test("공개 웹이 URL 입력·PR16 컷 좌표·전체 편집 진입을 모두 소유한다", async () => {
@@ -106,11 +108,24 @@ test("매 사용 권리 확인은 여섯 항목이며 개인정보·오픈소스
   const { html, source } = await studioSources();
   assert.equal((html.match(/data-ack/gu) || []).length, 6);
   assert.match(html, /허용된 VOD에만 사용하세요/u);
-  assert.match(html, /사용기록과 개인정보를 일절 수집하지 않으며/u);
+  assert.match(html, /운영 서버는 원본 VOD 주소, 컷, 자막과 편집 프로젝트를 애플리케이션 기록으로 보관하지 않습니다/u);
+  assert.match(html, /href="\/privacy\.html"/u);
   assert.match(html, /href="mailto:lostfragment@naver\.com"/u);
   assert.match(html, /https:\/\/github\.com\/studyreadbook4ever\/KirinukiHelper/u);
   assert.match(source, /allAcknowledgementsChecked\(\)[\s\S]*createPerUseConfirmationAttestation/u);
   assert.doesNotMatch(html, /name="basis"|id="evidence-fields"|id="confirmation-text"/u);
+});
+
+test("source 딥링크는 입력에 반영한 뒤 광고 시작 신호보다 먼저 주소에서 제거한다", async () => {
+  const { source, sourceLocation } = await studioSources();
+  assert.match(sourceLocation, /url\.searchParams\.get\("source"\)/u);
+  assert.match(sourceLocation, /hashParameters\.get\("source"\)/u);
+  assert.match(sourceLocation, /canonicalPath: "\/"/u);
+  const consume = source.indexOf("consumeSourceLocation(location.href)");
+  const replace = source.indexOf("history.replaceState(null, \"\", consumed.canonicalPath)", consume);
+  const prefill = source.indexOf("elements.sourceUrl.value = source", replace);
+  const signal = source.indexOf("window.dispatchEvent(new Event(SOURCE_LOCATION_SANITIZED_EVENT))", prefill);
+  assert.ok(consume >= 0 && replace > consume && prefill > replace && signal > prefill);
 });
 
 test("초기 컷은 W 연결 단계 없이 진행한 뒤 같은 탭 편집기로 이동한다", async () => {

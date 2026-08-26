@@ -106,6 +106,10 @@ import {
 import {
   LocalVodWebPlaybackController
 } from "./local-vod-playback.js";
+import {
+  consumeSourceLocation,
+  SOURCE_LOCATION_SANITIZED_EVENT
+} from "./source-location.js";
 
 export {
   formatStudioTimecode,
@@ -1912,14 +1916,17 @@ function scheduleLocalProjectLifecycleRefresh(): void {
 }
 
 function prefillSourceFromLocation(): void {
-  const url = new URL(location.href);
-  const source = url.searchParams.get("source") || new URLSearchParams(
-    url.hash.startsWith("#") ? url.hash.slice(1) : url.hash
-  ).get("source");
+  const consumed = consumeSourceLocation(location.href);
+  if (consumed.shouldSanitize) {
+    history.replaceState(null, "", consumed.canonicalPath);
+  }
+  const { source } = consumed;
   if (source) {
     elements.sourceUrl.value = source;
     updateSourcePlatform();
   }
+  document.documentElement.dataset.kirinukiSourceLocationSanitized = "true";
+  window.dispatchEvent(new Event(SOURCE_LOCATION_SANITIZED_EVENT));
 }
 
 function reloadActivePlayerFrame(): void {

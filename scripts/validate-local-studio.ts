@@ -245,6 +245,7 @@ for (const target of [
 
 for (const target of [
   "/licenses.html",
+  "/privacy.html",
   "/licenses.css",
   "/licenses/UNLICENSE.txt",
   "/licenses/HLS-JS-APACHE-2.0.txt",
