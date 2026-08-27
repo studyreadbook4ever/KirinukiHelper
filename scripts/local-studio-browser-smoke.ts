@@ -4163,40 +4163,76 @@ async function main(): Promise<void> {
     name.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
   `);
-  const shortLayerOrderJourney = await execute<{
+  const shortLayerDeleteStart = await execute<{
     initial: string[];
-    afterBack: string[];
-    afterFront: string[];
-    afterForward: string[];
-    afterBackward: string[];
+    orderControlCount: number;
+    initialDeleteCount: number;
+    afterDelete: string[];
   }>(`
     const order = () => [...document.querySelectorAll(".short-video-layer-item")]
       .map((item) => item.dataset.layerId || "");
-    const move = (layerId, action) => {
-      const button = document.querySelector(
-        '#short-video-layer-list button[data-layer-id="' + layerId
-        + '"][data-short-layer-order="' + action + '"]'
-      );
-      if (!(button instanceof HTMLButtonElement) || button.disabled) {
-        throw new Error(layerId + " " + action + " 겹침 순서 버튼을 누를 수 없습니다.");
-      }
-      button.click();
-      return order();
-    };
     const initial = order();
-    const afterBack = move("layer-c", "back");
-    const afterFront = move("layer-c", "front");
-    const afterForward = move("layer-b", "forward");
-    const afterBackward = move("layer-c", "backward");
-    return { initial, afterBack, afterFront, afterForward, afterBackward };
+    const orderControlCount = document.querySelectorAll("[data-short-layer-order]").length;
+    const initialDeleteCount = document.querySelectorAll("[data-short-layer-delete]").length;
+    const select = document.querySelector(
+      '#short-video-layer-list .short-video-layer-select[data-layer-id="layer-c"]'
+    );
+    const remove = document.querySelector(
+      '#short-video-layer-list [data-short-layer-delete][data-layer-id="layer-c"]'
+    );
+    if (!(select instanceof HTMLButtonElement) || select.disabled) {
+      throw new Error("layer-c 영상 행을 선택할 수 없습니다.");
+    }
+    if (!(remove instanceof HTMLButtonElement) || remove.disabled) {
+      throw new Error("layer-c 행별 삭제 버튼을 누를 수 없습니다.");
+    }
+    select.click();
+    remove.click();
+    return { initial, orderControlCount, initialDeleteCount, afterDelete: order() };
   `);
+  const shortLayerDeleteFocus = await waitFor(
+    () => execute<{ selected: string; focused: string }>(`
+      return {
+        selected: document.querySelector(
+          '.short-video-layer-item[data-selected="true"]'
+        )?.getAttribute("data-layer-id") || "",
+        focused: document.activeElement?.getAttribute("data-layer-id") || ""
+      };
+    `),
+    (value) => value.selected === "layer-b" && value.focused === "layer-b",
+    "쇼츠 행별 삭제 뒤 다음 영상 선택·focus가 이어지지 않았습니다."
+  );
+  const shortLayerDeleteUndo = await execute<{
+    afterUndo: string[];
+    restoredDeleteCount: number;
+  }>(`
+    const undo = document.querySelector("#undo");
+    if (!(undo instanceof HTMLButtonElement) || undo.disabled) {
+      throw new Error("행별 영상 삭제를 실행 취소할 수 없습니다.");
+    }
+    undo.click();
+    return {
+      afterUndo: [...document.querySelectorAll(".short-video-layer-item")]
+        .map((item) => item.dataset.layerId || ""),
+      restoredDeleteCount: document.querySelectorAll("[data-short-layer-delete]").length
+    };
+  `);
+  const shortLayerDeleteJourney = {
+    ...shortLayerDeleteStart,
+    selectedAfterDelete: shortLayerDeleteFocus.selected,
+    focusedAfterDelete: shortLayerDeleteFocus.focused,
+    ...shortLayerDeleteUndo
+  };
   assert(
-    shortLayerOrderJourney.initial.join(",") === "layer-c,layer-b,layer-a"
-      && shortLayerOrderJourney.afterBack.join(",") === "layer-b,layer-a,layer-c"
-      && shortLayerOrderJourney.afterFront.join(",") === "layer-c,layer-b,layer-a"
-      && shortLayerOrderJourney.afterForward.join(",") === "layer-b,layer-c,layer-a"
-      && shortLayerOrderJourney.afterBackward.join(",") === "layer-b,layer-a,layer-c",
-    `쇼츠 3레이어의 맨 위·위·아래·맨 아래 순서가 올바르지 않습니다: ${JSON.stringify(shortLayerOrderJourney)}`
+    shortLayerDeleteJourney.initial.join(",") === "layer-c,layer-b,layer-a"
+      && shortLayerDeleteJourney.orderControlCount === 0
+      && shortLayerDeleteJourney.initialDeleteCount === 3
+      && shortLayerDeleteJourney.afterDelete.join(",") === "layer-b,layer-a"
+      && shortLayerDeleteJourney.selectedAfterDelete === "layer-b"
+      && shortLayerDeleteJourney.focusedAfterDelete === "layer-b"
+      && shortLayerDeleteJourney.afterUndo.join(",") === "layer-c,layer-b,layer-a"
+      && shortLayerDeleteJourney.restoredDeleteCount === 3,
+    `쇼츠 고정 행·행별 삭제·focus·undo가 올바르지 않습니다: ${JSON.stringify(shortLayerDeleteJourney)}`
   );
   const authoredWorkspaceA = await execute<{
     cueText: string;
@@ -4223,7 +4259,7 @@ async function main(): Promise<void> {
   assert(
     authoredWorkspaceA.cueText === "A 전용 자막"
       && authoredWorkspaceA.cueCount === 1
-      && authoredWorkspaceA.layerIds.join(",") === "layer-b,layer-a,layer-c",
+      && authoredWorkspaceA.layerIds.join(",") === "layer-c,layer-b,layer-a",
     `A 쇼츠의 영상·자막 상태가 함께 저장되지 않았습니다: ${JSON.stringify(authoredWorkspaceA)}`
   );
   await execute(`
@@ -4338,7 +4374,7 @@ async function main(): Promise<void> {
       value.activeId === shortWorkspaceA.activeId
       && !value.selectDisabled
       && value.cueText === "A 전용 자막"
-      && value.layerIds.join(",") === "layer-b,layer-a,layer-c"
+      && value.layerIds.join(",") === "layer-c,layer-b,layer-a"
     ),
     "B history를 남긴 채 A 쇼츠 상태로 독립 전환하지 못했습니다."
   );
@@ -4368,7 +4404,7 @@ async function main(): Promise<void> {
   assert(
     workspaceAHistoryState.afterUndo === "새 자막"
       && workspaceAHistoryState.afterRedo === "A 전용 자막"
-      && workspaceAHistoryState.layerIds.join(",") === "layer-b,layer-a,layer-c",
+      && workspaceAHistoryState.layerIds.join(",") === "layer-c,layer-b,layer-a",
     `A 쇼츠 undo/redo가 B 또는 영상 순서를 바꿨습니다: ${JSON.stringify(workspaceAHistoryState)}`
   );
   await execute(`
@@ -4449,7 +4485,7 @@ async function main(): Promise<void> {
         && collection.workspaces.length === 2
         && workspaceA?.name === "브라우저 A 작업"
         && workspaceA.shortForm.subtitles[0]?.text === "A 전용 자막"
-        && frontToBackA === "layer-b,layer-a,layer-c"
+        && frontToBackA === "layer-c,layer-b,layer-a"
         && workspaceB?.name === "브라우저 B 작업"
         && workspaceB.shortForm.videoAssets.length === 0
         && workspaceB.shortForm.subtitles[0]?.text === "B 전용 자막";
@@ -4549,7 +4585,7 @@ async function main(): Promise<void> {
       && !value.selectDisabled
       && value.urlId === shortWorkspaceA.activeId
       && value.cueText === "A 전용 자막"
-      && value.layerIds.join(",") === "layer-b,layer-a,layer-c"
+      && value.layerIds.join(",") === "layer-c,layer-b,layer-a"
     ),
     "B reload 뒤 A 쇼츠로 전환했을 때 영상·자막이 섞였습니다."
   );
@@ -4588,7 +4624,7 @@ async function main(): Promise<void> {
       value.activeId === shortWorkspaceA.activeId
       && value.urlId === shortWorkspaceA.activeId
       && value.cueText === "A 전용 자막"
-      && value.layerIds.join(",") === "layer-b,layer-a,layer-c"
+      && value.layerIds.join(",") === "layer-c,layer-b,layer-a"
       && value.optionCount === 2
     ),
     "A 쇼츠 영상·자막·URL identity가 두 번째 reload 뒤 복원되지 않았습니다.",
@@ -4606,7 +4642,7 @@ async function main(): Promise<void> {
       ...longFormOrderJourney,
       reloaded: reloadedLongFormOrder.clipIds
     },
-    shortLayers: shortLayerOrderJourney,
+    shortLayers: shortLayerDeleteJourney,
     workspaces: {
       aId: shortWorkspaceA.activeId,
       bId: shortWorkspaceB.activeId,
