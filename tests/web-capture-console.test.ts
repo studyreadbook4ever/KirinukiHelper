@@ -32,6 +32,8 @@ test("웹 컷 화면은 PR16 단축키 의미를 소유하는 캡처 콘솔을 �
   assert.match(html, /id="refresh-local-projects"[^>]*aria-keyshortcuts="Q"/u);
   assert.match(html, /id="start-editor"[^>]*aria-keyshortcuts="A"/u);
   assert.match(html, /강조된 행에 E로 시작, R로 끝 시각을 기록합니다/u);
+  assert.match(html, /id="export-session-archive"[^>]*type="button"[^>]*>현재 컷 백업<\/button>/u);
+  assert.doesNotMatch(html, /id="export-session-archive"[^>]*aria-keyshortcuts=/u);
   assert.match(html, /id="add-clip"[^>]*>빈 구간 추가<\/button>/u);
   assert.match(html, /data-field="start"[^>]*required/u);
   assert.match(html, /data-field="end"[^>]*required/u);

@@ -89,6 +89,7 @@ import {
   normalizeChzzkVodMaterialization
 } from "../lib/chzzk-vod-materialization.js";
 import {
+  sessionArchiveJsonFromCaptureState,
   sessionArchiveCaptureFromJson
 } from "./session-archive-capture.js";
 import {
@@ -183,6 +184,9 @@ const elements = {
   importSessionArchive: requiredElement<HTMLButtonElement>(
     "#import-session-archive"
   ),
+  exportSessionArchive: requiredElement<HTMLButtonElement>(
+    "#export-session-archive"
+  ),
   sessionArchiveInput: requiredElement<HTMLInputElement>(
     "#session-archive-input"
   ),
@@ -203,6 +207,7 @@ const elements = {
   selectionRail: requiredElement<HTMLElement>(".selection-rail"),
   clipTemplate: requiredElement<HTMLTemplateElement>("#clip-row-template"),
   addClip: requiredElement<HTMLButtonElement>("#add-clip"),
+  captureBackupStatus: requiredElement<HTMLElement>("#capture-backup-status"),
   localProjectManager: requiredElement<HTMLElement>("#recent-section"),
   localProjectsSummary: requiredElement<HTMLElement>("#local-projects-summary"),
   refreshLocalProjects: requiredElement<HTMLButtonElement>("#refresh-local-projects"),
@@ -328,6 +333,7 @@ let localPreviewSourceUrl = "";
 let localPreviewToken = "";
 let localPreviewBusy = false;
 let localPreviewGeneration = 0;
+let captureBackupBusy = false;
 interface ActiveLocalPreviewOperation {
   readonly controller: AbortController;
   readonly generation: number;
@@ -964,6 +970,96 @@ function currentCaptureState({
       || "Kirinuki 로컬 컷 제어",
     segments
   };
+}
+
+function setCaptureBackupStatus(
+  message: string,
+  kind: "idle" | "error" | "success" = "idle"
+): void {
+  elements.captureBackupStatus.textContent = message;
+  elements.captureBackupStatus.classList.toggle("error", kind === "error");
+  elements.captureBackupStatus.classList.toggle("success", kind === "success");
+}
+
+function sanitizeCaptureBackupFileStem(value: string): string {
+  let cleaned = String(value || "kirinuki")
+    .normalize("NFKC")
+    .replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu, "")
+    .replace(/[\\/:*?"<>|\u0000-\u001f\u007f-\u009f]/gu, "-")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/^[.\s-]+|[.\s-]+$/gu, "")
+    .slice(0, 80)
+    .replace(/[.\s]+$/gu, "");
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9]|conin\$|conout\$)(?:[.\s]|$)/iu.test(cleaned)) {
+    cleaned = `safe-${cleaned.slice(0, 75).replace(/[.\s]+$/gu, "")}`;
+  }
+  return cleaned || "kirinuki";
+}
+
+function captureBackupFileName(projectName: string, createdAt: string): string {
+  const iso = new Date(createdAt).toISOString();
+  const timestamp = `${iso.slice(0, 10).replace(/-/gu, "")}-${iso
+    .slice(11, 19)
+    .replace(/:/gu, "")}Z`;
+  return `${sanitizeCaptureBackupFileStem(projectName)}-컷백업-${timestamp}.kirinuki-session.json`;
+}
+
+function startCaptureBackupDownload(
+  json: string,
+  fileName: string
+): void {
+  const objectUrl = URL.createObjectURL(new Blob([json], {
+    type: "application/json;charset=utf-8"
+  }));
+  const download = document.createElement("a");
+  download.href = objectUrl;
+  download.download = fileName;
+  download.hidden = true;
+  document.body.append(download);
+  try {
+    download.click();
+  } finally {
+    download.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+  }
+}
+
+async function exportCurrentCaptureSessionArchive(): Promise<void> {
+  if (captureBackupBusy) {
+    return;
+  }
+  captureBackupBusy = true;
+  elements.exportSessionArchive.disabled = true;
+  elements.exportSessionArchive.setAttribute("aria-busy", "true");
+  setCaptureBackupStatus("현재 컷 백업을 만드는 중입니다…");
+  try {
+    const captureState = currentCaptureState();
+    const projectName = normalizedProjectName();
+    const segmentCount = captureState.segments?.length ?? 0;
+    const createdAt = new Date().toISOString();
+    const json = await sessionArchiveJsonFromCaptureState(captureState, {
+      projectId: createFreshEditorProjectId(),
+      createdAt
+    });
+    startCaptureBackupDownload(
+      json,
+      captureBackupFileName(projectName, createdAt)
+    );
+    setCaptureBackupStatus(
+      `원본 링크와 ${segmentCount}개 구간의 백업 다운로드를 시작했습니다. 영상은 포함되지 않으며, 링크와 메모가 든 파일 공유에 주의하세요.`,
+      "success"
+    );
+  } catch (error) {
+    setCaptureBackupStatus(
+      `현재 컷을 백업하지 못했습니다: ${errorMessage(error)}`,
+      "error"
+    );
+  } finally {
+    captureBackupBusy = false;
+    elements.exportSessionArchive.disabled = false;
+    elements.exportSessionArchive.removeAttribute("aria-busy");
+  }
 }
 
 async function cancelLocalPreviewOperation(
@@ -2482,6 +2578,9 @@ function installStudioCaptureConsole(): void {
   syncCaptureConsoleAvailability();
 }
 
+elements.exportSessionArchive.addEventListener("click", () => {
+  void exportCurrentCaptureSessionArchive();
+});
 elements.addClip.addEventListener("click", () => addClipRow());
 elements.importSessionArchive.addEventListener("click", () => {
   elements.sessionArchiveInput.click();

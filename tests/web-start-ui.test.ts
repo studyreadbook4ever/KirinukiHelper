@@ -85,7 +85,31 @@ test("원본과 구간 rail은 PR16처럼 한 화면에 나란히 있고 직접 
   );
   assert.match(css, /\.source-capture-workspace \{[^}]*align-items: start;/u);
   assert.match(css, /\.selection-sidebar \{[^}]*gap: 24px;/u);
-  assert.match(css, /\.selection-rail \{[^}]*height: clamp\(520px, 72vh, 660px\)/u);
+  assert.match(css, /\.selection-rail \{[^}]*height: clamp\(560px, 74vh, 700px\)/u);
+  assert.match(
+    html,
+    /class="selection-rail-actions"[^>]*role="group"[^>]*aria-label="가져올 구간 작업"[\s\S]*id="export-session-archive"[^>]*type="button"[^>]*>현재 컷 백업<\/button>[\s\S]*id="add-clip"[^>]*>빈 구간 추가<\/button>/u
+  );
+  assert.ok(
+    html.indexOf('id="export-session-archive"') < html.indexOf('id="add-clip"'),
+    "현재 컷 백업은 빈 구간 추가 바로 왼쪽의 첫 번째 작업이어야 합니다."
+  );
+  assert.match(
+    html,
+    /id="capture-backup-status"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"[^>]*>원본 링크·프로젝트 이름·구간 메모가 백업 파일에 포함됩니다\. 영상은 포함되지 않습니다\.<\/p>/u
+  );
+  assert.match(
+    css,
+    /\.selection-rail-actions \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 1250px\)[\s\S]*\.selection-rail \{[^}]*height: min\(560px, 70vh\)/u
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 560px\)[\s\S]*\.selection-rail \{[^}]*height: min\(620px, 76vh\)/u
+  );
   assert.match(css, /\.clip-list \{[^}]*overflow-y: auto/u);
   assert.match(html, /data-field="start"[^>]*inputmode="decimal"/u);
   assert.match(html, /data-field="end"[^>]*inputmode="decimal"/u);
@@ -102,6 +126,33 @@ test("복원 JSON은 서버 업로드 없이 검증 후 원본·구간만 원자
     /const importedRows = imported\.segments\.map[\s\S]*elements\.clipList\.replaceChildren\(\.\.\.importedRows\)/u
   );
   assert.doesNotMatch(source, /fetch\([^)]*session-archive/iu);
+});
+
+test("현재 컷 백업은 같은 v1 경로를 브라우저 파일로 내려받고 기존 불러오기에 연결한다", async () => {
+  const { html, css, source } = await studioSources();
+  assert.match(
+    html,
+    /id="export-session-archive"[^>]*type="button"[^>]*>현재 컷 백업<\/button>/u
+  );
+  assert.match(
+    source,
+    /sessionArchiveJsonFromCaptureState\(captureState, \{[\s\S]*projectId: createFreshEditorProjectId\(\),[\s\S]*createdAt/u
+  );
+  assert.match(
+    source,
+    /new Blob\(\[json\], \{[\s\S]*application\/json;charset=utf-8[\s\S]*download\.download = fileName/u
+  );
+  assert.match(source, /download\.click\(\)[\s\S]*URL\.revokeObjectURL\(objectUrl\)/u);
+  assert.match(
+    source,
+    /elements\.exportSessionArchive\.addEventListener\("click"[\s\S]*exportCurrentCaptureSessionArchive\(\)/u
+  );
+  const downloadStart = source.indexOf("function startCaptureBackupDownload");
+  const downloadEnd = source.indexOf("async function cancelLocalPreviewOperation", downloadStart);
+  assert.ok(downloadStart >= 0 && downloadEnd > downloadStart);
+  assert.doesNotMatch(source.slice(downloadStart, downloadEnd), /fetch\(/u);
+  assert.match(css, /\.capture-backup-status\.error \{[^}]*#ff9292/u);
+  assert.match(css, /\.capture-backup-status\.success \{[^}]*var\(--accent\)/u);
 });
 
 test("매 사용 권리 확인은 여섯 항목이며 개인정보·오픈소스 경계를 설명한다", async () => {
