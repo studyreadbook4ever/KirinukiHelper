@@ -32,6 +32,9 @@ import {
   stringifySessionArchive
 } from "../src/lib/session-archive.js";
 import {
+  sessionArchiveCaptureFromJson
+} from "../src/web/session-archive-capture.js";
+import {
   LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
   LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
   LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
@@ -2596,6 +2599,94 @@ async function main(): Promise<void> {
       && clipState.coverage.includes("앞뒤 10초 포함"),
     `구간 ±10초 안내가 올바르지 않습니다: ${clipState.coverage}`
   );
+
+  await execute(`
+    const row = document.querySelector(".clip-row");
+    const note = row?.querySelector('[data-field="note"]');
+    const button = document.querySelector("#export-session-archive");
+    if (!(note instanceof HTMLInputElement)) {
+      throw new Error("백업할 구간 메모 입력이 없습니다.");
+    }
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error("현재 컷 백업 버튼이 없습니다.");
+    }
+    note.value = "브라우저 왕복 메모";
+    note.dispatchEvent(new Event("input", { bubbles: true }));
+    globalThis.__kirinukiCaptureBackup = {
+      clicked: false,
+      fileName: "",
+      json: ""
+    };
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalAnchorClick = HTMLAnchorElement.prototype.click;
+    let backupBlob = null;
+    URL.createObjectURL = function(blob) {
+      backupBlob = blob;
+      return originalCreateObjectURL.call(URL, blob);
+    };
+    HTMLAnchorElement.prototype.click = function() {
+      if (this.download.endsWith(".kirinuki-session.json") && backupBlob instanceof Blob) {
+        globalThis.__kirinukiCaptureBackup.clicked = true;
+        globalThis.__kirinukiCaptureBackup.fileName = this.download;
+        void backupBlob.text().then((json) => {
+          globalThis.__kirinukiCaptureBackup.json = json;
+        });
+        URL.createObjectURL = originalCreateObjectURL;
+        HTMLAnchorElement.prototype.click = originalAnchorClick;
+        return;
+      }
+      return originalAnchorClick.call(this);
+    };
+    button.click();
+    return true;
+  `);
+  const captureBackup = await waitFor(
+    () => execute<{
+      clicked: boolean;
+      fileName: string;
+      json: string;
+      status: string;
+      buttonBusy: boolean;
+      buttonDisabled: boolean;
+    }>(`
+      const backup = globalThis.__kirinukiCaptureBackup || {};
+      const button = document.querySelector("#export-session-archive");
+      return {
+        clicked: Boolean(backup.clicked),
+        fileName: String(backup.fileName || ""),
+        json: String(backup.json || ""),
+        status: document.querySelector("#capture-backup-status")?.textContent || "",
+        buttonBusy: button?.getAttribute("aria-busy") === "true",
+        buttonDisabled: Boolean(button?.disabled)
+      };
+    `),
+    (value) => (
+      value.clicked
+      && value.json.length > 0
+      && value.status.includes("백업 다운로드를 시작했습니다")
+      && !value.buttonBusy
+      && !value.buttonDisabled
+    ),
+    "현재 컷 백업 버튼이 브라우저 JSON 다운로드를 시작하지 못했습니다."
+  );
+  assert(
+    /^키리누키 프로젝트-컷백업-\d{8}-\d{6}Z\.kirinuki-session\.json$/u
+      .test(captureBackup.fileName),
+    `현재 컷 백업 파일명이 안전한 timestamp 형식이 아닙니다: ${captureBackup.fileName}`
+  );
+  const restoredCaptureBackup = await sessionArchiveCaptureFromJson(
+    captureBackup.json
+  );
+  assert(
+    restoredCaptureBackup.sourceUrl === chzzkUrl
+      && restoredCaptureBackup.projectName === "키리누키 프로젝트"
+      && restoredCaptureBackup.segments.length === 1
+      && restoredCaptureBackup.segments[0]?.startSeconds === 80.5
+      && restoredCaptureBackup.segments[0]?.endSeconds === 95
+      && restoredCaptureBackup.segments[0]?.note === "브라우저 왕복 메모",
+    `브라우저가 내보낸 컷 백업을 기존 importer가 그대로 복원하지 못했습니다: ${JSON.stringify(restoredCaptureBackup)}`
+  );
+  process.stderr.write("[browser-smoke] 현재 컷 백업 다운로드·기존 importer 왕복 검증 완료\n");
 
   await execute(`
     globalThis.__kirinukiArchiveConfirmCalls = 0;

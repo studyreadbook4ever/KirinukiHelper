@@ -11,13 +11,15 @@ import type {
 } from "../src/lib/editor-core.js";
 import {
   buildSessionArchive,
+  parseSessionArchiveJson,
   stringifySessionArchive
 } from "../src/lib/session-archive.js";
 import type {
   SessionArchiveMediaRecovery
 } from "../src/lib/session-archive.js";
 import {
-  sessionArchiveCaptureFromJson
+  sessionArchiveCaptureFromJson,
+  sessionArchiveJsonFromCaptureState
 } from "../src/web/session-archive-capture.js";
 
 const REMOTE_CASES = [
@@ -107,6 +109,184 @@ async function archiveJson(
   });
   return stringifySessionArchive(archive);
 }
+
+function captureState(source: SourceRecord): CaptureState {
+  return {
+    source,
+    projectName: `${String(source.platform)} 컷 백업`,
+    segments: [
+      {
+        id: "selection-a",
+        startSeconds: 80.5,
+        endSeconds: 95.001,
+        description: "첫 구간"
+      },
+      {
+        id: "selection-b",
+        startSeconds: 3_600.007,
+        endSeconds: 3_621.999,
+        description: "둘째 구간"
+      }
+    ]
+  };
+}
+
+test("컷 세션 백업은 CHZZK·YouTube·SOOP 모두 기존 v1 importer와 왕복한다", async () => {
+  for (const value of REMOTE_CASES) {
+    const source = sourceRecord(value);
+    const projectId = `capture-backup-${value.platform.toLowerCase()}`;
+    const json = await sessionArchiveJsonFromCaptureState(captureState(source), {
+      projectId,
+      createdAt: "2026-08-27T00:00:00.000Z"
+    });
+    const archive = await parseSessionArchiveJson(json);
+    const imported = await sessionArchiveCaptureFromJson(json);
+
+    assert.equal(archive.schema, "kirinuki-session-archive/v1");
+    assert.equal(archive.exportKind, "main");
+    assert.equal(archive.rootProject.id, projectId);
+    assert.deepEqual(archive.exportSnapshot, { projectId });
+    assert.equal(imported.sourceUrl, value.canonicalUrl);
+    assert.equal(imported.source.platform, value.platform);
+    assert.equal(imported.projectName, `${value.platform} 컷 백업`);
+    assert.equal(imported.archiveCreatedAt, "2026-08-27T00:00:00.000Z");
+    assert.deepEqual(imported.segments, [
+      { startSeconds: 80.5, endSeconds: 95.001, note: "첫 구간" },
+      { startSeconds: 3_600.007, endSeconds: 3_621.999, note: "둘째 구간" }
+    ]);
+  }
+});
+
+test("컷 세션 백업은 fresh 프로젝트와 재다운로드 identity만 남기고 민감 상태를 제외한다", async () => {
+  const youtube = sourceRecord(REMOTE_CASES[1]);
+  const sensitiveCapture = {
+    source: {
+      ...youtube,
+      accessToken: "must-not-leak-source-token",
+      authorization: "must-not-leak-authorization"
+    },
+    projectName: "  민감 상태 제외  ",
+    segments: [{
+      id: "selection-sensitive",
+      startSeconds: 1,
+      endSeconds: 2,
+      description: "  보존할 메모  ",
+      startCapture: {
+        credential: "must-not-leak-capture-credential"
+      }
+    }],
+    draft: {
+      startText: "must-not-leak-draft"
+    },
+    usagePolicyAttestation: {
+      confirmationText: "must-not-leak-policy"
+    },
+    history: {
+      undo: ["must-not-leak-history"]
+    }
+  } as unknown as CaptureState;
+  const json = await sessionArchiveJsonFromCaptureState(sensitiveCapture, {
+    projectId: "capture-backup-sensitive",
+    createdAt: "2026-08-27T01:02:03.000Z"
+  });
+  const archive = await parseSessionArchiveJson(json);
+
+  for (const forbidden of [
+    "must-not-leak-source-token",
+    "must-not-leak-authorization",
+    "must-not-leak-capture-credential",
+    "must-not-leak-draft",
+    "must-not-leak-policy",
+    "must-not-leak-history",
+    "usagePolicyAttestation",
+    "accessToken",
+    "authorization"
+  ]) {
+    assert.equal(json.includes(forbidden), false, `${forbidden}가 백업에 남았습니다.`);
+  }
+  assert.equal(archive.rootProject.name, "민감 상태 제외");
+  assert.equal(archive.rootProject.mediaAsset, null);
+  assert.equal(archive.rootProject.history, undefined);
+  assert.deepEqual(archive.rootProject.imageAssets, []);
+  assert.deepEqual(archive.imageAssets, []);
+  assert.deepEqual(archive.exportSnapshot, {
+    projectId: "capture-backup-sensitive"
+  });
+  assert.deepEqual(archive.mediaRecovery, {
+    schema: "kirinuki-media-recovery/v1",
+    mode: "redownload-vod",
+    source: {
+      platform: "YOUTUBE",
+      contentType: "vod",
+      contentId: "M7lc1UVf-VE",
+      canonicalUrl: "https://www.youtube.com/watch?v=M7lc1UVf-VE"
+    },
+    localMedia: null,
+    materialization: null,
+    vodBytesIncluded: false
+  });
+  assert.deepEqual(
+    (await sessionArchiveCaptureFromJson(json)).segments,
+    [{ startSeconds: 1, endSeconds: 2, note: "보존할 메모" }]
+  );
+});
+
+test("컷 세션 백업은 500개·0.1초 경계를 보존하고 그 밖의 입력은 거부한다", async () => {
+  const source = sourceRecord(REMOTE_CASES[0]);
+  const maximumSegments = Array.from(
+    { length: 500 },
+    (_, index) => ({
+      id: `selection-${index}`,
+      startSeconds: index,
+      endSeconds: index + 0.1,
+      description: `구간 ${index + 1}`
+    })
+  );
+  const atLimit = await sessionArchiveJsonFromCaptureState({
+    source,
+    projectName: "500개 경계",
+    segments: maximumSegments
+  }, {
+    projectId: "capture-backup-500"
+  });
+  assert.equal(
+    (await sessionArchiveCaptureFromJson(atLimit)).segments.length,
+    500
+  );
+
+  await assert.rejects(
+    sessionArchiveJsonFromCaptureState({
+      source,
+      projectName: "501개 경계",
+      segments: [
+        ...maximumSegments,
+        {
+          id: "selection-over-limit",
+          startSeconds: 501,
+          endSeconds: 502,
+          description: "초과"
+        }
+      ]
+    }, { projectId: "capture-backup-501" }),
+    /1~500개/u
+  );
+  await assert.rejects(
+    sessionArchiveJsonFromCaptureState({
+      source,
+      projectName: "너무 짧은 컷",
+      segments: [{ startSeconds: 1, endSeconds: 1.099 }]
+    }, { projectId: "capture-backup-short" }),
+    /0\.1초 이상/u
+  );
+  await assert.rejects(
+    sessionArchiveJsonFromCaptureState({
+      source,
+      projectName: "빈 컷",
+      segments: []
+    }, { projectId: "capture-backup-empty" }),
+    /1~500개/u
+  );
+});
 
 test("CHZZK·YouTube·SOOP 복원 JSON에서 canonical 링크와 정확한 밀리초 구간을 읽는다", async () => {
   for (const value of REMOTE_CASES) {
