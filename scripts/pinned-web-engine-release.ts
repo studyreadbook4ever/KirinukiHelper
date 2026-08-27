@@ -49,23 +49,23 @@ export const PINNED_WEB_ENGINE_RELEASE_CHANNEL:
 const verifiedWindowsPreview = parseLocalMediaEngineWindowsPreviewChannel({
   schema: LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_SCHEMA,
   status: "verified-windows-preview",
-  tag: "windows-preview-v3.0.20",
-  commit: "859a6f8df83c920545f2a5457c63cc188d4f4522",
+  tag: "windows-preview-v3.0.22",
+  commit: "463f2b96877668b505a1dc90e5ff8914366d52a9",
   aggregateManifestSha256:
-    "0fc6814910a2862a43340cf8bb45ad857ccdd7689c0fe59a511346bc62038a56",
+    "dc4af4ae23adfc6605e785080deaba10ca5c0610cc97bba8b368e701072602d4",
   sourceOffer: {
     bytes: 919,
     fileName: "Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt",
     sha256:
-      "7b6eb1110668c516f0acef5c27390dba387d15172d438d1240189cf58b0f139a",
-    url: "https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/windows-preview-v3.0.20/Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt"
+      "1e39be2e206621c522a51b11d2722ca61496b32e3d230c9314b1393dd62c3a35",
+    url: "https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/windows-preview-v3.0.22/Kirinuki-Engine-windows-preview-SOURCE-OFFER.txt"
   },
   installer: {
-    bytes: 128384206,
+    bytes: 128384044,
     fileName: "Kirinuki-Engine-windows-x64-preview-setup.exe",
     sha256:
-      "bf016482d81fcf209761112892a871c3561feae4530ee7c0791843c2b61dca76",
-    url: "https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/windows-preview-v3.0.20/Kirinuki-Engine-windows-x64-preview-setup.exe"
+      "142f4ecff45e06093cbe668b31e8cad025c157f9ef050141cc22ba3146fbaff4",
+    url: "https://github.com/studyreadbook4ever/KirinukiHelper/releases/download/windows-preview-v3.0.22/Kirinuki-Engine-windows-x64-preview-setup.exe"
   }
 });
 
