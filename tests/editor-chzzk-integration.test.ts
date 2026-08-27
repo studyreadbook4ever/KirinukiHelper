@@ -462,9 +462,10 @@ test("CHZZK VOD 자동 준비 UI는 긴 원본 부분 읽기 대신 compact 편�
     /id="local-media-engine-cancel"[^>]*>내 파일로 계속하기<\/button>/u
   );
   assert.match(html, /id="local-media-engine-flow"/u);
-  assert.match(html, /Linux 도우미 받기/u);
-  assert.match(html, /Debian\/Ubuntu 또는 Arch Linux x64용 파일/u);
-  assert.match(html, /패키지를 설치하고 도우미를 한 번 실행합니다/u);
+  assert.match(html, /data-local-media-engine-step-title="download"/u);
+  assert.match(html, /data-local-media-engine-step-detail="download"/u);
+  assert.match(html, /data-local-media-engine-step-detail="install"/u);
+  assert.match(html, /data-local-media-engine-step-detail="connect"/u);
   assert.match(html, /Debian\/Ubuntu·Arch Linux x64만 지원/u);
 
   const headerStrings = new Set(

@@ -147,20 +147,16 @@ test("trusted player shortcut은 installed guard와 exact direct frame·모든 �
   );
 });
 
-test("background·native smoke secondary instance는 컷 창을 열지 않는다", async () => {
+test("production plain activation은 windowless이고 cut 창은 isolated smoke만 도달한다", async () => {
   const main = await source("src/desktop/main.ts");
   const secondInstance = boundedSection(
     main,
     'app.on("second-instance"',
     "app.whenReady().then(async () => {"
   );
-  assert.match(
-    secondInstance,
-    /launchCommand\?\.kind === "cut"[\s\S]*!nativeSmoke[\s\S]*!argv\.includes\(ENGINE_BACKGROUND_ARGUMENT\)[\s\S]*requestCutWindow\(\)/u
-  );
-  assert.ok(
-    secondInstance.indexOf("!nativeSmoke")
-      < secondInstance.indexOf("requestCutWindow()"),
-    "내부 background/smoke secondary는 창 요청 전에 제외되어야 합니다."
-  );
+  assert.match(secondInstance, /else if \(nativeSmoke && launchCommand\?\.kind === "cut"\)/u);
+  assert.doesNotMatch(secondInstance, /!launchCommand[\s\S]{0,180}requestCutWindow/u);
+  assert.doesNotMatch(secondInstance, /ENGINE_BACKGROUND_ARGUMENT[\s\S]{0,180}requestCutWindow/u);
+  assert.match(main, /app\.on\("activate"[\s\S]{0,220}windowless media engine/u);
+  assert.match(main, /cutWindowRequested = Boolean\([\s\S]*nativeSmoke[\s\S]*initialLaunchCommand\?\.kind === "cut"/u);
 });

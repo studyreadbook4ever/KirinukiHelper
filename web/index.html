@@ -9,7 +9,7 @@
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki</title>
-    <link rel="stylesheet" href="/studio.css?v=3.0.21">
+    <link rel="stylesheet" href="/studio.css?v=3.0.22">
   </head>
   <body>
     <header class="topbar">
@@ -257,6 +257,14 @@
                   <output id="cut-preparation-percent">0%</output>
                 </div>
                 <progress id="cut-preparation-meter" max="1" value="0"></progress>
+                <div id="cut-preparation-recovery" class="cut-preparation-recovery" hidden>
+                  <code id="cut-preparation-error-code"></code>
+                  <div class="cut-preparation-recovery-actions">
+                    <button id="cut-preparation-retry" class="button secondary" type="button">다시 시도</button>
+                    <button id="cut-preparation-download" class="button secondary" type="button" hidden>최신 도우미 받기</button>
+                    <button id="cut-preparation-manual" class="button ghost" type="button" hidden>내 파일로 계속</button>
+                  </div>
+                </div>
                 <p>컷 선택은 이 웹 화면에서 끝납니다. 도우미가 필요한 경우에는 편집기로 넘어갈 때 선택한 영상 구간만 준비합니다.</p>
               </div>
             </div>
@@ -304,15 +312,15 @@
         <div id="local-media-engine-flow" class="local-media-engine-flow" aria-label="영상 준비 도우미 연결 순서">
           <div class="local-media-engine-step">
             <span class="local-media-engine-step-number" aria-hidden="true">1</span>
-            <div><strong>Linux 도우미 받기</strong><span>Debian/Ubuntu 또는 Arch Linux x64용 파일을 고릅니다.</span></div>
+            <div><strong data-local-media-engine-step-title="download">내 PC용 도우미 받기</strong><span data-local-media-engine-step-detail="download">운영체제에 맞는 설치 파일을 고릅니다.</span></div>
           </div>
           <div class="local-media-engine-step">
             <span class="local-media-engine-step-number" aria-hidden="true">2</span>
-            <div><strong>다운로드 후 설치·실행</strong><span>패키지를 설치하고 도우미를 한 번 실행합니다.</span></div>
+            <div><strong>다운로드 후 설치·실행</strong><span data-local-media-engine-step-detail="install">설치 파일을 실행하고 도우미를 한 번 시작합니다.</span></div>
           </div>
           <div class="local-media-engine-step">
             <span class="local-media-engine-step-number" aria-hidden="true">3</span>
-            <div><strong>이 화면에서 연결 확인</strong><span>도우미 실행을 자동 감지하고, ‘설치 후 연결 확인’ 한 번으로 이 브라우저를 등록합니다.</span></div>
+            <div><strong>이 화면에서 연결 확인</strong><span data-local-media-engine-step-detail="connect">도우미 실행을 확인한 뒤 이 브라우저에서 원래 작업을 이어갑니다.</span></div>
           </div>
         </div>
         <p id="local-media-engine-unsupported" class="local-media-engine-unsupported" hidden>
@@ -322,7 +330,7 @@
         <p id="local-media-engine-download-note" class="local-media-engine-download-note">
           다운로드를 누르면 이 화면에 다음 행동을 계속 안내합니다. 실제 파일 진행률은 브라우저의 다운로드 표시에서 확인할 수 있습니다.
         </p>
-        <a id="local-media-engine-source-offer" class="local-media-engine-source-offer" href="#" target="_blank" rel="noopener noreferrer" hidden>Linux 미리보기 소스·라이선스 안내</a>
+        <a id="local-media-engine-source-offer" class="local-media-engine-source-offer" href="#" target="_blank" rel="noopener noreferrer" hidden>도우미 소스·라이선스 안내</a>
         <div class="local-media-engine-actions">
           <button id="local-media-engine-cancel" class="button ghost" type="button">이번에는 파일로 계속</button>
           <button id="local-media-engine-reset" class="button ghost" type="button" hidden>연결 기억 지우기</button>
@@ -336,6 +344,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="/studio.js?v=3.0.21"></script>
+    <script type="module" src="/studio.js?v=3.0.22"></script>
   </body>
 </html>

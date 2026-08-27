@@ -2,9 +2,65 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  KIRINUKI_LINUX_DESKTOP_EXEC,
+  KIRINUKI_LINUX_DESKTOP_ID,
+  LinuxProtocolAssociationError,
   ensureDesktopProtocolRegistration,
+  reconcileLinuxProtocolAssociation,
   removeDesktopProtocolRegistration
 } from "../src/desktop/protocol-registration.js";
+
+const currentEntry = {
+  content: `[Desktop Entry]\nType=Application\nName=Kirinuki\nExec=${KIRINUKI_LINUX_DESKTOP_EXEC}\nMimeType=x-scheme-handler/kirinuki-engine;\n`,
+  executableExists: true,
+  regularFile: true
+} as const;
+
+test("Linux association 없음·현재·owned stale·foreign을 exact readback으로 구분한다", async () => {
+  for (const scenario of ["absent", "current", "legacy"] as const) {
+    let selected = scenario === "current"
+      ? KIRINUKI_LINUX_DESKTOP_ID
+      : scenario === "legacy" ? "Kirinuki.desktop" : "";
+    const writes: string[] = [];
+    const result = await reconcileLinuxProtocolAssociation({
+      queryDefault: async () => selected,
+      setDefault: async (desktopId) => {
+        writes.push(desktopId);
+        selected = desktopId;
+      },
+      inspect: async (desktopId) => desktopId === KIRINUKI_LINUX_DESKTOP_ID
+        ? currentEntry
+        : desktopId === "Kirinuki.desktop"
+          ? {
+              content: "[Desktop Entry]\nType=Application\nName=Kirinuki\nExec=/old/checkout/Kirinuki %U\nMimeType=x-scheme-handler/kirinuki-engine;\n",
+              executableExists: false,
+              regularFile: true
+            }
+          : null
+    });
+    assert.equal(result, scenario === "current"
+      ? "already-registered"
+      : scenario === "legacy" ? "migrated-owned-legacy" : "registered");
+    assert.deepEqual(writes, scenario === "current" ? [] : [KIRINUKI_LINUX_DESKTOP_ID]);
+  }
+
+  let writes = 0;
+  await assert.rejects(reconcileLinuxProtocolAssociation({
+    queryDefault: async () => "foreign.desktop",
+    setDefault: async () => { writes += 1; },
+    inspect: async (desktopId) => desktopId === KIRINUKI_LINUX_DESKTOP_ID
+      ? currentEntry
+      : {
+          content: "[Desktop Entry]\nType=Application\nName=Other\nExec=/usr/bin/other %U\nMimeType=x-scheme-handler/kirinuki-engine;\n",
+          executableExists: true,
+          regularFile: true
+        }
+  }), (error: unknown) => (
+    error instanceof LinuxProtocolAssociationError
+    && error.code === "FOREIGN_HANDLER"
+  ));
+  assert.equal(writes, 0);
+});
 
 test("이미 등록된 protocol은 변경하지 않고 idempotent readback으로 통과한다", () => {
   let setCalls = 0;

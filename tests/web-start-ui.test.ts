@@ -192,15 +192,17 @@ test("첫 방문 도우미 안내는 다운로드·설치·연결과 진행 상�
   for (const html of [indexHtml, editorHtml]) {
     assert.match(
       html,
-      /Linux 도우미 받기[\s\S]*다운로드 후 설치·실행[\s\S]*이 화면에서 연결 확인/u
+      /data-local-media-engine-step-title="download"[\s\S]*다운로드 후 설치·실행[\s\S]*이 화면에서 연결 확인/u
     );
-    assert.match(html, /Debian\/Ubuntu 또는 Arch Linux x64용 파일/u);
+    assert.match(html, /운영체제에 맞는 설치 파일/u);
     assert.match(html, /id="local-media-engine-status"[^>]*aria-live="polite"/u);
     assert.match(html, /id="local-media-engine-download-note"[\s\S]*실제 파일 진행률은 브라우저/u);
-    assert.match(html, /id="local-media-engine-source-offer"[^>]*hidden[^>]*>Linux 미리보기 소스·라이선스 안내/u);
+    assert.match(html, /id="local-media-engine-source-offer"[^>]*hidden[^>]*>도우미 소스·라이선스 안내/u);
     assert.doesNotMatch(html, /localhost|포트 번호|터미널에서/u);
   }
   assert.match(onboarding, /download[\s\S]*install[\s\S]*connect/iu);
+  assert.match(onboarding, /Windows 도우미 받기[\s\S]*Windows 11 x64용 설치 파일/u);
+  assert.match(onboarding, /Linux 도우미 받기[\s\S]*Debian\/Ubuntu 또는 Arch Linux/u);
 });
 
 test("공개 정적 산출물은 loopback 엔진만 연결하고 강제 보안 헤더를 유지한다", async () => {

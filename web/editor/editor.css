@@ -2658,8 +2658,10 @@ svg {
 }
 
 .short-video-layer-list {
-  max-height: 176px;
+  --short-video-row-height: 56px;
+  max-height: 300px;
   display: grid;
+  grid-auto-rows: var(--short-video-row-height);
   gap: 5px;
   overflow: auto;
   scrollbar-width: thin;
@@ -2667,17 +2669,21 @@ svg {
 
 .short-video-layer-item {
   width: 100%;
-  min-height: 52px;
-  padding: 7px 8px;
+  height: var(--short-video-row-height);
+  min-height: var(--short-video-row-height);
+  max-height: var(--short-video-row-height);
+  padding: 5px 6px 5px 8px;
+  box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: 7px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 48px;
   align-items: center;
   gap: 8px;
   color: #afb8c5;
   text-align: left;
   background: rgba(255, 255, 255, 0.018);
+  overflow: hidden;
 }
 
 .short-video-layer-select {
@@ -2692,26 +2698,30 @@ svg {
   color: inherit;
   text-align: left;
   background: transparent;
+  overflow: hidden;
 }
 
-.short-video-layer-order-actions {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
-}
-
-.short-video-layer-order-actions button {
-  min-height: 28px;
-  border: 1px solid rgba(154, 134, 255, 0.26);
-  border-radius: 5px;
-  color: #cfc6ff;
-  background: rgba(154, 134, 255, 0.055);
+.short-video-layer-delete {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid rgba(255, 109, 125, 0.28);
+  border-radius: 6px;
+  color: #ff9ba6;
+  background: rgba(255, 109, 125, 0.055);
   font-size: 10px;
   font-weight: 720;
 }
 
-.short-video-layer-order-actions button:disabled {
-  opacity: 0.28;
+.short-video-layer-delete:hover:not(:disabled),
+.short-video-layer-delete:focus-visible {
+  border-color: rgba(255, 109, 125, 0.64);
+  outline: 0;
+  background: rgba(255, 109, 125, 0.12);
+}
+
+.short-video-layer-delete:disabled {
+  opacity: 0.35;
 }
 
 .short-video-layer-item:hover,
@@ -2767,6 +2777,10 @@ svg {
 }
 
 .short-video-layer-state {
+  max-width: 104px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #9d93d7;
   font-size: 8px;
   font-weight: 730;
@@ -2812,7 +2826,7 @@ svg {
 
 .short-video-layer-actions {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr;
   gap: 5px;
 }
 
@@ -2841,7 +2855,7 @@ svg {
 }
 
 .short-video-layer-actions #toggle-short-video-layer-visibility {
-  grid-column: span 2;
+  grid-column: auto;
 }
 
 .short-video-layer-actions #toggle-short-video-layer-visibility[aria-pressed="false"] {
@@ -2849,12 +2863,6 @@ svg {
   text-decoration: line-through;
 }
 
-.short-video-layer-actions button.danger {
-  grid-column: span 2;
-  border-color: rgba(255, 109, 125, 0.28);
-  color: #ff9ba6;
-  background: rgba(255, 109, 125, 0.055);
-}
 
 .short-workspace-squeegee {
   padding: 12px;

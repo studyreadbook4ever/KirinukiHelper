@@ -281,7 +281,6 @@ import {
   trimShortFormCanvasToContent,
   removeShortFormSourceAudioAsset,
   removeShortFormVideoAsset,
-  reorderShortFormVideoAssets,
   saveActiveShortFormWorkspace,
   deleteShortFormWorkspace,
   shortFormVideoAssetsAtTimeline,
@@ -828,7 +827,6 @@ const EDITOR_ELEMENT_IDS = [
   "short-video-layer-volume",
   "short-video-layer-volume-value",
   "toggle-short-video-layer-visibility",
-  "delete-short-video-layer",
   "short-workspace-fit",
   "short-workspace-zoom",
   "short-workspace-zoom-value",
@@ -4849,27 +4847,18 @@ function renderShortVideoLayerPanel(
       ? "숨김"
       : `L${layer.lane + 1} · 화면 ${Math.round(layer.opacity * 100)}% · 소리 ${Math.round(layer.audioGain * 100)}%`;
     button.append(order, copy, state);
-    const orderActions = document.createElement("div");
-    orderActions.className = "short-video-layer-order-actions";
-    orderActions.setAttribute("role", "group");
-    orderActions.setAttribute("aria-label", `${index + 1}번 영상 화면 겹침 순서`);
-    const actions = [
-      ["front", "맨 위", index <= 0],
-      ["forward", "위로", index <= 0],
-      ["backward", "아래로", index >= layers.length - 1],
-      ["back", "맨 아래", index >= layers.length - 1]
-    ] as const;
-    for (const [action, label, boundary] of actions) {
-      const control = document.createElement("button");
-      control.type = "button";
-      control.dataset.shortLayerOrder = action;
-      control.dataset.layerId = layer.id;
-      control.textContent = label;
-      control.disabled = editBlocked || boundary;
-      control.setAttribute("aria-label", `${index + 1}번 영상을 ${label}로 이동`);
-      orderActions.append(control);
-    }
-    item.append(button, orderActions);
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "short-video-layer-delete";
+    deleteButton.dataset.shortLayerDelete = "true";
+    deleteButton.dataset.layerId = layer.id;
+    deleteButton.disabled = editBlocked;
+    deleteButton.textContent = "삭제";
+    deleteButton.setAttribute(
+      "aria-label",
+      `${index + 1}번 영상 ${title.textContent} 삭제`
+    );
+    item.append(button, deleteButton);
     elements.short_video_layer_list.append(item);
   }
 
@@ -4912,7 +4901,6 @@ function renderShortVideoLayerPanel(
   elements.toggle_short_video_layer_visibility.textContent = selectedLayer?.visible === false
     ? "숨김 · 다시 표시"
     : "표시 중 · 숨기기";
-  elements.delete_short_video_layer.disabled = controlsDisabled;
   if (focusedLayerId) {
     elements.short_video_layer_list.querySelector<HTMLButtonElement>(
       `.short-video-layer-select[data-layer-id="${CSS.escape(focusedLayerId)}"]`
@@ -7640,9 +7628,16 @@ async function commitShortSource(openShortWorkspace: boolean): Promise<boolean> 
     }
     return false;
   }
+  const shortFormWorkspaces = saveActiveShortFormWorkspace(
+    project.shortFormWorkspaces,
+    project.shortForm,
+    shortForm,
+    project.clips
+  );
   const nextProject = {
     ...project,
     shortForm,
+    shortFormWorkspaces,
     updatedAt: new Date().toISOString()
   };
   shortSourceComposerActive = false;
@@ -7851,7 +7846,7 @@ function updateSelectedShortVideoLayer(
   return true;
 }
 
-function deleteSelectedShortVideoLayer(): boolean {
+function deleteShortVideoLayer(layerId: string): boolean {
   if (workspaceMode !== "short-form") {
     return false;
   }
@@ -7859,77 +7854,45 @@ function deleteSelectedShortVideoLayer(): boolean {
     reportBlockedShortTimelineSourceEdit();
     return false;
   }
-  const selected = activeShortWorkspaceVideoLayer();
-  if (!selected) {
-    showToast("삭제할 영상을 먼저 선택해 주세요.");
+  const layers = shortWorkspaceVideoLayers();
+  const index = layers.findIndex((layer) => layer.id === layerId);
+  if (index < 0) {
     return false;
   }
-  const shortForm = removeShortFormVideoAsset(
+  const selectedId = activeShortWorkspaceVideoLayer()?.id || null;
+  const deletingSelected = selectedId === layerId;
+  const focusLayerId = deletingSelected
+    ? layers[index + 1]?.id || layers[index - 1]?.id || null
+    : selectedId;
+  let shortForm = removeShortFormVideoAsset(
     project.shortForm,
-    selected.id
+    layerId
   );
   if (shortForm === project.shortForm) {
     return false;
   }
+  if (deletingSelected) {
+    shortForm = {
+      ...shortForm,
+      selectedVideoLayerId: focusLayerId
+    };
+  }
   applyProject({ ...project, shortForm });
+  queueMicrotask(() => {
+    if (focusLayerId) {
+      elements.short_video_layer_list.querySelector<HTMLButtonElement>(
+        `.short-video-layer-select[data-layer-id="${CSS.escape(focusLayerId)}"]`
+      )?.focus({ preventScroll: true });
+    } else {
+      elements.add_short_video_layer.focus({ preventScroll: true });
+    }
+  });
   showToast(
     shortForm.videoAssets.length > 0
       ? "선택 영상을 삭제했습니다. 사진·자막·음성과 쇼츠 길이는 그대로 유지됩니다."
       : "마지막 영상도 삭제했습니다. 빈 쇼츠 화면과 사진·자막·음성은 그대로 유지됩니다.",
     "success"
   );
-  return true;
-}
-
-function moveShortVideoLayer(
-  layerId: string,
-  direction: "front" | "forward" | "backward" | "back"
-): boolean {
-  if (workspaceMode !== "short-form") {
-    return false;
-  }
-  if (shortTimelineSourceEditsBlocked()) {
-    reportBlockedShortTimelineSourceEdit();
-    return false;
-  }
-  const selected = project.shortForm.videoAssets.find((asset) => (
-    asset.id === layerId
-  )) || null;
-  if (!selected) {
-    return false;
-  }
-  const ordered = [...project.shortForm.videoAssets]
-    .sort((left, right) => left.zIndex - right.zIndex);
-  const index = ordered.findIndex((layer) => layer.id === selected.id);
-  const nextIndex = direction === "front"
-    ? ordered.length - 1
-    : direction === "back"
-      ? 0
-      : index + (direction === "forward" ? 1 : -1);
-  if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) {
-    return false;
-  }
-  const [moving] = ordered.splice(index, 1);
-  ordered.splice(nextIndex, 0, moving!);
-  const shortForm = reorderShortFormVideoAssets(
-    project.shortForm,
-    ordered.map((layer) => layer.id)
-  );
-  applyProject({
-    ...project,
-    shortForm: {
-      ...shortForm,
-      selectedVideoLayerId: selected.id
-    }
-  });
-  const message = direction === "front"
-    ? "영상을 맨 위로 올렸습니다."
-    : direction === "forward"
-      ? "영상을 한 단계 위로 올렸습니다."
-      : direction === "backward"
-        ? "영상을 한 단계 아래로 내렸습니다."
-        : "영상을 맨 아래로 내렸습니다.";
-  showToast(message);
   return true;
 }
 
@@ -19904,16 +19867,10 @@ function bindActions() {
     showToast(`${shortForm.videoLaneCount}번째 영상 라인을 추가했습니다.`, "success");
   });
   elements.short_video_layer_list.addEventListener("click", (event) => {
-    const orderButton = (event.target as HTMLElement | null)
-      ?.closest<HTMLButtonElement>("[data-short-layer-order]");
-    const order = orderButton?.dataset.shortLayerOrder;
-    const orderedLayerId = orderButton?.dataset.layerId;
-    if (
-      orderedLayerId
-      && (order === "front" || order === "forward"
-        || order === "backward" || order === "back")
-    ) {
-      moveShortVideoLayer(orderedLayerId, order);
+    const deleteButton = (event.target as HTMLElement | null)
+      ?.closest<HTMLButtonElement>("[data-short-layer-delete][data-layer-id]");
+    if (deleteButton?.dataset.layerId) {
+      deleteShortVideoLayer(deleteButton.dataset.layerId);
       return;
     }
     const item = (event.target as HTMLElement | null)?.closest<HTMLElement>(
@@ -19937,6 +19894,9 @@ function bindActions() {
     }
     const current = (event.target as HTMLElement | null)
       ?.closest<HTMLButtonElement>(".short-video-layer-select[data-layer-id]");
+    if (!current) {
+      return;
+    }
     const currentIndex = Math.max(0, items.indexOf(current!));
     const nextIndex = event.key === "Home"
       ? 0
@@ -20058,10 +20018,6 @@ function bindActions() {
       showToast(selected.visible ? "영상을 숨겼습니다." : "영상을 다시 표시했습니다.");
     }
   });
-  elements.delete_short_video_layer.addEventListener(
-    "click",
-    deleteSelectedShortVideoLayer
-  );
   elements.short_workspace_squeegee_actions.addEventListener("click", (event) => {
     const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(
       "button[data-short-workspace-squeegee]"

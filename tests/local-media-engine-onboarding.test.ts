@@ -14,7 +14,8 @@ import {
   localMediaEngineInstaller,
   localMediaEngineReleaseMessage,
   primeLocalMediaEngineTrust,
-  probeLocalMediaEngine
+  probeLocalMediaEngine,
+  probeLocalMediaEngineReachability
 } from "../src/editor/local-media-engine-onboarding.js";
 import {
   LOCAL_MEDIA_ENGINE_API_PROTOCOL,
@@ -462,6 +463,30 @@ test("v2 signed health compatibility는 app release 번호와 독립적이다", 
   ), 5_000, fixture.trustStore);
 });
 
+test("미등록 상태의 reachability는 실행 여부만 구분하고 ready 신뢰를 만들지 않는다", async () => {
+  let calls = 0;
+  assert.equal(await probeLocalMediaEngineReachability(undefined, async () => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      error: {
+        code: "HEALTH_PROBE_NOT_ALLOWED",
+        message: "signed health proof required"
+      }
+    }), { status: 403 });
+  }), true);
+  assert.equal(calls, 1);
+  assert.equal(await probeLocalMediaEngineReachability(undefined, async () => {
+    throw new TypeError("connection refused");
+  }), false);
+  assert.equal(await probeLocalMediaEngineReachability(undefined, async () => (
+    new Response(JSON.stringify({
+      schema: "foreign/health-v1",
+      status: "ok",
+      engine: { product: "foreign", protocol: "foreign/v1" }
+    }), { status: 200 })
+  )), false);
+});
+
 test("health probe는 부재·과대·호환되지 않는 엔진을 fail closed한다", async () => {
   const fixture = await signingFixture();
   await assert.rejects(
@@ -650,6 +675,10 @@ test("온보딩 재시도는 마지막 연결 오류가 요구할 때 click stac
     ["#local-media-engine-arch-download", new RetryFixtureElement()],
     ["#local-media-engine-download-label", new RetryFixtureElement()],
     ["#local-media-engine-source-offer", new RetryFixtureElement()],
+    ['[data-local-media-engine-step-title="download"]', new RetryFixtureElement()],
+    ['[data-local-media-engine-step-detail="download"]', new RetryFixtureElement()],
+    ['[data-local-media-engine-step-detail="install"]', new RetryFixtureElement()],
+    ['[data-local-media-engine-step-detail="connect"]', new RetryFixtureElement()],
     ["#local-media-engine-retry", new RetryFixtureElement()],
     ["#local-media-engine-reset", new RetryFixtureElement()],
     ["#local-media-engine-cancel", new RetryFixtureElement()],
@@ -805,6 +834,10 @@ test("첫 LNA 질문은 재다운로드보다 먼저 나오고 내 파일 선택
     ["#local-media-engine-arch-download", new FakeElement()],
     ["#local-media-engine-download-label", new FakeElement()],
     ["#local-media-engine-source-offer", new FakeElement()],
+    ['[data-local-media-engine-step-title="download"]', new FakeElement()],
+    ['[data-local-media-engine-step-detail="download"]', new FakeElement()],
+    ['[data-local-media-engine-step-detail="install"]', new FakeElement()],
+    ['[data-local-media-engine-step-detail="connect"]', new FakeElement()],
     ["#local-media-engine-retry", new FakeElement()],
     ["#local-media-engine-reset", new FakeElement()],
     ["#local-media-engine-cancel", new FakeElement()],

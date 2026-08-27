@@ -1,5 +1,6 @@
 import {
   LOCAL_MEDIA_ENGINE_API_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL,
   LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA as SHARED_LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA,
   LOCAL_MEDIA_ENGINE_PRODUCT,
   LOCAL_MEDIA_ENGINE_VOD_RUNTIME_SCHEMA,
@@ -98,6 +99,10 @@ interface EngineDialogElements {
   readonly archDownload: HTMLAnchorElement;
   readonly downloadLabel: HTMLElement;
   readonly sourceOffer: HTMLAnchorElement;
+  readonly downloadStepTitle: HTMLElement;
+  readonly downloadStepDetail: HTMLElement;
+  readonly installStepDetail: HTMLElement;
+  readonly connectStepDetail: HTMLElement;
   readonly retry: HTMLButtonElement;
   readonly reset: HTMLButtonElement;
   readonly cancel: HTMLButtonElement;
@@ -151,6 +156,18 @@ function dialogElements(): EngineDialogElements {
     ),
     downloadLabel: requiredElement<HTMLElement>("#local-media-engine-download-label"),
     sourceOffer: requiredElement<HTMLAnchorElement>("#local-media-engine-source-offer"),
+    downloadStepTitle: requiredElement<HTMLElement>(
+      '[data-local-media-engine-step-title="download"]'
+    ),
+    downloadStepDetail: requiredElement<HTMLElement>(
+      '[data-local-media-engine-step-detail="download"]'
+    ),
+    installStepDetail: requiredElement<HTMLElement>(
+      '[data-local-media-engine-step-detail="install"]'
+    ),
+    connectStepDetail: requiredElement<HTMLElement>(
+      '[data-local-media-engine-step-detail="connect"]'
+    ),
     retry: requiredElement<HTMLButtonElement>("#local-media-engine-retry"),
     reset: requiredElement<HTMLButtonElement>("#local-media-engine-reset"),
     cancel: requiredElement<HTMLButtonElement>("#local-media-engine-cancel"),
@@ -696,6 +713,72 @@ export async function probeLocalMediaEngine(
   }
 }
 
+/**
+ * Checks only whether the exact loopback endpoint is occupied by a Kirinuki
+ * engine-shaped responder. This never creates trust, stores identity, or
+ * promotes the engine to ready; signed probeLocalMediaEngine remains the sole
+ * readiness boundary.
+ */
+export async function probeLocalMediaEngineReachability(
+  signal?: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs: number = HEALTH_PROBE_TIMEOUT_MS
+): Promise<boolean> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+    throw new TypeError("로컬 영상 준비 도구 확인 제한 시간이 올바르지 않습니다.");
+  }
+  if (signal?.aborted) {
+    throw signal.reason;
+  }
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", forwardAbort, { once: true });
+  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(
+      LOCAL_MEDIA_ENGINE_HEALTH_ENDPOINT,
+      localMediaEngineLoopbackRequestInit({
+        method: "GET",
+        headers: {
+          "X-Kirinuki-Protocol": LOCAL_MEDIA_ENGINE_HEALTH_PROTOCOL
+        },
+        mode: "cors",
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        signal: controller.signal
+      })
+    );
+    const text = await boundedResponseText(response);
+    const payload = JSON.parse(text) as unknown;
+    if (
+      response.status === 403
+      && isRecord(payload)
+      && isRecord(payload.error)
+      && payload.error.code === "HEALTH_PROBE_NOT_ALLOWED"
+    ) {
+      return true;
+    }
+    const engine = isRecord(payload) && isRecord(payload.engine)
+      ? payload.engine
+      : null;
+    return response.status === 200
+      && isRecord(payload)
+      && payload.schema === LOCAL_MEDIA_ENGINE_HEALTH_SCHEMA
+      && payload.status === "ok"
+      && engine?.product === LOCAL_MEDIA_ENGINE_PRODUCT
+      && engine.protocol === LOCAL_MEDIA_ENGINE_API_PROTOCOL;
+  } catch {
+    if (signal?.aborted) {
+      throw signal.reason;
+    }
+    return false;
+  } finally {
+    globalThis.clearTimeout(timeout);
+    signal?.removeEventListener("abort", forwardAbort);
+  }
+}
+
 function normalizedPlatform(value: unknown): string {
   return String(value || "").trim().toLowerCase();
 }
@@ -943,6 +1026,7 @@ export interface LocalMediaEngineReadinessOptions {
     options?: LocalMediaEnginePairingOptions
   ) => Promise<Readonly<LocalMediaEngineDevicePin>>;
   readonly probe?: (signal?: AbortSignal) => Promise<void>;
+  readonly reachabilityProbe?: (signal?: AbortSignal) => Promise<boolean>;
 }
 
 export async function primeLocalMediaEngineTrust({
@@ -986,7 +1070,8 @@ export async function ensureLocalMediaEngineReady(
       localMediaEnginePermissionState()
     ),
     pair = pairLocalMediaEngine,
-    probe = probeLocalMediaEngine
+    probe = probeLocalMediaEngine,
+    reachabilityProbe = probeLocalMediaEngineReachability
   }: LocalMediaEngineReadinessOptions = {}
 ): Promise<LocalMediaEngineOnboardingResult> {
   let pinnedWakeError: LocalMediaEngineConnectionError | null = null;
@@ -1036,6 +1121,7 @@ export async function ensureLocalMediaEngineReady(
   let permissionState = await readPermissionState();
   let initialConnectionError: LocalMediaEngineConnectionError | null =
     pinnedWakeError;
+  let engineReachable = false;
   // If Chrome has not asked yet, explain the one-time local connection before
   // the first request triggers its system prompt. Once permission is granted,
   // every later visit takes the ordinary direct-probe path without Kirinuki
@@ -1054,6 +1140,9 @@ export async function ensureLocalMediaEngineReady(
       }
       initialConnectionError = error;
     }
+  }
+  if (initialConnectionError?.code === "ENGINE_UNPAIRED") {
+    engineReachable = await reachabilityProbe(signal);
   }
   if (activeOnboarding) {
     return activeOnboarding;
@@ -1075,6 +1164,22 @@ export async function ensureLocalMediaEngineReady(
     elements.unsupported.textContent = releaseUnavailable
       ? releaseMessage
       : "현재는 Windows 64비트, Apple Silicon macOS 15 이상, Debian/Ubuntu·Arch Linux 64비트만 지원합니다.";
+    if (target === "windows-x64") {
+      elements.downloadStepTitle.textContent = "Windows 도우미 받기";
+      elements.downloadStepDetail.textContent = "Windows 11 x64용 설치 파일(.exe)을 받습니다.";
+      elements.installStepDetail.textContent = "다운로드한 설치 파일을 실행합니다. 미리보기 빌드에서는 Windows 앱 보호 안내가 표시될 수 있습니다.";
+      elements.connectStepDetail.textContent = "설치가 끝나면 도우미 실행을 확인하고 원래 웹 작업을 이어갑니다.";
+    } else if (target === "linux-x64") {
+      elements.downloadStepTitle.textContent = "Linux 도우미 받기";
+      elements.downloadStepDetail.textContent = "Debian/Ubuntu 또는 Arch Linux x64용 파일을 고릅니다.";
+      elements.installStepDetail.textContent = "패키지를 설치하고 앱 메뉴에서 Kirinuki 도우미를 한 번 실행합니다.";
+      elements.connectStepDetail.textContent = "이 화면으로 돌아와 연결을 다시 확인하면 원래 웹 작업이 이어집니다.";
+    } else {
+      elements.downloadStepTitle.textContent = "내 PC용 도우미 받기";
+      elements.downloadStepDetail.textContent = "지원되는 운영체제용 설치 파일을 확인합니다.";
+      elements.installStepDetail.textContent = "설치 파일을 실행하고 도우미를 한 번 시작합니다.";
+      elements.connectStepDetail.textContent = "도우미 연결이 확인되면 원래 웹 작업을 이어갑니다.";
+    }
     elements.download.hidden = !installer || permissionMustBeResolved;
     if (installer) {
       elements.download.href = installer.url;
@@ -1093,15 +1198,21 @@ export async function ensureLocalMediaEngineReady(
       elements.archDownload.removeAttribute("href");
       elements.archDownload.removeAttribute("download");
     }
-    const sourceOffer = LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL?.status
-      === "verified-linux-preview"
-      ? LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL.sourceOffer
-      : undefined;
+    const sourceOffer = target === "windows-x64"
+      ? LOCAL_MEDIA_ENGINE_WINDOWS_PREVIEW_CHANNEL?.sourceOffer
+      : target === "linux-x64"
+        && LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL?.status === "verified-linux-preview"
+        ? LOCAL_MEDIA_ENGINE_RELEASE_CHANNEL.sourceOffer
+        : undefined;
     elements.sourceOffer.hidden = !sourceOffer;
     if (sourceOffer) {
       elements.sourceOffer.href = sourceOffer.url;
+      elements.sourceOffer.textContent = target === "windows-x64"
+        ? "Windows 미리보기 소스·라이선스 안내"
+        : "Linux 미리보기 소스·라이선스 안내";
     } else {
       elements.sourceOffer.removeAttribute("href");
+      elements.sourceOffer.textContent = "도우미 소스·라이선스 안내";
     }
     elements.retry.className = permissionMustBeResolved
       ? "button primary"
@@ -1114,7 +1225,7 @@ export async function ensureLocalMediaEngineReady(
       : permissionState === "denied"
         ? "권한 설정 후 다시 확인"
         : initialConnectionError?.code === "ENGINE_UNPAIRED"
-          ? "이 PC 연결"
+          ? engineReachable ? "이 PC 연결" : "도우미 실행 후 연결 확인"
           : initialConnectionError?.code === "ENGINE_UNAVAILABLE"
             ? "도우미 깨우고 다시 확인"
             : "설치 완료 · 다시 확인";
@@ -1193,6 +1304,9 @@ export async function ensureLocalMediaEngineReady(
         primedEngineWasHealthy = false;
         if (error instanceof LocalMediaEngineConnectionError) {
           lastConnectionError = error;
+          engineReachable = error.code === "ENGINE_UNPAIRED"
+            ? await reachabilityProbe(signal)
+            : false;
         }
         permissionState = await readPermissionState();
         const permissionStillBlocked = permissionState === "prompt"
@@ -1209,7 +1323,7 @@ export async function ensureLocalMediaEngineReady(
           ? "권한 설정 후 다시 확인"
           : error instanceof LocalMediaEngineConnectionError
             && error.code === "ENGINE_UNPAIRED"
-            ? "이 PC 연결"
+            ? engineReachable ? "이 PC 연결" : "도우미 실행 후 연결 확인"
             : error instanceof LocalMediaEngineConnectionError
               && error.code === "ENGINE_UNAVAILABLE"
               ? "도우미 깨우고 다시 확인"
@@ -1226,10 +1340,23 @@ export async function ensureLocalMediaEngineReady(
               ? error.message
               : error instanceof LocalMediaEngineConnectionError
                 && error.code === "ENGINE_UNPAIRED"
-                ? "도우미 실행을 확인했습니다. ‘이 PC 연결’을 한 번 누르면 이 브라우저 등록과 원래 작업을 이어갑니다."
+                ? engineReachable
+                  ? "도우미 실행을 확인했습니다. ‘이 PC 연결’을 누르면 이 브라우저 등록과 원래 작업을 이어갑니다."
+                  : target === "linux-x64"
+                    ? "도우미가 아직 실행되지 않았습니다. 앱 메뉴에서 Kirinuki 도우미를 한 번 실행한 뒤 연결을 다시 확인해 주세요."
+                    : "도우미가 아직 실행되지 않았습니다. 설치가 끝났다면 Kirinuki 도우미를 한 번 실행한 뒤 연결을 다시 확인해 주세요."
               : releaseUnavailable
                 ? releaseMessage
                 : ENGINE_RECOVERY_MESSAGE;
+        if (
+          target === "linux-x64"
+          && error instanceof LocalMediaEngineConnectionError
+          && error.code === "ENGINE_UNPAIRED"
+        ) {
+          elements.status.textContent += engineReachable
+            ? " 도우미는 실행 중이지만 연결 프로그램이 이어지지 않으면 터미널에서 `xdg-mime default kr.eff0rtchung.kirinuki.desktop x-scheme-handler/kirinuki-engine`를 한 번 실행한 뒤 다시 확인해 주세요."
+            : " 그래도 연결되지 않으면 터미널에서 `xdg-mime query default x-scheme-handler/kirinuki-engine`로 현재 연결 프로그램만 확인해 주세요.";
+        }
         return false;
       } finally {
         elements.retry.disabled = false;
