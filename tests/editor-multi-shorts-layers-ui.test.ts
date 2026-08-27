@@ -21,7 +21,7 @@ test("web은 명시적 쇼츠 작업 선택·이름·생성·복제·안전 삭�
   }
 });
 
-test("본편 재생 순서와 쇼츠 화면 겹침 순서를 각 행의 4방향 버튼으로 노출한다", async () => {
+test("본편 컷 순서는 유지하고 쇼츠 영상은 고정 행과 행별 삭제만 노출한다", async () => {
   const [web, main] = await Promise.all([
     source("web/editor.html"),
     source("src/editor/main.ts")
@@ -29,11 +29,14 @@ test("본편 재생 순서와 쇼츠 화면 겹침 순서를 각 행의 4방향 
   for (const html of [web]) {
     assert.match(html, /본편 컷 재생 순서/u);
     assert.match(html, /data-action="first"[\s\S]*data-action="up"[\s\S]*data-action="down"[\s\S]*data-action="last"/u);
-    assert.match(html, /위쪽 영상일수록[^<]*(?:앞에|화면 앞에) 보/u);
   }
   assert.doesNotMatch(web, /move-short-video-layer-front|move-short-video-layer-forward|move-short-video-layer-backward|move-short-video-layer-back/u);
-  assert.match(main, /dataset\.shortLayerOrder = action/u);
-  assert.match(main, /"front" \| "forward" \| "backward" \| "back"/u);
+  assert.doesNotMatch(main, /dataset\.shortLayerOrder = action/u);
+  assert.doesNotMatch(main, /"front" \| "forward" \| "backward" \| "back"/u);
+  assert.match(main, /deleteButton\.dataset\.shortLayerDelete = "true"/u);
+  assert.match(main, /deleteButton\.dataset\.layerId = layer\.id/u);
+  assert.match(main, /item\.append\(button, deleteButton\)/u);
+  assert.match(main, /function deleteShortVideoLayer\(layerId: string\): boolean/u);
   assert.match(main, /reorderClip\(project, clip\.id, targetIndex\)/u);
   assert.match(main, /`\$\{index \+ 1\}번 컷 \$\{clipTitle\}, \$\{actionLabel\}`/u);
   assert.match(main, /control\.setAttribute\("aria-label", label\)[\s\S]*control\.title = label/u);

@@ -89,6 +89,11 @@ test("빈 구간 추가와 T 확정은 값이 들어간 행만 처리한다", as
     /const populatedRows = clipRows\(\)\.filter[\s\S]*startInput\.value\.trim\(\)[\s\S]*const segments = populatedRows\.map/u
   );
   assert.match(source, /function finalizeCurrentDraftRow[\s\S]*validateStudioSelectionRange/u);
+  assert.match(
+    source,
+    /function finalizeCurrentDraftRow[\s\S]*addClipRow\(\);[\s\S]*elements\.captureStart\.focus\(\{ preventScroll: true \}\)/u,
+    "T 확정 뒤 다음 단축키가 시간 입력란에 문자로 들어가면 안 됩니다."
+  );
   assert.match(source, /case "save-segment":[\s\S]*finalizeCurrentDraftRow\(\)/u);
 });
 

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-test("installed desktop main은 headless 엔진과 격리된 Electron 컷 창만 함께 갖는다", async () => {
+test("installed desktop main은 평상시 windowless이고 컷 창은 native smoke에서만 연다", async () => {
   const [main, supervisor, packageFiles, packageScript] = await Promise.all([
     readFile(path.join(root, "src/desktop/main.ts"), "utf8"),
     readFile(path.join(root, "src/desktop/runtime-supervisor.ts"), "utf8"),
@@ -16,6 +16,11 @@ test("installed desktop main은 headless 엔진과 격리된 Electron 컷 창만
   assert.match(main, /BrowserWindow/u);
   assert.match(main, /CUT_WINDOW_URL/u);
   assert.match(main, /CUT_WINDOW_PLAYER_ACTION_CHANNEL/u);
+  assert.match(main, /if \(nativeSmoke\) \{\s*installCutWindowIpcHandler/u);
+  assert.match(main, /if \(nativeSmoke && cutWindowRequested\) \{\s*await openCutWindow/u);
+  assert.match(main, /app\.on\("activate", \(\) => \{\s*\/\/ The installed product is a windowless media engine/u);
+  assert.match(main, /app\.on\("window-all-closed", \(\) => \{/u);
+  assert.match(main, /else if \(nativeSmoke && launchCommand\?\.kind === "cut"\) \{\s*requestCutWindow/u);
   assert.match(packageFiles, /preload\.cjs/u);
   for (const source of [main, supervisor, packageFiles, packageScript]) {
     assert.doesNotMatch(source, /chrome-extension:\/\/|Player Bridge/u);

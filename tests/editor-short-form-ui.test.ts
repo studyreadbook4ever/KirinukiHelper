@@ -232,7 +232,6 @@ test("쇼츠 영상 에셋은 화면·원본 음성을 한 단위로 추가·선
     "short-video-layer-volume",
     "short-video-layer-volume-value",
     "toggle-short-video-layer-visibility",
-    "delete-short-video-layer",
     "short-preview-cache-status",
     "retry-short-preview-cache",
     "short-source-layer-intent"
@@ -241,7 +240,7 @@ test("쇼츠 영상 에셋은 화면·원본 음성을 한 단위로 추가·선
   }
   assert.match(
     html,
-    /위쪽 영상일수록 화면 앞에 보입니다\.[\s\S]*각 영상 행의 버튼으로 순서를 바꿀 수 있습니다/u
+    /영상을 선택하면 아래에서 구간·표시·불투명도·소리를 편집할 수 있습니다/u
   );
   assert.match(
     html,
@@ -254,6 +253,7 @@ test("쇼츠 영상 에셋은 화면·원본 음성을 한 단위로 추가·선
   assert.match(html, /원본 음량은 100%입니다\.[\s\S]*100%를 넘기면 큰 소리가 찌그러질 수 있습니다/u);
   assert.doesNotMatch(html, /A\/V 영상|A\/V 에셋/u);
   assert.doesNotMatch(html, /id="add-selected-video-source-audio"/u);
+  assert.doesNotMatch(html, /id="delete-short-video-layer"/u);
   assert.doesNotMatch(html, /원본 음성 에셋 추가/u);
   assert.match(html, /현재 쇼츠 화면이 비어 있습니다[\s\S]*‘영상 추가’/u);
   assert.match(html, /id="short-preview-cache-status"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/u);
@@ -297,12 +297,12 @@ test("쇼츠 영상 에셋은 화면·원본 음성을 한 단위로 추가·선
   const update = sectionFrom(
     source,
     "function replaceShortWorkspaceFraming(",
-    "function deleteSelectedShortVideoLayer("
+    "function deleteShortVideoLayer("
   );
   const remove = sectionFrom(
     source,
-    "function deleteSelectedShortVideoLayer()",
-    "function moveShortVideoLayer("
+    "function deleteShortVideoLayer(",
+    "function exactShortWorkspaceGeometry("
   );
   const bindings = sectionFrom(source, "function bindActions()", "async function initialize()");
 
@@ -312,6 +312,11 @@ test("쇼츠 영상 에셋은 화면·원본 음성을 한 단위로 추가·선
   assert.match(addFlow, /shortSourcePickerReturnState = \{[\s\S]*workspaceProject: cloneProject\(project\)[\s\S]*rootProject: cloneProject\(rootProject\)/u);
   assert.match(addFlow, /await exitShortFormWorkspace\(\{[\s\S]*render: false,[\s\S]*announce: false,[\s\S]*updateUrl: false[\s\S]*\}\)[\s\S]*startShortSourceComposer\(\)/u);
   assert.match(commit, /const videoAssetTargetTimelineMs = pendingShortVideoAssetTimelineMs/u);
+  assert.match(
+    commit,
+    /saveActiveShortFormWorkspace\([\s\S]*project\.shortFormWorkspaces,[\s\S]*project\.shortForm,[\s\S]*shortForm,[\s\S]*project\.clips[\s\S]*shortFormWorkspaces,/u,
+    "본편에서 추가한 영상은 활성 쇼츠 workspace snapshot에도 같은 transaction으로 저장돼야 합니다."
+  );
   assert.match(appendVideos, /addShortFormVideoAsset\(shortForm, \{/u);
   assert.match(appendVideos, /sourceAssetId: "project-primary"/u);
   assert.match(appendVideos, /sourceSelectionStartMs: selectionStartMs,[\s\S]*sourceSelectionEndMs: selectionEndMs,/u);
@@ -348,7 +353,10 @@ test("쇼츠 영상 에셋은 화면·원본 음성을 한 단위로 추가·선
   assert.match(layerPanel, /short_video_layer_volume\.disabled = controlsDisabled/u);
   assert.match(layerPanel, /selectedLayer\?\.audioGain \?\? 1/u);
   assert.match(layerPanel, /short_video_layer_volume_value\.textContent/u);
-  assert.match(layerPanel, /elements\.delete_short_video_layer\.disabled = controlsDisabled/u);
+  assert.match(layerPanel, /deleteButton\.dataset\.shortLayerDelete = "true"/u);
+  assert.match(layerPanel, /deleteButton\.dataset\.layerId = layer\.id/u);
+  assert.match(layerPanel, /deleteButton\.disabled = editBlocked/u);
+  assert.doesNotMatch(layerPanel, /data-short-layer-order|shortLayerOrder/u);
   assert.match(
     layerPanel,
     /focusedLayerId[\s\S]*CSS\.escape\(focusedLayerId\)[\s\S]*focus\(\{ preventScroll: true \}\)/u,
@@ -367,12 +375,12 @@ test("쇼츠 영상 에셋은 화면·원본 음성을 한 단위로 추가·선
 
   assert.match(update, /updateShortFormVideoAsset\([\s\S]*project\.shortForm,[\s\S]*selected\.id/u);
   assert.match(update, /shortTimelineSourceEditsBlocked\(\)[\s\S]*reportBlockedShortTimelineSourceEdit\(\)/u);
-  assert.match(remove, /removeShortFormVideoAsset\([\s\S]*project\.shortForm,[\s\S]*selected\.id/u);
+  assert.match(remove, /removeShortFormVideoAsset\([\s\S]*project\.shortForm,[\s\S]*layerId/u);
   assert.match(remove, /shortTimelineSourceEditsBlocked\(\)[\s\S]*reportBlockedShortTimelineSourceEdit\(\)/u);
   assert.match(remove, /마지막 영상도 삭제했습니다\. 빈 쇼츠 화면과 사진·자막·음성은 그대로 유지됩니다/u);
   assert.doesNotMatch(remove, /removeShortFormClip|scene|base/u);
-  assert.match(source, /reorderShortFormVideoAssets\(/u);
-  assert.match(bindings, /delete_short_video_layer\.addEventListener\([\s\S]*"click",[\s\S]*deleteSelectedShortVideoLayer/u);
+  assert.doesNotMatch(source, /function moveShortVideoLayer\(/u);
+  assert.match(bindings, /\[data-short-layer-delete\]\[data-layer-id\][\s\S]*deleteShortVideoLayer\(deleteButton\.dataset\.layerId\)[\s\S]*return/u);
   assert.match(
     bindings,
     /short_video_layer_list\.addEventListener\("keydown"[\s\S]*\["ArrowUp", "ArrowDown", "Home", "End"\][\s\S]*filter\(\(candidate\) => !candidate\.disabled\)[\s\S]*event\.key === "Home"[\s\S]*event\.key === "End"[\s\S]*event\.key === "ArrowUp"[\s\S]*selectShortWorkspaceVideoLayer\(layerId\)[\s\S]*CSS\.escape\(layerId\)[\s\S]*focus\(\{ preventScroll: true \}\)/u,
@@ -1059,7 +1067,6 @@ test("모든 v7 영상 에셋은 같은 픽셀 inspector·8방향 overlay를 쓰
     "short-workspace-safe-area",
     "reset-short-workspace-framing",
     "copy-short-workspace-framing",
-    "delete-short-video-layer"
   ]) {
     assert.match(inspector, new RegExp(`id="${id}"`, "u"));
   }
@@ -1139,7 +1146,7 @@ test("모든 v7 영상 에셋은 같은 픽셀 inspector·8방향 overlay를 쓰
   assert.match(bindings, /short_workspace_transform_layer\.addEventListener\([\s\S]*"pointerdown",[\s\S]*beginShortWorkspaceTransformGesture/u);
   assert.match(bindings, /short_workspace_transform_layer\.addEventListener\([\s\S]*"keydown",[\s\S]*nudgeShortWorkspaceTransformFromKeyboard/u);
   assert.doesNotMatch(bindings, /short_workspace_preview\.addEventListener\("pointerdown"/u);
-  assert.match(bindings, /delete_short_video_layer\.addEventListener\([\s\S]*deleteSelectedShortVideoLayer/u);
+  assert.match(bindings, /data-short-layer-delete[\s\S]*deleteShortVideoLayer/u);
   assert.doesNotMatch(bindings, /delete_short_workspace_clip/u);
   assert.match(bindings, /reset_short_workspace_framing\.addEventListener\([\s\S]*destinationRect: defaultShortDestinationRect/u);
   assert.match(bindings, /copy_short_workspace_framing\.addEventListener\([\s\S]*destinationRect: geometry\.destinationRect[\s\S]*\{ all: true \}/u);

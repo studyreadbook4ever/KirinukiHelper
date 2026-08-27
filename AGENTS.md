@@ -271,7 +271,7 @@ AudSeg 기준 구현은 `AudSeg/src/audseg/`, 브라우저 포트는
 - occurrence별 trim, split, merge, reorder, delete와 undo를 지원한다.
 - 영상 레이어별 source clock, scene-local range, crop, 위치, 크기, 불투명도,
   표시 여부와 z-order를 보존한다.
-- 영상·이미지 레이어의 위·아래 관계는 버튼으로 조작할 수 있어야 한다.
+- 영상 목록 기본 행에서는 수동 z-order 조작을 제공하지 않고 기존 z-index·paint/export 순서를 보존한다. 이미지 레이어의 순서 조작은 기존 계약을 유지한다.
 - 이미지·추가 음성·자막은 workspace에 명시적으로 추가하며 다른 workspace에서
   조용히 공유하거나 복사하지 않는다.
 - 내보내기 전에 사용자가 결과 파일 제목과 폴더를 정한다.

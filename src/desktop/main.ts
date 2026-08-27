@@ -62,6 +62,7 @@ import {
 } from "./instance-lifecycle.js";
 import {
   ensureDesktopProtocolRegistration,
+  ensureLinuxProtocolAssociation,
   removeDesktopProtocolRegistration
 } from "./protocol-registration.js";
 import {
@@ -291,15 +292,6 @@ function launchCommandFromArgv(
     logEvent("engine-launch-url-rejected", error);
     return null;
   }
-}
-
-function argvContainsEngineUrl(argv: readonly unknown[]): boolean {
-  return argv.some((value) => (
-    typeof value === "string"
-    && new RegExp(`^${LOCAL_MEDIA_ENGINE_PAIRING_SCHEME}:`, "iu").test(
-      value.trim()
-    )
-  ));
 }
 
 function drainPairingRequests(): void {
@@ -1676,7 +1668,9 @@ app.on("open-url", (event, url) => {
     const command = parseLocalMediaEngineLaunchCommand(url);
     if (command.kind === "pair") {
       enqueuePairingRequest(command.pairingRequest);
-    } else {
+    } else if (nativeSmoke) {
+      // The legacy cut window is retained only for isolated security smoke.
+      // Production helper activation is always a windowless ensure-running.
       requestCutWindow();
     }
   } catch (error) {
@@ -1685,7 +1679,12 @@ app.on("open-url", (event, url) => {
 });
 
 app.on("activate", () => {
-  requestCutWindow();
+  // The installed product is a windowless media engine. OS activation and
+  // Start Menu launches only ensure that the existing primary remains alive.
+});
+
+app.on("window-all-closed", () => {
+  // A test-only BrowserWindow failure must never own the engine lifetime.
 });
 
 runtimePaths = desktopPaths(nativeSmoke);
@@ -1700,16 +1699,9 @@ const initialPairingRequest = initialLaunchCommand?.kind === "pair"
   ? initialLaunchCommand.pairingRequest
   : null;
 cutWindowRequested = Boolean(
-  !nativeSmoke
+  nativeSmoke
   && !initialOwnedUninstallRequest
-  && (
-    initialLaunchCommand?.kind === "cut"
-    || (
-      !initialLaunchCommand
-      && !argvContainsEngineUrl(process.argv)
-      && !process.argv.includes(ENGINE_BACKGROUND_ARGUMENT)
-    )
-  )
+  && initialLaunchCommand?.kind === "cut"
 );
 const instanceIdentity = engineInstanceIdentity({
   platform: process.platform,
@@ -1729,7 +1721,9 @@ if (!primaryInstance) {
     app.exit(0);
   }
 } else {
-  installCutWindowIpcHandler();
+  if (nativeSmoke) {
+    installCutWindowIpcHandler();
+  }
   cleanupOwnedInstallation = initialOwnedUninstallRequest;
   if (initialPairingRequest) {
     enqueuePairingRequest(initialPairingRequest);
@@ -1769,18 +1763,8 @@ if (!primaryInstance) {
         );
       if (pairingRequest) {
         enqueuePairingRequest(pairingRequest);
-      } else {
-        if (
-          launchCommand?.kind === "cut"
-          || (
-            !nativeSmoke
-            && !launchCommand
-            && !argvContainsEngineUrl(argv)
-            && !argv.includes(ENGINE_BACKGROUND_ARGUMENT)
-          )
-        ) {
-          requestCutWindow();
-        }
+      } else if (nativeSmoke && launchCommand?.kind === "cut") {
+        requestCutWindow();
       }
       return;
     }
@@ -1805,11 +1789,22 @@ if (!primaryInstance) {
       return;
     }
     if (app.isPackaged) {
-      ensureDesktopProtocolRegistration({
-        application: app,
-        scheme: LOCAL_MEDIA_ENGINE_PAIRING_SCHEME,
-        isolatedSmoke: nativeSmoke?.autostartMode === "isolated"
-      });
+      if (process.platform === "linux" && !nativeSmoke) {
+        try {
+          await ensureLinuxProtocolAssociation();
+        } catch (error) {
+          // A foreign user-owned association is never overwritten
+          // automatically. Keep the windowless engine available so the web
+          // can present the explicit Linux recovery guidance.
+          logEvent("linux-protocol-association-needs-user-action", error);
+        }
+      } else {
+        ensureDesktopProtocolRegistration({
+          application: app,
+          scheme: LOCAL_MEDIA_ENGINE_PAIRING_SCHEME,
+          isolatedSmoke: nativeSmoke?.autostartMode === "isolated"
+        });
+      }
     }
     const appRoot = app.isPackaged
       ? app.getAppPath()
@@ -1836,7 +1831,7 @@ if (!primaryInstance) {
       nodeBinary: process.execPath
     });
     runtime = startedRuntime;
-    if (cutWindowRequested) {
+    if (nativeSmoke && cutWindowRequested) {
       await openCutWindow();
     }
     if (app.isPackaged) {

@@ -39,6 +39,10 @@ import {
 import {
   currentClientCannotUseEditor
 } from "../lib/editor-mobile-access.js";
+import {
+  cutPreparationRecoveryKind,
+  safeCutPreparationErrorCode
+} from "./cut-preparation-recovery.js";
 
 import {
   deleteAllProjectSessionsAtomically,
@@ -242,6 +246,21 @@ const elements = {
   ),
   cutPreparationMeter: requiredElement<HTMLProgressElement>(
     "#cut-preparation-meter"
+  ),
+  cutPreparationRecovery: requiredElement<HTMLElement>(
+    "#cut-preparation-recovery"
+  ),
+  cutPreparationErrorCode: requiredElement<HTMLElement>(
+    "#cut-preparation-error-code"
+  ),
+  cutPreparationRetry: requiredElement<HTMLButtonElement>(
+    "#cut-preparation-retry"
+  ),
+  cutPreparationDownload: requiredElement<HTMLButtonElement>(
+    "#cut-preparation-download"
+  ),
+  cutPreparationManual: requiredElement<HTMLButtonElement>(
+    "#cut-preparation-manual"
   ),
   streamCurrentTime: requiredElement<HTMLOutputElement>(
     "#stream-current-time"
@@ -486,7 +505,10 @@ function showCutPreparation(
   progress: number
 ): void {
   const value = Math.max(0, Math.min(1, Number(progress) || 0));
+  latestCutPreparationStage = stage;
   elements.cutPreparationProgress.hidden = false;
+  delete elements.cutPreparationProgress.dataset.state;
+  elements.cutPreparationRecovery.hidden = true;
   elements.cutPreparationStage.textContent = stage;
   elements.cutPreparationMeter.value = value;
   elements.cutPreparationPercent.textContent = `${Math.round(value * 100)}%`;
@@ -496,6 +518,34 @@ function hideCutPreparation(): void {
   elements.cutPreparationProgress.hidden = true;
   elements.cutPreparationMeter.value = 0;
   elements.cutPreparationPercent.textContent = "0%";
+  delete elements.cutPreparationProgress.dataset.state;
+  elements.cutPreparationRecovery.hidden = true;
+}
+
+let latestCutPreparationStage = "영상 준비";
+let forceManualFileForNextPreparation = false;
+
+function showCutPreparationFailure(error: unknown): void {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    elements.cutPreparationProgress.dataset.state = "cancelled";
+    elements.cutPreparationStage.textContent = "선택한 구간 준비를 취소했습니다";
+    elements.cutPreparationRecovery.hidden = true;
+    setStatus("영상 준비를 취소했습니다. 컷 선택 내용은 그대로 유지됩니다.", "idle");
+    return;
+  }
+  const code = safeCutPreparationErrorCode(error);
+  const recovery = cutPreparationRecoveryKind(code);
+  elements.cutPreparationProgress.dataset.state = "error";
+  elements.cutPreparationStage.textContent = `${latestCutPreparationStage} 단계에서 멈췄습니다`;
+  elements.cutPreparationErrorCode.textContent = code;
+  elements.cutPreparationRecovery.hidden = false;
+  elements.cutPreparationRetry.textContent = recovery === "reconnect"
+    ? "도우미 연결 다시 확인"
+    : recovery === "source"
+      ? "원본 다시 확인하고 재시도"
+      : "다시 시도";
+  elements.cutPreparationDownload.hidden = !["update", "source"].includes(recovery);
+  elements.cutPreparationManual.hidden = recovery === "reconnect";
 }
 
 function replaceStreamFrame(): void {
@@ -1197,6 +1247,15 @@ async function prepareSelectedVodForEditor(
   projectId: string,
   captureSeed: CaptureState
 ): Promise<boolean> {
+  if (forceManualFileForNextPreparation) {
+    forceManualFileForNextPreparation = false;
+    hideCutPreparation();
+    setStatus(
+      "내 파일로 계속합니다. 편집기에서 ‘내 파일 직접 연결’을 선택해 주세요.",
+      "idle"
+    );
+    return false;
+  }
   showCutPreparation("이 PC의 영상 준비 도우미를 확인하고 있습니다", 0.01);
   const readiness = await ensureLocalMediaEngineReady();
   if (readiness === "manual-file") {
@@ -2250,8 +2309,12 @@ function finalizeCurrentDraftRow(): void {
   }
   row.classList.add("finalized");
   row.dataset.finalized = "true";
-  const next = addClipRow();
-  requiredInputWithin(next, '[data-field="start"]').focus();
+  addClipRow();
+  // Keep global capture shortcuts out of the newly-created text inputs. The
+  // next row remains active, while focus returns to a non-editable control so
+  // an immediate E/F/R/T sequence is interpreted as shortcuts rather than
+  // literal text.
+  elements.captureStart.focus({ preventScroll: true });
   elements.streamCutStatus.textContent =
     "구간을 확정하고 다음 빈 구간을 열었습니다.";
 }
@@ -2632,8 +2695,7 @@ elements.form.addEventListener("submit", (event) => {
     } catch (error) {
       setStatus(errorMessage(error), "error");
       if (!elements.cutPreparationProgress.hidden) {
-        elements.cutPreparationStage.textContent =
-          "선택한 구간 준비를 완료하지 못했습니다";
+        showCutPreparationFailure(error);
       }
       if (!allAcknowledgementsChecked()) {
         focusFirstMissingAcknowledgement();
@@ -2642,6 +2704,22 @@ elements.form.addEventListener("submit", (event) => {
       renderEditorEntryAvailability();
     }
   })();
+});
+
+elements.cutPreparationRetry.addEventListener("click", () => {
+  elements.cutPreparationRecovery.hidden = true;
+  elements.startEditor.click();
+});
+elements.cutPreparationDownload.addEventListener("click", () => {
+  const download = !elements.archHelperDownload.hidden
+    ? elements.archHelperDownload
+    : elements.helperDownload;
+  download.click();
+});
+elements.cutPreparationManual.addEventListener("click", () => {
+  forceManualFileForNextPreparation = true;
+  elements.cutPreparationRecovery.hidden = true;
+  elements.startEditor.click();
 });
 
 renderMobileEditorAccess();
