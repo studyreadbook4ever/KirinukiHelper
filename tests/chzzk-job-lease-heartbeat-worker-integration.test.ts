@@ -18,6 +18,7 @@ import {
 const JOB_LEASE_DATABASE_FILENAME = ".materializing-lock.sqlite3";
 const JOB_LEASE_SCHEMA_ID = "chzzk-kirinuki/chzzk-vod-job-lease-v3";
 const MAX_SAFE_JOB_LEASE_SIDECAR_BYTES = 1024 * 1024;
+const PREFILLED_WAL_TEST_LEASE_MS = 10_000;
 
 type SqliteValue = string | number | bigint | null | Uint8Array;
 
@@ -144,7 +145,7 @@ async function prefillWalBehindPinnedReader(
     writer.exec(`
       PRAGMA busy_timeout = 2000;
       PRAGMA journal_mode = WAL;
-      PRAGMA synchronous = FULL;
+      PRAGMA synchronous = NORMAL;
       PRAGMA wal_autocheckpoint = ${CHZZK_JOB_LEASE_WAL_AUTOCHECKPOINT_PAGES};
       PRAGMA journal_size_limit = ${CHZZK_JOB_LEASE_JOURNAL_SIZE_LIMIT_BYTES};
     `);
@@ -306,6 +307,11 @@ function launchHeartbeatWorker(
       if (waiter.type === type) {
         waiters.delete(waiter);
         waiter.resolve();
+      } else if (type === "failure") {
+        waiters.delete(waiter);
+        waiter.reject(new Error(
+          `Heartbeat worker failed before the expected ${waiter.type} message.`
+        ));
       }
     }
   });
@@ -538,7 +544,11 @@ test("pinned reader가 WAL checkpoint를 굶기면 hard limit 전에 fail-closed
   try {
     prefilled = await prefillWalBehindPinnedReader(fixture);
     prefilled.writer.close();
-    const probe = launchHeartbeatWorker(fixture);
+    const probe = launchHeartbeatWorker(fixture, {
+      // WAL setup is intentionally outside the worker. Keep its duration from
+      // consuming the compressed lease used by this integration fixture.
+      leaseMs: PREFILLED_WAL_TEST_LEASE_MS
+    });
     worker = probe.worker;
 
     await probe.waitForMessage("failure", 3_000);
@@ -591,7 +601,10 @@ test("완료된 PASSIVE checkpoint의 큰 물리 WAL은 다음 heartbeat에서 �
       "fixture must retain a physically large checkpointed WAL"
     );
 
-    const probe = launchHeartbeatWorker(fixture);
+    const probe = launchHeartbeatWorker(fixture, {
+      // This test exercises a completed checkpoint, not initial lease expiry.
+      leaseMs: PREFILLED_WAL_TEST_LEASE_MS
+    });
     worker = probe.worker;
     await probe.waitForMessage("ready", 3_000);
     assert(await waitForRevision(fixture.databasePath, 2) >= 2);
