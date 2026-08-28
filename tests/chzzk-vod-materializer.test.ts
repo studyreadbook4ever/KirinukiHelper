@@ -2189,25 +2189,45 @@ test("죽은 PID가 남긴 SQLite job lease는 cache checkpoint를 보존한 채
   }
 });
 
-test("start marker 없는 macOS/Windows식 live PID lease도 monotonic heartbeat가 stale이면 회수한다", async () => {
+test("start marker 없는 macOS/Windows식 live PID lease도 monotonic heartbeat가 stale이면 회수한다", async (context) => {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-reused-pid-lease-"));
+  let restoreBootClock = (): void => undefined;
   try {
     const fixture = await prepareJobLeaseFixture(stateDir, "reused-pid-lease");
+    const simulatedBootClockMs = 200_000;
     replaceJobLeaseRow(fixture.databasePath, {
       ownerId: "b".repeat(48),
       pid: process.pid,
-      heartbeatAtBootMs: Math.max(0, Math.floor(os.uptime() * 1_000) - 120_000)
+      heartbeatAtBootMs: simulatedBootClockMs - 120_000
     });
+    const uptimeMock = context.mock.method(
+      os,
+      "uptime",
+      () => simulatedBootClockMs / 1_000
+    );
+    let bootClockRestored = false;
+    restoreBootClock = (): void => {
+      if (bootClockRestored) {
+        return;
+      }
+      bootClockRestored = true;
+      uptimeMock.mock.restore();
+    };
     const resumedHarness = createHarness({ keyframeSegments: new Set([2]) });
     const resumed = await materializeChzzkVod(fixture.request, {
       fetchImpl: resumedHarness.fetchImpl,
       runProcess: resumedHarness.runProcess,
-      sleep: async () => undefined
+      sleep: async () => undefined,
+      // Restore the real boot clock after classifying the seeded row but before
+      // the replacement owner starts its real heartbeat worker.
+      beforeStaleJobLeaseCompareAndSwap: async () => restoreBootClock()
     });
+    assert.equal(bootClockRestored, true);
     assert.equal(resumed.reused, false);
     assert.deepEqual(resumedHarness.calls.segments, []);
     assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
   } finally {
+    restoreBootClock();
     await rm(stateDir, { recursive: true, force: true });
   }
 });
