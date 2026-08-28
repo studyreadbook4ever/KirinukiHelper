@@ -37,6 +37,10 @@ import {
   runMaterializerProcess,
   sleepWithMaterializerAbort
 } from "../scripts/chzzk-vod-materializer.js";
+import {
+  CHZZK_JOB_LEASE_WAL_COMMIT_MARGIN_BYTES,
+  CHZZK_JOB_LEASE_WAL_SOFT_LIMIT_BYTES
+} from "../scripts/chzzk-job-lease-heartbeat-worker-source.js";
 import type {
   ChzzkVodMaterializerDependencies,
   ProcessResult,
@@ -2192,7 +2196,7 @@ test("start marker 없는 macOS/Windows식 live PID lease도 monotonic heartbeat
     replaceJobLeaseRow(fixture.databasePath, {
       ownerId: "b".repeat(48),
       pid: process.pid,
-      heartbeatAtBootMs: Math.max(0, Math.floor(os.uptime() * 1_000) - 60_000)
+      heartbeatAtBootMs: Math.max(0, Math.floor(os.uptime() * 1_000) - 120_000)
     });
     const resumedHarness = createHarness({ keyframeSegments: new Set([2]) });
     const resumed = await materializeChzzkVod(fixture.request, {
@@ -2203,6 +2207,33 @@ test("start marker 없는 macOS/Windows식 live PID lease도 monotonic heartbeat
     assert.equal(resumed.reused, false);
     assert.deepEqual(resumedHarness.calls.segments, []);
     assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("60초 지연된 live PID heartbeat는 90초 HDD lease 안에서 활성으로 유지한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-hdd-lease-window-"));
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "hdd-lease-window");
+    replaceJobLeaseRow(fixture.databasePath, {
+      ownerId: "9".repeat(48),
+      pid: process.pid,
+      heartbeatAtBootMs: Math.max(0, Math.floor(os.uptime() * 1_000) - 60_000)
+    });
+    const blockedHarness = createHarness({ keyframeSegments: new Set([2]) });
+    await assert.rejects(
+      materializeChzzkVod(fixture.request, {
+        fetchImpl: blockedHarness.fetchImpl,
+        runProcess: blockedHarness.runProcess,
+        sleep: async () => undefined
+      }),
+      (error: unknown) => (
+        error instanceof ChzzkVodMaterializationError
+        && error.code === "ALREADY_RUNNING"
+      )
+    );
+    assert.equal(readJobLeaseRow(fixture.databasePath)?.ownerId, "9".repeat(48));
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
@@ -2504,6 +2535,110 @@ test("job lease DB symlink는 SQLite open 전에 fail-closed한다", {
     ));
     assert.equal(await readFile(outside, "utf8"), "must remain unchanged\n");
   } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("4096-byte page 계약과 다른 job lease DB는 WAL heartbeat 전에 fail-closed한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-lease-page-size-"));
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "lease-page-size");
+    withJobLeaseDatabase(fixture.databasePath, (database) => {
+      database.exec(`
+        PRAGMA journal_mode = DELETE;
+        PRAGMA page_size = 65536;
+        VACUUM;
+      `);
+      const pageSize = database.prepare("PRAGMA page_size").get() as {
+        page_size?: unknown;
+      };
+      assert.equal(pageSize.page_size, 65_536);
+    });
+
+    const harness = createHarness({ keyframeSegments: new Set([2]) });
+    await assert.rejects(materializeChzzkVod(fixture.request, {
+      fetchImpl: harness.fetchImpl,
+      runProcess: harness.runProcess,
+      sleep: async () => undefined
+    }), (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "LOCK_FAILED"
+    ));
+    assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
+    withJobLeaseDatabase(fixture.databasePath, (database) => {
+      const pageSize = database.prepare("PRAGMA page_size").get() as {
+        page_size?: unknown;
+      };
+      assert.equal(pageSize.page_size, 65_536);
+    });
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("첫 worker heartbeat가 실패하면 방금 획득한 owner row를 즉시 정리한다", {
+  timeout: 8_000
+}, async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-worker-startup-"));
+  let reader: TestSqliteDatabase | undefined;
+  let writer: TestSqliteDatabase | undefined;
+  try {
+    const fixture = await prepareJobLeaseFixture(stateDir, "worker-startup");
+    const sqlite = testRequireNodeBuiltin("node:sqlite") as TestNodeSqlite;
+    reader = new sqlite.DatabaseSync(fixture.databasePath);
+    writer = new sqlite.DatabaseSync(fixture.databasePath);
+    reader.exec("PRAGMA journal_mode = WAL; BEGIN;");
+    reader.prepare(`
+      SELECT COUNT(*) AS count
+      FROM materialization_job_lease
+    `).get();
+    writer.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+      PRAGMA wal_autocheckpoint = 32;
+    `);
+
+    const walPath = `${fixture.databasePath}-wal`;
+    let walBytes = 0;
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      writer.exec(`PRAGMA user_version = ${attempt % 2};`);
+      if (attempt % 8 !== 0) {
+        continue;
+      }
+      walBytes = (await stat(walPath)).size;
+      if (walBytes > CHZZK_JOB_LEASE_WAL_SOFT_LIMIT_BYTES + 32 * 1_024) {
+        break;
+      }
+    }
+    assert(walBytes > CHZZK_JOB_LEASE_WAL_SOFT_LIMIT_BYTES);
+    assert(
+      walBytes < 1024 * 1024 - CHZZK_JOB_LEASE_WAL_COMMIT_MARGIN_BYTES
+    );
+    writer.close();
+    writer = undefined;
+
+    const harness = createHarness({ keyframeSegments: new Set([2]) });
+    await assert.rejects(materializeChzzkVod(fixture.request, {
+      fetchImpl: harness.fetchImpl,
+      runProcess: harness.runProcess,
+      sleep: async () => undefined
+    }), (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "LOCK_FAILED"
+    ));
+
+    reader.exec("ROLLBACK;");
+    reader.close();
+    reader = undefined;
+    assert.equal(readJobLeaseRow(fixture.databasePath), undefined);
+  } finally {
+    try {
+      reader?.exec("ROLLBACK;");
+    } catch {
+      // The pinned reader may already have been released.
+    }
+    reader?.close();
+    writer?.close();
     await rm(stateDir, { recursive: true, force: true });
   }
 });

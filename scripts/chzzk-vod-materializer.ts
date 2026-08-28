@@ -56,7 +56,12 @@ import {
   terminatePosixProcessGroup
 } from "./process-tree-termination.js";
 import {
-  CHZZK_JOB_LEASE_HEARTBEAT_WORKER_SOURCE
+  CHZZK_JOB_LEASE_HEARTBEAT_WORKER_SOURCE,
+  CHZZK_JOB_LEASE_JOURNAL_SIZE_LIMIT_BYTES,
+  CHZZK_JOB_LEASE_SQLITE_PAGE_BYTES,
+  CHZZK_JOB_LEASE_WAL_AUTOCHECKPOINT_PAGES,
+  CHZZK_JOB_LEASE_WAL_COMMIT_MARGIN_BYTES,
+  CHZZK_JOB_LEASE_WAL_SOFT_LIMIT_BYTES
 } from "./chzzk-job-lease-heartbeat-worker-source.js";
 
 export const LEGACY_CHZZK_VOD_MATERIALIZATION_SCHEMA_ID =
@@ -86,7 +91,7 @@ const CHZZK_JOB_LEASE_SCHEMA_ID = "chzzk-kirinuki/chzzk-vod-job-lease-v3";
 const CHZZK_JOB_LEASE_DATABASE_FILENAME = ".materializing-lock.sqlite3";
 const CHZZK_STORAGE_GENERATION = "v3";
 const CHZZK_JOB_LOCK_HEARTBEAT_INTERVAL_MS = 5_000;
-const CHZZK_JOB_LOCK_LEASE_MS = 30_000;
+const CHZZK_JOB_LOCK_LEASE_MS = 90_000;
 const CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS = 5_000;
 const CHZZK_PUBLIC_ORIGIN = `https://${CHZZK_PAGE_HOST}`;
 const CHZZK_PUBLIC_USER_AGENT =
@@ -3544,6 +3549,31 @@ const JOB_LEASE_TABLE_SQL = `CREATE TABLE materialization_job_lease (
   process_start_marker TEXT
 ) STRICT`;
 
+function assertJobLeaseSqliteConfiguration(
+  database: JobLeaseSqliteDatabase
+): void {
+  const expectedPragmas = [
+    ["busy_timeout", CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS],
+    ["journal_mode", "wal"],
+    ["synchronous", 2],
+    ["page_size", CHZZK_JOB_LEASE_SQLITE_PAGE_BYTES],
+    ["wal_autocheckpoint", CHZZK_JOB_LEASE_WAL_AUTOCHECKPOINT_PAGES],
+    ["journal_size_limit", CHZZK_JOB_LEASE_JOURNAL_SIZE_LIMIT_BYTES],
+    ["trusted_schema", 0]
+  ] as const;
+  for (const [pragmaName, expected] of expectedPragmas) {
+    const record = objectRecord(database.prepare(`PRAGMA ${pragmaName}`).get());
+    const values = record ? Object.values(record) : [];
+    if (
+      !record
+      || values.length !== 1
+      || values[0] !== expected
+    ) {
+      throw new Error(`Job lease SQLite rejected PRAGMA ${pragmaName}.`);
+    }
+  }
+}
+
 function jobLeaseBootClockMs(): number {
   const milliseconds = Math.floor(os.uptime() * 1_000);
   if (!Number.isSafeInteger(milliseconds) || milliseconds < 0) {
@@ -3601,6 +3631,9 @@ async function assertSafeJobLeaseDatabasePath(
     `${databasePath}-wal`,
     `${databasePath}-shm`
   ]) {
+    const maximumCandidateBytes = candidate.endsWith("-wal")
+      ? MAX_JOB_LEASE_DATABASE_BYTES - CHZZK_JOB_LEASE_WAL_COMMIT_MARGIN_BYTES
+      : MAX_JOB_LEASE_DATABASE_BYTES;
     let status: BigIntStats;
     try {
       status = await lstat(candidate, { bigint: true });
@@ -3614,7 +3647,7 @@ async function assertSafeJobLeaseDatabasePath(
       !status.isFile()
       || status.isSymbolicLink()
       || status.nlink !== 1n
-      || status.size > BigInt(MAX_JOB_LEASE_DATABASE_BYTES)
+      || status.size > BigInt(maximumCandidateBytes)
     ) {
       throw new Error("Job lease database has an unsafe filesystem shape.");
     }
@@ -3632,11 +3665,15 @@ async function openJobLeaseDatabase(
     database = new sqlite.DatabaseSync(databasePath);
     await assertSafeJobLeaseDatabasePath(databasePath, stateDirectory);
     database.exec(`
-      PRAGMA busy_timeout = ${CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS};
-      PRAGMA journal_mode = DELETE;
-      PRAGMA synchronous = FULL;
       PRAGMA trusted_schema = OFF;
+      PRAGMA page_size = ${CHZZK_JOB_LEASE_SQLITE_PAGE_BYTES};
+      PRAGMA busy_timeout = ${CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS};
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = FULL;
+      PRAGMA wal_autocheckpoint = ${CHZZK_JOB_LEASE_WAL_AUTOCHECKPOINT_PAGES};
+      PRAGMA journal_size_limit = ${CHZZK_JOB_LEASE_JOURNAL_SIZE_LIMIT_BYTES};
     `);
+    assertJobLeaseSqliteConfiguration(database);
     database.exec("BEGIN IMMEDIATE;");
     try {
       const applicationIdRecord = objectRecord(
@@ -3801,6 +3838,7 @@ async function createJobLockLease(
   databasePath: string,
   ownerId: string,
   initialRevision: number,
+  initialHeartbeatAtBootMs: number,
   heartbeatIntervalMs: number
 ): Promise<JobLockLease> {
   const leaseAbort = new AbortController();
@@ -3817,8 +3855,16 @@ async function createJobLockLease(
       schemaId: CHZZK_JOB_LEASE_SCHEMA_ID,
       ownerId,
       initialRevision,
+      initialHeartbeatAtBootMs,
       intervalMs: heartbeatIntervalMs,
-      busyTimeoutMs: CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS
+      busyTimeoutMs: CHZZK_JOB_LOCK_BUSY_TIMEOUT_MS,
+      leaseMs: CHZZK_JOB_LOCK_LEASE_MS,
+      sqlitePageBytes: CHZZK_JOB_LEASE_SQLITE_PAGE_BYTES,
+      walAutocheckpointPages: CHZZK_JOB_LEASE_WAL_AUTOCHECKPOINT_PAGES,
+      journalSizeLimitBytes: CHZZK_JOB_LEASE_JOURNAL_SIZE_LIMIT_BYTES,
+      maximumSidecarBytes: MAX_JOB_LEASE_DATABASE_BYTES,
+      walSoftLimitBytes: CHZZK_JOB_LEASE_WAL_SOFT_LIMIT_BYTES,
+      walCommitMarginBytes: CHZZK_JOB_LEASE_WAL_COMMIT_MARGIN_BYTES
     }
   });
   let resolveReady: (() => void) | undefined;
@@ -3952,8 +3998,34 @@ async function acquireJobLock(
   } catch {
     fail("CHZZK 편집 구간 작업 잠금 DB를 열지 못했습니다.", "LOCK_FAILED");
   }
+  const startAcquiredLease = async (
+    revision: number,
+    heartbeatAtBootMs: number
+  ): Promise<JobLockLease> => {
+    try {
+      return await createJobLockLease(
+        database,
+        databasePath,
+        ownerId,
+        revision,
+        heartbeatAtBootMs,
+        heartbeatIntervalMs
+      );
+    } catch (error) {
+      try {
+        database.prepare(`
+          DELETE FROM materialization_job_lease
+          WHERE singleton = 1 AND schema_id = ? AND owner_id = ?
+        `).run(CHZZK_JOB_LEASE_SCHEMA_ID, ownerId);
+      } catch {
+        // Preserve the worker startup error. A later stale-owner CAS is safe.
+      }
+      throw error;
+    }
+  };
   try {
     for (let attempt = 0; attempt < 16; attempt += 1) {
+      const insertedHeartbeatAtBootMs = jobLeaseBootClockMs();
       const inserted = sqliteChanges(database.prepare(`
         INSERT INTO materialization_job_lease (
           singleton,
@@ -3971,17 +4043,11 @@ async function acquireJobLock(
         ownerId,
         process.pid,
         createdAtUnixMs,
-        jobLeaseBootClockMs(),
+        insertedHeartbeatAtBootMs,
         processStartMarker ?? null
       ));
       if (inserted === 1) {
-        return await createJobLockLease(
-          database,
-          databasePath,
-          ownerId,
-          1,
-          heartbeatIntervalMs
-        );
+        return await startAcquiredLease(1, insertedHeartbeatAtBootMs);
       }
       if (inserted !== 0) {
         throw new Error("Job lease insert changed an unexpected number of rows.");
@@ -3999,6 +4065,7 @@ async function acquireJobLock(
         throw new Error("Job lease revision overflowed.");
       }
       const replacementRevision = observed.revision + 1;
+      const replacementHeartbeatAtBootMs = jobLeaseBootClockMs();
       const replaced = sqliteChanges(database.prepare(`
         UPDATE materialization_job_lease
         SET
@@ -4020,19 +4087,16 @@ async function acquireJobLock(
         replacementRevision,
         process.pid,
         createdAtUnixMs,
-        jobLeaseBootClockMs(),
+        replacementHeartbeatAtBootMs,
         processStartMarker ?? null,
         observed.schemaId,
         observed.ownerId,
         observed.revision
       ));
       if (replaced === 1) {
-        return await createJobLockLease(
-          database,
-          databasePath,
-          ownerId,
+        return await startAcquiredLease(
           replacementRevision,
-          heartbeatIntervalMs
+          replacementHeartbeatAtBootMs
         );
       }
       if (replaced !== 0) {
