@@ -1949,6 +1949,7 @@ async function main(): Promise<void> {
       shellHidden: boolean;
       shellInert: boolean;
       policyAbsent: boolean;
+      runtimeReadyAbsent: boolean;
     }>(`
       const gate = document.querySelector("#editor-mobile-gate");
       const shell = document.querySelector("#editor-shell");
@@ -1956,7 +1957,9 @@ async function main(): Promise<void> {
         gateVisible: gate instanceof HTMLElement && !gate.hidden,
         shellHidden: shell instanceof HTMLElement && shell.hidden,
         shellInert: shell instanceof HTMLElement && shell.inert,
-        policyAbsent: document.querySelector("#editor-policy-gate") === null
+        policyAbsent: document.querySelector("#editor-policy-gate") === null,
+        runtimeReadyAbsent:
+          document.documentElement.dataset.kirinukiEditorRuntimeReady !== "true"
       };
     `),
     (value) => (
@@ -1964,6 +1967,7 @@ async function main(): Promise<void> {
       && value.shellHidden
       && value.shellInert
       && value.policyAbsent
+      && value.runtimeReadyAbsent
     ),
     "iPhone UA의 직접 editor URL이 inert 모바일 gate로 닫히지 않았습니다."
   );
@@ -3384,6 +3388,7 @@ async function main(): Promise<void> {
     emptyTitleRejected: boolean;
     sanitizedPreview: string;
     validTitleAccepted: boolean;
+    runtimeReady: boolean;
   }>(`
     const ad = document.querySelector("#desktop-ad-slot");
     const workspace = document.querySelector(".workspace");
@@ -3428,7 +3433,9 @@ async function main(): Promise<void> {
       suggestedTitle,
       emptyTitleRejected,
       sanitizedPreview,
-      validTitleAccepted
+      validTitleAccepted,
+      runtimeReady:
+        document.documentElement.dataset.kirinukiEditorRuntimeReady === "true"
     };
   `);
   assert(
@@ -3451,6 +3458,7 @@ async function main(): Promise<void> {
       && editorChrome.suggestedTitle === "localhost-browser-smoke"
       && editorChrome.emptyTitleRejected
       && editorChrome.validTitleAccepted
+      && editorChrome.runtimeReady
       && editorChrome.sanitizedPreview.includes("사용자 - 최종본"),
     `출력 영상 제목 입력·검증 흐름이 깨졌습니다: ${JSON.stringify(editorChrome)}`
   );
