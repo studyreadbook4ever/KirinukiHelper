@@ -364,6 +364,7 @@ assertKirinukiStudioDocumentOrigin(
 const SUBTITLE_SYNC_SKILL_MARKDOWN =
   __KIRINUKI_SUBTITLE_SYNC_SKILL_MARKDOWN__;
 const USAGE_POLICY_LEASE_HEARTBEAT_MS = 60 * 1_000;
+const EDITOR_RUNTIME_READY_EVENT = "kirinuki:editor-runtime-ready";
 
 declare global {
   interface Window {
@@ -21491,6 +21492,8 @@ async function initialize() {
     );
   }
   startDevReloadObserver();
+  document.documentElement.dataset.kirinukiEditorRuntimeReady = "true";
+  window.dispatchEvent(new Event(EDITOR_RUNTIME_READY_EVENT));
 }
 
 function normalizeLocalCaptionFirstPass(detail: unknown) {

@@ -219,6 +219,41 @@ test("편집기 스크립트는 정책 검증 성공 전 프로젝트·미디어
   );
 });
 
+test("편집기 runtime ready 신호는 정상 초기화와 미디어 복원이 끝난 뒤 한 번만 보낸다", async () => {
+  const source = await readFile(
+    new URL("../src/editor/main.ts", import.meta.url),
+    "utf8"
+  );
+  const initialize = sectionFrom(
+    source,
+    "async function initialize()",
+    "function normalizeLocalCaptionFirstPass("
+  );
+  const restoreMediaIndex = initialize.indexOf("await restoreMedia()");
+  const startDevReloadIndex = initialize.indexOf("startDevReloadObserver()");
+  const readyLatchIndex = initialize.indexOf(
+    'document.documentElement.dataset.kirinukiEditorRuntimeReady = "true"'
+  );
+  const readyEventIndex = initialize.indexOf(
+    "window.dispatchEvent(new Event(EDITOR_RUNTIME_READY_EVENT))"
+  );
+
+  assert.equal(
+    source.match(/kirinuki:editor-runtime-ready/gu)?.length,
+    1,
+    "runtime ready event 이름은 단일 canonical 상수여야 합니다."
+  );
+  assert.ok(restoreMediaIndex >= 0);
+  assert.ok(startDevReloadIndex > restoreMediaIndex);
+  assert.ok(readyLatchIndex > startDevReloadIndex);
+  assert.ok(readyEventIndex > readyLatchIndex);
+  assert.match(
+    initialize,
+    /startDevReloadObserver\(\);\s*document\.documentElement\.dataset\.kirinukiEditorRuntimeReady = "true";\s*window\.dispatchEvent\(new Event\(EDITOR_RUNTIME_READY_EVENT\)\);\s*\}\s*function normalizeLocalCaptionFirstPass\(/u
+  );
+  assert.doesNotMatch(initialize, /new CustomEvent\(EDITOR_RUNTIME_READY_EVENT/u);
+});
+
 test("웹 편집 종료는 진입 baseline을 먼저 잡고 명시적 저장·폐기에서만 확정한다", async () => {
   const [html, source] = await Promise.all([
     readFile(new URL("../web/editor.html", import.meta.url), "utf8"),
