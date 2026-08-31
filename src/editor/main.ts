@@ -98,7 +98,6 @@ import {
   captionColorShortcutDigitFromEvent,
   clipNavigationShortcutDirectionFromEvent,
   editorKeyboardShortcutBinding,
-  formatKeyboardShortcutHint,
   isKeyboardShortcutEventBlocked,
   keyboardShortcutLetterFromEvent
 } from "../lib/keyboard-shortcuts.js";
@@ -677,7 +676,15 @@ function rawErrorMessage(error: unknown): string {
 }
 
 function errorMessage(error: unknown): string {
-  return uiLocalization.translate(rawErrorMessage(error));
+  const source = rawErrorMessage(error);
+  const translated = uiLocalization.translate(source);
+  if (uiLocalization.language !== "ko" && /[가-힣]/u.test(translated)) {
+    console.warn("Unlocalized editor error detail was hidden from the UI.", source);
+    return uiLocalization.translate(
+      "작업 중 오류가 발생했습니다. 다시 시도해 주세요."
+    );
+  }
+  return translated;
 }
 
 function internalMediaEngineErrorMessage(
@@ -712,7 +719,7 @@ function internalMediaEngineErrorMessage(
       `${feature}용 내부 미디어 엔진을 준비하지 못했습니다. ${recovery}`
     );
   }
-  return uiLocalization.translate(message);
+  return errorMessage(error);
 }
 
 function errorName(error: unknown): string {
@@ -1367,8 +1374,7 @@ function scheduleUsagePolicyLeaseHeartbeat(): void {
 function showVerifiedEditorShell(session: ActiveUsagePolicySession): void {
   usagePolicySession = session;
   syncEditorUrlToUsagePolicySession(session);
-  elements.usage_policy_status.textContent =
-    `이번 사용 확인 · ${usagePolicyBasisLabel(session.basis)}`;
+  renderUsagePolicyStatus(session);
   elements.usage_policy_status.title =
     "사용자 진술을 기록한 상태이며 Kirinuki의 법률·권리 검증이나 게시 승인을 뜻하지 않습니다.";
   elements.editor_origin_gate.hidden = true;
@@ -1382,6 +1388,16 @@ function showVerifiedEditorShell(session: ActiveUsagePolicySession): void {
     startDevReloadObserver();
   }
   scheduleUsagePolicyLeaseHeartbeat();
+}
+
+function renderUsagePolicyStatus(session = usagePolicySession): void {
+  if (!session) {
+    return;
+  }
+  const basis = uiLocalization.translate(usagePolicyBasisLabel(session.basis));
+  elements.usage_policy_status.textContent = uiLocalization.translate(
+    `이번 사용 확인 · ${basis}`
+  );
 }
 
 function showEditorMobileGate(): void {
@@ -1511,8 +1527,17 @@ function editorShortcutBindingForTarget(
 function editorShortcutTitle(targetId: string, label: string): string {
   const binding = editorShortcutBindingForTarget(targetId);
   return binding
-    ? formatKeyboardShortcutHint(label, binding.key)
+    ? localizedEditorShortcutHint(label, binding.key)
     : label;
+}
+
+function localizedEditorShortcutHint(label: string, key: string): string {
+  const translatedLabel = uiLocalization.translate(label);
+  return {
+    ko: `${translatedLabel} (단축키 ${key})`,
+    en: `${translatedLabel} (shortcut ${key})`,
+    ja: `${translatedLabel}（ショートカット ${key}）`
+  }[uiLocalization.language];
 }
 
 function usableEditorShortcutTarget(
@@ -1540,7 +1565,7 @@ function installEditorShortcutHints(): void {
       if (!(target instanceof HTMLElement)) {
         throw new Error(`편집기 단축키 대상이 없습니다: #${targetId}`);
       }
-      target.title = formatKeyboardShortcutHint(binding.label, binding.key);
+      target.title = localizedEditorShortcutHint(binding.label, binding.key);
       target.setAttribute("aria-keyshortcuts", binding.key);
     }
   }
@@ -1811,11 +1836,20 @@ function parseTime(value: string) {
 function formatDuration(milliseconds: number) {
   const seconds = Math.max(0, milliseconds / 1000);
   if (seconds < 60) {
-    return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}초`;
+    const value = seconds < 10 ? seconds.toFixed(1) : String(Math.round(seconds));
+    return {
+      ko: `${value}초`,
+      en: `${value} sec`,
+      ja: `${value} 秒`
+    }[uiLocalization.language];
   }
   const minutes = Math.floor(seconds / 60);
   const remainder = Math.round(seconds % 60);
-  return `${minutes}분 ${remainder}초`;
+  return {
+    ko: `${minutes}분 ${remainder}초`,
+    en: `${minutes} min ${remainder} sec`,
+    ja: `${minutes} 分 ${remainder} 秒`
+  }[uiLocalization.language];
 }
 
 function projectSourcePlatformLabel(
@@ -2181,6 +2215,7 @@ function showToast(message: string, type = "info", timeout = 3600) {
   clearTimeout(toastTimer ?? undefined);
   toastTimer = null;
   elements.toast.textContent = message;
+  uiLocalization.refresh(elements.toast);
   elements.toast.className = `toast ${type}`;
   elements.toast.setAttribute("role", type === "error" ? "alert" : "status");
   elements.toast.setAttribute("aria-live", type === "error" ? "assertive" : "polite");
@@ -2191,6 +2226,13 @@ function showToast(message: string, type = "info", timeout = 3600) {
       toastTimer = null;
     }, timeout);
   }
+}
+
+function dismissToast(): void {
+  clearTimeout(toastTimer ?? undefined);
+  toastTimer = null;
+  elements.toast.hidden = true;
+  elements.toast.textContent = "";
 }
 
 function advanceProjectSessionGeneration(): number {
@@ -2400,6 +2442,16 @@ function localSaveTimeFormatter(): Intl.DateTimeFormat {
   });
 }
 
+function replaceUiCopyParts(
+  element: HTMLElement,
+  parts: readonly string[]
+): void {
+  element.replaceChildren(
+    ...parts.filter(Boolean).map((part) => document.createTextNode(part))
+  );
+  uiLocalization.refresh(element);
+}
+
 function renderLocalPersistenceStatus(): void {
   if (!elements?.local_draft_status) {
     return;
@@ -2419,12 +2471,15 @@ function renderLocalPersistenceStatus(): void {
       : state === "saved"
         ? `편집 중 임시 복구됨 ${localSaveTimeFormatter().format(lastCurrentProjectSavedAtMs)}`
         : "편집 중 임시 복구 준비됨";
-  const lastAutoText = lastAutomaticDraftAtMs > 0
-    ? ` · 최근 5분 복구 ${localDraftDateFormatter().format(lastAutomaticDraftAtMs)}`
-    : "";
-  elements.local_draft_status.textContent = (
-    `${current} · 현재 복구본 ${Math.min(5, knownLocalDraftCount)}/5 · 5분 간격 · 탭 종료 시 임시본 폐기${lastAutoText}`
-  );
+  replaceUiCopyParts(elements.local_draft_status, [
+    current,
+    ` · 현재 복구본 ${Math.min(5, knownLocalDraftCount)}/5`,
+    " · 5분 간격",
+    " · 탭 종료 시 임시본 폐기",
+    lastAutomaticDraftAtMs > 0
+      ? ` · 최근 5분 복구 ${localDraftDateFormatter().format(lastAutomaticDraftAtMs)}`
+      : ""
+  ]);
 }
 
 function localDraftReasonLabel(reason: "manual" | "auto" | "pre-restore") {
@@ -2469,14 +2524,17 @@ function queueLocalDraftOperation<T>(operation: () => T | PromiseLike<T>): Promi
   return queued;
 }
 
-function localDraftSummary(draft: LocalDraftRecord) {
+function localDraftSummaryParts(draft: LocalDraftRecord): string[] {
   const snapshot = draft.project;
   return [
-    `컷 ${Array.isArray(snapshot.clips) ? snapshot.clips.length : 0}`,
-    `자막 ${Array.isArray(snapshot.subtitles) ? snapshot.subtitles.length : 0}`,
-    `이미지 ${Array.isArray(snapshot.imageAssets) ? snapshot.imageAssets.length : 0}`,
-    `음성 ${Array.isArray(snapshot.audioRegions) ? snapshot.audioRegions.length : 0}`
-  ].join(" · ");
+    `컷 ${Array.isArray(snapshot.clips) ? snapshot.clips.length : 0}개`,
+    " · ",
+    `자막 ${Array.isArray(snapshot.subtitles) ? snapshot.subtitles.length : 0}개`,
+    " · ",
+    `이미지 ${Array.isArray(snapshot.imageAssets) ? snapshot.imageAssets.length : 0}개`,
+    " · ",
+    `음성 ${Array.isArray(snapshot.audioRegions) ? snapshot.audioRegions.length : 0}개`
+  ];
 }
 
 function updateLocalDraftStatus(drafts: LocalDraftRecord[] = []) {
@@ -2532,7 +2590,7 @@ function renderLocalDraftList(
 
     const summary = document.createElement("span");
     summary.className = "local-draft-item-meta";
-    summary.textContent = localDraftSummary(draft);
+    replaceUiCopyParts(summary, localDraftSummaryParts(draft));
 
     copy.append(heading, summary);
     label.append(input, copy);
@@ -4116,10 +4174,18 @@ function renderHeader() {
   elements.source_kind.textContent = sourceType === "UNKNOWN"
     ? sourcePlatform
     : `${sourcePlatform} · ${sourceType}`;
-  elements.source_title.textContent = [
+  const sourceTitle = [
     project.source?.streamerName,
     project.source?.broadcastTitle
-  ].filter(Boolean).join(" · ") || "키리누키 프로젝트";
+  ].filter(Boolean).join(" · ");
+  elements.source_title.toggleAttribute(
+    "data-kirinuki-ui-copy-ignore",
+    Boolean(sourceTitle)
+  );
+  elements.source_title.textContent = sourceTitle || "키리누키 프로젝트";
+  if (!sourceTitle) {
+    uiLocalization.refresh(elements.source_title);
+  }
   elements.source_link_state.classList.toggle("connected", sourceBindingConnected);
   elements.source_link_state.title = sourceBindingConnected
     ? "원래 영상 탭과 연결됨"
@@ -4202,11 +4268,17 @@ function renderHeader() {
     };
     const counts = new Map<string, number>();
     for (const warning of warnings) {
-      const label = warningLabels[warning.code] || "기타 처리 경고";
+      const label = uiLocalization.translate(
+        warningLabels[warning.code] || "기타 처리 경고"
+      );
       counts.set(label, (counts.get(label) || 0) + 1);
     }
     const summary = [...counts.entries()]
-      .map(([label, count]) => `${label} ${count}건`)
+      .map(([label, count]) => ({
+        ko: `${label} ${count}건`,
+        en: `${label}: ${count}`,
+        ja: `${label} ${count}件`
+      })[uiLocalization.language])
       .join(" · ");
     const reviewCount = warnings.filter(
       (warning) => CAPTION_REVIEW_WARNING_CODES.has(warning.code)
@@ -4471,7 +4543,10 @@ function renderClipList() {
       Boolean(clip.note)
     );
     templateElement(".clip-time").textContent = `${formatTime(clip.sourceStartMs)} → ${formatTime(clip.sourceEndMs)}`;
-    templateElement(".clip-duration").textContent = formatDuration(clipDurationMs(clip));
+    const clipDuration = templateElement(".clip-duration");
+    const clipDurationMilliseconds = clipDurationMs(clip);
+    clipDuration.dataset.kirinukiUiDurationMs = String(clipDurationMilliseconds);
+    clipDuration.textContent = formatDuration(clipDurationMilliseconds);
     const checkbox = templateElement(".clip-group-checkbox");
     checkbox.dataset.clipId = clip.id;
     checkbox.checked = clipGroupSelection.has(clip.id);
@@ -4574,6 +4649,7 @@ function renderCaptionColorRegister(selectedColor: string) {
     button.title = index === 0
       ? `기본 흰색 · ${color.toUpperCase()} · ${shortcut}`
       : `최근 색상 ${index} · ${color.toUpperCase()} · ${shortcut}`;
+    uiLocalization.refresh(button);
     elements.caption_color_register.append(button);
   }
 }
@@ -4662,7 +4738,9 @@ function renderCueInspector() {
   elements.cue_timing_match_help.textContent = !selectedAsset
     ? "같은 컷의 이미지를 선택하면 양끝 시각을 한 번에 맞출 수 있어요."
     : canMatchAsset
-      ? `${selectedAsset.name || "선택 이미지"}의 시작·끝 시각을 그대로 적용합니다.`
+      ? selectedAsset.name
+        ? `${selectedAsset.name}의 시작·끝 시각을 그대로 적용합니다.`
+        : "선택 이미지의 시작·끝 시각을 그대로 적용합니다."
       : "선택 이미지가 다른 컷에 있어 시각을 맞출 수 없습니다.";
 }
 
@@ -4679,7 +4757,7 @@ function renderImageAssetInspector() {
   const range = imageAssetTimelineRange(project, asset);
   elements.asset_name.textContent = asset.name;
   elements.asset_name.dataset.kirinukiUiCopyIgnore = "";
-  elements.asset_meta.textContent = [
+  const assetMeta = [
     asset.naturalWidth && asset.naturalHeight
       ? `${asset.naturalWidth}×${asset.naturalHeight}`
       : null,
@@ -4687,7 +4765,11 @@ function renderImageAssetInspector() {
     asset.mimeType === "image/png" || asset.mimeType === "image/webp"
       ? "투명 배경 지원"
       : null
-  ].filter(Boolean).join(" · ");
+  ].filter((part): part is string => Boolean(part));
+  replaceUiCopyParts(
+    elements.asset_meta,
+    assetMeta.flatMap((part, index) => index === 0 ? [part] : [" · ", part])
+  );
   if (document.activeElement !== elements.asset_start) {
     elements.asset_start.value = formatTime(range?.startMs || 0, { compact: true });
   }
@@ -4700,7 +4782,9 @@ function renderImageAssetInspector() {
   elements.asset_timing_match_help.textContent = !selectedSubtitle
     ? "같은 컷의 자막을 선택하면 양끝 시각을 한 번에 맞출 수 있어요."
     : canMatchCue
-      ? `“${selectedSubtitle.text || "빈 자막"}”의 시작·끝 시각을 그대로 적용합니다.`
+      ? selectedSubtitle.text
+        ? `“${selectedSubtitle.text}”의 시작·끝 시각을 그대로 적용합니다.`
+        : "“빈 자막”의 시작·끝 시각을 그대로 적용합니다."
       : "선택 자막이 다른 컷에 있어 시각을 맞출 수 없습니다.";
   const xPercent = Math.round(asset.x * 100);
   const yPercent = Math.round(asset.y * 100);
@@ -4792,11 +4876,11 @@ function shortFormQualityAssessment(
   const scaleX = destination.width / sourceWidth;
   const scaleY = destination.height / sourceHeight;
   const distortion = Math.max(scaleX, scaleY) / Math.max(0.0001, Math.min(scaleX, scaleY));
-  const correction = shortPreviewAdaptiveScalerUnavailable
+  const correction = uiLocalization.translate(shortPreviewAdaptiveScalerUnavailable
     ? "표준 호환 보간"
     : shortPreviewAdaptiveScaler?.capabilityStatus.warmFrameTiming === "passed"
       ? "자동 고품질 보정"
-      : "자동 품질 확인 중";
+      : "자동 품질 확인 중");
   if (distortion > 1.015) {
     return {
       level: "warning",
@@ -4878,6 +4962,7 @@ function renderShortVideoLayerPanel(
       "aria-label",
       `영상 ${index + 1}, ${layer.lane + 1}번 라인, 음량 ${Math.round(layer.audioGain * 100)}%, ${layer.visible ? "표시 중" : "숨김"}, 쇼츠 ${formatTime(layer.timelineStartMs, { compact: true })}부터 ${formatTime(layer.timelineEndMs, { compact: true })}, 원본 ${formatTime(layer.sourceStartMs, { compact: true })}부터 ${formatTime(layer.sourceEndMs, { compact: true })}`
     );
+    uiLocalization.refresh(button);
 
     const order = document.createElement("span");
     order.className = "short-video-layer-index";
@@ -4886,13 +4971,16 @@ function renderShortVideoLayerPanel(
     const copy = document.createElement("span");
     copy.className = "short-video-layer-copy";
     const title = document.createElement("strong");
-    title.textContent = String(rootSource?.note || "").trim()
+    const sourceNote = String(rootSource?.note || "").trim();
+    title.textContent = sourceNote
       || (sourceIndex >= 0 ? `본편 컷 ${sourceIndex + 1}` : "본편 영상");
+    title.toggleAttribute("data-kirinuki-ui-copy-ignore", Boolean(sourceNote));
+    uiLocalization.refresh(title);
     const timing = document.createElement("small");
-    timing.textContent = (
-      `쇼츠 ${formatTime(layer.timelineStartMs, { compact: true })}–${formatTime(layer.timelineEndMs, { compact: true })}`
-      + ` · 원본 ${formatTime(layer.sourceStartMs, { compact: true })}–${formatTime(layer.sourceEndMs, { compact: true })}`
-    );
+    replaceUiCopyParts(timing, [
+      `쇼츠 ${formatTime(layer.timelineStartMs, { compact: true })}–${formatTime(layer.timelineEndMs, { compact: true })}`,
+      ` · 원본 ${formatTime(layer.sourceStartMs, { compact: true })}–${formatTime(layer.sourceEndMs, { compact: true })}`
+    ]);
     copy.append(title, timing);
 
     const state = document.createElement("span");
@@ -5008,8 +5096,11 @@ function renderShortFramingInspector(): void {
       || `영상 ${readyCacheCount}/${layers.length}개 · 이 기기에서 미리보기 준비 중`;
   } else if (shortPreviewCacheError) {
     elements.short_preview_cache_status.dataset.state = "error";
-    elements.short_preview_cache_status.textContent =
-      `영상 미리보기 준비 실패 · ${shortPreviewCacheError}`;
+    replaceUiCopyParts(elements.short_preview_cache_status, [
+      "영상 미리보기 준비 실패",
+      " · ",
+      shortPreviewCacheError
+    ]);
   } else if (layers.length === 0 && sourceAudioAssets.length === 0) {
     elements.short_preview_cache_status.dataset.state = "ready";
     elements.short_preview_cache_status.textContent =
@@ -5021,12 +5112,23 @@ function renderShortFramingInspector(): void {
         ? "ready"
         : "working"
     );
-    elements.short_preview_cache_status.textContent = (
+    const previewsReady = (
       readyCacheCount === layers.length
       && readySourceAudioCacheCount === sourceAudioAssets.length
-    )
-      ? `영상 ${layers.length}개${sourceAudioAssets.length > 0 ? ` · 기존 방식 음성 ${sourceAudioAssets.length}개` : ""} · 미리보기 준비됨`
-      : `영상 ${readyCacheCount}/${layers.length}개${sourceAudioAssets.length > 0 ? ` · 기존 방식 음성 ${readySourceAudioCacheCount}/${sourceAudioAssets.length}개` : ""} · 미리보기 준비 필요`;
+    );
+    replaceUiCopyParts(elements.short_preview_cache_status, [
+      previewsReady
+        ? `영상 ${layers.length}개`
+        : `영상 ${readyCacheCount}/${layers.length}개`,
+      sourceAudioAssets.length > 0 ? " · " : "",
+      sourceAudioAssets.length > 0
+        ? previewsReady
+          ? `기존 방식 음성 ${sourceAudioAssets.length}개`
+          : `기존 방식 음성 ${readySourceAudioCacheCount}/${sourceAudioAssets.length}개`
+        : "",
+      " · ",
+      previewsReady ? "미리보기 준비됨" : "미리보기 준비 필요"
+    ]);
   }
   if (
     (readyCacheCount < layers.length
@@ -5074,9 +5176,16 @@ function renderShortFramingInspector(): void {
     )
     : null;
   elements.short_workspace_destination_readout.dataset.quality = quality?.level || "notice";
-  elements.short_workspace_destination_readout.textContent = exactGeometry
-    ? `X ${exactGeometry.destinationRect.x} · Y ${exactGeometry.destinationRect.y} · ${exactGeometry.destinationRect.width}×${exactGeometry.destinationRect.height}px · ${quality?.text || "품질 계산 중"}`
-    : "영상을 선택하면 픽셀 단위 배치값과 품질 상태가 표시됩니다.";
+  replaceUiCopyParts(
+    elements.short_workspace_destination_readout,
+    exactGeometry
+      ? [
+        `X ${exactGeometry.destinationRect.x} · Y ${exactGeometry.destinationRect.y} · ${exactGeometry.destinationRect.width}×${exactGeometry.destinationRect.height}px`,
+        " · ",
+        quality?.text || "품질 계산 중"
+      ]
+      : ["영상을 선택하면 픽셀 단위 배치값과 품질 상태가 표시됩니다."]
+  );
 
   // v6 persists exact source/destination rectangles only. These controls are
   // retained as hidden DOM compatibility anchors for old saved editor markup.
@@ -5133,13 +5242,28 @@ function renderShortFramingInspector(): void {
   )
     ? "warning"
     : "clear";
-  elements.short_workspace_edge_gap_status.textContent = !selectedLayer
-    ? "영상을 선택하면 1–24px의 미세한 가장자리 틈을 검사합니다."
-    : compositeGaps.length > 0
-      ? `현재 화면의 최종 합성에서 미세 틈 ${compositeGaps.length}개 감지 · ‘모두 밀기’로 관련 영상만 맞닿게 확장할 수 있습니다.`
-    : edgeGaps.length > 0
-      ? `미세한 검은 틈 감지 · ${edgeGaps.map(({ edge, pixels }) => `${edgeLabels[edge]} ${pixels}px`).join(" · ")}`
-      : "밀어낼 미세 틈이 없습니다. 크게 비운 영역은 의도적 배치로 유지합니다.";
+  if (!selectedLayer) {
+    replaceUiCopyParts(elements.short_workspace_edge_gap_status, [
+      "영상을 선택하면 1–24px의 미세한 가장자리 틈을 검사합니다."
+    ]);
+  } else if (compositeGaps.length > 0) {
+    replaceUiCopyParts(elements.short_workspace_edge_gap_status, [
+      `현재 화면의 최종 합성에서 미세 틈 ${compositeGaps.length}개 감지 · ‘모두 밀기’로 관련 영상만 맞닿게 확장할 수 있습니다.`
+    ]);
+  } else if (edgeGaps.length > 0) {
+    replaceUiCopyParts(elements.short_workspace_edge_gap_status, [
+      "미세한 검은 틈 감지",
+      ...edgeGaps.flatMap(({ edge, pixels }) => [
+        " · ",
+        edgeLabels[edge] || edge,
+        ` ${pixels}px`
+      ])
+    ]);
+  } else {
+    replaceUiCopyParts(elements.short_workspace_edge_gap_status, [
+      "밀어낼 미세 틈이 없습니다. 크게 비운 영역은 의도적 배치로 유지합니다."
+    ]);
+  }
   for (const button of elements.short_workspace_squeegee_actions
     .querySelectorAll<HTMLButtonElement>("button[data-short-workspace-squeegee]")) {
     const direction = button.dataset.shortWorkspaceSqueegee || "";
@@ -5157,16 +5281,26 @@ function renderShortFramingInspector(): void {
     const sourceIndex = rootProject.clips.findIndex((candidate) => (
       candidate.id === selectedLayer.sourceClipId
     ));
-    const sourceLabel = String(sourceClip?.note || "").trim()
+    const sourceNote = String(sourceClip?.note || "").trim();
+    const sourceLabel = document.createElement("span");
+    sourceLabel.textContent = sourceNote
       || (sourceIndex >= 0 ? `본편 컷 ${sourceIndex + 1}` : "본편 원본 컷");
-    elements.short_workspace_source.textContent = (
-      `영상 ${Math.max(0, selectedIndex) + 1}/${layers.length} · ${sourceLabel}`
+    sourceLabel.toggleAttribute(
+      "data-kirinuki-ui-copy-ignore",
+      Boolean(sourceNote)
     );
-    elements.short_workspace_duration.textContent = (
-      `쇼츠 ${formatTime(selectedLayer.timelineStartMs, { compact: true })}–${formatTime(selectedLayer.timelineEndMs, { compact: true })}`
-      + ` · 원본 ${formatTime(selectedLayer.sourceStartMs, { compact: true })}–${formatTime(selectedLayer.sourceEndMs, { compact: true })}`
-      + ` · 길이 ${formatTime(selectedLayer.timelineEndMs - selectedLayer.timelineStartMs, { compact: true })}`
+    elements.short_workspace_source.replaceChildren(
+      document.createTextNode(
+        `영상 ${Math.max(0, selectedIndex) + 1}/${layers.length} · `
+      ),
+      sourceLabel
     );
+    uiLocalization.refresh(elements.short_workspace_source);
+    replaceUiCopyParts(elements.short_workspace_duration, [
+      `쇼츠 ${formatTime(selectedLayer.timelineStartMs, { compact: true })}–${formatTime(selectedLayer.timelineEndMs, { compact: true })}`,
+      ` · 원본 ${formatTime(selectedLayer.sourceStartMs, { compact: true })}–${formatTime(selectedLayer.sourceEndMs, { compact: true })}`,
+      ` · 길이 ${formatTime(selectedLayer.timelineEndMs - selectedLayer.timelineStartMs, { compact: true })}`
+    ]);
   } else {
     elements.short_workspace_source.textContent = "빈 1080×1920 쇼츠 화면";
     elements.short_workspace_duration.textContent =
@@ -5185,6 +5319,7 @@ function renderShortFramingInspector(): void {
       ? `쇼츠 9대16 화면. 영상 ${layers.length}개 중 선택 영상은 원본 ${Math.round(exactGeometry.sourceRect.x * exactGeometry.sourceRect.referenceWidth)}, ${Math.round(exactGeometry.sourceRect.y * exactGeometry.sourceRect.referenceHeight)}에서 ${Math.round(exactGeometry.sourceRect.width * exactGeometry.sourceRect.referenceWidth)} 곱하기 ${Math.round(exactGeometry.sourceRect.height * exactGeometry.sourceRect.referenceHeight)}픽셀을 가져와 쇼츠 화면 X ${exactGeometry.destinationRect.x}, Y ${exactGeometry.destinationRect.y}, ${exactGeometry.destinationRect.width} 곱하기 ${exactGeometry.destinationRect.height}픽셀로 배치합니다.`
       : "빈 1080대1920 쇼츠 화면. 영상을 자유롭게 추가할 수 있습니다."
   );
+  uiLocalization.refresh(elements.short_workspace_preview);
   renderShortWorkspaceTransformOverlay();
 }
 
@@ -5456,7 +5591,10 @@ function renderCaptionPropertiesSheet() {
   if (sheet.summary.unknownClipCaptionCount > 0) {
     summaryParts.push(`연결된 컷 없음 ${sheet.summary.unknownClipCaptionCount}개`);
   }
-  elements.caption_sheet_summary.textContent = summaryParts.join(" · ");
+  replaceUiCopyParts(
+    elements.caption_sheet_summary,
+    summaryParts.flatMap((part, index) => index > 0 ? [" · ", part] : [part])
+  );
 
   const outline = sheet.summary.commonOutline;
   elements.caption_sheet_common_style.textContent = outline.enabled
@@ -5972,6 +6110,19 @@ function renderWorkspaceModeChrome(): void {
         : "1080×1920 쇼츠 화면이 준비됐습니다. ‘본편 편집으로’에서 영상을 추가해 주세요."
       : "본편 컷 재생 순서입니다. 위에서 아래 순서로 이어서 재생되며, 범위는 자동으로 늘어나거나 줄어들지 않습니다.";
   }
+  [
+    elements.open_short_form,
+    elements.workspace_mode_badge,
+    elements.exit_short_form,
+    elements.workspace_mode_title,
+    elements.export_video,
+    clipHeading,
+    clipIntro
+  ].forEach((element) => {
+    if (element) {
+      uiLocalization.refresh(element);
+    }
+  });
 }
 
 function resetPropertyInspectorScroll(): void {
@@ -7876,13 +8027,13 @@ function applyShortWorkspaceSqueegee(
     destinationRect: nextLayer.destinationRect
   });
   if (changed) {
-    const directionLabel = {
+    const directionLabel = uiLocalization.translate({
       left: "왼쪽",
       right: "오른쪽",
       top: "위",
       bottom: "아래",
       all: "감지된 모든 방향"
-    }[direction];
+    }[direction]);
     showToast(
       `${directionLabel}의 미세한 검은 틈을 화면 끝까지 보정했습니다. 가져올 원본 영역은 유지됩니다.`,
       "success"
@@ -8435,7 +8586,9 @@ function requestShortPreviewLayerPlay(
     state.error = new Error(
       `${layerId} 영상의 이 기기 재생을 시작하지 못했습니다: ${errorDetails(error)}`
     );
-    shortPreviewCacheError = state.error.message;
+    shortPreviewCacheError =
+      `${layerId} 영상의 이 기기 재생을 시작하지 못했습니다.`;
+    console.warn(state.error.message);
     return;
   }
   state.playPromise = playPromise;
@@ -8492,7 +8645,8 @@ function requestShortPreviewLayerPlay(
         state.error = new Error(
           `${layerId} 영상의 이 기기 재생을 시작하지 못했습니다: ${errorDetails(error)}`
         );
-        shortPreviewCacheError = state.error.message;
+        shortPreviewCacheError =
+          `${layerId} 영상의 이 기기 재생을 시작하지 못했습니다.`;
         console.warn(state.error.message);
         scheduleShortWorkspacePreview();
       } else if (
@@ -8970,7 +9124,8 @@ function drawMultiLayerShortWorkspacePreview(
     try {
       video = ensureShortPreviewLayerVideo(layer);
     } catch (error) {
-      shortPreviewCacheError = errorDetails(error);
+      shortPreviewCacheError =
+        `${layer.id} 영상의 미리보기를 준비하지 못했습니다.`;
       pendingLayerCount += 1;
       console.warn(`${layer.id} 영상만 미리보기에서 제외했습니다.`, error);
       continue;
@@ -9337,15 +9492,28 @@ function renderShortSourceComposer(): void {
     ? shortFormQualityAssessment(crop, defaultShortDestinationRect(crop))
     : null;
   elements.short_source_readout.dataset.quality = quality?.level || "notice";
-  elements.short_source_readout.textContent = pixels && range
-    ? `원본 ${pixels.x}, ${pixels.y} · ${pixels.width}×${pixels.height}px · ${formatDuration(range.endMs - range.startMs)} · ${quality?.text || "품질 계산 중"} · 쇼츠 캔버스에서 별도 이동·크기 조절`
-    : "0.1초 이상의 구간과 사용할 화면을 정해 주세요.";
+  replaceUiCopyParts(
+    elements.short_source_readout,
+    pixels && range
+      ? [
+        "원본",
+        ` ${pixels.x}, ${pixels.y} · ${pixels.width}×${pixels.height}px`,
+        " · ",
+        formatDuration(range.endMs - range.startMs),
+        " · ",
+        quality?.text || "품질 계산 중",
+        " · ",
+        "쇼츠 캔버스에서 별도 이동·크기 조절"
+      ]
+      : ["0.1초 이상의 구간과 사용할 화면을 정해 주세요."]
+  );
   elements.short_source_crop_move.setAttribute(
     "aria-label",
     pixels
       ? `사용할 원본 화면 ${pixels.x}, ${pixels.y}, ${pixels.width} 곱하기 ${pixels.height}픽셀. 드래그로 이동하고 가장자리 손잡이로 크기를 조절합니다.`
       : "쇼츠에 사용할 원본 화면"
   );
+  uiLocalization.refresh(elements.short_source_crop_move);
   for (const button of elements.short_source_composer.querySelectorAll<HTMLButtonElement>(
     "button[data-short-source-aspect]"
   )) {
@@ -9611,7 +9779,8 @@ function showTimelineSnapGuide(match: TimelineSnapMatch | null) {
     hideTimelineSnapGuide();
     return;
   }
-  const label = `${match.label || "정렬점"} · ${formatTime(match.timeMs, { compact: true })}`;
+  const snapPointLabel = uiLocalization.translate(match.label || "정렬점");
+  const label = `${snapPointLabel} · ${formatTime(match.timeMs, { compact: true })}`;
   elements.timeline_snap_guide.hidden = false;
   elements.timeline_snap_guide.style.left = `${timelineX(match.timeMs)}px`;
   elements.timeline_snap_guide.dataset.label = label;
@@ -9931,11 +10100,24 @@ function renderTimelineRange() {
   );
 
   elements.timeline_range_summary.hidden = !rawRange;
-  elements.timeline_range_summary.textContent = range
-    ? `${formatTime(range.startMs, { compact: true })}–${formatTime(range.endMs, { compact: true })} · ${formatDuration(range.endMs - range.startMs)} ${choosingShortSource ? "쇼츠 소스" : "삭제"}`
-    : rawRange
-      ? `${formatDuration(rawRange.endMs - rawRange.startMs)} · 0.1초 이상 필요`
-      : "";
+  replaceUiCopyParts(
+    elements.timeline_range_summary,
+    range
+      ? [
+        `${formatTime(range.startMs, { compact: true })}–${formatTime(range.endMs, { compact: true })}`,
+        " · ",
+        formatDuration(range.endMs - range.startMs),
+        " ",
+        choosingShortSource ? "쇼츠 소스" : "삭제"
+      ]
+      : rawRange
+        ? [
+          formatDuration(rawRange.endMs - rawRange.startMs),
+          " · ",
+          "0.1초 이상 필요"
+        ]
+        : []
+  );
 
   if (rangeTools) {
     rangeTools.hidden = false;
@@ -10442,6 +10624,7 @@ function makeHandle(
   handle.title = disabled
     ? `${projectSourcePlatformLabel()} 편집 영상을 다시 준비한 뒤 조정할 수 있습니다`
     : "←/→ 0.1초 · Shift+←/→ 1초";
+  uiLocalization.refresh(handle);
   handle.addEventListener("pointerdown", onStart);
   handle.addEventListener("keydown", (event) => {
     if (!onNudge || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) {
@@ -11788,14 +11971,26 @@ function renderTimeline({ keepScroll = false } = {}) {
       const body = document.createElement("button");
       body.type = "button";
       body.className = "short-video-asset-block-body";
-      const sourceLabel = String(sourceClip?.note || "").trim()
+      const sourceNote = String(sourceClip?.note || "").trim();
+      const sourceLabel = document.createElement("span");
+      sourceLabel.textContent = sourceNote
         || (sourceIndex >= 0 ? `본편 컷 ${sourceIndex + 1}` : "본편 원본");
-      body.textContent = `L${asset.lane + 1} · ${assetIndex + 1} · ${sourceLabel} · ${Math.round(asset.audioGain * 100)}%`;
+      sourceLabel.toggleAttribute(
+        "data-kirinuki-ui-copy-ignore",
+        Boolean(sourceNote)
+      );
+      body.replaceChildren(
+        document.createTextNode(`L${asset.lane + 1} · ${assetIndex + 1} · `),
+        sourceLabel,
+        document.createTextNode(` · ${Math.round(asset.audioGain * 100)}%`)
+      );
+      uiLocalization.refresh(body);
       body.title = (
         `캔버스 ${formatTime(asset.timelineStartMs, { compact: true })}–${formatTime(asset.timelineEndMs, { compact: true })}`
         + ` · 원본 ${formatTime(asset.sourceStartMs, { compact: true })}–${formatTime(asset.sourceEndMs, { compact: true })}`
         + ` · ${asset.lane + 1}번 라인 · 음량 ${Math.round(asset.audioGain * 100)}% · 앞뒤 영상과 독립적으로 이동·자르기 가능`
       );
+      uiLocalization.refresh(body);
       body.addEventListener("pointerdown", (event) => {
         bindShortTimelineSourceMove(body, asset, "video", event);
       });
@@ -11885,15 +12080,28 @@ function renderTimeline({ keepScroll = false } = {}) {
       const body = document.createElement("button");
       body.type = "button";
       body.className = "source-audio-asset-block-body";
-      const sourceLabel = String(sourceClip?.note || "").trim()
+      const sourceNote = String(sourceClip?.note || "").trim();
+      const sourceLabel = document.createElement("span");
+      sourceLabel.textContent = sourceNote
         || (sourceIndex >= 0 ? `본편 컷 ${sourceIndex + 1}` : "본편 원본");
-      body.textContent = asset.muted
-        ? `${assetIndex + 1} · 음소거 · ${sourceLabel}`
-        : `${assetIndex + 1} · 원본 ${Math.round(asset.gain * 100)}% · ${sourceLabel}`;
+      sourceLabel.toggleAttribute(
+        "data-kirinuki-ui-copy-ignore",
+        Boolean(sourceNote)
+      );
+      body.replaceChildren(
+        document.createTextNode(
+          asset.muted
+            ? `${assetIndex + 1} · 음소거 · `
+            : `${assetIndex + 1} · 원본 ${Math.round(asset.gain * 100)}% · `
+        ),
+        sourceLabel
+      );
+      uiLocalization.refresh(body);
       body.title = (
         `캔버스 ${formatTime(asset.timelineStartMs, { compact: true })}–${formatTime(asset.timelineEndMs, { compact: true })}`
         + ` · 원본 ${formatTime(asset.sourceStartMs, { compact: true })}–${formatTime(asset.sourceEndMs, { compact: true })}`
       );
+      uiLocalization.refresh(body);
       body.addEventListener("pointerdown", (event) => {
         bindShortTimelineSourceMove(body, asset, "source-audio", event);
       });
@@ -12209,6 +12417,7 @@ function renderTimeline({ keepScroll = false } = {}) {
     body.textContent = asset.name || `이미지 ${assetIndex + 1}`;
     body.toggleAttribute("data-kirinuki-ui-copy-ignore", Boolean(asset.name));
     body.title = `${asset.name || "이미지"} · 겹친 이미지는 이미지 트랙의 별도 줄에 표시됩니다.`;
+    uiLocalization.refresh(body);
     body.addEventListener("pointerdown", (event) => {
       bindTimedBlockMove(body, asset, "asset", event);
     });
@@ -16175,8 +16384,8 @@ function setWhisperConnectionStatus(
 ) {
   whisperConnectionState = state;
   whisperConnectionMessage = message;
-  elements.whisper_connection_status.textContent = message;
   elements.whisper_connection_status.dataset.state = state;
+  renderWhisperConnectionStatus();
 }
 
 function connectedWhisperCatalogEntry() {
@@ -16193,6 +16402,14 @@ function connectedWhisperCatalogEntry() {
     return null;
   }
   return entry;
+}
+
+function renderWhisperConnectionStatus(): void {
+  const connectedModel = connectedWhisperCatalogEntry();
+  const source = connectedModel && captionAgentRuntime
+    ? `연결됨 · 이 PC의 ${uiLocalization.translate(connectedModel.label)} (${captionAgentRuntime.sttModel})`
+    : whisperConnectionMessage;
+  elements.whisper_connection_status.textContent = uiLocalization.translate(source);
 }
 
 function renderCaptionModeControls() {
@@ -16228,10 +16445,11 @@ function renderCaptionModeControls() {
     : " 이 PC의 Whisper 자동 연결";
   elements.whisper_model_summary.hidden = false;
   if (connectedModel && captionAgentRuntime) {
-    elements.whisper_model_summary.textContent = [
-      `연결된 모델: ${connectedModel.label} (${connectedModel.id})`,
-      `${connectedModel.purpose} · 모델 파일 ${connectedModel.downloadSizeLabel}`
-    ].join("\n");
+    replaceUiCopyParts(elements.whisper_model_summary, [
+      `연결된 모델: ${uiLocalization.translate(connectedModel.label)} (${connectedModel.id})`,
+      "\n",
+      `${uiLocalization.translate(connectedModel.purpose)} · 모델 파일 ${uiLocalization.translate(connectedModel.downloadSizeLabel)}`
+    ]);
   } else {
     elements.whisper_model_summary.textContent =
       "버튼을 누르면 실행 중인 Tiny·Base·Small·Medium 모델을 자동으로 확인합니다";
@@ -16248,8 +16466,7 @@ function renderCaptionModeControls() {
       "disconnected"
     );
   } else {
-    elements.whisper_connection_status.textContent = whisperConnectionMessage;
-    elements.whisper_connection_status.dataset.state = whisperConnectionState;
+    renderWhisperConnectionStatus();
   }
 }
 
@@ -16501,12 +16718,15 @@ async function testCaptionAgentConnection() {
     }
     const provider = result.provider ? ` · ${result.provider}` : "";
     const actualStt = config.runtime?.sttModel || result.models?.stt || "확인 불가";
+    const actualSttLabel = actualStt === "확인 불가"
+      ? uiLocalization.translate(actualStt)
+      : actualStt;
     const ready = captionAgentCapabilityReady(result);
     const readiness = !ready
       ? " · 로컬 STT 설정 미완료"
       : "";
     showToast(
-      `자막 에이전트 연결 확인 완료${provider} · Whisper · STT ${actualStt}${readiness}`,
+      `자막 에이전트 연결 확인 완료${provider} · Whisper · STT ${actualSttLabel}${readiness}`,
       ready ? "success" : "error",
       ready ? 5200 : 0
     );
@@ -16515,9 +16735,12 @@ async function testCaptionAgentConnection() {
       model: config.model
     });
     connectedWhisperModelId = String(actualStt);
+    const connectedModelLabel = whisperModelCatalogEntry(actualStt)?.label;
     setWhisperConnectionStatus(
       ready
-        ? `연결됨 · 이 PC의 ${whisperModelCatalogEntry(actualStt)?.label || actualStt}`
+        ? `연결됨 · 이 PC의 ${connectedModelLabel
+          ? uiLocalization.translate(connectedModelLabel)
+          : actualStt}`
         : "Whisper 설정을 확인해 주세요",
       ready ? "ready" : "error"
     );
@@ -16840,7 +17063,21 @@ async function generateCaptions() {
           },
           onProgress: (progress, label) => {
             const local = 0.28 + Math.max(0, Math.min(1, progress)) * 0.7;
-            setAiProgress(base + span * local, `${index + 1}/${clips.length} · ${label}`);
+            const knownProgressLabels = new Set([
+              "자막 엔진에 선택 구간 음성을 보내는 중",
+              "음성인식과 자막 초벌 정리 중",
+              "로컬 Whisper 자막 초안 수신 완료"
+            ]);
+            const safeLabel = /[가-힣]/u.test(label) && !knownProgressLabels.has(label)
+              ? "음성인식과 자막 초벌 정리 중"
+              : label;
+            if (safeLabel !== label) {
+              console.warn("Unlocalized caption-agent progress was hidden from the UI.", label);
+            }
+            setAiProgress(
+              base + span * local,
+              `${index + 1}/${clips.length} · ${safeLabel}`
+            );
           }
         });
         if (String(result.sttModel || "") !== runtime.sttModel) {
@@ -16937,8 +17174,16 @@ async function generateCaptions() {
       (warning) => CAPTION_REVIEW_WARNING_CODES.has(warning.code)
     ).length;
     const draftLabel = audsegMode
-      ? `AudSeg ${AUDSEG_ENGINE_VERSION} 빈 타이밍`
-      : `로컬 Whisper ${runtime.sttModel} 자막`;
+      ? ({
+        ko: `AudSeg ${AUDSEG_ENGINE_VERSION} 빈 타이밍`,
+        en: `AudSeg ${AUDSEG_ENGINE_VERSION} empty timing`,
+        ja: `AudSeg ${AUDSEG_ENGINE_VERSION} 空タイミング`
+      })[uiLocalization.language]
+      : ({
+        ko: `로컬 Whisper ${runtime.sttModel} 자막`,
+        en: `local Whisper ${runtime.sttModel} captions`,
+        ja: `ローカル Whisper ${runtime.sttModel} 字幕`
+      })[uiLocalization.language];
     showToast(
       audsegMode
         ? generatedCueCount > 0
@@ -17878,16 +18123,19 @@ async function cleanupCompletedExportSessionCaches(
     + browserCleanup.deletedMediaHandleCount
     + browserCleanup.deletedEditingSessionCheckpointCount
   );
-  elements.session_completed_summary.textContent = (
-    `내보낸 영상과 편집 복원 파일은 그대로 보존했습니다. 이 작업의 기기 내 데이터 ${deletedBrowserRecords}건`
-    + (releasedVodFiles > 0
+  replaceUiCopyParts(elements.session_completed_summary, [
+    "내보낸 영상과 편집 복원 파일은 그대로 보존했습니다. ",
+    `이 작업의 기기 내 데이터 ${deletedBrowserRecords}건`,
+    releasedVodFiles > 0
       ? `과 VOD 작업 파일 ${releasedVodFiles.toLocaleString(uiIntlLocale(uiLocalization.language))}개(${formatFileSize(releasedVodBytes)})`
-      : "")
-    + "만 삭제했습니다."
-    + (runtimeCleanupWarning
-      ? ` 남은 연결 정보는 브라우저를 닫을 때 다시 정리합니다: ${runtimeCleanupWarning}`
-      : "")
-  );
+      : "",
+    "만 삭제했습니다.",
+    runtimeCleanupWarning ? " " : "",
+    runtimeCleanupWarning
+      ? "남은 연결 정보는 브라우저를 닫을 때 다시 정리합니다: "
+      : "",
+    runtimeCleanupWarning
+  ]);
   if (!elements.session_completed_dialog.open) {
     elements.session_completed_dialog.showModal();
   }
@@ -18236,7 +18484,12 @@ async function exportVideo(
       } catch (error: unknown) {
         verificationFailure = errorDetails(error);
       }
-      let cleanupMessage = "";
+      let cleanupSummary: {
+        browserRecordCount: number;
+        releasedVodFiles: number;
+        releasedVodBytes: number;
+        runtimeCleanupWarning: string;
+      } | null = null;
       let cleanupFailure = "";
       hideJob();
       if (verifiedOutput) {
@@ -18244,9 +18497,14 @@ async function exportVideo(
           (sum, sidecar) => sum + sidecar.sizeBytes,
           0
         );
-        const shouldCleanup = await askExportSessionCleanup(
-          `${isShortForm ? "쇼츠 영상" : "영상"} ${formatFileSize(verifiedOutput.sizeBytes)}와 편집 복원 파일${sidecars.length > 1 ? "·자막 파일" : ""} ${formatFileSize(sidecarBytes)}이 제대로 저장됐는지 확인했습니다.`
-        );
+        const shouldCleanup = await askExportSessionCleanup([
+          isShortForm ? "쇼츠 영상" : "영상",
+          ` ${formatFileSize(verifiedOutput.sizeBytes)}`,
+          "와 편집 복원 파일",
+          sidecars.length > 1 ? "·자막 파일" : "",
+          ` ${formatFileSize(sidecarBytes)}`,
+          "이 제대로 저장됐는지 확인했습니다."
+        ]);
         if (shouldCleanup) {
           try {
             showJob(
@@ -18294,16 +18552,12 @@ async function exportVideo(
               + cleanup.browser.deletedMediaHandleCount
               + cleanup.browser.deletedEditingSessionCheckpointCount
             );
-            cleanupMessage = (
-              ` 현재 편집 작업을 완료하고 기기 내 기록 ${browserRecordCount}건`
-              + (cleanup.releasedVodFiles > 0
-                ? `과 VOD 작업 파일 ${cleanup.releasedVodFiles.toLocaleString(uiIntlLocale(uiLocalization.language))}개(${formatFileSize(cleanup.releasedVodBytes)})`
-                : "")
-              + "를 정리했습니다."
-              + (cleanup.runtimeCleanupWarning
-                ? " 남은 연결 정보는 브라우저를 닫을 때 한 번 더 정리됩니다."
-                : "")
-            );
+            cleanupSummary = {
+              browserRecordCount,
+              releasedVodFiles: cleanup.releasedVodFiles,
+              releasedVodBytes: cleanup.releasedVodBytes,
+              runtimeCleanupWarning: cleanup.runtimeCleanupWarning
+            };
           } catch (error: unknown) {
             cleanupFailure = errorDetails(error);
           } finally {
@@ -18312,8 +18566,10 @@ async function exportVideo(
         }
       }
       if (!verifiedOutput) {
+        const verificationReason = verificationFailure
+          || uiLocalization.translate("확인 결과가 없습니다.");
         showToast(
-          `${isShortForm ? "쇼츠 영상" : "영상"}과 복원 파일은 보존했지만 저장 완료를 확인하지 못해 임시 자료를 모두 유지했습니다: ${verificationFailure || "확인 결과가 없습니다."}`,
+          `${isShortForm ? "쇼츠 영상" : "영상"}과 복원 파일은 보존했지만 저장 완료를 확인하지 못해 임시 자료를 모두 유지했습니다: ${verificationReason}`,
           "error",
           0
         );
@@ -18324,8 +18580,49 @@ async function exportVideo(
           0
         );
       } else {
+        const localizedRecordCount = cleanupSummary?.browserRecordCount
+          .toLocaleString(uiIntlLocale(uiLocalization.language));
+        const localizedVodFileCount = cleanupSummary?.releasedVodFiles
+          .toLocaleString(uiIntlLocale(uiLocalization.language));
+        const savedSubject = isShortForm
+          ? ({ ko: "쇼츠 영상", en: "Shorts video", ja: "ショート動画" })[uiLocalization.language]
+          : ({ ko: "영상", en: "Video", ja: "動画" })[uiLocalization.language];
+        const savedFiles = sidecars.length > 1
+          ? ({
+            ko: "편집 복원 파일·자막 파일",
+            en: "edit-recovery and caption files",
+            ja: "編集復元ファイル・字幕ファイル"
+          })[uiLocalization.language]
+          : ({
+            ko: "편집 복원 파일",
+            en: "edit-recovery file",
+            ja: "編集復元ファイル"
+          })[uiLocalization.language];
+        const cleanupCopy = cleanupSummary
+          ? ({
+            ko: ` 현재 편집 작업을 완료하고 기기 내 기록 ${localizedRecordCount}건${cleanupSummary.releasedVodFiles > 0
+              ? `과 VOD 작업 파일 ${localizedVodFileCount}개(${formatFileSize(cleanupSummary.releasedVodBytes)})`
+              : ""}를 정리했습니다.${cleanupSummary.runtimeCleanupWarning
+              ? " 남은 연결 정보는 브라우저를 닫을 때 한 번 더 정리됩니다."
+              : ""}`,
+            en: ` Finished this editing session and cleaned up ${localizedRecordCount} local records${cleanupSummary.releasedVodFiles > 0
+              ? ` and ${localizedVodFileCount} VOD working files (${formatFileSize(cleanupSummary.releasedVodBytes)})`
+              : ""}.${cleanupSummary.runtimeCleanupWarning
+              ? " Remaining connection data will be cleaned up once more when the browser closes."
+              : ""}`,
+            ja: ` 現在の編集セッションを完了し、デバイス内記録 ${localizedRecordCount} 件${cleanupSummary.releasedVodFiles > 0
+              ? `と VOD 作業ファイル ${localizedVodFileCount} 件（${formatFileSize(cleanupSummary.releasedVodBytes)}）`
+              : ""}を整理しました。${cleanupSummary.runtimeCleanupWarning
+              ? " 残っている接続情報はブラウザーを閉じる際にもう一度整理します。"
+              : ""}`
+          })[uiLocalization.language]
+          : "";
         showToast(
-          `${isShortForm ? "쇼츠 영상" : "영상"}과 편집 복원 파일${sidecars.length > 1 ? "·자막 파일" : ""}을 확인해 선택한 폴더에 저장했습니다.${cleanupMessage}`,
+          ({
+            ko: `${savedSubject}과 ${savedFiles}을 확인해 선택한 폴더에 저장했습니다.${cleanupCopy}`,
+            en: `${savedSubject} and the ${savedFiles} were verified and saved to the selected folder.${cleanupCopy}`,
+            ja: `${savedSubject}と${savedFiles}を確認し、選択したフォルダーに保存しました。${cleanupCopy}`
+          })[uiLocalization.language],
           "success",
           7000
         );
@@ -18353,21 +18650,54 @@ async function exportVideo(
       const canceled = errorName(error) === "AbortError";
       const message = errorDetails(error);
       const cleanupMessage = cleanupFailed
-        ? " 생성된 빈 영상 파일은 지우지 못했습니다."
+        ? ({
+          ko: " 생성된 빈 영상 파일은 지우지 못했습니다.",
+          en: " The empty video file that was created could not be deleted.",
+          ja: " 生成された空の動画ファイルを削除できませんでした。"
+        })[uiLocalization.language]
         : preservedOutputInspectionFailed
-          ? ` 오류 뒤 상태를 확정할 수 없는 ${videoName} 파일은 안전을 위해 지우지 않았습니다.`
+          ? ({
+            ko: ` 오류 뒤 상태를 확정할 수 없는 ${videoName} 파일은 안전을 위해 지우지 않았습니다.`,
+            en: ` The state of ${videoName} could not be determined after the error, so the file was kept for safety.`,
+            ja: ` エラー後に状態を確認できない ${videoName} ファイルは、安全のため削除していません。`
+          })[uiLocalization.language]
           : preservedOutput
-            ? ` 오류 전에 기록된 ${videoName} 파일은 복구 가능성을 위해 지우지 않았습니다.`
+            ? ({
+              ko: ` 오류 전에 기록된 ${videoName} 파일은 복구 가능성을 위해 지우지 않았습니다.`,
+              en: ` The ${videoName} file written before the error was kept for possible recovery.`,
+              ja: ` エラー前に書き込まれた ${videoName} ファイルは、復元できる可能性を残すため削除していません。`
+            })[uiLocalization.language]
             : "";
       const failurePrefix = exportState.stage === "finalize"
-        ? "영상 파일 마무리 실패"
-        : "영상 내보내기 실패";
+        ? ({
+          ko: "영상 파일 마무리 실패",
+          en: "Could not finalize the video file",
+          ja: "動画ファイルの仕上げに失敗"
+        })[uiLocalization.language]
+        : ({
+          ko: "영상 내보내기 실패",
+          en: "Video export failed",
+          ja: "動画の書き出しに失敗"
+        })[uiLocalization.language];
+      const preservedEditCopy = ({
+        ko: "현재 편집은 내보내기 직전 저장본에 보존돼 있습니다.",
+        en: "The current edit remains preserved in the version saved immediately before export.",
+        ja: "現在の編集内容は、書き出し直前の保存版に保持されています。"
+      })[uiLocalization.language];
       showToast(
         canceled
-          ? `영상 내보내기를 취소했습니다.${cleanupMessage}`
+          ? `${({
+            ko: "영상 내보내기를 취소했습니다.",
+            en: "Video export canceled.",
+            ja: "動画の書き出しをキャンセルしました。"
+          })[uiLocalization.language]}${cleanupMessage}`
           : renderCompleted
-            ? `영상은 보존했지만 편집 복원 파일·자막 파일을 저장하거나 확인하지 못했습니다: ${message}. 임시 자료는 유지했습니다.`
-            : `${failurePrefix}: ${message}.${cleanupMessage} 현재 편집은 내보내기 직전 저장본에 보존돼 있습니다.`,
+            ? ({
+              ko: `영상은 보존했지만 편집 복원 파일·자막 파일을 저장하거나 확인하지 못했습니다: ${message}. 임시 자료는 유지했습니다.`,
+              en: `The video was preserved, but the edit-recovery and caption files could not be saved or verified: ${message}. Temporary data was kept.`,
+              ja: `動画は保持しましたが、編集復元ファイル・字幕ファイルを保存または確認できませんでした: ${message}。一時データは維持しました。`
+            })[uiLocalization.language]
+            : `${failurePrefix}: ${message}.${cleanupMessage} ${preservedEditCopy}`,
         canceled && !cleanupFailed ? "info" : "error",
         0
       );
@@ -18503,7 +18833,14 @@ function suggestedExportOutputTitle(exportKind: ExportKind): string {
       ? projectTitle
       : sourceTitle || projectTitle || "kirinuki"
   ).replace(/\s+쇼츠$/u, "");
-  return exportKind === "short-form" ? `${baseTitle} 쇼츠` : baseTitle;
+  if (exportKind !== "short-form") {
+    return baseTitle;
+  }
+  return `${baseTitle} ${{
+    ko: "쇼츠",
+    en: "Short",
+    ja: "ショート"
+  }[uiLocalization.language]}`;
 }
 
 function renderExportOutputTitle(): string | null {
@@ -18516,9 +18853,21 @@ function renderExportOutputTitle(): string | null {
     return null;
   }
   const safeTitle = sanitizeFileName(rawTitle);
-  elements.export_file_name_preview.textContent = (
-    `저장 파일: ${safeTitle}.(영상 형식) · ${safeTitle}.kirinuki-session.json`
-    + " · 자막이 있으면 같은 이름의 SRT (중복 이름은 번호를 붙여 보존)"
+  const videoTitle = document.createElement("span");
+  videoTitle.dataset.kirinukiUiCopyIgnore = "";
+  videoTitle.textContent = safeTitle;
+  const recoveryTitle = document.createElement("span");
+  recoveryTitle.dataset.kirinukiUiCopyIgnore = "";
+  recoveryTitle.textContent = safeTitle;
+  elements.export_file_name_preview.replaceChildren(
+    document.createTextNode("저장 파일: "),
+    videoTitle,
+    document.createTextNode(".(영상 형식) · "),
+    recoveryTitle,
+    document.createTextNode(".kirinuki-session.json"),
+    document.createTextNode(
+      " · 자막이 있으면 같은 이름의 SRT (중복 이름은 번호를 붙여 보존)"
+    )
   );
   return safeTitle;
 }
@@ -18532,11 +18881,11 @@ function resolveExportCleanupDialog(shouldDelete: boolean): void {
   resolve?.(shouldDelete);
 }
 
-function askExportSessionCleanup(summary: string): Promise<boolean> {
+function askExportSessionCleanup(summaryParts: readonly string[]): Promise<boolean> {
   if (pendingExportCleanupResolve) {
     throw new Error("이전 내보내기 정리 확인이 아직 끝나지 않았습니다.");
   }
-  elements.cleanup_after_export_summary.textContent = summary;
+  replaceUiCopyParts(elements.cleanup_after_export_summary, summaryParts);
   if (!elements.cleanup_after_export_dialog.open) {
     elements.cleanup_after_export_dialog.showModal();
   }
@@ -19546,10 +19895,11 @@ function bindActions() {
   elements.retry_short_preview_cache.addEventListener(
     "click",
     () => void retryShortPreviewAssetCaches().catch((error: unknown) => {
-      shortPreviewCacheError = errorDetails(error);
+      shortPreviewCacheError = "영상 미리보기 준비 실패";
+      console.warn("쇼츠 미리보기를 다시 만들지 못했습니다.", error);
       renderShortFramingInspector();
       showToast(
-        `쇼츠 미리보기를 다시 만들지 못했습니다: ${shortPreviewCacheError}`,
+        `쇼츠 미리보기를 다시 만들지 못했습니다: ${uiLocalization.translate(shortPreviewCacheError)}`,
         "error",
         0
       );
@@ -20602,7 +20952,11 @@ function bindActions() {
           showToast(`자막 폰트를 준비하지 못했습니다: ${errorMessage(error)}`, "error", 0);
         });
     }
-    showToast(`${preset.displayName} 스타일을 적용했습니다.`, "success", 3600);
+    showToast(
+      `${uiLocalization.translate(preset.displayName)} 스타일을 적용했습니다.`,
+      "success",
+      3600
+    );
   });
   elements.audseg_provider_tab.addEventListener("click", () => {
     selectCaptionProvider(AUDSEG_DRAFT_MODEL);
@@ -21478,16 +21832,21 @@ async function initialize() {
       + completedCleanup.browser.deletedMediaHandleCount
       + completedCleanup.browser.deletedEditingSessionCheckpointCount
     );
-    elements.session_completed_summary.textContent = (
-      `${startupCleanupRecoveryNotice} 내보낸 영상과 편집 복원 파일은 그대로 보존했고, 이 작업의 기기 내 데이터 ${deletedBrowserRecords}건`
-      + (completedCleanup.releasedBytes > 0
+    replaceUiCopyParts(elements.session_completed_summary, [
+      startupCleanupRecoveryNotice,
+      " ",
+      "내보낸 영상과 편집 복원 파일은 그대로 보존했고, ",
+      `이 작업의 기기 내 데이터 ${deletedBrowserRecords}건`,
+      completedCleanup.releasedBytes > 0
         ? `과 VOD 작업 재료 ${formatFileSize(completedCleanup.releasedBytes)}`
-        : "")
-      + "을 삭제했습니다."
-      + (runtimeCleanupWarning
-        ? ` 로컬 연결 정리는 다음 영상 준비 도구 시작 때 다시 시도됩니다: ${runtimeCleanupWarning}`
-        : "")
-    );
+        : "",
+      "을 삭제했습니다.",
+      runtimeCleanupWarning ? " " : "",
+      runtimeCleanupWarning
+        ? "로컬 연결 정리는 다음 영상 준비 도구 시작 때 다시 시도됩니다: "
+        : "",
+      runtimeCleanupWarning
+    ]);
     startupCleanupRecoveryNotice = "";
     if (!elements.session_completed_dialog.open) {
       elements.session_completed_dialog.showModal();
@@ -21929,7 +22288,26 @@ window.addEventListener(UI_LANGUAGE_CHANGE_EVENT, () => {
       time.textContent = formatter.format(timestamp);
     }
   });
+  document.querySelectorAll<HTMLElement>(
+    "[data-kirinuki-ui-duration-ms]"
+  ).forEach((element) => {
+    const durationMs = Number(element.dataset.kirinukiUiDurationMs);
+    if (Number.isFinite(durationMs)) {
+      element.textContent = formatDuration(durationMs);
+    }
+  });
+  installEditorShortcutHints();
+  renderCaptionModeControls();
+  renderHeader();
   renderLocalPersistenceStatus();
+  renderUsagePolicyStatus();
+  hideTimelineSnapGuide();
+  dismissToast();
+  if (project) {
+    renderShortFramingInspector();
+    renderShortSourceComposer();
+    renderTimelineRange();
+  }
 });
 
 void initialize().catch((error: unknown) => {

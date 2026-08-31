@@ -12,6 +12,328 @@ import type {
  * anchored patterns at the end of this file.
  */
 export const EDITOR_RUNTIME_UI_COPY = {
+  "저장 파일:": {
+    en: "Saved files:",
+    ja: "保存ファイル:"
+  },
+  ".(영상 형식) ·": {
+    en: ".(video format) ·",
+    ja: ".（動画形式） ·"
+  },
+  "· 자막이 있으면 같은 이름의 SRT (중복 이름은 번호를 붙여 보존)": {
+    en: "· Captions are saved as an SRT with the same name (numbered if the name already exists)",
+    ja: "· 字幕がある場合は同名の SRT として保存（同名ファイルは番号を付けて保持）"
+  },
+  "와 편집 복원 파일": {
+    en: " and edit-recovery file",
+    ja: "と編集復元ファイル"
+  },
+  "·자막 파일": {
+    en: " and caption file",
+    ja: "・字幕ファイル"
+  },
+  "이 제대로 저장됐는지 확인했습니다.": {
+    en: " were saved correctly.",
+    ja: "が正しく保存されたことを確認しました。"
+  },
+  "작업 중 오류가 발생했습니다. 다시 시도해 주세요.": {
+    en: "Something went wrong. Try again.",
+    ja: "処理中にエラーが発生しました。もう一度お試しください。"
+  },
+  "저장된 자막 위치가 가장 많이 쓰인 값과 다릅니다. 오류로 확정된 것은 아닙니다.": {
+    en: "The saved caption position differs from the most-used value. This does not necessarily indicate an error.",
+    ja: "保存済みの字幕位置が最も多く使われている値と異なります。エラーと確定したわけではありません。"
+  },
+  "설정 크기가 가장 많이 쓰인 값과 다릅니다. 오류로 확정된 것은 아닙니다.": {
+    en: "The configured size differs from the most-used value. This does not necessarily indicate an error.",
+    ja: "設定サイズが最も多く使われている値と異なります。エラーと確定したわけではありません。"
+  },
+  "글자색이 가장 많이 쓰인 값과 다릅니다. 오류로 확정된 것은 아닙니다.": {
+    en: "The text color differs from the most-used value. This does not necessarily indicate an error.",
+    ja: "文字色が最も多く使われている値と異なります。エラーと確定したわけではありません。"
+  },
+  "검은 상자가 가장 많이 쓰인 값과 다릅니다. 오류로 확정된 것은 아닙니다.": {
+    en: "The black-box setting differs from the most-used value. This does not necessarily indicate an error.",
+    ja: "黒いボックスの設定が最も多く使われている値と異なります。エラーと確定したわけではありません。"
+  },
+  "진행 중인 편집·저장·내보내기 작업이 끝난 뒤 작업을 끝내 주세요.": {
+    en: "Finish the active edit, save, or export operation before ending the session.",
+    ja: "進行中の編集・保存・書き出し処理が完了してから、作業を終了してください。"
+  },
+  "쇼츠 미리보기·화면 조정 작업이 끝난 뒤 작업을 끝내 주세요.": {
+    en: "Finish the Shorts preview or framing adjustment before ending the session.",
+    ja: "ショート動画のプレビュー・画面調整が完了してから、作業を終了してください。"
+  },
+  "VOD 편집 영상 준비 작업이 끝난 뒤 작업을 끝내 주세요.": {
+    en: "Finish preparing the VOD editing media before ending the session.",
+    ja: "VOD 編集用メディアの準備が完了してから、作業を終了してください。"
+  },
+  "열려 있는 내보내기·세션 정리 확인창이 끝난 뒤 작업을 끝내 주세요.": {
+    en: "Close the export or session-cleanup confirmation before ending the session.",
+    ja: "開いている書き出し・セッション整理の確認画面を閉じてから、作業を終了してください。"
+  },
+  "진행 중인 편집·저장·내보내기 작업이 끝난 뒤 다시 선택해 주세요.": {
+    en: "Wait for the active edit, save, or export operation to finish, then choose again.",
+    ja: "進行中の編集・保存・書き出し処理が完了してから、もう一度選択してください。"
+  },
+  "쇼츠 미리보기·화면 조정 작업이 끝난 뒤 다시 선택해 주세요.": {
+    en: "Wait for the Shorts preview or framing adjustment to finish, then choose again.",
+    ja: "ショート動画のプレビュー・画面調整が完了してから、もう一度選択してください。"
+  },
+  "VOD 편집 영상 준비 작업이 끝난 뒤 다시 선택해 주세요.": {
+    en: "Wait for the VOD editing media to finish preparing, then choose again.",
+    ja: "VOD 編集用メディアの準備が完了してから、もう一度選択してください。"
+  },
+  "열려 있는 내보내기·세션 정리 확인창이 끝난 뒤 다시 선택해 주세요.": {
+    en: "Close the export or session-cleanup confirmation, then choose again.",
+    ja: "開いている書き出し・セッション整理の確認画面を閉じてから、もう一度選択してください。"
+  },
+  "· 5분 간격": {
+    en: "· every 5 minutes",
+    ja: "· 5 分間隔"
+  },
+  "· 탭 종료 시 임시본 폐기": {
+    en: "· temporary copies discarded when the tab closes",
+    ja: "· タブ終了時に一時データを破棄"
+  },
+  "내보낸 영상과 편집 복원 파일은 그대로 보존했습니다.": {
+    en: "The exported video and edit-recovery file were preserved.",
+    ja: "書き出した動画と編集復元ファイルは保持しました。"
+  },
+  "내보낸 영상과 편집 복원 파일은 그대로 보존했고,": {
+    en: "The exported video and edit-recovery file were preserved.",
+    ja: "書き出した動画と編集復元ファイルは保持しました。"
+  },
+  "만 삭제했습니다.": {
+    en: " were deleted.",
+    ja: "のみ削除しました。"
+  },
+  "을 삭제했습니다.": {
+    en: " were deleted.",
+    ja: "を削除しました。"
+  },
+  "남은 연결 정보는 브라우저를 닫을 때 다시 정리합니다:": {
+    en: "Remaining connection data will be cleaned up when the browser closes:",
+    ja: "残っている接続情報はブラウザーを閉じる際に再整理します:"
+  },
+  "로컬 연결 정리는 다음 영상 준비 도구 시작 때 다시 시도됩니다:": {
+    en: "Local connection cleanup will be retried the next time the media helper starts:",
+    ja: "ローカル接続の整理は、次回動画準備ヘルパーを起動した際に再試行します:"
+  },
+  // Preview, export verification, and completed-session recovery failures.
+  "쇼츠 원본 음성 미리보기를 읽지 못했습니다.": {
+    en: "Could not load the source-audio preview for Shorts.",
+    ja: "ショート動画の元音声プレビューを読み込めませんでした。"
+  },
+  "쇼츠 대체 미리보기 캔버스를 준비하지 못했습니다.": {
+    en: "Could not prepare the fallback Shorts preview canvas.",
+    ja: "ショート動画の代替プレビュー用キャンバスを準備できませんでした。"
+  },
+  "현재 시점의 쇼츠 미리보기 영상이 아직 준비되지 않았습니다.": {
+    en: "The Shorts preview at the current playhead is not ready yet.",
+    ja: "現在位置のショート動画プレビューはまだ準備できていません。"
+  },
+  "로컬 쇼츠 영상을 제한 시간 안에 디코딩하지 못했습니다. 미리보기를 다시 만들어 주세요.": {
+    en: "Could not decode the local Shorts video in time. Rebuild the preview.",
+    ja: "ローカルのショート動画を時間内にデコードできませんでした。プレビューを作り直してください。"
+  },
+  "쇼츠 재생 준비가 취소되었습니다.": {
+    en: "Shorts playback preparation was canceled.",
+    ja: "ショート動画の再生準備をキャンセルしました。"
+  },
+  "백업 파일의 VOD 원본 주소와 이 기기에 준비된 영상 기록이 일치하지 않습니다.": {
+    en: "The source VOD URL in the backup does not match the media prepared on this device.",
+    ja: "バックアップ内の元 VOD URL が、このデバイスで準備済みの動画記録と一致しません。"
+  },
+  "내보낸 세션 복원 JSON 파일 핸들이 없습니다.": {
+    en: "The exported session-recovery JSON file handle is missing.",
+    ja: "書き出したセッション復元 JSON のファイルハンドルがありません。"
+  },
+  "내보낸 sidecar 파일명이 중복되어 전체 묶음을 검증할 수 없습니다.": {
+    en: "Duplicate exported sidecar filenames prevent verification of the complete set.",
+    ja: "書き出したサイドカーファイルの名前が重複しているため、ファイル一式を検証できません。"
+  },
+  "내보낸 묶음에는 세션 복원 JSON이 정확히 하나 있어야 합니다.": {
+    en: "The exported set must contain exactly one session-recovery JSON file.",
+    ja: "書き出したファイル一式には、セッション復元 JSON が 1 つだけ必要です。"
+  },
+  "같은 이름의 내보내기가 너무 많습니다. 출력 영상 제목을 바꿔 주세요.": {
+    en: "Too many exports use the same name. Change the output title.",
+    ja: "同名の書き出しが多すぎます。出力動画のタイトルを変更してください。"
+  },
+  "저장된 영상 파일이 비어 있습니다.": {
+    en: "The saved video file is empty.",
+    ja: "保存された動画ファイルが空です。"
+  },
+  "저장된 파일의 영상 트랙과 재생 길이를 확인하지 못했습니다.": {
+    en: "Could not verify the video track and duration of the saved file.",
+    ja: "保存されたファイルの映像トラックと再生時間を確認できませんでした。"
+  },
+  "편집본에 필요한 음성 트랙이 저장된 영상에서 누락됐습니다.": {
+    en: "The saved video is missing the audio track required by the edit.",
+    ja: "保存された動画に、編集内容で必要な音声トラックがありません。"
+  },
+  "저장된 영상 파일이 검증 중 변경되어 임시 파일을 유지합니다.": {
+    en: "The saved video changed during verification, so the temporary file was kept.",
+    ja: "検証中に保存動画が変更されたため、一時ファイルを保持します。"
+  },
+  "세션 정리 저장을 시작하지 못했습니다.": {
+    en: "Could not start saving the session cleanup state.",
+    ja: "セッション整理状態の保存を開始できませんでした。"
+  },
+  "이전 종료가 이 세션의 VOD 작업 재료 정리 도중 발생했습니다. 원본 연결을 검증하고 필요하면 세션 전용 재료를 다시 준비합니다.": {
+    en: "The previous shutdown occurred while this session's VOD working files were being cleaned up. Kirinuki will verify the source connection and rebuild session-only media if needed.",
+    ja: "前回は、このセッションの VOD 作業ファイルを整理中に終了しました。元動画の接続を確認し、必要に応じてセッション専用メディアを再準備します。"
+  },
+  "이전 세션 정리 표식이 현재 VOD 작업 범위와 정확히 일치하지 않아 아무 파일도 지우지 않았습니다. 현재 원본 연결을 다시 검증합니다.": {
+    en: "The previous cleanup marker did not exactly match the current VOD workspace, so no files were deleted. Kirinuki will verify the current source connection again.",
+    ja: "前回の整理マーカーが現在の VOD 作業範囲と完全には一致しなかったため、ファイルは削除していません。現在の元動画接続を再確認します。"
+  },
+  "이전 종료 전에 이 세션의 VOD 작업 재료 삭제가 끝난 것을 확인해 브라우저 편집 세션 정리도 마무리했습니다.": {
+    en: "Kirinuki confirmed that this session's VOD working files were deleted before the previous shutdown and finished cleaning up the browser editing session.",
+    ja: "前回の終了前にこのセッションの VOD 作業ファイルが削除済みであることを確認し、ブラウザーの編集セッション整理も完了しました。"
+  },
+  "현재 연결된 편집용 VOD의 정확한 준비 기록을 확인하지 못해 영상을 삭제하지 않았습니다.": {
+    en: "The exact preparation record for the connected editing VOD could not be verified, so the video was not deleted.",
+    ja: "接続中の編集用 VOD の正確な準備記録を確認できなかったため、動画は削除していません。"
+  },
+  "현재 Kirinuki 내부 미디어 엔진의 접근 정보가 없어 이번 편집용 VOD를 삭제하지 않았습니다.": {
+    en: "The current Kirinuki media-engine credentials are unavailable, so this editing VOD was not deleted.",
+    ja: "現在の Kirinuki 内部メディアエンジンへの接続情報がないため、今回の編集用 VOD は削除していません。"
+  },
+  "저장을 마친 뒤 VOD 준비 기록을 유지하지 못했습니다.": {
+    en: "Could not retain the VOD preparation record after saving.",
+    ja: "保存後に VOD の準備記録を維持できませんでした。"
+  },
+  "브라우저의 원본 연결 세션을 확인하지 못했습니다.": {
+    en: "Could not verify the browser's source-connection session.",
+    ja: "ブラウザーの元動画接続セッションを確認できませんでした。"
+  },
+  // Shared media-helper copy can surface from either the cut page or editor.
+  "진행 중인 영상 작업이 끝난 뒤 쇼츠 요소를 조정해 주세요.": {
+    en: "Wait for the active media job to finish before adjusting Shorts elements.",
+    ja: "進行中のメディア処理が完了してから、ショート動画の要素を調整してください。"
+  },
+  "이 위치를 쇼츠 소스 시작점으로": {
+    en: "Set Shorts Source In Here",
+    ja: "ここをショート動画のソースイン点に設定"
+  },
+  "이 위치를 쇼츠 소스 끝점으로": {
+    en: "Set Shorts Source Out Here",
+    ja: "ここをショート動画のソースアウト点に設定"
+  },
+  "영상 준비": {
+    en: "Media preparation",
+    ja: "動画の準備"
+  },
+  "설치된 영상 준비 도구의 응답 크기가 올바르지 않습니다.": {
+    en: "The installed media helper returned an invalid response size.",
+    ja: "インストール済みの動画準備ヘルパーから無効なサイズの応答が返されました。"
+  },
+  "설치된 영상 준비 도구의 응답이 허용 크기를 넘었습니다.": {
+    en: "The installed media helper's response exceeded the allowed size.",
+    ja: "インストール済みの動画準備ヘルパーの応答が許容サイズを超えました。"
+  },
+  "설치된 영상 준비 도구의 응답 문자가 올바르지 않습니다.": {
+    en: "The installed media helper's response contains invalid characters.",
+    ja: "インストール済みの動画準備ヘルパーの応答に無効な文字が含まれています。"
+  },
+  "Kirinuki 엔진 연결 응답이 만료됐거나 지원 version보다 오래됐습니다.": {
+    en: "The Kirinuki engine connection response has expired or is older than the supported version.",
+    ja: "Kirinukiエンジンの接続応答が期限切れか、対応バージョンより古くなっています。"
+  },
+  "Kirinuki 엔진 연결 응답의 설치 identity 서명이 올바르지 않습니다.": {
+    en: "The installation identity signature in the Kirinuki engine response is invalid.",
+    ja: "Kirinukiエンジン接続応答のインストールID署名が無効です。"
+  },
+  "이 브라우저가 이전에 연결한 영상 준비 도우미와 현재 도우미의 identity가 다릅니다. 자동 교체하지 않았습니다. 설치를 확인한 뒤 ‘연결 기억 지우기’를 명시적으로 선택해 주세요.": {
+    en: "This helper has a different identity from the one previously connected to this browser. It was not replaced automatically. Verify the installation, then explicitly select ‘Forget helper connection’.",
+    ja: "現在のヘルパーは、このブラウザーが以前接続したヘルパーとIDが異なります。自動では置き換えていません。インストールを確認し、「接続情報を消去」を明示的に選択してください。"
+  },
+  "Kirinuki 엔진 연결 제한 시간이 올바르지 않습니다.": {
+    en: "The Kirinuki engine connection timeout is invalid.",
+    ja: "Kirinukiエンジンの接続タイムアウトが無効です。"
+  },
+  "Kirinuki 엔진 pairing poll 응답이 JSON이 아닙니다.": {
+    en: "The Kirinuki engine pairing-poll response is not JSON.",
+    ja: "Kirinukiエンジンのペアリング確認応答がJSONではありません。"
+  },
+  "Kirinuki 엔진 pairing 대기 응답이 올바르지 않습니다.": {
+    en: "The Kirinuki engine pairing-pending response is invalid.",
+    ja: "Kirinukiエンジンのペアリング待機応答が無効です。"
+  },
+  "Kirinuki 엔진 pairing 응답이 현재 요청과 다릅니다.": {
+    en: "The Kirinuki engine pairing response does not match the current request.",
+    ja: "Kirinukiエンジンのペアリング応答が現在のリクエストと一致しません。"
+  },
+  "로컬 영상 준비 도구 확인 제한 시간이 올바르지 않습니다.": {
+    en: "The local media-helper check timeout is invalid.",
+    ja: "ローカル動画準備ヘルパーの確認タイムアウトが無効です。"
+  },
+  "이 브라우저의 Kirinuki 엔진 identity 저장소를 읽지 못했습니다.": {
+    en: "Could not read the Kirinuki engine identity stored in this browser.",
+    ja: "このブラウザーに保存されたKirinukiエンジンIDを読み込めませんでした。"
+  },
+  "현재 도우미의 응답은 이 브라우저에 기억된 도우미 identity와 다릅니다. 연결 정보를 자동 교체하지 않았습니다.": {
+    en: "The current helper's response has a different identity from the helper remembered by this browser. Connection data was not replaced automatically.",
+    ja: "現在のヘルパー応答は、このブラウザーに記憶されたヘルパーIDと異なります。接続情報は自動更新していません。"
+  },
+  "현재 영상 준비 도우미의 응답에서 기억된 도우미의 서명을 확인하지 못했습니다.": {
+    en: "The remembered helper signature could not be verified in the current media helper response.",
+    ja: "現在の動画準備ヘルパー応答で、記憶済みヘルパーの署名を確認できませんでした。"
+  },
+  "macOS 시스템 설정의 일반 > 로그인 항목에서 Kirinuki 백그라운드 실행을 한 번 허용해 주세요. 허용되면 자동으로 이어집니다.": {
+    en: "In macOS System Settings, open General > Login Items and allow Kirinuki to run in the background once. Setup will continue automatically.",
+    ja: "macOSのシステム設定で「一般」>「ログイン項目」を開き、Kirinukiのバックグラウンド実行を一度許可してください。許可後は自動で続行します。"
+  },
+  "설치된 영상 준비 도구가 현재 안전 기준과 맞지 않거나 손상됐습니다. 아래 공식 서명 설치 파일을 실행한 뒤 ‘이 PC 연결’을 한 번 눌러 주세요.": {
+    en: "The installed media helper does not meet current security requirements or is damaged. Run the officially signed installer below, then select ‘Connect this PC’ once.",
+    ja: "インストール済みの動画準備ヘルパーが現在の安全基準に適合していないか、破損しています。下の公式署名済みインストーラーを実行し、「このPCに接続」を一度押してください。"
+  },
+  "확인 중 로컬 엔진 identity가 바뀌었습니다. 연결 정보를 자동 교체하지 않았습니다.": {
+    en: "The local engine identity changed during verification. Connection data was not replaced automatically.",
+    ja: "確認中にローカルエンジンIDが変わりました。接続情報は自動更新していません。"
+  },
+  "설치된 로컬 엔진 version이 이 브라우저의 신뢰 기록과 맞지 않습니다.": {
+    en: "The installed local engine version does not match this browser's trust record.",
+    ja: "インストール済みローカルエンジンのバージョンが、このブラウザーの信頼記録と一致しません。"
+  },
+  "Windows 도우미 미리보기 다운로드를 요청했습니다. 다운로드한 exe를 실행하세요. Windows가 앱 보호 화면을 표시하면 ‘추가 정보’에서 실행을 선택할 수 있습니다. 설치가 끝나면 도우미가 자동으로 시작되고 이 화면이 연결을 계속 확인합니다.": {
+    en: "The Windows helper preview download has started. Run the downloaded EXE. If Windows shows an app-protection screen, choose to run it under ‘More info’. The helper starts automatically after installation while this screen continues checking the connection.",
+    ja: "Windows用ヘルパーのプレビュー版をダウンロードしています。ダウンロードしたEXEを実行してください。Windowsの保護画面が表示された場合は、「詳細情報」から実行できます。インストール後にヘルパーが自動起動し、この画面で接続確認が続きます。"
+  },
+  "Windows 설치 파일 다운로드를 요청했습니다. 브라우저 다운로드 표시가 완료되면 파일을 실행하세요. 이 화면은 설치된 도우미를 자동으로 확인하고 있습니다.": {
+    en: "The Windows installer download has started. Run the file after your browser reports that the download is complete. This screen is automatically checking for the installed helper.",
+    ja: "Windowsインストーラーのダウンロードを開始しました。ブラウザーで完了を確認したら、ファイルを実行してください。この画面はインストール済みヘルパーを自動確認しています。"
+  },
+  "macOS 설치 파일 다운로드를 요청했습니다. 완료된 DMG를 열어 Kirinuki를 응용 프로그램에 넣고 한 번 실행하세요. 이 화면은 도우미 연결을 자동으로 확인하고 있습니다.": {
+    en: "The macOS installer download has started. Open the downloaded DMG, move Kirinuki to Applications, and launch it once. This screen is automatically checking the helper connection.",
+    ja: "macOSインストーラーのダウンロードを開始しました。ダウンロードしたDMGを開き、Kirinukiをアプリケーションに移して一度起動してください。この画面はヘルパー接続を自動確認しています。"
+  },
+  "Debian/Ubuntu용 다운로드를 요청했습니다. 다운로드가 끝나면 deb를 설치하고 도우미를 한 번 실행한 뒤 이 화면의 ‘설치 후 연결 확인’을 눌러 주세요. 실행 중인 도우미는 자동으로 감지합니다.": {
+    en: "The Debian/Ubuntu download has started. Install the DEB, launch the helper once, then select ‘Check connection after installation’ on this screen. A running helper is detected automatically.",
+    ja: "Debian/Ubuntu用ファイルのダウンロードを開始しました。DEBをインストールし、ヘルパーを一度起動してから、この画面の「インストール後に接続を確認」を押してください。実行中のヘルパーは自動検出されます。"
+  },
+  "Debian/Ubuntu용 도우미 다운로드를 요청했습니다. 다운로드가 끝나면 deb를 설치하고 도우미를 한 번 실행한 뒤 ‘설치 후 연결 확인’을 눌러 주세요. 실행 중인 도우미는 자동으로 감지합니다.": {
+    en: "The Debian/Ubuntu helper download has started. Install the DEB, launch the helper once, then select ‘Check connection after installation’. A running helper is detected automatically.",
+    ja: "Debian/Ubuntu用ヘルパーのダウンロードを開始しました。DEBをインストールし、ヘルパーを一度起動してから「インストール後に接続を確認」を押してください。実行中のヘルパーは自動検出されます。"
+  },
+  "Arch Linux용 도우미 다운로드를 요청했습니다. 다운로드가 끝나면 pacman으로 패키지를 설치하고 도우미를 한 번 실행한 뒤 ‘설치 후 연결 확인’을 눌러 주세요. 실행 중인 도우미는 자동으로 감지합니다.": {
+    en: "The Arch Linux helper download has started. Install the package with pacman, launch the helper once, then select ‘Check connection after installation’. A running helper is detected automatically.",
+    ja: "Arch Linux用ヘルパーのダウンロードを開始しました。pacmanでパッケージをインストールし、ヘルパーを一度起動してから「インストール後に接続を確認」を押してください。実行中のヘルパーは自動検出されます。"
+  },
+  "도우미는 실행 중이지만 연결 프로그램이 이어지지 않으면 터미널에서 `xdg-mime default kr.eff0rtchung.kirinuki.desktop x-scheme-handler/kirinuki-engine`를 한 번 실행한 뒤 다시 확인해 주세요.": {
+    en: "If the helper is running but the protocol handler does not open, run `xdg-mime default kr.eff0rtchung.kirinuki.desktop x-scheme-handler/kirinuki-engine` once in a terminal, then check again.",
+    ja: "ヘルパーが実行中でもプロトコルハンドラーが開かない場合は、ターミナルで `xdg-mime default kr.eff0rtchung.kirinuki.desktop x-scheme-handler/kirinuki-engine` を一度実行してから再確認してください。"
+  },
+  "그래도 연결되지 않으면 터미널에서 `xdg-mime query default x-scheme-handler/kirinuki-engine`로 현재 연결 프로그램만 확인해 주세요.": {
+    en: "If it still does not connect, run `xdg-mime query default x-scheme-handler/kirinuki-engine` in a terminal to check the current protocol handler.",
+    ja: "それでも接続できない場合は、ターミナルで `xdg-mime query default x-scheme-handler/kirinuki-engine` を実行し、現在のプロトコルハンドラーを確認してください。"
+  },
+  "허용": {
+    en: "Allowed",
+    ja: "許可"
+  },
   // Editor entry, policy, and session lifecycle.
   "현재 공개 설치판은 Whisper를 제공하지 않습니다. AudSeg 또는 자막 작업 프롬프트를 사용해 주세요.": {
     en: "The current public build does not include Whisper. Use AudSeg or the caption-work prompt instead.",
@@ -463,7 +785,7 @@ export const EDITOR_RUNTIME_UI_COPY = {
   },
   "로컬 엔진 session을 bounded retry 뒤에도 복구하지 못했습니다.": {
     en: "The local-engine session could not be recovered after bounded retries.",
-    ja: "回数を制限した再試行後もローカルエンジンの session を復旧できませんでした。"
+    ja: "回数を制限した再試行後もローカルエンジンのセッションを復旧できませんでした。"
   },
   "Kirinuki 내부 미디어 엔진이 안전한 VOD 시간 정보를 확인하지 못했습니다.": {
     en: "Kirinuki's internal media engine could not verify safe VOD timing information.",
@@ -623,9 +945,17 @@ export const EDITOR_RUNTIME_UI_COPY = {
     en: "Selected image",
     ja: "選択中の画像"
   },
+  "선택 이미지의 시작·끝 시각을 그대로 적용합니다.": {
+    en: "Apply the selected image's exact start and end times.",
+    ja: "選択中の画像の開始・終了時刻をそのまま適用します。"
+  },
   "선택 이미지가 다른 컷에 있어 시각을 맞출 수 없습니다.": {
     en: "The selected image is in another clip, so its timing cannot be matched.",
     ja: "選択した画像は別のクリップにあるため、時刻を合わせられません。"
+  },
+  "이미지 · 겹친 이미지는 이미지 트랙의 별도 줄에 표시됩니다.": {
+    en: "Image · Overlapping images appear on separate rows of the image track.",
+    ja: "画像 · 重なった画像は画像トラックの別の行に表示されます。"
   },
   "투명 배경 지원": {
     en: "Transparent backgrounds supported",
@@ -634,6 +964,14 @@ export const EDITOR_RUNTIME_UI_COPY = {
   "빈 자막": {
     en: "Empty caption",
     ja: "空の字幕"
+  },
+  "“빈 자막”의 시작·끝 시각을 그대로 적용합니다.": {
+    en: "Apply the empty caption's exact start and end times.",
+    ja: "空の字幕の開始・終了時刻をそのまま適用します。"
+  },
+  "저장본을 적용했습니다. 원본 파일 ‘영상’을 다시 연결해 주세요.": {
+    en: "Saved version applied. Reconnect the source video.",
+    ja: "保存版を適用しました。元動画を再接続してください。"
   },
   "(빈 자막)": {
     en: "(Empty caption)",
@@ -820,6 +1158,30 @@ export const EDITOR_RUNTIME_UI_COPY = {
   "정렬점": {
     en: "Snap point",
     ja: "スナップ点"
+  },
+  "컷 시작": {
+    en: "Clip start",
+    ja: "クリップ開始"
+  },
+  "컷 끝": {
+    en: "Clip end",
+    ja: "クリップ終了"
+  },
+  "자막 시작": {
+    en: "Caption start",
+    ja: "字幕開始"
+  },
+  "자막 끝": {
+    en: "Caption end",
+    ja: "字幕終了"
+  },
+  "에셋 시작": {
+    en: "Asset start",
+    ja: "素材開始"
+  },
+  "에셋 끝": {
+    en: "Asset end",
+    ja: "素材終了"
   },
   "캔버스 시작": {
     en: "Canvas start",
@@ -1713,10 +2075,6 @@ export const EDITOR_RUNTIME_UI_COPY = {
     en: "Another editor tab is already exporting video. Try again after it finishes.",
     ja: "別のエディタータブですでに動画を書き出しています。その処理が完了してから、もう一度押してください。"
   },
-  "· 자막이 있으면 같은 이름의 SRT (중복 이름은 번호를 붙여 보존)": {
-    en: "· If captions exist, an SRT with the same name (duplicates are preserved with a number)",
-    ja: "· 字幕がある場合は同名の SRT（重複名は番号を付けて保存）"
-  },
   "이전 내보내기 정리 확인이 아직 끝나지 않았습니다.": {
     en: "Cleanup verification for the previous export is still in progress.",
     ja: "前回の書き出しの整理確認がまだ完了していません。"
@@ -1837,7 +2195,7 @@ export const EDITOR_RUNTIME_UI_COPY = {
   },
   "로컬 엔진 identity 사전 확인에 실패했습니다.": {
     en: "The local-engine identity precheck failed.",
-    ja: "ローカルエンジンの identity 事前確認に失敗しました。"
+    ja: "ローカルエンジンの識別情報を事前確認できませんでした。"
   },
   "이 프로젝트가 이미 다른 탭에서 편집 중입니다. 기존 탭을 사용하거나 닫은 뒤 다시 열어 주세요.": {
     en: "This project is already being edited in another tab. Use that tab, or close it before reopening the project.",
@@ -1945,7 +2303,7 @@ export const EDITOR_RUNTIME_UI_COPY = {
   },
   "로컬 엔진 identity 재확인에 실패했습니다.": {
     en: "The local-engine identity recheck failed.",
-    ja: "ローカルエンジンの identity 再確認に失敗しました。"
+    ja: "ローカルエンジンの識別情報を再確認できませんでした。"
   },
 
   // Labels returned by directly imported, user-visible modules.
@@ -2297,7 +2655,7 @@ export const EDITOR_RUNTIME_UI_COPY = {
   },
   "로컬 엔진 identity 초기화를 취소했습니다.": {
     en: "Canceled the local-engine identity reset.",
-    ja: "ローカルエンジンの identity リセットをキャンセルしました。"
+    ja: "ローカルエンジンの識別情報のリセットをキャンセルしました。"
   },
   "이 구간을 새 쇼츠 장면으로 만들도록 전환했습니다.": {
     en: "This range will now be added as a new Shorts scene.",
@@ -2333,11 +2691,39 @@ export const EDITOR_RUNTIME_UI_COPY = {
   },
   "연결 identity를 초기화했습니다. ‘이 PC 연결’을 눌러 다시 확인해 주세요.": {
     en: "Connection identity reset. Choose “Connect this PC” to check again.",
-    ja: "接続 identity をリセットしました。「この PC を接続」を押して再確認してください。"
+    ja: "接続識別情報をリセットしました。「この PC を接続」を押して再確認してください。"
   },
   "이 브라우저에 기억된 영상 준비 도우미 identity를 지울까요? 설치된 도우미를 직접 확인한 경우에만 계속하세요.": {
     en: "Forget the media helper identity saved in this browser? Continue only if you have verified the installed helper yourself.",
-    ja: "このブラウザーに保存された動画準備ヘルパーの identity を削除しますか？インストール済みのヘルパーを自分で確認した場合のみ続行してください。"
+    ja: "このブラウザーに保存された動画準備ヘルパーの識別情報を削除しますか？インストール済みのヘルパーを自分で確認した場合のみ続行してください。"
+  },
+  "영상 미리보기 준비 실패": {
+    en: "Video preview preparation failed",
+    ja: "動画プレビューの準備に失敗"
+  },
+  "미리보기 준비됨": {
+    en: "Preview ready",
+    ja: "プレビュー準備完了"
+  },
+  "미리보기 준비 필요": {
+    en: "Preview needs preparation",
+    ja: "プレビューの準備が必要"
+  },
+  "원본": {
+    en: "Source",
+    ja: "元動画"
+  },
+  "미세한 검은 틈 감지": {
+    en: "Small black gaps detected",
+    ja: "微細な黒い隙間を検出"
+  },
+  "쇼츠 캔버스에서 별도 이동·크기 조절": {
+    en: "Move and resize independently on the Shorts canvas",
+    ja: "ショート動画のキャンバス上で個別に移動・サイズ調整"
+  },
+  "0.1초 이상 필요": {
+    en: "At least 0.1 seconds required",
+    ja: "0.1 秒以上必要"
   }
 } satisfies UiCopyCatalog;
 
@@ -2347,6 +2733,208 @@ export const EDITOR_RUNTIME_UI_COPY = {
  * sentence patterns here: that could rewrite filenames or user-authored copy.
  */
 export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
+  // Normal Shorts authoring path. These stay fully anchored so captured source
+  // notes, image names, timecodes, and error details remain user-owned data.
+  {
+    source: /^기본 흰색 · (#[0-9A-Fa-f]{3,8}) · (.+)$/u,
+    en: "Default white · $1 · $2",
+    ja: "既定の白 · $1 · $2"
+  },
+  {
+    source: /^최근 색상 (\d+) · (#[0-9A-Fa-f]{3,8}) · (.+)$/u,
+    en: "Recent color $1 · $2 · $3",
+    ja: "最近使った色 $1 · $2 · $3"
+  },
+  {
+    source: /^영상 (\d+), (\d+)번 라인, 음량 ([\d.]+)%, 표시 중, 쇼츠 (.+?)부터 (.+?), 원본 (.+?)부터 (.+)$/u,
+    en: "Video $1, track $2, volume $3%, visible, Short $4 to $5, source $6 to $7",
+    ja: "動画 $1、トラック $2、音量 $3%、表示中、ショート $4 から $5、元動画 $6 から $7"
+  },
+  {
+    source: /^영상 (\d+), (\d+)번 라인, 음량 ([\d.]+)%, 숨김, 쇼츠 (.+?)부터 (.+?), 원본 (.+?)부터 (.+)$/u,
+    en: "Video $1, track $2, volume $3%, hidden, Short $4 to $5, source $6 to $7",
+    ja: "動画 $1、トラック $2、音量 $3%、非表示、ショート $4 から $5、元動画 $6 から $7"
+  },
+  {
+    source: /^쇼츠 (.+?)–(.+?) · 원본 (.+?)–(.+?) · 길이 (.+)$/u,
+    en: "Short $1–$2 · source $3–$4 · duration $5",
+    ja: "ショート $1〜$2 · 元動画 $3〜$4 · 長さ $5"
+  },
+  {
+    source: /^쇼츠 (.+?)–(.+?) · 원본 (.+?)–(.+)$/u,
+    en: "Short $1–$2 · source $3–$4",
+    ja: "ショート $1〜$2 · 元動画 $3〜$4"
+  },
+  {
+    source: /^영상 ([\d,.]+)개$/u,
+    en: "$1 videos",
+    ja: "動画 $1 件"
+  },
+  {
+    source: /^영상 ([\d,.]+)\/([\d,.]+)개$/u,
+    en: "Videos $1/$2",
+    ja: "動画 $1/$2"
+  },
+  {
+    source: /^기존 방식 음성 ([\d,.]+)개$/u,
+    en: "$1 legacy audio tracks",
+    ja: "旧方式の音声 $1 件"
+  },
+  {
+    source: /^기존 방식 음성 ([\d,.]+)\/([\d,.]+)개$/u,
+    en: "Legacy audio $1/$2",
+    ja: "旧方式の音声 $1/$2"
+  },
+  {
+    source: /^영상 ([\d,.]+)\/([\d,.]+) ·$/u,
+    en: "Video $1/$2 ·",
+    ja: "動画 $1/$2 ·"
+  },
+  {
+    source: /^· 길이 (.+)$/u,
+    en: "· duration $1",
+    ja: "· 長さ $1"
+  },
+  {
+    source: /^쇼츠 9대16 화면\. 영상 ([\d,.]+)개 중 선택 영상은 원본 (-?[\d,.]+), (-?[\d,.]+)에서 ([\d,.]+) 곱하기 ([\d,.]+)픽셀을 가져와 쇼츠 화면 X (-?[\d,.]+), Y (-?[\d,.]+), ([\d,.]+) 곱하기 ([\d,.]+)픽셀로 배치합니다\.$/u,
+    en: "9:16 Short canvas. Of $1 videos, the selected video uses a $4 by $5 pixel source region at $2, $3 and is placed at X $6, Y $7 with a size of $8 by $9 pixels.",
+    ja: "9:16 のショート画面。動画 $1 件のうち、選択中の動画は元動画の $2, $3 にある $4 × $5 ピクセルの範囲を使い、ショート画面の X $6、Y $7 に $8 × $9 ピクセルで配置されています。"
+  },
+  {
+    source: /^사용할 원본 화면 (-?[\d,.]+), (-?[\d,.]+), ([\d,.]+) 곱하기 ([\d,.]+)픽셀\. 드래그로 이동하고 가장자리 손잡이로 크기를 조절합니다\.$/u,
+    en: "Source frame at $1, $2, sized $3 by $4 pixels. Drag to move it and use the edge handles to resize it.",
+    ja: "使用する元画面は $1, $2 の位置、$3 × $4 ピクセルです。ドラッグで移動し、端のハンドルでサイズを調整できます。"
+  },
+  {
+    source: /^(.+) 구간을 영상 ([\d,.]+)개로 추가했습니다\. 화면과 원본 음성은 함께 준비되며 이동·자르기·삭제도 같이 적용됩니다\.$/u,
+    en: "Added $2 videos covering $1. Their visuals and source audio are prepared together; moving, trimming, or deleting them applies to both.",
+    ja: "$1 の範囲を動画 $2 本として追加しました。画面と元音声は一緒に準備され、移動・トリミング・削除も同時に適用されます。"
+  },
+  {
+    source: /^앞뒤 빈 구간을 (.+)만큼 제거하고 모든 요소를 0초 기준으로 맞췄습니다\. Ctrl\+Z로 되돌릴 수 있습니다\.$/u,
+    en: "Removed $1 of empty space from the beginning and end, then aligned every element to start at 0 seconds. Press Ctrl+Z to undo.",
+    ja: "前後の空白を $1 削除し、すべての要素を 0 秒基準に揃えました。Ctrl+Z で元に戻せます。"
+  },
+  {
+    source: /^(.+) 구간을 삭제했습니다\. Ctrl\+Z로 되돌릴 수 있습니다\.$/u,
+    en: "Deleted a $1 range. Press Ctrl+Z to undo.",
+    ja: "$1 の範囲を削除しました。Ctrl+Z で元に戻せます。"
+  },
+  {
+    source: /^(CHZZK|YouTube|SOOP) 편집 영상을 다시 준비한 뒤 조정할 수 있습니다$/u,
+    en: "Prepare the $1 editing media again before adjusting.",
+    ja: "$1 の編集用動画を再準備すると調整できます"
+  },
+  {
+    source: /^치지직 편집 영상을 다시 준비한 뒤 조정할 수 있습니다$/u,
+    en: "Prepare the CHZZK editing media again before adjusting.",
+    ja: "CHZZK の編集用動画を再準備すると調整できます"
+  },
+  {
+    source: /^(CHZZK|YouTube|SOOP) 편집 영상을 다시 준비한 뒤 컷 경계를 조정해 주세요\.$/u,
+    en: "Prepare the $1 editing media again before adjusting clip boundaries.",
+    ja: "$1 の編集用動画を再準備してからクリップ境界を調整してください。"
+  },
+  {
+    source: /^치지직 편집 영상을 다시 준비한 뒤 컷 경계를 조정해 주세요\.$/u,
+    en: "Prepare the CHZZK editing media again before adjusting clip boundaries.",
+    ja: "CHZZK の編集用動画を再準備してからクリップ境界を調整してください。"
+  },
+  {
+    source: /^캔버스 (.+?)–(.+?) · 원본 (.+?)–(.+?) · (\d+)번 라인 · 음량 ([\d.]+)% · 앞뒤 영상과 독립적으로 이동·자르기 가능$/u,
+    en: "Canvas $1–$2 · source $3–$4 · track $5 · volume $6% · can be moved and trimmed independently of adjacent videos",
+    ja: "キャンバス $1〜$2 · 元動画 $3〜$4 · トラック $5 · 音量 $6% · 前後の動画とは独立して移動・トリミング可能"
+  },
+  {
+    source: /^캔버스 (.+?)–(.+?) · 원본 (.+?)–(.+)$/u,
+    en: "Canvas $1–$2 · source $3–$4",
+    ja: "キャンバス $1〜$2 · 元動画 $3〜$4"
+  },
+  {
+    source: /^(\d+) · 음소거 ·$/u,
+    en: "$1 · muted ·",
+    ja: "$1 · ミュート ·"
+  },
+  {
+    source: /^(\d+) · 원본 ([\d.]+)% ·$/u,
+    en: "$1 · source $2% ·",
+    ja: "$1 · 元音声 $2% ·"
+  },
+  {
+    source: /^(.+) · 겹친 이미지는 이미지 트랙의 별도 줄에 표시됩니다\.$/u,
+    en: "$1 · Overlapping images appear on separate rows of the image track.",
+    ja: "$1 · 重なった画像は画像トラックの別の行に表示されます。"
+  },
+  {
+    source: /^쇼츠 재생을 준비하지 못했습니다: (.+)$/u,
+    en: "Could not prepare Shorts playback: $1",
+    ja: "ショート動画の再生を準備できませんでした: $1"
+  },
+  {
+    source: /^(.+)을 이미지 트랙에 추가했습니다\. 투명 배경도 유지됩니다\.$/u,
+    en: "Added $1 to the image track. Transparent backgrounds are preserved.",
+    ja: "$1 を画像トラックに追加しました。透過背景も維持されます。"
+  },
+  {
+    source: /^(.+)을 이미지 트랙에 추가했습니다\.$/u,
+    en: "Added $1 to the image track.",
+    ja: "$1 を画像トラックに追加しました。"
+  },
+  {
+    source: /^약 (.+)$/u,
+    en: "about $1",
+    ja: "約 $1"
+  },
+  {
+    source: /^자막 에이전트 연결 확인 완료(.*) · Whisper · STT (.+) · 로컬 STT 설정 미완료$/u,
+    en: "Caption-agent connection check complete$1 · Whisper · STT $2 · local STT setup incomplete",
+    ja: "字幕エージェントの接続確認完了$1 · Whisper · STT $2 · ローカル STT 設定未完了"
+  },
+  {
+    source: /^자막 에이전트 연결 확인 완료(.*) · Whisper · STT (.+)$/u,
+    en: "Caption-agent connection check complete$1 · Whisper · STT $2",
+    ja: "字幕エージェントの接続確認完了$1 · Whisper · STT $2"
+  },
+  {
+    source: /^자막 방식 설정 저장 실패: (.+)$/u,
+    en: "Could not save the caption-method settings: $1",
+    ja: "字幕方式の設定を保存できませんでした: $1"
+  },
+  {
+    source: /^SKILL\.md를 복사하지 못했습니다: (.+)$/u,
+    en: "Could not copy SKILL.md: $1",
+    ja: "SKILL.md をコピーできませんでした: $1"
+  },
+  {
+    source: /^원본은 현재 탭에 연결했지만 재시작용 파일 권한을 저장하지 못했습니다: (.+)$/u,
+    en: "The source is connected in this tab, but its file permission could not be saved for the next session: $1",
+    ja: "元動画は現在のタブに接続しましたが、次回起動用のファイル権限を保存できませんでした: $1"
+  },
+  {
+    source: /^로컬 편집 영상은 교체했지만 화면 동기화에 실패했습니다: (.+)$/u,
+    en: "The local editing media was replaced, but the editor view could not be synchronized: $1",
+    ja: "ローカル編集用動画は置き換えましたが、エディター画面を同期できませんでした: $1"
+  },
+  {
+    source: /^(.+) 이전 미리보기도 복구하지 못했습니다: (.+)$/u,
+    en: "$1 The previous preview could not be restored either: $2",
+    ja: "$1 以前のプレビューも復元できませんでした: $2"
+  },
+  {
+    source: /^VOD 원본 시각으로 정렬값을 되돌리지 못했습니다: (.+)$/u,
+    en: "Could not reset alignment to the VOD source timecode: $1",
+    ja: "VOD の元タイムコードに合わせて位置を戻せませんでした: $1"
+  },
+  {
+    source: /^본편·쇼츠 로컬 범위를 합치지 못했습니다: (.+)$/u,
+    en: "Could not merge the local ranges for the Main Edit and Shorts: $1",
+    ja: "本編とショート動画のローカル範囲を統合できませんでした: $1"
+  },
+  {
+    source: /^연결됨 · 이 PC의 (.+)$/u,
+    en: "Connected · $1 on this PC",
+    ja: "接続済み · この PC の $1"
+  },
   {
     source: /^쇼츠 작업은 최대 ([\d,.]+)개까지 만들 수 있습니다\.$/u,
     en: "You can create up to $1 Shorts workspaces.",
@@ -2361,96 +2949,6 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     source: /^(\d+)번 레인 자막: 빈 자막$/u,
     en: "Track $1 caption: Empty caption",
     ja: "$1 番トラックの字幕：空の字幕"
-  },
-  {
-    source: /^([\d,.]+)개 컷을 한 단계 위로 이동$/u,
-    en: "Move $1 clips up one position",
-    ja: "クリップ $1 件を 1 つ上へ移動"
-  },
-  {
-    source: /^([\d,.]+)개 컷을 한 단계 아래로 이동$/u,
-    en: "Move $1 clips down one position",
-    ja: "クリップ $1 件を 1 つ下へ移動"
-  },
-  {
-    source: /^(\d+)번 컷 (.+), 맨 처음으로 이동$/u,
-    en: "Clip $1 $2, move to beginning",
-    ja: "$1 番クリップ $2、先頭へ移動"
-  },
-  {
-    source: /^(\d+)번 컷 (.+), 한 칸 위로 이동$/u,
-    en: "Clip $1 $2, move up one",
-    ja: "$1 番クリップ $2、1 つ上へ移動"
-  },
-  {
-    source: /^(\d+)번 컷 (.+), 한 칸 아래로 이동$/u,
-    en: "Clip $1 $2, move down one",
-    ja: "$1 番クリップ $2、1 つ下へ移動"
-  },
-  {
-    source: /^(\d+)번 컷 (.+), 맨 마지막으로 이동$/u,
-    en: "Clip $1 $2, move to end",
-    ja: "$1 番クリップ $2、末尾へ移動"
-  },
-  {
-    source: /^중단된 AudSeg 타이밍 초벌을 이어서 할까요\?$/u,
-    en: "Resume the interrupted AudSeg timing pass?",
-    ja: "中断した AudSeg タイミングの下書きを再開しますか？"
-  },
-  {
-    source: /^중단된 Whisper 자막 초벌을 이어서 할까요\?$/u,
-    en: "Resume the interrupted Whisper caption pass?",
-    ja: "中断した Whisper 字幕の下書きを再開しますか？"
-  },
-  {
-    source: /^AudSeg 빈 타이밍 초벌을 시작할까요\?$/u,
-    en: "Start an AudSeg empty-timing pass?",
-    ja: "AudSeg の空タイミング下書きを開始しますか？"
-  },
-  {
-    source: /^Whisper 로컬 자막 초벌을 시작할까요\?$/u,
-    en: "Start a local Whisper caption pass?",
-    ja: "ローカル Whisper 字幕の下書きを開始しますか？"
-  },
-  {
-    source: /^(\d+)\/(\d+) · 빈 타이밍 저장 완료$/u,
-    en: "$1/$2 · Empty timings saved",
-    ja: "$1/$2 · 空タイミングの保存完了"
-  },
-  {
-    source: /^(\d+)\/(\d+) · 자막 초안 저장 완료$/u,
-    en: "$1/$2 · Caption drafts saved",
-    ja: "$1/$2 · 字幕下書きの保存完了"
-  },
-  {
-    source: /^준비된 편집 영상에 세로 화면 배치·컷·이미지·자막을 합치고 있습니다\.$/u,
-    en: "Compositing the vertical layout, clips, images, and captions onto the prepared editing media.",
-    ja: "準備済み編集用動画に縦画面レイアウト・クリップ・画像・字幕を合成しています。"
-  },
-  {
-    source: /^직접 연결한 영상에 세로 화면 배치·컷·이미지·자막을 합치고 있습니다\.$/u,
-    en: "Compositing the vertical layout, clips, images, and captions onto the connected video.",
-    ja: "直接接続した動画に縦画面レイアウト・クリップ・画像・字幕を合成しています。"
-  },
-  {
-    source: /^쇼츠 영상과 복원 파일은 보존했지만 저장 완료를 확인하지 못해 임시 자료를 모두 유지했습니다: (.+)$/u,
-    en: "The Shorts video and recovery file were preserved, but save completion could not be verified, so all temporary data was kept: $1",
-    ja: "ショート動画と復元ファイルは保持しましたが、保存完了を確認できなかったため一時データをすべて維持しました: $1"
-  },
-  {
-    source: /^영상과 복원 파일은 보존했지만 저장 완료를 확인하지 못해 임시 자료를 모두 유지했습니다: (.+)$/u,
-    en: "The video and recovery file were preserved, but save completion could not be verified, so all temporary data was kept: $1",
-    ja: "動画と復元ファイルは保持しましたが、保存完了を確認できなかったため一時データをすべて維持しました: $1"
-  },
-  {
-    source: /^쇼츠 영상과 편집 복원 파일은 안전하게 저장했지만 임시 자료는 정리하지 못했습니다: (.+)$/u,
-    en: "The Shorts video and edit-recovery file were saved safely, but temporary data could not be cleaned up: $1",
-    ja: "ショート動画と編集復元ファイルは安全に保存しましたが、一時データを整理できませんでした: $1"
-  },
-  {
-    source: /^영상과 편집 복원 파일은 안전하게 저장했지만 임시 자료는 정리하지 못했습니다: (.+)$/u,
-    en: "The video and edit-recovery file were saved safely, but temporary data could not be cleaned up: $1",
-    ja: "動画と編集復元ファイルは安全に保存しましたが、一時データを整理できませんでした: $1"
   },
   // Runtime/media-engine recovery.
   {
@@ -2517,29 +3015,29 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "· 最新の 5 分復元 $1"
   },
   {
-    source: /^(.+?) · 현재 복구본 ([0-5])\/5 · 5분 간격 · 탭 종료 시 임시본 폐기(.*)$/u,
-    en: "$1 · Current recovery copies $2/5 · every 5 minutes · temporary copies discarded when the tab closes$3",
-    ja: "$1 · 現在の復元データ $2/5 · 5 分間隔 · タブ終了時に一時データを破棄$3"
+    source: /^· 현재 복구본 ([0-5])\/5$/u,
+    en: "· Current recovery copies $1/5",
+    ja: "· 現在の復元データ $1/5"
   },
   {
-    source: /^컷 ([\d,.]+)$/u,
-    en: "Clips $1",
-    ja: "クリップ $1"
+    source: /^컷 ([\d,.]+)개$/u,
+    en: "Clips: $1",
+    ja: "クリップ: $1"
   },
   {
-    source: /^자막 ([\d,.]+)$/u,
-    en: "Captions $1",
-    ja: "字幕 $1"
+    source: /^자막 ([\d,.]+)개$/u,
+    en: "Captions: $1",
+    ja: "字幕: $1"
   },
   {
-    source: /^이미지 ([\d,.]+)$/u,
-    en: "Images $1",
-    ja: "画像 $1"
+    source: /^이미지 ([\d,.]+)개$/u,
+    en: "Images: $1",
+    ja: "画像: $1"
   },
   {
-    source: /^음성 ([\d,.]+)$/u,
-    en: "Audio ranges $1",
-    ja: "音声 $1"
+    source: /^음성 ([\d,.]+)개$/u,
+    en: "Audio: $1",
+    ja: "音声: $1"
   },
   {
     source: /^저장·복구본 ([\d,.]+)개 불러오기$/u,
@@ -2710,6 +3208,21 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "ショートプレビューを再作成できませんでした: $1"
   },
   {
+    source: /^(.+) 영상의 이 기기 재생을 시작하지 못했습니다\.$/u,
+    en: "Could not start local playback for video $1.",
+    ja: "動画 $1 のローカル再生を開始できませんでした。"
+  },
+  {
+    source: /^(.+) 영상의 미리보기를 준비하지 못했습니다\.$/u,
+    en: "Could not prepare the preview for video $1.",
+    ja: "動画 $1 のプレビューを準備できませんでした。"
+  },
+  {
+    source: /^(.+) 영상의 화면 배치를 계산하지 못했습니다\.$/u,
+    en: "Could not calculate the framing for video $1.",
+    ja: "動画 $1 の画面配置を計算できませんでした。"
+  },
+  {
     source: /^쇼츠 작업 전환 실패: (.+)$/u,
     en: "Could not switch Shorts workspaces: $1",
     ja: "ショート動画プロジェクトの切り替えに失敗: $1"
@@ -2762,9 +3275,39 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "クリップ $1 件を選択"
   },
   {
-    source: /^([\d,.]+)개 컷을 한 단계 (위로|아래로) 이동$/u,
-    en: "Move $1 clips one step $2",
-    ja: "クリップ $1 件を 1 段階 $2移動"
+    source: /^(\d+)번 컷 선택 구간 (\d+), 묶음 이동 선택$/u,
+    en: "Clip $1 selected range $2, select for group move",
+    ja: "$1 番クリップ 選択範囲 $2、グループ移動に選択"
+  },
+  {
+    source: /^(\d+)번 컷 선택 구간 (\d+), 맨 처음으로 이동$/u,
+    en: "Clip $1 selected range $2, move to beginning",
+    ja: "$1 番クリップ 選択範囲 $2、先頭へ移動"
+  },
+  {
+    source: /^(\d+)번 컷 선택 구간 (\d+), 한 칸 위로 이동$/u,
+    en: "Clip $1 selected range $2, move up one",
+    ja: "$1 番クリップ 選択範囲 $2、1 つ上へ移動"
+  },
+  {
+    source: /^(\d+)번 컷 선택 구간 (\d+), 한 칸 아래로 이동$/u,
+    en: "Clip $1 selected range $2, move down one",
+    ja: "$1 番クリップ 選択範囲 $2、1 つ下へ移動"
+  },
+  {
+    source: /^(\d+)번 컷 선택 구간 (\d+), 맨 마지막으로 이동$/u,
+    en: "Clip $1 selected range $2, move to end",
+    ja: "$1 番クリップ 選択範囲 $2、末尾へ移動"
+  },
+  {
+    source: /^([\d,.]+)개 컷을 한 단계 위로 이동$/u,
+    en: "Move $1 clips up one position",
+    ja: "クリップ $1 件を 1 つ上へ移動"
+  },
+  {
+    source: /^([\d,.]+)개 컷을 한 단계 아래로 이동$/u,
+    en: "Move $1 clips down one position",
+    ja: "クリップ $1 件を 1 つ下へ移動"
   },
   {
     source: /^선택 구간 ([\d,.]+)$/u,
@@ -2777,9 +3320,24 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "$1 番クリップ $2、グループ移動に選択"
   },
   {
-    source: /^(\d+)번 컷 (.+), (맨 처음으로 이동|한 칸 위로 이동|한 칸 아래로 이동|맨 마지막으로 이동)$/u,
-    en: "Clip $1 $2, $3",
-    ja: "$1 番クリップ $2、$3"
+    source: /^(\d+)번 컷 (.+), 맨 처음으로 이동$/u,
+    en: "Clip $1 $2, move to beginning",
+    ja: "$1 番クリップ $2、先頭へ移動"
+  },
+  {
+    source: /^(\d+)번 컷 (.+), 한 칸 위로 이동$/u,
+    en: "Clip $1 $2, move up one",
+    ja: "$1 番クリップ $2、1 つ上へ移動"
+  },
+  {
+    source: /^(\d+)번 컷 (.+), 한 칸 아래로 이동$/u,
+    en: "Clip $1 $2, move down one",
+    ja: "$1 番クリップ $2、1 つ下へ移動"
+  },
+  {
+    source: /^(\d+)번 컷 (.+), 맨 마지막으로 이동$/u,
+    en: "Clip $1 $2, move to end",
+    ja: "$1 番クリップ $2、末尾へ移動"
   },
   {
     source: /^(\d+)번 컷 앞쪽 30초를 이 기기에 추가$/u,
@@ -2869,29 +3427,54 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "$1 · 範囲 $2 件 · 必要な前後の範囲を追加準備可能"
   },
   {
-    source: /^(CHZZK|치지직|YouTube|SOOP) 원본 확인 중$/u,
+    source: /^(CHZZK|YouTube|SOOP) 원본 확인 중$/u,
     en: "Checking $1 source",
     ja: "$1 の元動画を確認中"
   },
   {
-    source: /^(CHZZK|치지직|YouTube|SOOP) 원본 시각과 최초 ±10초 편집 핸들을 확인합니다\.$/u,
+    source: /^치지직 원본 확인 중$/u,
+    en: "Checking CHZZK source",
+    ja: "CHZZK の元動画を確認中"
+  },
+  {
+    source: /^(CHZZK|YouTube|SOOP) 원본 시각과 최초 ±10초 편집 핸들을 확인합니다\.$/u,
     en: "Checking the $1 source timing and initial ±10-second editing handles.",
     ja: "$1 の元動画時刻と初期 ±10 秒編集ハンドルを確認します。"
   },
   {
-    source: /^먼저 (CHZZK|치지직|YouTube|SOOP) 편집 영상을 준비해 주세요\.$/u,
+    source: /^치지직 원본 시각과 최초 ±10초 편집 핸들을 확인합니다\.$/u,
+    en: "Checking the CHZZK source timing and initial ±10-second editing handles.",
+    ja: "CHZZK の元動画時刻と初期 ±10 秒編集ハンドルを確認します。"
+  },
+  {
+    source: /^먼저 (CHZZK|YouTube|SOOP) 편집 영상을 준비해 주세요\.$/u,
     en: "Prepare $1 editing media first.",
     ja: "先に $1 の編集用動画を準備してください。"
   },
   {
-    source: /^현재 컷과 맞는 (CHZZK|치지직|YouTube|SOOP) VOD 선택 구간을 다시 준비해 주세요\.$/u,
+    source: /^먼저 치지직 편집 영상을 준비해 주세요\.$/u,
+    en: "Prepare CHZZK editing media first.",
+    ja: "先に CHZZK の編集用動画を準備してください。"
+  },
+  {
+    source: /^현재 컷과 맞는 (CHZZK|YouTube|SOOP) VOD 선택 구간을 다시 준비해 주세요\.$/u,
     en: "Prepare the selected $1 VOD range matching the current clip again.",
     ja: "現在のクリップに合う $1 VOD の選択範囲を再度準備してください。"
   },
   {
-    source: /^(CHZZK|치지직|YouTube|SOOP) 로컬 편집 영상의 컷 범위를 다시 확인해 주세요\.$/u,
+    source: /^현재 컷과 맞는 치지직 VOD 선택 구간을 다시 준비해 주세요\.$/u,
+    en: "Prepare the selected CHZZK VOD range matching the current clip again.",
+    ja: "現在のクリップに合う CHZZK VOD の選択範囲を再度準備してください。"
+  },
+  {
+    source: /^(CHZZK|YouTube|SOOP) 로컬 편집 영상의 컷 범위를 다시 확인해 주세요\.$/u,
     en: "Check the clip ranges in the local $1 editing media again.",
     ja: "$1 のローカル編集用動画のクリップ範囲を再確認してください。"
+  },
+  {
+    source: /^치지직 로컬 편집 영상의 컷 범위를 다시 확인해 주세요\.$/u,
+    en: "Check the clip ranges in the local CHZZK editing media again.",
+    ja: "CHZZK のローカル編集用動画のクリップ範囲を再確認してください。"
   },
 
   // Shorts workspace, layer list, geometry, and accessibility.
@@ -3001,7 +3584,12 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "クリップ内 $1"
   },
   {
-    source: /^(\d+)번 자막 편집 · (\d+)번 컷 · (.+) · (\d+)번 레인$/u,
+    source: /^(\d+)번 자막 편집 · (\d+)번 컷 · 컷 안 (\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?) · (\d+)번 레인$/u,
+    en: "Edit caption $1 · clip $2 · $3 into clip · track $4",
+    ja: "$1 番字幕を編集 · $2 番クリップ · クリップ内 $3 · $4 番トラック"
+  },
+  {
+    source: /^(\d+)번 자막 편집 · (\d+)번 컷 · (\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?) · (\d+)번 레인$/u,
     en: "Edit caption $1 · clip $2 · $3 · track $4",
     ja: "$1 番字幕を編集 · $2 番クリップ · $3 · $4 番トラック"
   },
@@ -3019,11 +3607,6 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     source: /^(.+) · ([\d,.]+)개$/u,
     en: "$1 · $2",
     ja: "$1 · $2 件"
-  },
-  {
-    source: /^자막 ([\d,.]+)개$/u,
-    en: "$1 captions",
-    ja: "字幕 $1 件"
   },
   {
     source: /^설정 ([\d,.]+)묶음$/u,
@@ -3049,6 +3632,11 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     source: /^연결된 컷 없음 ([\d,.]+)개$/u,
     en: "$1 with no linked clip",
     ja: "接続クリップなし $1 件"
+  },
+  {
+    source: /^프로젝트 공통 외곽선 (#[A-Fa-f0-9]{6}) · ([\d.]+%) · 행별 검은 상자와는 별도$/u,
+    en: "Project-wide outline $1 · $2 · separate from each row's black box",
+    ja: "プロジェクト共通の縁取り $1 · $2 · 行ごとの黒いボックスとは別設定"
   },
   {
     source: /^“(.+)” 작업 삭제$/u,
@@ -3303,14 +3891,24 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "$1 分"
   },
   {
-    source: /^중단된 (AudSeg 타이밍|Whisper 자막) 초벌을 이어서 할까요\?$/u,
-    en: "Resume the interrupted $1 draft?",
-    ja: "中断した $1 の下書きを再開しますか？"
+    source: /^중단된 AudSeg 타이밍 초벌을 이어서 할까요\?$/u,
+    en: "Resume the interrupted AudSeg timing draft?",
+    ja: "中断した AudSeg タイミングの下書きを再開しますか？"
   },
   {
-    source: /^(AudSeg 빈 타이밍|Whisper 로컬 자막) 초벌을 시작할까요\?$/u,
-    en: "Start an $1 draft?",
-    ja: "$1 の下書きを開始しますか？"
+    source: /^중단된 Whisper 자막 초벌을 이어서 할까요\?$/u,
+    en: "Resume the interrupted Whisper caption draft?",
+    ja: "中断した Whisper 字幕の下書きを再開しますか？"
+  },
+  {
+    source: /^AudSeg 빈 타이밍 초벌을 시작할까요\?$/u,
+    en: "Start an AudSeg empty-timing draft?",
+    ja: "AudSeg 空タイミングの下書きを開始しますか？"
+  },
+  {
+    source: /^Whisper 로컬 자막 초벌을 시작할까요\?$/u,
+    en: "Start a local Whisper caption draft?",
+    ja: "ローカル Whisper 字幕の下書きを開始しますか？"
   },
   {
     source: /^저장 완료된 컷 ([\d,.]+)개는 건너뜁니다$/u,
@@ -3383,6 +3981,21 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "$1/$2 · Whisper 要求を準備中"
   },
   {
+    source: /^(\d+)\/(\d+) · 자막 엔진에 선택 구간 음성을 보내는 중$/u,
+    en: "$1/$2 · sending the selected audio to the caption engine",
+    ja: "$1/$2 · 選択範囲の音声を字幕エンジンへ送信中"
+  },
+  {
+    source: /^(\d+)\/(\d+) · 음성인식과 자막 초벌 정리 중$/u,
+    en: "$1/$2 · transcribing audio and refining the caption draft",
+    ja: "$1/$2 · 音声認識と字幕下書きを整理中"
+  },
+  {
+    source: /^(\d+)\/(\d+) · 로컬 Whisper 자막 초안 수신 완료$/u,
+    en: "$1/$2 · local Whisper caption draft received",
+    ja: "$1/$2 · ローカル Whisper の字幕下書きを受信完了"
+  },
+  {
     source: /^로컬 Whisper (.+)에 다시 연결됨 · 초벌을 이어갑니다$/u,
     en: "Reconnected to local Whisper $1 · resuming the draft",
     ja: "ローカル Whisper $1 に再接続 · 下書きを再開します"
@@ -3393,9 +4006,14 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "一度に作成できる AI 字幕は最大 $1 件です。有効なクリップを分けて実行してください。"
   },
   {
-    source: /^(\d+)\/(\d+) · (빈 타이밍|자막 초안) 저장 완료$/u,
-    en: "$1/$2 · $3 saved",
-    ja: "$1/$2 · $3 の保存完了"
+    source: /^(\d+)\/(\d+) · 빈 타이밍 저장 완료$/u,
+    en: "$1/$2 · Empty timings saved",
+    ja: "$1/$2 · 空タイミングの保存完了"
+  },
+  {
+    source: /^(\d+)\/(\d+) · 자막 초안 저장 완료$/u,
+    en: "$1/$2 · Caption drafts saved",
+    ja: "$1/$2 · 字幕下書きの保存完了"
   },
   {
     source: /^AudSeg (\S+) 빈 타이밍$/u,
@@ -3435,6 +4053,81 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
 
   // Export verification and archive restore. Filenames and hashes are captures
   // and are never altered.
+  {
+    source: /^같은 본편에서 가져온 영상의 원본 선택 기준이 서로 다릅니다: (.+)$/u,
+    en: "Videos taken from the same Main Edit use different source-selection anchors: $1",
+    ja: "同じ本編から取り込んだ動画で元動画の選択基準が一致しません: $1"
+  },
+  {
+    source: /^이 기기에 저장된 범위에 같은 원본 선택 기준이 중복돼 있습니다: (.+)$/u,
+    en: "The locally saved ranges contain a duplicate source-selection anchor: $1",
+    ja: "このデバイスに保存された範囲に同じ元動画の選択基準が重複しています: $1"
+  },
+  {
+    source: /^쇼츠의 원본 선택 기준이 올바르지 않습니다: (.+)$/u,
+    en: "The Shorts source-selection anchor is invalid: $1",
+    ja: "ショート動画の元動画選択基準が正しくありません: $1"
+  },
+  {
+    source: /^(.+) 파일 핸들이 다른 파일 (.+)을\(를\) 가리킵니다\.$/u,
+    en: "The file handle for $1 points to a different file, $2.",
+    ja: "$1 のファイルハンドルが別のファイル $2 を参照しています。"
+  },
+  {
+    source: /^(.+) 파일이 최종 안정성 확인 중 변경되었습니다\.$/u,
+    en: "$1 changed during the final stability check.",
+    ja: "$1 は最終安定性チェック中に変更されました。"
+  },
+  {
+    source: /^(.+) 파일의 최종 안정성 SHA-256이 일치하지 않습니다\.$/u,
+    en: "The final stability SHA-256 for $1 does not match.",
+    ja: "$1 の最終安定性 SHA-256 が一致しません。"
+  },
+  {
+    source: /^저장된 영상 형식이 예상과 다릅니다: (.+) \/ (.+)$/u,
+    en: "The saved video format differs from the expected format: $1 / $2",
+    ja: "保存された動画形式が想定と異なります: $1 / $2"
+  },
+  {
+    source: /^VOD 삭제 요청과 정리 표식 복구가 모두 실패했습니다: (.+) \/ (.+)$/u,
+    en: "Both the VOD deletion request and cleanup-marker recovery failed: $1 / $2",
+    ja: "VOD の削除要求と整理マーカーの復元がどちらも失敗しました: $1 / $2"
+  },
+  {
+    source: /^이 세션의 VOD 재료는 삭제했지만 브라우저 편집 세션 정리를 완료하지 못했습니다\. 다음 실행에서 삭제 완료 표식 또는 정확한 원본 상태를 확인해 복구합니다: (.+)$/u,
+    en: "This session's VOD working media was deleted, but browser-session cleanup did not finish. On the next launch, Kirinuki will recover from the deletion marker or the exact source state: $1",
+    ja: "このセッションの VOD 作業素材は削除しましたが、ブラウザー編集セッションの整理を完了できませんでした。次回起動時に削除完了マーカーまたは正確な元動画の状態から復元します: $1"
+  },
+  {
+    source: /^브라우저 편집 세션을 원자적으로 정리하지 못해 현재 편집과 원본 파일 연결을 모두 유지했습니다: (.+)$/u,
+    en: "Browser-session cleanup could not be completed atomically, so the current edit and source-file connection were both kept: $1",
+    ja: "ブラウザー編集セッションをアトミックに整理できなかったため、現在の編集と元ファイルの接続をどちらも維持しました: $1"
+  },
+  {
+    source: /^복원 이미지 (.+)의 검증된 Blob을 찾지 못했습니다\.$/u,
+    en: "Could not find the verified Blob for recovered image $1.",
+    ja: "復元画像 $1 の検証済み Blob が見つかりません。"
+  },
+  {
+    source: /^복원 이미지 (.+)의 새 저장 키를 만들지 못했습니다\.$/u,
+    en: "Could not create a new storage key for recovered image $1.",
+    ja: "復元画像 $1 の新しい保存キーを作成できませんでした。"
+  },
+  {
+    source: /^이 작업의 기기 내 데이터 ([\d,.]+)건$/u,
+    en: "$1 local records from this edit",
+    ja: "この編集のデバイス内データ $1 件"
+  },
+  {
+    source: /^과 VOD 작업 파일 ([\d,.]+)개\((.+)\)$/u,
+    en: " and $1 VOD working files ($2)",
+    ja: "と VOD 作業ファイル $1 件（$2）"
+  },
+  {
+    source: /^과 VOD 작업 재료 (.+)$/u,
+    en: " and VOD working media ($1)",
+    ja: "と VOD 作業メディア（$1）"
+  },
   {
     source: /^(.+) 파일이 이름 확인 뒤 새로 생겨 덮어쓰지 않았습니다\. 다시 내보내 주세요\.$/u,
     en: "$1 appeared after the filename check and was not overwritten. Export again.",
@@ -3486,24 +4179,44 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "書き出し直前に元ファイルを再確認できませんでした: $1。「自分のファイルを直接接続」でファイル権限を確認してください。"
   },
   {
-    source: /^준비된 편집 영상에 (세로 화면 배치·)?컷·이미지·자막을 합치고 있습니다\.$/u,
-    en: "Compositing $1clips, images, and captions onto the prepared editing media.",
-    ja: "準備済み編集用動画に $1クリップ・画像・字幕を合成しています。"
+    source: /^준비된 편집 영상에 컷·이미지·자막을 합치고 있습니다\.$/u,
+    en: "Compositing clips, images, and captions onto the prepared editing media.",
+    ja: "準備済み編集用動画にクリップ・画像・字幕を合成しています。"
   },
   {
-    source: /^직접 연결한 영상에 (세로 화면 배치·)?컷·이미지·자막을 합치고 있습니다\.$/u,
-    en: "Compositing $1clips, images, and captions onto the connected video.",
-    ja: "直接接続した動画に $1クリップ・画像・字幕を合成しています。"
+    source: /^준비된 편집 영상에 세로 화면 배치·컷·이미지·자막을 합치고 있습니다\.$/u,
+    en: "Compositing the vertical layout, clips, images, and captions onto the prepared editing media.",
+    ja: "準備済み編集用動画に縦画面レイアウト・クリップ・画像・字幕を合成しています。"
   },
   {
-    source: /^(쇼츠 영상|영상)과 복원 파일은 보존했지만 저장 완료를 확인하지 못해 임시 자료를 모두 유지했습니다: (.+)$/u,
-    en: "The $1 and recovery file were preserved, but save completion could not be verified, so all temporary data was kept: $2",
-    ja: "$1 と復元ファイルは保持しましたが、保存完了を確認できなかったため一時データをすべて維持しました: $2"
+    source: /^직접 연결한 영상에 컷·이미지·자막을 합치고 있습니다\.$/u,
+    en: "Compositing clips, images, and captions onto the connected video.",
+    ja: "直接接続した動画にクリップ・画像・字幕を合成しています。"
   },
   {
-    source: /^(쇼츠 영상|영상)과 편집 복원 파일은 안전하게 저장했지만 임시 자료는 정리하지 못했습니다: (.+)$/u,
-    en: "The $1 and edit-recovery file were saved safely, but temporary data could not be cleaned up: $2",
-    ja: "$1 と編集復元ファイルは安全に保存しましたが、一時データを整理できませんでした: $2"
+    source: /^직접 연결한 영상에 세로 화면 배치·컷·이미지·자막을 합치고 있습니다\.$/u,
+    en: "Compositing the vertical layout, clips, images, and captions onto the connected video.",
+    ja: "直接接続した動画に縦画面レイアウト・クリップ・画像・字幕を合成しています。"
+  },
+  {
+    source: /^쇼츠 영상과 복원 파일은 보존했지만 저장 완료를 확인하지 못해 임시 자료를 모두 유지했습니다: (.+)$/u,
+    en: "The Shorts video and recovery file were preserved, but save completion could not be verified, so all temporary data was kept: $1",
+    ja: "ショート動画と復元ファイルは保持しましたが、保存完了を確認できなかったため一時データをすべて維持しました: $1"
+  },
+  {
+    source: /^영상과 복원 파일은 보존했지만 저장 완료를 확인하지 못해 임시 자료를 모두 유지했습니다: (.+)$/u,
+    en: "The video and recovery file were preserved, but save completion could not be verified, so all temporary data was kept: $1",
+    ja: "動画と復元ファイルは保持しましたが、保存完了を確認できなかったため一時データをすべて維持しました: $1"
+  },
+  {
+    source: /^쇼츠 영상과 편집 복원 파일은 안전하게 저장했지만 임시 자료는 정리하지 못했습니다: (.+)$/u,
+    en: "The Shorts video and edit-recovery file were saved safely, but temporary data could not be cleaned up: $1",
+    ja: "ショート動画と編集復元ファイルは安全に保存しましたが、一時データを整理できませんでした: $1"
+  },
+  {
+    source: /^영상과 편집 복원 파일은 안전하게 저장했지만 임시 자료는 정리하지 못했습니다: (.+)$/u,
+    en: "The video and edit-recovery file were saved safely, but temporary data could not be cleaned up: $1",
+    ja: "動画と編集復元ファイルは安全に保存しましたが、一時データを整理できませんでした: $1"
   },
   {
     source: /^영상 내보내기를 취소했습니다\.(.*)$/u,
@@ -3518,7 +4231,7 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
   {
     source: /^최종 합성 화면의 ([\d,.]+)개 시간 구간에서 1–24px 외곽 틈·영상 사이 seam을 감지했습니다\. 취소한 뒤 영상 탭의 밀대 도구를 쓰거나, 의도한 여백이면 그대로 내보낼 수 있습니다\.$/u,
     en: "Detected 1–24 px outer gaps or seams between videos in $1 time ranges of the final composite. Cancel and use the edge-push tool in the Video tab, or export as-is if the spacing is intentional.",
-    ja: "最終合成画面の時間範囲 $1 件で 1〜24 px の外周の隙間または動画間の seam を検出しました。キャンセルして動画タブの押し広げツールを使うか、意図した余白ならそのまま書き出せます。"
+    ja: "最終合成画面の時間範囲 $1 件で 1〜24 px の外周の隙間または動画間の継ぎ目を検出しました。キャンセルして動画タブの押し広げツールを使うか、意図した余白ならそのまま書き出せます。"
   },
   {
     source: /^저장 파일: (.+)\.\(영상 형식\) · (.+)\.kirinuki-session\.json$/u,
@@ -3564,6 +4277,11 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     source: /^자막 레인은 최대 ([\d,.]+)개까지 만들 수 있습니다\.$/u,
     en: "Up to $1 caption tracks can be created.",
     ja: "字幕トラックは最大 $1 本まで作成できます。"
+  },
+  {
+    source: /^현재 시각의 ([\d,.]+)개 자막 레인이 모두 사용 중입니다\.$/u,
+    en: "All $1 caption tracks at the playhead are in use.",
+    ja: "現在位置では $1 本の字幕トラックがすべて使用中です。"
   },
   {
     source: /^(\d+)번째 자막 레인을 추가했습니다\.$/u,

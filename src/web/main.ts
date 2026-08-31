@@ -499,7 +499,14 @@ function renderMobileEditorAccess(): void {
 }
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return uiLocalization.translate(message);
+  const translated = uiLocalization.translate(message);
+  if (uiLocalization.language !== "ko" && /[가-힣]/u.test(translated)) {
+    console.warn("Unlocalized cut-screen error detail was hidden from the UI.", message);
+    return uiLocalization.translate(
+      "작업 중 오류가 발생했습니다. 다시 시도해 주세요."
+    );
+  }
+  return translated;
 }
 
 function setStatus(message: string, kind: "idle" | "error" | "success" = "idle"): void {

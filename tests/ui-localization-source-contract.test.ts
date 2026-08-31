@@ -303,6 +303,28 @@ test("사용자 프로젝트·원본·자막 문구는 UI 번역 대상에서 �
     /body\.textContent = `\$\{index \+ 1\} · \$\{clip\.note \|\| "사용자 선택"\}`;/u,
     "timeline clip notes must retain a non-catalog index prefix as their source guard"
   );
+  assert.ok(
+    (timeline.match(
+      /sourceLabel\.toggleAttribute\(\s*"data-kirinuki-ui-copy-ignore",\s*Boolean\(sourceNote\)\s*\)/gu
+    ) || []).length >= 2,
+    "Shorts video and source-audio timeline labels must guard user source notes"
+  );
+  assert.match(
+    timeline,
+    /body\.toggleAttribute\("data-kirinuki-ui-copy-ignore", Boolean\(asset\.name\)\);[\s\S]{0,220}body\.title = `\$\{asset\.name \|\| "이미지"\} · 겹친 이미지는 이미지 트랙의 별도 줄에 표시됩니다\.`/u,
+    "image names must stay user copy while the timeline-title suffix remains localizable"
+  );
+
+  const shortVideoLayers = sourceBetween(
+    editorMain,
+    "function renderShortVideoLayerPanel(",
+    "function renderShortFramingInspector()"
+  );
+  assert.match(
+    shortVideoLayers,
+    /const sourceNote = String\(rootSource\?\.note \|\| ""\)\.trim\(\);[\s\S]{0,220}title\.toggleAttribute\(\s*"data-kirinuki-ui-copy-ignore",\s*Boolean\(sourceNote\)\s*\)/u,
+    "user source notes in Shorts video layers must opt out of UI translation"
+  );
 
   const overlays = sourceBetween(
     editorMain,

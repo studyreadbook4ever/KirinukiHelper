@@ -82,6 +82,33 @@ test("여러 화면 카탈로그의 충돌을 fail-closed로 거부한다", () =
   );
 });
 
+test("공용 영상 준비 도우미 문구는 컷 화면과 편집기에서 모두 번역된다", async () => {
+  const onboardingSource = await readFile(
+    new URL("../src/editor/local-media-engine-onboarding.ts", import.meta.url),
+    "utf8"
+  );
+  const editorCatalog = mergeUiCopyCatalogs(
+    EDITOR_STATIC_UI_COPY,
+    EDITOR_RUNTIME_UI_COPY
+  );
+  const sharedCopy = Object.keys(CUT_UI_COPY_CATALOG).filter((source) => (
+    /[가-힣]/u.test(source)
+    && onboardingSource.includes(JSON.stringify(source).slice(1, -1))
+  ));
+
+  assert.notEqual(sharedCopy.length, 0);
+  assert.deepEqual(
+    sharedCopy.filter((source) => !editorCatalog[source]),
+    []
+  );
+  for (const source of sharedCopy) {
+    const translation = editorCatalog[source];
+    assert.ok(translation);
+    assert.doesNotMatch(translation.en, /[가-힣]/u);
+    assert.doesNotMatch(translation.ja, /[가-힣]/u);
+  }
+});
+
 test("편집기 동적 오류와 상태는 내부 원인까지 한 언어로 표시한다", () => {
   const catalog = mergeUiCopyCatalogs(
     EDITOR_STATIC_UI_COPY,
@@ -122,6 +149,80 @@ test("편집기 동적 오류와 상태는 내부 원인까지 한 언어로 표
   }
 });
 
+test("쇼츠 정상 편집 경로의 동적 문구는 사용자 이름만 보존하고 전부 번역된다", () => {
+  const catalog = mergeUiCopyCatalogs(
+    EDITOR_STATIC_UI_COPY,
+    EDITOR_RUNTIME_UI_COPY
+  );
+  const userNote = "사용자 메모";
+  const userAssetName = "사용자 이미지.png";
+
+  for (const language of ["en", "ja"] as const) {
+    const duration = language === "en" ? "1.2 sec" : "1.2 秒";
+    const systemCopy = [
+      "기본 흰색 · #FFFFFF · 1",
+      "최근 색상 2 · #AABBCC · 3",
+      "영상 1, 2번 라인, 음량 100%, 표시 중, 쇼츠 00:01부터 00:02, 원본 00:03부터 00:04",
+      "쇼츠 00:01–00:02 · 원본 00:03–00:04",
+      "쇼츠 00:01–00:02 · 원본 00:03–00:04 · 길이 00:01",
+      "영상 2개",
+      "영상 1/2개",
+      "기존 방식 음성 2개",
+      "기존 방식 음성 1/2개",
+      "영상 1/2 ·",
+      "· 길이 00:01",
+      "쇼츠 9대16 화면. 영상 2개 중 선택 영상은 원본 1, 2에서 300 곱하기 400픽셀을 가져와 쇼츠 화면 X 3, Y 4, 500 곱하기 600픽셀로 배치합니다.",
+      "사용할 원본 화면 1, 2, 300 곱하기 400픽셀. 드래그로 이동하고 가장자리 손잡이로 크기를 조절합니다.",
+      `${duration} 구간을 영상 2개로 추가했습니다. 화면과 원본 음성은 함께 준비되며 이동·자르기·삭제도 같이 적용됩니다.`,
+      `앞뒤 빈 구간을 ${duration}만큼 제거하고 모든 요소를 0초 기준으로 맞췄습니다. Ctrl+Z로 되돌릴 수 있습니다.`,
+      `${duration} 구간을 삭제했습니다. Ctrl+Z로 되돌릴 수 있습니다.`,
+      "CHZZK 편집 영상을 다시 준비한 뒤 조정할 수 있습니다",
+      "CHZZK 편집 영상을 다시 준비한 뒤 컷 경계를 조정해 주세요.",
+      "캔버스 00:01–00:02 · 원본 00:03–00:04 · 1번 라인 · 음량 100% · 앞뒤 영상과 독립적으로 이동·자르기 가능",
+      "캔버스 00:01–00:02 · 원본 00:03–00:04",
+      "1 · 음소거 ·",
+      "1 · 원본 100% ·",
+      "쇼츠 재생을 준비하지 못했습니다: DecoderError"
+    ];
+    for (const source of systemCopy) {
+      assert.doesNotMatch(
+        translateUiCopy(
+          source,
+          language,
+          catalog,
+          EDITOR_RUNTIME_UI_COPY_PATTERNS
+        ),
+        /[가-힣]/u,
+        `${language} Shorts copy leaked Korean: ${source}`
+      );
+    }
+
+    for (const [source, userCopy] of [
+      [
+        `${userNote} · 겹친 이미지는 이미지 트랙의 별도 줄에 표시됩니다.`,
+        userNote
+      ],
+      [
+        `${userAssetName}을 이미지 트랙에 추가했습니다. 투명 배경도 유지됩니다.`,
+        userAssetName
+      ],
+      [
+        `${userAssetName}을 이미지 트랙에 추가했습니다.`,
+        userAssetName
+      ]
+    ] as const) {
+      const translated = translateUiCopy(
+        source,
+        language,
+        catalog,
+        EDITOR_RUNTIME_UI_COPY_PATTERNS
+      );
+      assert.ok(translated.includes(userCopy));
+      assert.doesNotMatch(translated.replace(userCopy, ""), /[가-힣]/u);
+    }
+  }
+});
+
 test("일본어 편집 UI는 clip과 track 용어를 일관되게 사용한다", () => {
   const japaneseCopy = [
     ...Object.values(EDITOR_RUNTIME_UI_COPY).map((copy) => copy.ja),
@@ -129,6 +230,38 @@ test("일본어 편집 UI는 clip과 track 용어를 일관되게 사용한다",
   ].join("\n");
   assert.doesNotMatch(japaneseCopy, /(?<!ショート)カット/u);
   assert.doesNotMatch(japaneseCopy, /レーン/u);
+});
+
+test("편집기 동적 패턴은 중복되지 않고 문맥별 단수·개수 표현을 구분한다", () => {
+  const patternKeys = EDITOR_RUNTIME_UI_COPY_PATTERNS.map((pattern) => (
+    `${pattern.source.source}/${pattern.source.flags}`
+  ));
+  assert.equal(new Set(patternKeys).size, patternKeys.length);
+
+  const catalog = mergeUiCopyCatalogs(
+    EDITOR_STATIC_UI_COPY,
+    EDITOR_RUNTIME_UI_COPY
+  );
+  for (const language of ["en", "ja"] as const) {
+    for (const source of [
+      "컷 1",
+      "이미지 1",
+      "컷 3개",
+      "자막 2개",
+      "이미지 1개",
+      "음성 0개",
+      "현재 시각의 3개 자막 레인이 모두 사용 중입니다."
+    ]) {
+      const translated = translateUiCopy(
+        source,
+        language,
+        catalog,
+        EDITOR_RUNTIME_UI_COPY_PATTERNS
+      );
+      assert.notEqual(translated, source);
+      assert.doesNotMatch(translated, /[가-힣]/u);
+    }
+  }
 });
 
 test("컷 화면과 편집기는 상표 바로 아래에 같은 KR EN JP 버튼을 둔다", async () => {

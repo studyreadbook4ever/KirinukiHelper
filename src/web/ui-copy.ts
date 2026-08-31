@@ -83,6 +83,10 @@ const studioStaticCopy = {
     en: "Try again",
     ja: "再試行"
   },
+  "작업 중 오류가 발생했습니다. 다시 시도해 주세요.": {
+    en: "Something went wrong. Try again.",
+    ja: "処理中にエラーが発生しました。もう一度お試しください。"
+  },
   "저장된 편집이 없습니다.": {
     en: "There are no saved edits.",
     ja: "保存済みの編集はありません。"
@@ -524,6 +528,10 @@ const studioRuntimeCopy = {
   "목록 준비에 실패했습니다. 오류가 난 항목은 임의로 삭제하지 않았습니다.": { en: "Could not prepare the list. No items with errors were deleted.", ja: "一覧を準備できませんでした。エラーが発生した項目は削除していません。" },
   "저장된 편집 없음 · 아래 입력은 항상 새 프로젝트로 시작합니다.": { en: "No saved edits · The fields below always start a new project.", ja: "保存済みの編集なし · 下の入力欄からは常に新しいプロジェクトが始まります。" },
   "알 수 없음": { en: "Unknown", ja: "不明" },
+  "지원하지 않는 브라우저 프로젝트가 있습니다: 알 수 없음": {
+    en: "An unsupported browser project was found: Unknown",
+    ja: "対応していないブラウザープロジェクトがあります: 不明"
+  },
   "이 브라우저에 저장된 편집이 없습니다.": { en: "No edits are saved in this browser.", ja: "このブラウザーに保存された編集はありません。" },
   "브라우저 편집 목록을 읽지 못했습니다.": { en: "Could not read the browser edit list.", ja: "ブラウザーの編集一覧を読み込めませんでした。" },
   "자동 이전 편집 브라우저 저장 상태 정리에 실패했습니다.": { en: "Could not automatically clean up the previous edit's browser state.", ja: "以前の編集のブラウザー保存状態を自動整理できませんでした。" },
@@ -854,9 +862,54 @@ export const CUT_UI_COPY_PATTERNS = [
     ja: "ウェブの元動画プレーヤーに接続できませんでした：$1 ヘルパーを起動して再試行してください。"
   },
   {
-    source: /^(?:영상 준비|도우미가 요청을 확인하고 있습니다|원본 VOD를 안전하게 확인하고 있습니다|선택한 구간만 계산하고 있습니다|선택한 구간을 이 PC에 받고 있습니다|받은 영상과 원본 시각을 검증하고 있습니다|웹 편집기용 영상을 구성하고 있습니다|선택한 구간 준비를 마쳤습니다|선택한 구간을 준비하지 못했습니다|선택한 구간 준비를 취소했습니다) 단계에서 멈췄습니다$/u,
-    en: "Media preparation stopped at this stage.",
-    ja: "この段階で動画の準備が停止しました。"
+    source: /^영상 준비 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped.",
+    ja: "動画の準備が停止しました。"
+  },
+  {
+    source: /^도우미가 요청을 확인하고 있습니다 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped while the helper was checking the request.",
+    ja: "ヘルパーがリクエストを確認している段階で動画の準備が停止しました。"
+  },
+  {
+    source: /^원본 VOD를 안전하게 확인하고 있습니다 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped while checking the source VOD.",
+    ja: "元の VOD を確認している段階で動画の準備が停止しました。"
+  },
+  {
+    source: /^선택한 구간만 계산하고 있습니다 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped while calculating the selected ranges.",
+    ja: "選択範囲を計算している段階で動画の準備が停止しました。"
+  },
+  {
+    source: /^선택한 구간을 이 PC에 받고 있습니다 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped while downloading the selected ranges to this PC.",
+    ja: "選択範囲をこの PC にダウンロードしている段階で動画の準備が停止しました。"
+  },
+  {
+    source: /^받은 영상과 원본 시각을 검증하고 있습니다 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped while verifying the downloaded video against the source timecodes.",
+    ja: "ダウンロードした動画と元動画のタイムコードを検証している段階で動画の準備が停止しました。"
+  },
+  {
+    source: /^웹 편집기용 영상을 구성하고 있습니다 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped while assembling the video for the web editor.",
+    ja: "ウェブエディター用の動画を作成している段階で動画の準備が停止しました。"
+  },
+  {
+    source: /^선택한 구간 준비를 마쳤습니다 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped immediately after the selected ranges were ready.",
+    ja: "選択範囲の準備が完了した直後に処理が停止しました。"
+  },
+  {
+    source: /^선택한 구간을 준비하지 못했습니다 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped after the selected ranges could not be prepared.",
+    ja: "選択範囲を準備できず、処理が停止しました。"
+  },
+  {
+    source: /^선택한 구간 준비를 취소했습니다 단계에서 멈췄습니다$/u,
+    en: "Media preparation stopped after preparation was canceled.",
+    ja: "選択範囲の準備がキャンセルされ、処理が停止しました。"
   },
   {
     source: /^편집기에서 준비할 범위 ([0-9:.]+) ~ ([0-9:.]+) \(앞뒤 10초 포함\)$/u,
