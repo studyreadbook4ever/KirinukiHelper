@@ -39,6 +39,8 @@
   --source-audio-track-height: 0px;
   --subtitle-track-height: 48px;
   --subtitle-lane-count: 2;
+  --ui-copy-source-frame: "원본 영상 영역";
+  --ui-copy-review: "확인";
   --timeline-content-height: calc(
     var(--ruler-height) +
     var(--video-track-height) +
@@ -51,6 +53,16 @@
   font-synthesis: none;
   background: var(--bg);
   color: var(--text);
+}
+
+:root:lang(en) {
+  --ui-copy-source-frame: "Source Video Area";
+  --ui-copy-review: "Review";
+}
+
+:root:lang(ja) {
+  --ui-copy-source-frame: "元映像の領域";
+  --ui-copy-review: "確認";
 }
 
 * {
@@ -324,7 +336,10 @@ svg {
 .editor-brand-slot {
   width: 100px;
   display: grid;
+  grid-template-rows: 60px 26px;
   place-items: center;
+  gap: 1px;
+  padding: 1px 4px;
   overflow: hidden;
   border-radius: 8px;
   background:
@@ -335,10 +350,16 @@ svg {
     0 0 22px rgba(0, 230, 163, 0.035);
 }
 
+.editor-brand-mark {
+  width: 92px;
+  height: 60px;
+  overflow: hidden;
+}
+
 .kirinuki-mark {
   display: block;
-  width: 100px;
-  height: 90px;
+  width: 92px;
+  height: 60px;
 }
 
 .kirinuki-mark-frame {
@@ -374,6 +395,61 @@ svg {
   font-size: 8.5px;
   font-weight: 800;
   letter-spacing: 1.65px;
+}
+
+.ui-language-switcher {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  gap: 1px;
+  padding: 1px;
+  border: 1px solid #354047;
+  border-radius: 5px;
+  background: #080b0e;
+}
+
+.ui-language-switcher button {
+  min-width: 28px;
+  height: 24px;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 3px;
+  color: #88949b;
+  background: transparent;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.ui-language-switcher.compact {
+  padding: 0;
+}
+
+.ui-language-switcher button:hover {
+  color: #e6edef;
+  background: #1d252a;
+}
+
+.ui-language-switcher button.active,
+.ui-language-switcher button[aria-pressed="true"] {
+  color: #03130f;
+  background: var(--mint);
+}
+
+.ui-language-switcher button:focus-visible {
+  outline: 2px solid #f6f8fb;
+  outline-offset: 1px;
+}
+
+:root:lang(ja) .editor-shell,
+:root:lang(ja) .editor-policy-gate,
+:root:lang(ja) .editor-mobile-gate,
+:root:lang(ja) dialog,
+:root:lang(ja) .toast {
+  font-family: Inter, "Hiragino Sans", "Yu Gothic UI", "Yu Gothic", "Noto Sans JP", ui-sans-serif, system-ui, sans-serif;
 }
 
 .editor-leaderboard-ad-slot {
@@ -1329,7 +1405,7 @@ svg {
 }
 
 .short-source-crop-surface::before {
-  content: "원본 영상 영역";
+  content: var(--ui-copy-source-frame);
   position: absolute;
   top: 7px;
   left: 8px;
@@ -5311,7 +5387,7 @@ svg {
 }
 
 .cue-block.review-required.ai:not(.human-edited)::after {
-  content: "확인";
+  content: var(--ui-copy-review);
   color: #2d2110;
   background: #ffd18c;
 }

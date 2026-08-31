@@ -115,6 +115,15 @@ import {
   consumeSourceLocation,
   SOURCE_LOCATION_SANITIZED_EVENT
 } from "./source-location.js";
+import {
+  UI_LANGUAGE_CHANGE_EVENT,
+  installUiLocalization,
+  uiIntlLocale
+} from "../lib/ui-localization.js";
+import {
+  CUT_UI_COPY_CATALOG,
+  CUT_UI_COPY_PATTERNS
+} from "./ui-copy.js";
 
 export {
   formatStudioTimecode,
@@ -127,6 +136,11 @@ const activeStudioOrigin = assertKirinukiStudioDocumentOrigin(
     `meta[name="${KIRINUKI_STUDIO_ORIGIN_META_NAME}"]`
   )?.content
 );
+
+const uiLocalization = installUiLocalization({
+  catalog: CUT_UI_COPY_CATALOG,
+  patterns: CUT_UI_COPY_PATTERNS
+});
 
 const publicLaunchShell = requiredElement<HTMLElement>("#public-launch-shell");
 const localAppSurface = requiredElement<HTMLElement>("#local-app-surface");
@@ -317,6 +331,8 @@ let pendingLocalProjectDeletion: PendingLocalProjectDeletion | null = null;
 let localProjectManagerBusy = false;
 let localProjectManagerInitialized = false;
 let localProjectManagerLastError: unknown = null;
+let localProjectManagerRenderState: "loading" | "ready" | "error" =
+  "loading";
 const localProjectLifecycleCleanupQueue = createLatestSerialOperationQueue();
 let localProjectLifecycleRefreshTimer: number | null = null;
 let openingEditor = false;
@@ -482,7 +498,8 @@ function renderMobileEditorAccess(): void {
   renderEditorEntryAvailability();
 }
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  return uiLocalization.translate(message);
 }
 
 function setStatus(message: string, kind: "idle" | "error" | "success" = "idle"): void {
@@ -1559,9 +1576,9 @@ async function importSessionArchiveFile(file: File): Promise<void> {
   const imported = await sessionArchiveCaptureFromJson(await file.text());
   if (
     hasMeaningfulCaptureInput()
-    && !window.confirm(
+    && !window.confirm(uiLocalization.translate(
       `현재 입력을 ‘${imported.projectName}’의 원본 링크와 ${imported.segments.length}개 구간으로 바꿀까요?\n\n현재 편집기 세션과 정책 확인은 건드리지 않습니다.`
-    )
+    ))
   ) {
     setStatus("백업 파일 불러오기를 취소했습니다.");
     return;
@@ -1712,7 +1729,7 @@ function localProjectTimeLabel(updatedAtMs: number): string {
   if (updatedAtMs <= 0) {
     return "저장 시각 정보 없음";
   }
-  return new Intl.DateTimeFormat("ko-KR", {
+  return new Intl.DateTimeFormat(uiIntlLocale(uiLocalization.language), {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(updatedAtMs));
@@ -1761,7 +1778,7 @@ function renderLocalProjectEntries(): void {
       time.dateTime = new Date(updatedAtMs).toISOString();
     }
     requiredElementWithin<HTMLElement>(row, ".local-project-counts").textContent =
-      `컷 ${project.clips.length.toLocaleString("ko-KR")}개 · 자막 ${project.subtitles.length.toLocaleString("ko-KR")}개`;
+      `컷 ${project.clips.length.toLocaleString(uiIntlLocale(uiLocalization.language))}개 · 자막 ${project.subtitles.length.toLocaleString(uiIntlLocale(uiLocalization.language))}개`;
     requiredElementWithin<HTMLElement>(row, ".local-project-drafts").textContent =
       hasOpenEditingSession
         ? "현재 다른 탭에서 편집 중입니다"
@@ -1825,6 +1842,7 @@ function renderLocalProjectEntries(): void {
 function renderLocalProjectManagerState(
   state: "loading" | "ready" | "error"
 ): void {
+  localProjectManagerRenderState = state;
   const hasProjects = localProjectEntries.length > 0;
   elements.localProjectManager.hidden = state !== "error" && !hasProjects;
   elements.localProjectManager.ariaBusy = String(state === "loading");
@@ -1848,7 +1866,7 @@ function renderLocalProjectManagerState(
   } else {
     const activeCount = openEditingCheckpointProjectIds.size;
     elements.localProjectsSummary.textContent = hasProjects
-      ? `저장된 편집 ${localProjectEntries.length.toLocaleString("ko-KR")}개 · 최근 수정순${activeCount > 0 ? ` · 다른 탭 작업 중 ${activeCount}개` : ""}`
+      ? `저장된 편집 ${localProjectEntries.length.toLocaleString(uiIntlLocale(uiLocalization.language))}개 · 최근 수정순${activeCount > 0 ? ` · 다른 탭 작업 중 ${activeCount}개` : ""}`
       : "저장된 편집 없음 · 아래 입력은 항상 새 프로젝트로 시작합니다.";
   }
 }
@@ -2819,6 +2837,11 @@ elements.cutPreparationManual.addEventListener("click", () => {
   forceManualFileForNextPreparation = true;
   elements.cutPreparationRecovery.hidden = true;
   elements.startEditor.click();
+});
+
+window.addEventListener(UI_LANGUAGE_CHANGE_EVENT, () => {
+  renderLocalProjectEntries();
+  renderLocalProjectManagerState(localProjectManagerRenderState);
 });
 
 renderMobileEditorAccess();

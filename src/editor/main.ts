@@ -348,6 +348,19 @@ import {
   studioStorageArea,
   verifyStudioUsagePolicyGate
 } from "./studio-runtime.js";
+import {
+  UI_LANGUAGE_CHANGE_EVENT,
+  installUiLocalization,
+  mergeUiCopyCatalogs,
+  uiIntlLocale
+} from "../lib/ui-localization.js";
+import {
+  EDITOR_STATIC_UI_COPY
+} from "./ui-copy-static.js";
+import {
+  EDITOR_RUNTIME_UI_COPY,
+  EDITOR_RUNTIME_UI_COPY_PATTERNS
+} from "./ui-copy-runtime.js";
 
 declare const __KIRINUKI_SUBTITLE_SYNC_SKILL_MARKDOWN__: string;
 
@@ -360,6 +373,16 @@ assertKirinukiStudioDocumentOrigin(
   location.origin,
   CONFIGURED_KIRINUKI_STUDIO_ORIGIN
 );
+
+const uiLocalization = installUiLocalization({
+  catalog: mergeUiCopyCatalogs(
+    EDITOR_STATIC_UI_COPY,
+    EDITOR_RUNTIME_UI_COPY
+  ),
+  patterns: [
+    ...EDITOR_RUNTIME_UI_COPY_PATTERNS
+  ]
+});
 
 const SUBTITLE_SYNC_SKILL_MARKDOWN =
   __KIRINUKI_SUBTITLE_SYNC_SKILL_MARKDOWN__;
@@ -649,35 +672,47 @@ interface VodCoveragePlan {
   expandsCurrentMaterialization: boolean;
 }
 
-function errorMessage(error: unknown): string {
+function rawErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function errorMessage(error: unknown): string {
+  return uiLocalization.translate(rawErrorMessage(error));
 }
 
 function internalMediaEngineErrorMessage(
   error: unknown,
   feature: "VOD" | "Whisper"
 ): string {
-  const message = errorMessage(error);
-  const recovery = feature === "Whisper"
+  const message = rawErrorMessage(error);
+  const recovery = uiLocalization.translate(feature === "Whisper"
     ? "현재 공개 설치판은 Whisper를 제공하지 않습니다. AudSeg 또는 자막 작업 프롬프트를 사용해 주세요."
-    : "설치 안내가 보이면 이 PC용 영상 준비 도구를 한 번 설치한 뒤 같은 버튼을 다시 눌러 주세요.";
+    : "설치 안내가 보이면 이 PC용 영상 준비 도구를 한 번 설치한 뒤 같은 버튼을 다시 눌러 주세요.");
   if (
     /failed to fetch|networkerror|load failed|시간.*초과|timed?\s*out|econnrefused/iu.test(message)
   ) {
-    return `${feature}용 내부 미디어 엔진을 시작하지 못했습니다. ${recovery}`;
+    return uiLocalization.translate(
+      `${feature}용 내부 미디어 엔진을 시작하지 못했습니다. ${recovery}`
+    );
   }
   if (/\b403\b|origin|출처/iu.test(message)) {
-    return `${feature}용 내부 미디어 엔진이 현재 편집 세션을 확인하지 못했습니다. ${recovery}`;
+    return uiLocalization.translate(
+      `${feature}용 내부 미디어 엔진이 현재 편집 세션을 확인하지 못했습니다. ${recovery}`
+    );
   }
   if (/\b429\b|너무 많은|rate/iu.test(message)) {
-    return `${feature}용 내부 미디어 엔진이 다른 작업을 마무리하고 있습니다. 잠시 뒤 같은 버튼을 다시 눌러 주세요.`;
+    return uiLocalization.translate(
+      `${feature}용 내부 미디어 엔진이 다른 작업을 마무리하고 있습니다. 잠시 뒤 같은 버튼을 다시 눌러 주세요.`
+    );
   }
   if (
     /companion|gateway|게이트웨이|도우미|localhost|127\.0\.0\.1|endpoint|port|포트|setup/iu.test(message)
   ) {
-    return `${feature}용 내부 미디어 엔진을 준비하지 못했습니다. ${recovery}`;
+    return uiLocalization.translate(
+      `${feature}용 내부 미디어 엔진을 준비하지 못했습니다. ${recovery}`
+    );
   }
-  return message;
+  return uiLocalization.translate(message);
 }
 
 function errorName(error: unknown): string {
@@ -2346,20 +2381,24 @@ async function waitForProjectSaves() {
   await projectWriteQueue.waitForIdle();
 }
 
-const localDraftDateFormatter = new Intl.DateTimeFormat("ko-KR", {
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit"
-});
+function localDraftDateFormatter(): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat(uiIntlLocale(uiLocalization.language), {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
 
-const localSaveTimeFormatter = new Intl.DateTimeFormat("ko-KR", {
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit"
-});
+function localSaveTimeFormatter(): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat(uiIntlLocale(uiLocalization.language), {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
 
 function renderLocalPersistenceStatus(): void {
   if (!elements?.local_draft_status) {
@@ -2378,10 +2417,10 @@ function renderLocalPersistenceStatus(): void {
     : state === "saving"
       ? "편집 중 임시 복구 중…"
       : state === "saved"
-        ? `편집 중 임시 복구됨 ${localSaveTimeFormatter.format(lastCurrentProjectSavedAtMs)}`
+        ? `편집 중 임시 복구됨 ${localSaveTimeFormatter().format(lastCurrentProjectSavedAtMs)}`
         : "편집 중 임시 복구 준비됨";
   const lastAutoText = lastAutomaticDraftAtMs > 0
-    ? ` · 최근 5분 복구 ${localDraftDateFormatter.format(lastAutomaticDraftAtMs)}`
+    ? ` · 최근 5분 복구 ${localDraftDateFormatter().format(lastAutomaticDraftAtMs)}`
     : "";
   elements.local_draft_status.textContent = (
     `${current} · 현재 복구본 ${Math.min(5, knownLocalDraftCount)}/5 · 5분 간격 · 탭 종료 시 임시본 폐기${lastAutoText}`
@@ -2484,9 +2523,11 @@ function renderLocalDraftList(
 
     const time = document.createElement("time");
     time.dateTime = draft.createdAt;
-    time.textContent = localDraftDateFormatter.format(
-      new Date(draft.createdAtMs || draft.createdAt)
-    );
+    const draftTimeMs = new Date(
+      draft.createdAtMs || draft.createdAt
+    ).getTime();
+    time.dataset.kirinukiUiDate = String(draftTimeMs);
+    time.textContent = localDraftDateFormatter().format(draftTimeMs);
     heading.append(time, reason);
 
     const summary = document.createElement("span");
@@ -4185,6 +4226,7 @@ function renderMediaCard() {
   const usableMedia = Boolean(mediaFile && materializedMediaBindingIsValid());
   elements.media_card.classList.toggle("empty", !usableMedia);
   elements.stage_empty.hidden = usableMedia;
+  elements.media_name.removeAttribute("data-kirinuki-ui-copy-ignore");
   if (document.activeElement !== elements.source_offset) {
     elements.source_offset.value = String(
       (Number(project.broadcastSession?.alignmentOffsetMs) || 0) / 1000
@@ -4217,6 +4259,10 @@ function renderMediaCard() {
   elements.media_name.textContent = materialization
     ? `${sourcePlatformLabel(materialization.source.platform)} 편집 영상 준비됨`
     : String(asset.name || "");
+  elements.media_name.toggleAttribute(
+    "data-kirinuki-ui-copy-ignore",
+    !materialization && Boolean(asset.name)
+  );
   const preparedClipCount = materialization
     ? new Set(
       materialization.windows.flatMap((window) => window.clipIds)
@@ -4418,7 +4464,12 @@ function renderClipList() {
     item.classList.toggle("clip-group-selected", clipGroupSelection.has(clip.id));
     templateElement(".clip-index").textContent = String(index + 1);
     const clipTitle = clip.note || `선택 구간 ${index + 1}`;
-    templateElement(".clip-title").textContent = String(clipTitle);
+    const clipTitleElement = templateElement(".clip-title");
+    clipTitleElement.textContent = String(clipTitle);
+    clipTitleElement.toggleAttribute(
+      "data-kirinuki-ui-copy-ignore",
+      Boolean(clip.note)
+    );
     templateElement(".clip-time").textContent = `${formatTime(clip.sourceStartMs)} → ${formatTime(clip.sourceEndMs)}`;
     templateElement(".clip-duration").textContent = formatDuration(clipDurationMs(clip));
     const checkbox = templateElement(".clip-group-checkbox");
@@ -4620,12 +4671,14 @@ function renderImageAssetInspector() {
   elements.asset_empty.hidden = Boolean(asset);
   elements.asset_editor.hidden = !asset;
   if (!asset) {
+    elements.asset_name.removeAttribute("data-kirinuki-ui-copy-ignore");
     elements.asset_thumbnail.removeAttribute("src");
     elements.asset_thumbnail.alt = "";
     return;
   }
   const range = imageAssetTimelineRange(project, asset);
   elements.asset_name.textContent = asset.name;
+  elements.asset_name.dataset.kirinukiUiCopyIgnore = "";
   elements.asset_meta.textContent = [
     asset.naturalWidth && asset.naturalHeight
       ? `${asset.naturalWidth}×${asset.naturalHeight}`
@@ -5199,6 +5252,10 @@ function renderCueList() {
     time.textContent = `L${cue.lane + 1} · ${formatTime(range.startMs, { compact: true }).slice(0, -4)}`;
     const text = document.createElement("span");
     text.textContent = cue.text || "(빈 자막)";
+    text.toggleAttribute(
+      "data-kirinuki-ui-copy-ignore",
+      Boolean(cue.text)
+    );
     button.append(time, text);
     elements.cue_list.append(button);
   });
@@ -5551,6 +5608,22 @@ function currentShortWorkspaceId(): string {
   return currentShortWorkspaceCollection().activeWorkspaceId;
 }
 
+function defaultShortWorkspaceName(index: number): string {
+  return {
+    ko: `쇼츠 ${index}`,
+    en: `Short ${index}`,
+    ja: `ショート ${index}`
+  }[uiLocalization.language];
+}
+
+function duplicateShortWorkspaceName(name: string): string {
+  return {
+    ko: `${name} 복사본`,
+    en: `${name} copy`,
+    ja: `${name} コピー`
+  }[uiLocalization.language];
+}
+
 function renderShortWorkspaceProjectManager(): void {
   const shortActive = workspaceMode === "short-form";
   elements.short_workspace_projects.hidden = !shortActive;
@@ -5728,12 +5801,15 @@ async function createOrDuplicateShortWorkspace(duplicateActive: boolean): Promis
     syncedRoot.clips
   );
   const id = `shorts-${crypto.randomUUID()}`;
+  const workspaceIndex = currentShortWorkspaceCollection().workspaces.length + 1;
   const collection = addShortFormWorkspace(
     syncedRoot.shortFormWorkspaces,
     syncedRoot.shortForm,
     {
       id,
-      name: duplicateActive ? `${current.name} 복사본` : undefined,
+      name: duplicateActive
+        ? duplicateShortWorkspaceName(current.name)
+        : defaultShortWorkspaceName(workspaceIndex),
       duplicateActive
     },
     syncedRoot.clips
@@ -5780,9 +5856,9 @@ async function deleteCurrentShortWorkspace(): Promise<void> {
     showToast("마지막 쇼츠 작업은 삭제할 수 없습니다.", "error");
     return;
   }
-  if (!window.confirm(
+  if (!window.confirm(uiLocalization.translate(
     `“${current.name}” 쇼츠 작업을 삭제할까요?\n이 작업의 자막·영상 배치·실행 취소 기록은 복구할 수 없습니다.`
-  )) {
+  ))) {
     return;
   }
   const next = deleteShortFormWorkspace(
@@ -11948,6 +12024,10 @@ function renderTimeline({ keepScroll = false } = {}) {
     body.type = "button";
     body.className = "clip-block-body";
     body.textContent = `${index + 1} · ${clip.note || "사용자 선택"}`;
+    body.toggleAttribute(
+      "data-kirinuki-ui-copy-ignore",
+      Boolean(clip.note)
+    );
     body.addEventListener("click", () => {
       const seekSelection = shouldSeekTimelineItemSelection();
       project = { ...project, selectedClipId: clip.id };
@@ -12127,6 +12207,7 @@ function renderTimeline({ keepScroll = false } = {}) {
     body.type = "button";
     body.className = "asset-block-body";
     body.textContent = asset.name || `이미지 ${assetIndex + 1}`;
+    body.toggleAttribute("data-kirinuki-ui-copy-ignore", Boolean(asset.name));
     body.title = `${asset.name || "이미지"} · 겹친 이미지는 이미지 트랙의 별도 줄에 표시됩니다.`;
     body.addEventListener("pointerdown", (event) => {
       bindTimedBlockMove(body, asset, "asset", event);
@@ -12292,6 +12373,10 @@ function renderTimeline({ keepScroll = false } = {}) {
     body.type = "button";
     body.className = "cue-block-body";
     body.textContent = cue.text || "(빈 자막)";
+    body.toggleAttribute(
+      "data-kirinuki-ui-copy-ignore",
+      Boolean(cue.text)
+    );
     body.addEventListener("pointerdown", (event) => {
       bindTimedBlockMove(body, cue, "subtitle", event);
     });
@@ -12480,6 +12565,7 @@ function renderSubtitleOverlay() {
     overlay.dataset.cueId = cue.id;
     overlay.setAttribute("aria-label", `${cue.lane + 1}번 레인 자막: ${cue.text || "빈 자막"}`);
     const text = document.createElement("span");
+    text.dataset.kirinukiUiCopyIgnore = "";
     const maximumLines = Math.max(
       1,
       Math.min(2, Math.round(Number(project.subtitleDefaults.maxLines) || 1))
@@ -14327,7 +14413,12 @@ function pastedImageName(mimeType: string | undefined) {
     "image/webp": "webp",
     "image/gif": "gif"
   } as Record<string, string>)[String(mimeType)] || "image";
-  return `붙여넣은 이미지.${extension}`;
+  const baseName = {
+    ko: "붙여넣은 이미지",
+    en: "Pasted image",
+    ja: "貼り付けた画像"
+  }[uiLocalization.language];
+  return `${baseName}.${extension}`;
 }
 
 async function addImageAssetFromBlob(blob: Blob, {
@@ -14505,7 +14596,7 @@ function addCueAtPlayhead({
     clipId: clip!.id,
     startOffsetMs,
     endOffsetMs,
-    text: "새 자막",
+    text: uiLocalization.translate("새 자막"),
     lane,
     x: 0.5,
     y: 0.84,
@@ -16334,9 +16425,9 @@ function formatCaptionRunDuration(milliseconds: number) {
   const minutes = Math.floor((totalSeconds % 3_600) / 60);
   const seconds = totalSeconds % 60;
   return [
-    hours > 0 ? `${hours}시간` : "",
-    minutes > 0 ? `${minutes}분` : "",
-    `${seconds}초`
+    hours > 0 ? uiLocalization.translate(`${hours}시간`) : "",
+    minutes > 0 ? uiLocalization.translate(`${minutes}분`) : "",
+    uiLocalization.translate(`${seconds}초`)
   ].filter(Boolean).join(" ");
 }
 
@@ -16370,7 +16461,7 @@ function confirmCaptionAgentRun(
       ]),
     "",
     "취소하면 오디오 추출을 시작하지 않습니다."
-  ].join("\n"));
+  ].map((line) => uiLocalization.translate(line)).join("\n"));
 }
 
 async function testCaptionAgentConnection() {
@@ -16775,7 +16866,7 @@ async function generateCaptions() {
       generatedCueCount += drafts.length;
       if (generatedCueCount > MAX_CAPTION_AGENT_CUES_PER_RUN) {
         throw new Error(
-          `한 번에 만들 수 있는 AI 자막은 최대 ${MAX_CAPTION_AGENT_CUES_PER_RUN.toLocaleString("ko-KR")}개입니다. 활성 컷을 나눠서 실행해 주세요.`
+          `한 번에 만들 수 있는 AI 자막은 최대 ${MAX_CAPTION_AGENT_CUES_PER_RUN.toLocaleString(uiIntlLocale(uiLocalization.language))}개입니다. 활성 컷을 나눠서 실행해 주세요.`
         );
       }
       captionWarnings = mergeAiWarnings(
@@ -17790,7 +17881,7 @@ async function cleanupCompletedExportSessionCaches(
   elements.session_completed_summary.textContent = (
     `내보낸 영상과 편집 복원 파일은 그대로 보존했습니다. 이 작업의 기기 내 데이터 ${deletedBrowserRecords}건`
     + (releasedVodFiles > 0
-      ? `과 VOD 작업 파일 ${releasedVodFiles.toLocaleString("ko-KR")}개(${formatFileSize(releasedVodBytes)})`
+      ? `과 VOD 작업 파일 ${releasedVodFiles.toLocaleString(uiIntlLocale(uiLocalization.language))}개(${formatFileSize(releasedVodBytes)})`
       : "")
     + "만 삭제했습니다."
     + (runtimeCleanupWarning
@@ -18206,7 +18297,7 @@ async function exportVideo(
             cleanupMessage = (
               ` 현재 편집 작업을 완료하고 기기 내 기록 ${browserRecordCount}건`
               + (cleanup.releasedVodFiles > 0
-                ? `과 VOD 작업 파일 ${cleanup.releasedVodFiles.toLocaleString("ko-KR")}개(${formatFileSize(cleanup.releasedVodBytes)})`
+                ? `과 VOD 작업 파일 ${cleanup.releasedVodFiles.toLocaleString(uiIntlLocale(uiLocalization.language))}개(${formatFileSize(cleanup.releasedVodBytes)})`
                 : "")
               + "를 정리했습니다."
               + (cleanup.runtimeCleanupWarning
@@ -18626,9 +18717,9 @@ async function importSessionArchiveFile(file: File): Promise<void> {
       "현재 정책을 확인한 원본과 복원 파일의 원본이 다릅니다. 해당 원본 탭에서 이번 사용 정책을 다시 입력한 뒤 복원해 주세요."
     );
   }
-  if (!window.confirm(
+  if (!window.confirm(uiLocalization.translate(
     `현재 편집을 안전하게 저장한 뒤 ‘${archivedRoot.name}’ 저장본으로 교체할까요?\n\n편집 복원 파일에는 원본 VOD가 들어 있지 않으므로 필요하면 원본을 다시 연결하거나 준비합니다.`
-  )) {
+  ))) {
     return;
   }
   const precommitBusyReason = projectReplacementBusyReason();
@@ -21276,6 +21367,25 @@ async function initialize() {
       throw new Error("새 편집의 캡처 데이터를 확인하지 못했습니다.");
     }
     project = createEditorProjectFromCapture(captureState, { id: projectId });
+    if (uiLocalization.language !== "ko") {
+      const collection = normalizeShortFormWorkspaceCollection(
+        project.shortFormWorkspaces,
+        project.shortForm,
+        project.clips
+      );
+      project = {
+        ...project,
+        shortFormWorkspaces: {
+          ...collection,
+          workspaces: collection.workspaces.map((workspace, index) => ({
+            ...workspace,
+            name: workspace.name === `쇼츠 ${index + 1}`
+              ? defaultShortWorkspaceName(index + 1)
+              : workspace.name
+          }))
+        }
+      };
+    }
   } else {
     if (!storedProject) {
       throw new Error("다시 열 편집 프로젝트를 확인하지 못했습니다.");
@@ -21509,7 +21619,7 @@ function normalizeLocalCaptionFirstPass(detail: unknown) {
   }
   if (detail.cues.length > MAX_CAPTION_AGENT_CUES_PER_RUN) {
     throw new TypeError(
-      `한 번에 추가할 수 있는 로컬 자막은 최대 ${MAX_CAPTION_AGENT_CUES_PER_RUN.toLocaleString("ko-KR")}개입니다.`
+      `한 번에 추가할 수 있는 로컬 자막은 최대 ${MAX_CAPTION_AGENT_CUES_PER_RUN.toLocaleString(uiIntlLocale(uiLocalization.language))}개입니다.`
     );
   }
   const clipsById = new Map(project.clips.map((clip) => [clip.id, clip]));
@@ -21807,6 +21917,19 @@ window.addEventListener("pageshow", (event) => {
     return;
   }
   resumeEditorAfterPageShow();
+});
+
+window.addEventListener(UI_LANGUAGE_CHANGE_EVENT, () => {
+  const formatter = localDraftDateFormatter();
+  document.querySelectorAll<HTMLTimeElement>(
+    "time[data-kirinuki-ui-date]"
+  ).forEach((time) => {
+    const timestamp = Number(time.dataset.kirinukiUiDate);
+    if (Number.isFinite(timestamp)) {
+      time.textContent = formatter.format(timestamp);
+    }
+  });
+  renderLocalPersistenceStatus();
 });
 
 void initialize().catch((error: unknown) => {
