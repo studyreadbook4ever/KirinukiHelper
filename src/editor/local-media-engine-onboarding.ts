@@ -51,6 +51,7 @@ import type {
   LocalMediaEngineReleaseChannel,
   LocalMediaEngineWindowsPreviewChannel
 } from "./local-media-engine-release.js";
+import { translateInstalledUiCopy } from "../lib/ui-localization.js";
 
 export const LOCAL_MEDIA_ENGINE_ORIGIN = "http://127.0.0.1:4319";
 export const LOCAL_MEDIA_ENGINE_HEALTH_ENDPOINT =
@@ -1412,9 +1413,9 @@ export async function ensureLocalMediaEngineReady(
           elements.reset.hidden = true;
           return;
         }
-        if (!globalThis.confirm(
+        if (!globalThis.confirm(translateInstalledUiCopy(
           "이 브라우저에 기억된 영상 준비 도우미 identity를 지울까요? 설치된 도우미를 직접 확인한 경우에만 계속하세요."
-        )) {
+        ))) {
           return;
         }
         await localMediaEngineTrustStore.reset(pin.keyId);

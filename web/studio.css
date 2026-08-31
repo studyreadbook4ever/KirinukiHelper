@@ -24,14 +24,26 @@ body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 75% -
 button, input { font: inherit; }
 button { color: inherit; }
 .topbar { position: sticky; top: 0; z-index: 10; height: 76px; display: flex; align-items: center; justify-content: space-between; padding: 0 max(20px, calc((100vw - 1560px) / 2)); background: rgb(9 11 12 / .88); border-bottom: 1px solid #22282b; backdrop-filter: blur(18px); }
-.brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
-.brand strong { font-family: Pretendard, sans-serif; font-size: 22px; }
+.brand-lockup { display: flex; align-items: center; gap: 9px; }
+.brand { display: flex; align-items: center; color: inherit; text-decoration: none; }
+.brand-meta { display: grid; align-content: center; gap: 5px; }
+.brand-meta > strong { font-family: Pretendard, sans-serif; font-size: 20px; line-height: 1; }
 .kirinuki-mark { display: block; width: 64px; height: 58px; }
 .kirinuki-mark-frame { fill: rgb(8 12 14 / .72); stroke: rgb(246 248 251 / .22); stroke-width: 1; }
 .kirinuki-mark-perforation { fill: var(--accent); opacity: .72; }
 .kirinuki-mark-k { fill: none; stroke: #f6f8fb; stroke-width: 6; stroke-linecap: square; stroke-linejoin: bevel; }
 .kirinuki-mark-cut { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: square; stroke-linejoin: miter; }
 .kirinuki-mark-word { fill: #f6f8fb; font-family: Inter, system-ui, sans-serif; font-size: 8.5px; font-weight: 800; letter-spacing: 1.65px; }
+.ui-language-switcher { display: inline-flex; width: max-content; align-items: center; gap: 2px; padding: 2px; border: 1px solid #364044; border-radius: 7px; background: #090c0d; }
+.ui-language-switcher button { min-width: 29px; height: 24px; padding: 0 5px; border: 0; border-radius: 4px; color: #8f9ba0; background: transparent; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 10px; font-weight: 800; line-height: 1; letter-spacing: .04em; cursor: pointer; }
+.ui-language-switcher button:hover { color: #dce4e6; background: #1b2225; }
+.ui-language-switcher button.active,
+.ui-language-switcher button[aria-pressed="true"] { color: #04130f; background: var(--accent); }
+.ui-language-switcher button:focus-visible { outline: 2px solid #f6f8fb; outline-offset: 2px; }
+:root:lang(ja) body { font-family: Inter, "Hiragino Sans", "Yu Gothic UI", "Yu Gothic", "Noto Sans JP", Pretendard, system-ui, sans-serif; }
+:root:lang(ja) .public-launch-card h1,
+:root:lang(ja) .public-launch-copy,
+:root:lang(ja) .start-intro h1 { word-break: normal; overflow-wrap: anywhere; }
 main { width: min(1560px, calc(100% - 40px)); margin: 0 auto; padding: 30px 0 110px; }
 .public-launch-shell { width: min(920px, calc(100% - 40px)); min-height: calc(100vh - 76px); display: grid; place-items: center; padding-block: 48px 90px; }
 .public-launch-card { width: 100%; padding: clamp(30px, 6vw, 64px); border: 1px solid #285e50; border-radius: 24px; background: linear-gradient(145deg, rgb(24 31 32 / .97), rgb(11 15 16 / .98)); box-shadow: 0 28px 100px rgb(0 0 0 / .3); }
@@ -291,7 +303,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 
 @media (max-width: 560px) {
-  .brand strong { display: none; }
+  .brand-meta > strong { display: none; }
+  .brand-meta { gap: 0; }
   .source-input-row { grid-template-columns: 1fr; }
   .source-input-row input { grid-column: auto; }
   .stream-stage { min-height: 200px; }

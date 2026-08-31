@@ -2207,6 +2207,81 @@ async function main(): Promise<void> {
     studioReferrerPolicy === "strict-origin-when-cross-origin",
     `YouTube client identity를 보존할 localhost referrer policy가 다릅니다: ${studioReferrerPolicy}`
   );
+  const localizationState = await execute<{
+    htmlLanguage: string;
+    sourceHeading: string;
+    sourceValue: string;
+    projectValue: string;
+    pressed: string[];
+  }>(`
+    const source = document.querySelector("#source-url");
+    const project = document.querySelector("#project-name");
+    if (!(source instanceof HTMLInputElement) || !(project instanceof HTMLInputElement)) {
+      throw new Error("localization state inputs are missing");
+    }
+    source.value = "https://example.invalid/user-source";
+    project.value = "사용자 프로젝트 Keep そのまま";
+    document.querySelector("button[data-kirinuki-ui-language='en']")?.click();
+    return {
+      htmlLanguage: document.documentElement.lang,
+      sourceHeading: document.querySelector("#source-title")?.textContent || "",
+      sourceValue: source.value,
+      projectValue: project.value,
+      pressed: [...document.querySelectorAll("button[data-kirinuki-ui-language][aria-pressed='true']")]
+        .map((button) => button.getAttribute("data-kirinuki-ui-language") || "")
+    };
+  `);
+  assert(
+    localizationState.htmlLanguage === "en"
+      && localizationState.sourceHeading === "Source VOD"
+      && localizationState.sourceValue === "https://example.invalid/user-source"
+      && localizationState.projectValue === "사용자 프로젝트 Keep そのまま"
+      && JSON.stringify(localizationState.pressed) === JSON.stringify(["en"]),
+    `영어 UI 전환이 입력 상태를 그대로 보존하지 않았습니다: ${JSON.stringify(localizationState)}`
+  );
+  await webdriver("POST", `/session/${sessionId}/url`, { url: `${studioOrigin}/` });
+  const persistedEnglish = await waitFor(
+    () => execute<{ htmlLanguage: string; sourceHeading: string }>(`
+      return {
+        htmlLanguage: document.documentElement.lang,
+        sourceHeading: document.querySelector("#source-title")?.textContent || ""
+      };
+    `),
+    (value) => value.htmlLanguage === "en" && value.sourceHeading === "Source VOD",
+    "명시적으로 고른 영어 UI가 새로고침 뒤 유지되지 않았습니다."
+  );
+  const japaneseAndKorean = await execute<{
+    japaneseHeading: string;
+    japaneseLanguage: string;
+    koreanHeading: string;
+    koreanLanguage: string;
+    switcherButtonHeight: number;
+  }>(`
+    document.querySelector("button[data-kirinuki-ui-language='ja']")?.click();
+    const japaneseHeading = document.querySelector("#source-title")?.textContent || "";
+    const japaneseLanguage = document.documentElement.lang;
+    const languageButton = document.querySelector("button[data-kirinuki-ui-language='ja']");
+    const switcherButtonHeight = languageButton instanceof HTMLElement
+      ? languageButton.getBoundingClientRect().height
+      : 0;
+    document.querySelector("button[data-kirinuki-ui-language='ko']")?.click();
+    return {
+      japaneseHeading,
+      japaneseLanguage,
+      koreanHeading: document.querySelector("#source-title")?.textContent || "",
+      koreanLanguage: document.documentElement.lang,
+      switcherButtonHeight
+    };
+  `);
+  assert(
+    persistedEnglish.htmlLanguage === "en"
+      && japaneseAndKorean.japaneseLanguage === "ja"
+      && japaneseAndKorean.japaneseHeading === "元のVOD"
+      && japaneseAndKorean.koreanLanguage === "ko"
+      && japaneseAndKorean.koreanHeading === "원본 VOD"
+      && japaneseAndKorean.switcherButtonHeight >= 24,
+    `KR/EN/JP UI 전환 또는 언어 버튼 크기가 다릅니다: ${JSON.stringify(japaneseAndKorean)}`
+  );
   const chzzkUrl = "https://chzzk.naver.com/video/14514980";
   const transitionChzzkUrl = "https://chzzk.naver.com/video/14514981";
   const youtubeUrl = "https://youtu.be/M7lc1UVf-VE?t=5";
@@ -3372,6 +3447,83 @@ async function main(): Promise<void> {
     (ready) => ready,
     "VOD 준비 후 편집기 작업 잠금이 해제되지 않았습니다.",
     10_000
+  );
+  const editorLocalization = await execute<{
+    english: {
+      htmlLanguage: string;
+      title: string;
+      exportLabel: string;
+      projectName: string;
+      clipTime: string;
+    };
+    japanese: {
+      htmlLanguage: string;
+      title: string;
+      exportLabel: string;
+      projectName: string;
+      clipTime: string;
+      targetSizes: Array<{ width: number; height: number }>;
+    };
+    korean: {
+      htmlLanguage: string;
+      title: string;
+      exportLabel: string;
+      projectName: string;
+      clipTime: string;
+    };
+  }>(`
+    const snapshot = () => ({
+      htmlLanguage: document.documentElement.lang,
+      title: document.querySelector(".topbar > h1")?.textContent?.trim() || "",
+      exportLabel: document.querySelector("#export-video")?.textContent?.replace(/\\s+/gu, " ").trim() || "",
+      projectName: document.querySelector("#project-name")?.value || "",
+      clipTime: document.querySelector(".clip-time")?.textContent || ""
+    });
+    const clickLanguage = (language) => {
+      const button = document.querySelector(
+        'button[data-kirinuki-ui-language="' + language + '"]'
+      );
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("편집기 " + language + " 언어 버튼이 없습니다.");
+      }
+      button.click();
+    };
+    clickLanguage("en");
+    const english = snapshot();
+    clickLanguage("ja");
+    const japanese = {
+      ...snapshot(),
+      targetSizes: [...document.querySelectorAll(
+        "#editor-brand-slot button[data-kirinuki-ui-language]"
+      )].map((button) => {
+        const rect = button.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      })
+    };
+    clickLanguage("ko");
+    return { english, japanese, korean: snapshot() };
+  `);
+  assert(
+    editorLocalization.english.htmlLanguage === "en"
+      && editorLocalization.english.title === "Kirinuki Video Editor"
+      && editorLocalization.english.exportLabel === "Export"
+      && editorLocalization.english.projectName === "localhost-browser-smoke"
+      && editorLocalization.english.clipTime === "00:01:20.500 → 00:01:35.000"
+      && editorLocalization.japanese.htmlLanguage === "ja"
+      && editorLocalization.japanese.title === "Kirinuki 動画エディター"
+      && editorLocalization.japanese.exportLabel === "書き出し"
+      && editorLocalization.japanese.projectName === "localhost-browser-smoke"
+      && editorLocalization.japanese.clipTime === "00:01:20.500 → 00:01:35.000"
+      && editorLocalization.japanese.targetSizes.length === 3
+      && editorLocalization.japanese.targetSizes.every(({ width, height }) => (
+        width >= 24 && height >= 24
+      ))
+      && editorLocalization.korean.htmlLanguage === "ko"
+      && editorLocalization.korean.title === "Kirinuki 영상 편집기"
+      && editorLocalization.korean.exportLabel === "영상 내보내기"
+      && editorLocalization.korean.projectName === "localhost-browser-smoke"
+      && editorLocalization.korean.clipTime === "00:01:20.500 → 00:01:35.000",
+    `편집기 언어 전환이 문구·터치 대상·편집 상태를 보존하지 않았습니다: ${JSON.stringify(editorLocalization)}`
   );
   const editorChrome = await execute<{
     adWidth: number;
@@ -4853,6 +5005,7 @@ async function main(): Promise<void> {
       href: editor.href,
       projectName: editor.projectName,
       materialization: preparedB.mediaName,
+      localization: editorLocalization,
       chrome: editorChrome
     },
     sessionTransition: {

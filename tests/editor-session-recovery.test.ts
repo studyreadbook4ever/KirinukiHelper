@@ -286,7 +286,7 @@ test("편집 세션은 진입 baseline 뒤 작업 사본을 저장하고 명시�
   );
   assert.match(
     source,
-    /return `\$\{feature\}용 내부 미디어 엔진을 시작하지 못했습니다\. \$\{recovery\}`/u
+    /return uiLocalization\.translate\(\s*`\$\{feature\}용 내부 미디어 엔진을 시작하지 못했습니다\. \$\{recovery\}`\s*\);/u
   );
   assert.doesNotMatch(
     source,

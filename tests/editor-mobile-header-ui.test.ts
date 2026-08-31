@@ -66,7 +66,7 @@ test("편집기 상단은 Kirinuki 상표·728x90 슬롯과 두 행의 원래 �
   const webTopbar = header(webHtml);
   assert.match(
     webTopbar,
-    /id="editor-brand-slot"[^>]*role="img"[^>]*aria-label="Kirinuki 상표"/u
+    /id="editor-brand-slot"[^>]*>\s*<div class="editor-brand-mark"[^>]*role="img"[^>]*aria-label="Kirinuki 상표"/u
   );
   assert.doesNotMatch(webTopbar, /id="editor-brand-slot"[^>]*aria-hidden="true"/u);
   assert.match(
@@ -76,7 +76,7 @@ test("편집기 상단은 Kirinuki 상표·728x90 슬롯과 두 행의 원래 �
   assert.doesNotMatch(
     webTopbar.match(/<svg class="kirinuki-mark"[\s\S]*?<\/svg>/u)?.[0] ?? "",
     /<(?:title|desc)>/u,
-    "상표 이름은 바깥 role=img 한 곳에서만 제공해야 합니다."
+    "상표 이름은 언어 선택기를 감싸지 않는 brand mark 한 곳에서만 제공해야 합니다."
   );
 
   for (const css of [webCss]) {
@@ -97,7 +97,12 @@ test("편집기 상단은 Kirinuki 상표·728x90 슬롯과 두 행의 원래 �
     );
   }
 
-  assert.match(webCss, /\.kirinuki-mark\s*\{[^}]*width:\s*100px;[^}]*height:\s*90px;/u);
+  assert.match(webCss, /\.editor-brand-mark\s*\{[^}]*width:\s*92px;[^}]*height:\s*60px;/u);
+  assert.match(webCss, /\.kirinuki-mark\s*\{[^}]*width:\s*92px;[^}]*height:\s*60px;/u);
+  assert.match(
+    webCss,
+    /\.ui-language-switcher button\s*\{[^}]*min-width:\s*28px;[^}]*height:\s*24px;/u
+  );
   assert.match(webCss, /\.kirinuki-mark-k\s*\{[^}]*stroke:\s*#f6f8fb;/u);
   assert.match(webCss, /\.kirinuki-mark-cut\s*\{[^}]*stroke:\s*var\(--mint\);/u);
 });
