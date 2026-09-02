@@ -324,6 +324,7 @@ interface NativeVodMaterializationResult {
     };
   };
   artifactPath: string;
+  artifactVerification?: ChzzkVodRunnerResult["artifactVerification"];
   reused: boolean;
 }
 
@@ -341,6 +342,9 @@ interface UnitMaterializationProgress {
   phase: ChzzkVodMaterializationProgress["phase"];
   completedUnits: number;
   totalUnits: number;
+  detailStage?: ChzzkVodMaterializationProgress["detailStage"];
+  processedBytes?: number;
+  totalBytes?: number;
 }
 
 function materializationProgressFraction(
@@ -353,6 +357,15 @@ function materializationProgressFraction(
     return 0.03;
   }
   if (progress.phase === "planning") {
+    if (progress.detailStage === "base-hash") {
+      const byteFraction = Number(progress.totalBytes) > 0
+        ? Math.max(0, Math.min(
+          1,
+          Number(progress.processedBytes || 0) / Number(progress.totalBytes)
+        ))
+        : 0;
+      return 0.08 + byteFraction * 0.015;
+    }
     return 0.08;
   }
   if (progress.phase === "downloading") {
@@ -362,7 +375,28 @@ function materializationProgressFraction(
     return 0.8 + unitFraction * 0.08;
   }
   if (progress.phase === "muxing") {
-    return 0.92;
+    const byteFraction = Number(progress.totalBytes) > 0
+      ? Math.max(0, Math.min(
+        1,
+        Number(progress.processedBytes || 0) / Number(progress.totalBytes)
+      ))
+      : unitFraction;
+    if (progress.detailStage === "run-remux") {
+      return 0.89 + unitFraction * 0.05;
+    }
+    if (progress.detailStage === "final-concat") {
+      return 0.95 + byteFraction * 0.01;
+    }
+    if (progress.detailStage === "final-verify") {
+      return 0.965 + byteFraction * 0.01;
+    }
+    if (progress.detailStage === "final-hash") {
+      return 0.977 + byteFraction * 0.018;
+    }
+    if (progress.detailStage === "publishing") {
+      return 0.998;
+    }
+    return 0.89;
   }
   return 0.999;
 }
@@ -374,6 +408,9 @@ function materializationProgressMessage(
     return "공개 VOD 원본을 확인하는 중";
   }
   if (progress.phase === "planning") {
+    if (progress.detailStage === "base-hash") {
+      return "기존 편집용 VOD 캐시의 무결성을 확인하는 중";
+    }
     return "현재 clip별 로컬 편집 범위와 필요한 디코딩 조각을 계산하는 중";
   }
   if (progress.phase === "downloading") {
@@ -385,6 +422,23 @@ function materializationProgressMessage(
     return "받은 VOD 구간의 코덱·무결성을 확인하는 중";
   }
   if (progress.phase === "muxing") {
+    if (progress.detailStage === "run-remux") {
+      return progress.totalUnits > 0
+        ? `로컬 편집 구간 ${progress.completedUnits}/${progress.totalUnits} 구성 중`
+        : "로컬 편집 구간을 구성하는 중";
+    }
+    if (progress.detailStage === "final-concat") {
+      return "준비한 구간을 최종 편집 MP4로 연결하는 중";
+    }
+    if (progress.detailStage === "final-verify") {
+      return "최종 편집 MP4의 재생 경계와 코덱을 확인하는 중";
+    }
+    if (progress.detailStage === "final-hash") {
+      return "최종 편집 MP4의 무결성을 확인하는 중";
+    }
+    if (progress.detailStage === "publishing") {
+      return "검증한 편집 MP4를 이 프로젝트에 연결하는 중";
+    }
     return "필요 구간을 로컬 편집 MP4로 구성하는 중";
   }
   return "VOD 편집 구간 준비를 마무리하는 중";
@@ -445,6 +499,9 @@ export function createPlatformMaterializationRunner({
       );
     }
     let result: NativeVodMaterializationResult;
+    let chzzkArtifactVerification:
+      | ChzzkVodRunnerResult["artifactVerification"]
+      | undefined;
     if (source.platform === SOURCE_PLATFORM_CHZZK) {
       try {
         result = await chzzkMaterializer({
@@ -459,11 +516,22 @@ export function createPlatformMaterializationRunner({
           onProgress: (progress) => {
             reportMaterializationProgress(onProgress, {
               phase: progress.phase,
-              completedUnits: progress.completedSegments,
-              totalUnits: progress.totalSegments
+              completedUnits: progress.completedRuns
+                ?? progress.completedSegments,
+              totalUnits: progress.totalRuns ?? progress.totalSegments,
+              ...(progress.detailStage
+                ? { detailStage: progress.detailStage }
+                : {}),
+              ...(progress.processedBytes === undefined
+                ? {}
+                : { processedBytes: progress.processedBytes }),
+              ...(progress.totalBytes === undefined
+                ? {}
+                : { totalBytes: progress.totalBytes })
             });
           }
         });
+        chzzkArtifactVerification = result.artifactVerification;
       } catch (error) {
         if (
           !(error instanceof ChzzkVodMaterializationError)
@@ -535,6 +603,9 @@ export function createPlatformMaterializationRunner({
         hashSha256: result.receipt.artifact.hashSha256,
         sizeBytes: result.receipt.artifact.sizeBytes
       },
+      ...(chzzkArtifactVerification
+        ? { artifactVerification: chzzkArtifactVerification }
+        : {}),
       reused: result.reused
     };
   };
@@ -1781,6 +1852,7 @@ export function createCaptionGatewayServer({
   });
   const chzzkVodJobs = createChzzkVodJobManager({
     runner: selectedMaterializationRunner,
+    trustNativeChzzkArtifactVerification: materializationRunner === undefined,
     ...(config.vodStateDir ? { artifactRoot: config.vodStateDir } : {}),
     ...(vodObserverLeaseTtlMs === undefined
       ? {}
@@ -3633,10 +3705,41 @@ export function createCaptionGatewayServer({
           });
           return;
         }
-        // A status request keeps only the observer that originally submitted
-        // this exact job alive. Same-project recovery capabilities may inspect
-        // or explicitly cancel it, but cannot accidentally resurrect its lease.
-        chzzkVodJobs.renewObserver(jobId, capability.clientNonce);
+        if (request.method !== "DELETE") {
+          const renewed = chzzkVodJobs.renewObserver(
+            jobId,
+            capability.clientNonce
+          );
+          const active = ![
+            "completed",
+            "failed",
+            "cancelled"
+          ].includes(job.state);
+          if (
+            !renewed
+            && active
+            && job.request.continuationPolicy === "bounded-persistent-editor"
+          ) {
+            // A full-editor execution no longer depends on browser timers.
+            // After wake/reload, an authenticated capability with the same
+            // exact project+source scope may attach its fresh document nonce.
+            // Collection POST remains the fingerprint-proving recovery path;
+            // this status path only restores observation of an already-running
+            // bounded job whose lifetime is independently enforced.
+            chzzkVodJobs.observe(jobId, capability.clientNonce);
+          } else if (!renewed && active) {
+            // Ephemeral previews retain observer-owned lifetime. A different or
+            // expired document cannot extend them merely by knowing a job ID;
+            // it must submit the exact request again through the collection.
+            rejectJson(request, response, 409, {
+              error: {
+                code: "OBSERVER_REATTACH_REQUIRED",
+                message: "로컬 미리보기 관찰 연결이 만료되었습니다. 같은 미리보기 요청을 다시 시작해 주세요."
+              }
+            });
+            return;
+          }
+        }
         const status = await chzzkVodJobs.publicStatus(job, baseUrl);
         if (closing) {
           sendGatewayClosing(request, response, config.allowedOrigin);

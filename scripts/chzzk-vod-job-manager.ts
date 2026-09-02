@@ -15,6 +15,7 @@ import {
   unlink
 } from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   SOURCE_PLATFORM_CHZZK,
   SOURCE_PLATFORM_SOOP,
@@ -45,9 +46,9 @@ import {
 } from "./vod-consumer-scope.js";
 
 export const CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA =
-  "chzzk-kirinuki-vod-materialization-request/v3";
+  "chzzk-kirinuki-vod-materialization-request/v4";
 export const CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA =
-  "chzzk-kirinuki-vod-materialization-status/v1";
+  "chzzk-kirinuki-vod-materialization-status/v2";
 export const CHZZK_VOD_CACHE_PURGE_REQUEST_SCHEMA =
   "chzzk-kirinuki-vod-cache-purge-request/v1";
 export const CHZZK_VOD_CACHE_PURGE_RESULT_SCHEMA =
@@ -65,13 +66,17 @@ export const DEFAULT_COMPLETED_VOD_JOB_TTL_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_FAILED_VOD_JOB_TTL_MS = 5 * 60 * 1_000;
 /**
  * Active browser documents poll every 500ms. Fifteen seconds tolerates short
- * scheduler stalls while still reclaiming a closed document promptly. A
- * browser that throttles background timers beyond this bound intentionally
- * loses only the in-progress job; its durable project/cache can start the same
- * request again. Keeping an abandoned downloader alive indefinitely would be
- * the worse liveness and resource-safety failure.
+ * scheduler stalls while still reclaiming a closed document's queued work and
+ * ephemeral preview promptly. A full editor execution that has already begun
+ * becomes detached instead and is bounded by its helper-owned deadline below.
  */
 export const DEFAULT_ACTIVE_VOD_JOB_OBSERVER_LEASE_TTL_MS = 15_000;
+/**
+ * Once a bounded persistent edit has entered the runner, browser observation
+ * is no longer its lifetime authority. Keep that execution finite even when
+ * every browser document is frozen or gone.
+ */
+export const DEFAULT_VOD_JOB_EXECUTION_DEADLINE_MS = 12 * 60 * 60 * 1_000;
 export const VOD_ARTIFACT_CHUNK_BYTES = 1024 * 1024;
 export const VOD_CONSUMER_PURGE_QUARANTINE_DIRECTORY =
   process.platform === "win32" ? ".q" : ".purge-quarantine";
@@ -90,6 +95,23 @@ export type ChzzkVodJobState =
   | "failed"
   | "cancelled";
 
+export type ChzzkVodContinuationPolicy =
+  | "bounded-persistent-editor"
+  | "ephemeral-preview";
+
+export type ChzzkVodCancellationReason =
+  | "user-requested"
+  | "queued-observer-expired"
+  | "ephemeral-observer-expired"
+  | "engine-shutdown"
+  | "execution-deadline";
+
+export interface ChzzkVodCancellationProvenance {
+  reason: ChzzkVodCancellationReason;
+  phase: ChzzkVodJobStage;
+  elapsedMs: number;
+}
+
 export interface ChzzkVodJobClip {
   id: string;
   startMs: number;
@@ -99,6 +121,7 @@ export interface ChzzkVodJobClip {
 export interface ChzzkVodMaterializationRequest {
   /** Stable logical edit-session identity used only to isolate local files. */
   consumerId: string;
+  continuationPolicy: ChzzkVodContinuationPolicy;
   sourceUrl: string;
   sourceClockIdentity?: SoopVodSourceClockIdentity;
   clips: ChzzkVodJobClip[];
@@ -133,6 +156,13 @@ export interface ChzzkVodRunnerResult {
     hashSha256: string;
     sizeBytes: number;
   };
+  /**
+   * Native CHZZK materialization can hand off the exact lstat snapshot it
+   * hashed while publishing. The manager accepts it only while that snapshot
+   * still names the same regular file; other runners simply omit it and use
+   * the existing manager-side verification path.
+   */
+  artifactVerification?: ChzzkVodArtifactSnapshotVerification;
   reused: boolean;
 }
 
@@ -140,6 +170,11 @@ export interface ChzzkVodArtifactVerification {
   hashSha256: string;
   chunkSizeBytes: typeof VOD_ARTIFACT_CHUNK_BYTES;
   chunkHashesSha256: readonly string[];
+}
+
+export interface ChzzkVodArtifactSnapshotVerification
+  extends ChzzkVodArtifactVerification {
+  identity: ChzzkVodArtifactIdentity;
 }
 
 export type ChzzkVodMaterializationRunner = (
@@ -164,11 +199,18 @@ interface ChzzkVodJob {
   observerLeaseEnforced: boolean;
   observerLeaseExpiries: Map<string, number>;
   observerLeaseTimer?: unknown;
+  executionStartedAt?: number;
+  executionDeadlineTimer?: unknown;
+  lastActivityAt: number;
+  lastActivityStage: ChzzkVodJobStage;
+  cancellation?: Readonly<ChzzkVodCancellationProvenance>;
   result?: ChzzkVodRunnerResult;
   artifactIntegrity?: Readonly<ChzzkVodRunnerResult["artifact"]>;
   artifactVerificationDigest?: Readonly<ChzzkVodArtifactVerification>;
   verifiedArtifactIdentity?: Readonly<ChzzkVodArtifactIdentity>;
   artifactVerification?: Promise<ChzzkVodArtifactIdentity | null>;
+  /** Settles only after this runner has stopped every write it owns. */
+  execution?: Promise<void>;
   activeMediaReads: number;
   mediaReadDrainWaiters?: Set<() => void>;
   purging: boolean;
@@ -259,10 +301,16 @@ interface ChzzkVodConsumerPurgeOperation {
 export interface ChzzkVodPublicStatus {
   schema: typeof CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA;
   jobId: string;
+  continuationPolicy: ChzzkVodContinuationPolicy;
   state: ChzzkVodJobState;
   progress: number;
   message: string;
   reused: boolean;
+  observation: {
+    state: "attached" | "detached";
+    lastActivityAt: string;
+  };
+  cancellation?: ChzzkVodCancellationProvenance;
   materialization?: unknown;
   media?: {
     url: string;
@@ -294,6 +342,8 @@ export interface ChzzkVodArtifactIdentity {
 
 interface ChzzkVodJobManagerOptions {
   runner: ChzzkVodMaterializationRunner;
+  /** Only the in-process native CHZZK adapter may enable snapshot handoff. */
+  trustNativeChzzkArtifactVerification?: boolean;
   /** Exact managed materializer root. Purge is fail-closed when absent. */
   artifactRoot?: string;
   inspectArtifactIdentity?: (
@@ -312,6 +362,10 @@ interface ChzzkVodJobManagerOptions {
   failedTtlMs?: number;
   observerLeaseTtlMs?: number;
   observerLeaseScheduler?: ChzzkVodObserverLeaseScheduler;
+  executionDeadlineMs?: number;
+  executionDeadlineScheduler?: ChzzkVodObserverLeaseScheduler;
+  consumerPurgeExecutionDrainTimeoutMs?: number;
+  monotonicNow?: () => number;
   randomBytesImpl?: typeof randomBytes;
   now?: () => number;
 }
@@ -385,6 +439,7 @@ const PUBLIC_MATERIALIZATION_ERROR_CODES = new Set([
   "DISK_SPACE_CHECK_FAILED",
   "DOWNLOAD_FAILED",
   "FETCH_UNAVAILABLE",
+  "INSUFFICIENT_DISK_SPACE",
   "INVALID_CLIPS",
   "INVALID_BASE_MATERIALIZATION",
   "INVALID_HANDLE",
@@ -487,6 +542,14 @@ const MAPPED_MATERIALIZATION_ERROR_MESSAGES = new Map<string, string>([
   [
     "LOCAL_WRITE_FAILED",
     "받은 VOD 구간을 이 기기에 안전하게 저장하지 못했습니다. 저장 공간과 권한을 확인한 뒤 다시 시도해 주세요."
+  ],
+  [
+    "DISK_SPACE_CHECK_FAILED",
+    "이 기기의 저장 공간을 안전하게 확인하지 못했습니다. 저장 장치를 확인한 뒤 다시 시도해 주세요."
+  ],
+  [
+    "INSUFFICIENT_DISK_SPACE",
+    "VOD 구간을 안전하게 준비할 저장 공간이 부족합니다. 여유 공간을 확보한 뒤 다시 시도해 주세요."
   ],
   [
     "MATERIALIZATION_QUOTA_EXCEEDED",
@@ -720,6 +783,7 @@ export function normalizeChzzkVodMaterializationRequest(
     || Object.keys(value).some((key) => ![
       "schema",
       "consumerId",
+      "continuationPolicy",
       "sourceUrl",
       "sourceClockIdentity",
       "clips",
@@ -745,6 +809,13 @@ export function normalizeChzzkVodMaterializationRequest(
   }
   if (Number(value.handleMs) !== CHZZK_VOD_HANDLE_MS) {
     throw new TypeError("현재 VOD 편집 여유는 앞뒤 10초만 지원합니다.");
+  }
+  const continuationPolicy = value.continuationPolicy;
+  if (
+    continuationPolicy !== "bounded-persistent-editor"
+    && continuationPolicy !== "ephemeral-preview"
+  ) {
+    throw new TypeError("VOD 준비 작업의 실행 지속 정책이 올바르지 않습니다.");
   }
   const sourceUrl = normalizeSourceUrl(value.sourceUrl);
   const source = inferSourceIdentifiers(sourceUrl);
@@ -775,6 +846,7 @@ export function normalizeChzzkVodMaterializationRequest(
   const editableRanges = normalizeEditableRanges(value.editableRanges, clips);
   return {
     consumerId,
+    continuationPolicy,
     sourceUrl,
     ...(sourceClockIdentity ? { sourceClockIdentity } : {}),
     clips,
@@ -963,6 +1035,7 @@ function consumerCachePurgeIdentityForJob(
 function requestFingerprint(request: ChzzkVodMaterializationRequest): string {
   const canonical = JSON.stringify({
     consumerId: request.consumerId,
+    continuationPolicy: request.continuationPolicy,
     sourceUrl: request.sourceUrl,
     sourceClockIdentity: request.sourceClockIdentity ?? null,
     handleMs: request.handleMs,
@@ -1885,12 +1958,47 @@ function validArtifactVerification(
   );
 }
 
+function validArtifactIdentity(
+  value: unknown,
+  sizeBytes: number
+): value is ChzzkVodArtifactIdentity {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return value.size === sizeBytes
+    && Number.isSafeInteger(value.size)
+    && Number.isFinite(value.mtimeMs)
+    && typeof value.rawDev === "string"
+    && /^-?\d+$/u.test(value.rawDev)
+    && typeof value.dev === "string"
+    && /^-?\d+$/u.test(value.dev)
+    && typeof value.ino === "string"
+    && /^\d+$/u.test(value.ino)
+    && value.nlink === "1"
+    && typeof value.mtimeNs === "string"
+    && /^-?\d+$/u.test(value.mtimeNs)
+    && typeof value.ctimeNs === "string"
+    && /^-?\d+$/u.test(value.ctimeNs)
+    && value.regular === true
+    && value.symlink === false;
+}
+
+function validArtifactSnapshotVerification(
+  value: unknown,
+  sizeBytes: number
+): value is ChzzkVodArtifactSnapshotVerification {
+  return isRecord(value)
+    && validArtifactVerification(value, sizeBytes)
+    && validArtifactIdentity(value.identity, sizeBytes);
+}
+
 function terminalJob(job: ChzzkVodJob): boolean {
   return ["completed", "failed", "cancelled"].includes(job.state);
 }
 
 function evictableTerminalJob(job: ChzzkVodJob): boolean {
   return terminalJob(job)
+    && job.execution === undefined
     && job.activeMediaReads === 0
     && !job.purging
     && !job.consumerPurging
@@ -1928,8 +2036,34 @@ function waitForActiveMediaReadsToDrain(
   });
 }
 
+function waitForAffectedExecutionsToSettle(
+  executions: readonly Promise<void>[],
+  timeoutMs: number
+): Promise<boolean> {
+  if (executions.length === 0) {
+    return Promise.resolve(true);
+  }
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (completed: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(completed);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    void Promise.allSettled(executions).then(
+      () => finish(true),
+      () => finish(true)
+    );
+  });
+}
+
 export function createChzzkVodJobManager({
   runner,
+  trustNativeChzzkArtifactVerification = false,
   artifactRoot,
   inspectArtifactIdentity = inspectExactArtifactIdentity,
   hashArtifact = hashExactArtifact,
@@ -1950,6 +2084,19 @@ export function createChzzkVodJobManager({
       clearTimeout(handle as NodeJS.Timeout);
     }
   },
+  executionDeadlineMs = DEFAULT_VOD_JOB_EXECUTION_DEADLINE_MS,
+  executionDeadlineScheduler = {
+    schedule(callback, delayMs) {
+      const timer = setTimeout(callback, delayMs);
+      timer.unref();
+      return timer;
+    },
+    cancel(handle) {
+      clearTimeout(handle as NodeJS.Timeout);
+    }
+  },
+  consumerPurgeExecutionDrainTimeoutMs = 30_000,
+  monotonicNow = () => performance.now(),
   randomBytesImpl = randomBytes,
   now = Date.now
 }: ChzzkVodJobManagerOptions) {
@@ -1987,6 +2134,28 @@ export function createChzzkVodJobManager({
     100,
     Math.min(5 * 60 * 1_000, Math.round(observerLeaseTtlMs))
   );
+  if (
+    !Number.isFinite(executionDeadlineMs)
+    || !Number.isSafeInteger(Math.round(executionDeadlineMs))
+    || executionDeadlineMs <= 0
+  ) {
+    throw new RangeError("VOD 작업 전체 실행 시간 제한이 올바르지 않습니다.");
+  }
+  const executionDeadlineLifetime = Math.max(
+    100,
+    Math.min(24 * 60 * 60 * 1_000, Math.round(executionDeadlineMs))
+  );
+  if (
+    !Number.isFinite(consumerPurgeExecutionDrainTimeoutMs)
+    || !Number.isSafeInteger(Math.round(consumerPurgeExecutionDrainTimeoutMs))
+    || consumerPurgeExecutionDrainTimeoutMs <= 0
+  ) {
+    throw new RangeError("VOD 세션 정리의 실행 종료 대기 시간이 올바르지 않습니다.");
+  }
+  const consumerPurgeExecutionDrainTimeout = Math.max(
+    10,
+    Math.min(5 * 60 * 1_000, Math.round(consumerPurgeExecutionDrainTimeoutMs))
+  );
   const managedArtifactRoot = artifactRoot === undefined
     ? null
     : path.resolve(artifactRoot);
@@ -2022,10 +2191,10 @@ export function createChzzkVodJobManager({
         removeTree: removeConsumerCacheTreeImpl
       }))
       : Promise.resolve({
-        releasedBytes: 0,
-        releasedFiles: 0,
-        releasedScopes: 0
-      });
+          releasedBytes: 0,
+          releasedFiles: 0,
+          releasedScopes: 0
+        });
     return initializationOperation;
   };
 
@@ -2040,6 +2209,23 @@ export function createChzzkVodJobManager({
     queue.length = nextIndex;
   };
 
+  const clearExecutionDeadlineTimer = (job: ChzzkVodJob): void => {
+    if (job.executionDeadlineTimer !== undefined) {
+      executionDeadlineScheduler.cancel(job.executionDeadlineTimer);
+      delete job.executionDeadlineTimer;
+    }
+  };
+
+  const recordJobActivity = (
+    job: ChzzkVodJob,
+    stage: ChzzkVodJobStage,
+    timestamp = now()
+  ): void => {
+    job.lastActivityStage = stage;
+    job.lastActivityAt = timestamp;
+    job.updatedAt = timestamp;
+  };
+
   const clearObserverLeaseTimer = (job: ChzzkVodJob): void => {
     if (job.observerLeaseTimer !== undefined) {
       observerLeaseScheduler.cancel(job.observerLeaseTimer);
@@ -2052,21 +2238,70 @@ export function createChzzkVodJobManager({
     job.observerLeaseExpiries.clear();
   };
 
+  const cancellationMessage = (
+    reason: ChzzkVodCancellationReason
+  ): string => {
+    if (reason === "queued-observer-expired") {
+      return "편집 문서가 닫혀 대기 중인 VOD 구간 준비를 정리했습니다.";
+    }
+    if (reason === "ephemeral-observer-expired") {
+      return "미리보기 관찰이 끝나 VOD 구간 준비를 정리했습니다.";
+    }
+    if (reason === "engine-shutdown") {
+      return "Kirinuki 내부 미디어 엔진 종료로 VOD 구간 준비를 취소했습니다.";
+    }
+    if (reason === "execution-deadline") {
+      return "VOD 구간 준비가 안전 실행 시간 제한을 넘어 취소했습니다.";
+    }
+    return "VOD 구간 준비를 취소했습니다.";
+  };
+
+  /**
+   * Commits the first cancellation initiator exactly once. Runner settlement,
+   * later deadlines, and shutdown must never rewrite this provenance.
+   */
+  const finalizeCancellation = (
+    job: ChzzkVodJob,
+    reason: ChzzkVodCancellationReason
+  ): boolean => {
+    if (terminalJob(job) || job.cancellation || jobs.get(job.id) !== job) {
+      return false;
+    }
+    const phase = ALLOWED_STAGES.has(job.state as ChzzkVodJobStage)
+      ? job.state as ChzzkVodJobStage
+      : job.lastActivityStage;
+    const elapsedMs = job.executionStartedAt === undefined
+      ? 0
+      : Math.max(0, Math.round(monotonicNow() - job.executionStartedAt));
+    const message = cancellationMessage(reason);
+    job.cancellation = Object.freeze({ reason, phase, elapsedMs });
+    job.controller.abort(new DOMException(message, "AbortError"));
+    job.state = "cancelled";
+    job.progress = 0;
+    job.message = message;
+    job.updatedAt = now();
+    clearExecutionDeadlineTimer(job);
+    finishObserverLeases(job);
+    compactQueue();
+    return true;
+  };
+
   const cancelAbandonedJob = (job: ChzzkVodJob): void => {
     if (terminalJob(job) || jobs.get(job.id) !== job) {
       finishObserverLeases(job);
       return;
     }
-    job.controller.abort(new DOMException(
-      "편집 문서의 VOD 작업 관찰 lease가 만료되었습니다.",
-      "AbortError"
-    ));
-    job.state = "cancelled";
-    job.progress = 0;
-    job.message = "편집 문서가 닫혀 VOD 구간 준비를 정리했습니다.";
-    job.updatedAt = now();
-    finishObserverLeases(job);
-    compactQueue();
+    if (job.state === "queued") {
+      finalizeCancellation(job, "queued-observer-expired");
+      return;
+    }
+    if (job.request.continuationPolicy === "ephemeral-preview") {
+      finalizeCancellation(job, "ephemeral-observer-expired");
+      return;
+    }
+    // A started full-editor job owns a bounded execution lease in the helper.
+    // Losing browser observation detaches progress only; it is not cancellation.
+    clearObserverLeaseTimer(job);
   };
 
   const expireObserverLeases = (
@@ -2111,6 +2346,15 @@ export function createChzzkVodJobManager({
       expireObserverLeases(job, timestamp);
       scheduleObserverLeaseExpiry(job);
     }
+  };
+
+  const startExecutionDeadline = (job: ChzzkVodJob): void => {
+    clearExecutionDeadlineTimer(job);
+    job.executionStartedAt = monotonicNow();
+    job.executionDeadlineTimer = executionDeadlineScheduler.schedule(() => {
+      delete job.executionDeadlineTimer;
+      finalizeCancellation(job, "execution-deadline");
+    }, executionDeadlineLifetime);
   };
 
   const evictExpired = () => {
@@ -2212,6 +2456,27 @@ export function createChzzkVodJobManager({
       ) {
         return artifact;
       }
+      const handedOffVerification = job.result.artifactVerification;
+      if (
+        handedOffVerification
+        && validArtifactSnapshotVerification(
+          handedOffVerification,
+          artifact.size
+        )
+        && sameArtifactIdentity(handedOffVerification.identity, artifact)
+        && handedOffVerification.hashSha256
+          === job.artifactIntegrity.hashSha256
+      ) {
+        job.artifactVerificationDigest = Object.freeze({
+          hashSha256: handedOffVerification.hashSha256,
+          chunkSizeBytes: VOD_ARTIFACT_CHUNK_BYTES,
+          chunkHashesSha256: Object.freeze([
+            ...handedOffVerification.chunkHashesSha256
+          ])
+        });
+        job.verifiedArtifactIdentity = Object.freeze({ ...artifact });
+        return artifact;
+      }
       const verification = await hashArtifact(
         job.result.artifactPath,
         artifact,
@@ -2269,7 +2534,8 @@ export function createChzzkVodJobManager({
       runningJobs += 1;
       job.state = "resolving";
       job.message = `${requestPlatformLabel(job.request)} 원본 정보를 확인하는 중`;
-      job.updatedAt = now();
+      recordJobActivity(job, "resolving");
+      startExecutionDeadline(job);
       const execution = (async () => {
         try {
           const result = await runner({
@@ -2282,13 +2548,10 @@ export function createChzzkVodJobManager({
               job.state = update.stage;
               job.progress = Math.max(0, Math.min(0.999, Number(update.progress) || 0));
               job.message = safeMessage(update.message, "VOD 구간을 준비하는 중");
-              job.updatedAt = now();
+              recordJobActivity(job, update.stage);
             }
           });
           if (job.controller.signal.aborted) {
-            job.state = "cancelled";
-            job.progress = 0;
-            job.message = "VOD 구간 준비를 취소했습니다.";
             return;
           }
           if (
@@ -2330,6 +2593,24 @@ export function createChzzkVodJobManager({
               hashSha256: result.artifact.hashSha256,
               sizeBytes: result.artifact.sizeBytes
             },
+            ...(trustNativeChzzkArtifactVerification
+              && validArtifactSnapshotVerification(
+              result.artifactVerification,
+              result.artifact.sizeBytes
+            )
+              ? {
+                  artifactVerification: Object.freeze({
+                    identity: Object.freeze({
+                      ...result.artifactVerification.identity
+                    }),
+                    hashSha256: result.artifactVerification.hashSha256,
+                    chunkSizeBytes: VOD_ARTIFACT_CHUNK_BYTES,
+                    chunkHashesSha256: Object.freeze([
+                      ...result.artifactVerification.chunkHashesSha256
+                    ])
+                  })
+                }
+              : {}),
             reused: Boolean(result.reused)
           };
           job.artifactIntegrity = Object.freeze({
@@ -2337,6 +2618,7 @@ export function createChzzkVodJobManager({
             sizeBytes: result.artifact.sizeBytes
           });
           job.reused = Boolean(result.reused);
+          recordJobActivity(job, job.lastActivityStage);
           job.state = "completed";
           job.progress = 1;
           job.lastAccessAt = now();
@@ -2345,11 +2627,9 @@ export function createChzzkVodJobManager({
             : "이 기기에 편집용 구간을 준비했습니다.";
         } catch (error: unknown) {
           if (job.controller.signal.aborted) {
-            job.state = "cancelled";
-            job.progress = 0;
-            job.message = "VOD 구간 준비를 취소했습니다.";
             return;
           }
+          recordJobActivity(job, job.lastActivityStage);
           job.state = "failed";
           job.progress = 0;
           job.message = "VOD 구간 준비에 실패했습니다.";
@@ -2360,6 +2640,7 @@ export function createChzzkVodJobManager({
           };
         } finally {
           job.updatedAt = now();
+          clearExecutionDeadlineTimer(job);
           if (terminalJob(job)) {
             finishObserverLeases(job);
           }
@@ -2367,8 +2648,15 @@ export function createChzzkVodJobManager({
           startNext();
         }
       })();
+      job.execution = execution;
       activeRuns.add(execution);
-      void execution.finally(() => activeRuns.delete(execution));
+      const releaseExecution = (): void => {
+        activeRuns.delete(execution);
+        if (job.execution === execution) {
+          delete job.execution;
+        }
+      };
+      void execution.then(releaseExecution, releaseExecution);
     }
   };
 
@@ -2384,6 +2672,16 @@ export function createChzzkVodJobManager({
     if (consumerPurgeOperations.has(request.consumerId)) {
       throw new ChzzkVodJobManagerError(
         "이 편집 세션의 VOD 캐시를 정리하는 중이라 새 작업을 시작할 수 없습니다.",
+        "BUSY"
+      );
+    }
+    if ([...jobs.values()].some((candidate) => (
+      candidate.request.consumerId === request.consumerId
+      && candidate.state === "cancelled"
+      && candidate.execution !== undefined
+    ))) {
+      throw new ChzzkVodJobManagerError(
+        "취소한 이 편집 세션의 VOD 쓰기가 끝나는 중입니다.",
         "BUSY"
       );
     }
@@ -2431,6 +2729,8 @@ export function createChzzkVodJobManager({
       controller: new AbortController(),
       observerLeaseEnforced: false,
       observerLeaseExpiries: new Map(),
+      lastActivityAt: timestamp,
+      lastActivityStage: "queued",
       activeMediaReads: 0,
       purging: false,
       consumerPurging: false
@@ -2455,7 +2755,9 @@ export function createChzzkVodJobManager({
 
   /**
    * Adds one authenticated browser document as an observer of an active job.
-   * Multiple documents may observe the same deduplicated job independently.
+   * Multiple documents may observe the same deduplicated job independently;
+   * an exact create returning a detached persistent job may attach a fresh
+   * document nonce here without restarting its runner.
    */
   const observe = (jobId: string, rawObserverId: unknown): boolean => {
     evictExpired();
@@ -2518,13 +2820,7 @@ export function createChzzkVodJobManager({
       );
     }
     if (job.state !== "completed" && job.state !== "failed" && job.state !== "cancelled") {
-      job.controller.abort(new DOMException("사용자가 작업을 취소했습니다.", "AbortError"));
-      job.state = "cancelled";
-      job.progress = 0;
-      job.message = "VOD 구간 준비를 취소했습니다.";
-      job.updatedAt = now();
-      finishObserverLeases(job);
-      compactQueue();
+      finalizeCancellation(job, "user-requested");
     }
     return job;
   };
@@ -2557,10 +2853,18 @@ export function createChzzkVodJobManager({
     const status: ChzzkVodPublicStatus = {
       schema: CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA,
       jobId: job.id,
+      continuationPolicy: job.request.continuationPolicy,
       state: job.state,
       progress: job.progress,
       message: job.message,
-      reused: job.reused
+      reused: job.reused,
+      observation: {
+        state: job.observerLeaseExpiries.size > 0 ? "attached" : "detached",
+        lastActivityAt: new Date(job.lastActivityAt).toISOString()
+      },
+      ...(job.cancellation
+        ? { cancellation: { ...job.cancellation } }
+        : {})
     };
     if (job.error) {
       status.error = { ...job.error };
@@ -2570,10 +2874,15 @@ export function createChzzkVodJobManager({
         return {
           schema: CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA,
           jobId: job.id,
+          continuationPolicy: job.request.continuationPolicy,
           state: job.state,
           progress: job.progress,
           message: job.message,
           reused: job.reused,
+          observation: { ...status.observation },
+          ...(job.cancellation
+            ? { cancellation: { ...job.cancellation } }
+            : {}),
           ...(job.error ? { error: { ...job.error } } : {})
         };
       }
@@ -2885,8 +3194,7 @@ export function createChzzkVodJobManager({
     if (
       !scopeJobs.includes(job)
       || scopeJobs.some((candidate) => (
-        !terminalJob(candidate)
-        || candidate.purging
+        candidate.purging
         || candidate.consumerPurging
         || candidate.purgeOperation !== undefined
       ))
@@ -2896,6 +3204,18 @@ export function createChzzkVodJobManager({
         "BUSY"
       );
     }
+    const startedScopeJobs = scopeJobs.filter((candidate) => (
+      !terminalJob(candidate) && candidate.state !== "queued"
+    ));
+    if (startedScopeJobs.some((candidate) => !candidate.execution)) {
+      throw new ChzzkVodJobManagerError(
+        "이 편집 세션의 실행 중인 VOD 쓰기 경계를 확인하지 못했습니다.",
+        "BUSY"
+      );
+    }
+    const executingScopeJobs = scopeJobs.filter((candidate) => (
+      candidate.execution !== undefined
+    ));
     const scopeRoot = vodConsumerScopeRoot(
       managedArtifactRoot,
       identity.consumerId
@@ -2922,10 +3242,18 @@ export function createChzzkVodJobManager({
         source: Object.freeze({ ...identity.source })
       })
     };
+    consumerPurgeOperations.set(identity.consumerId, operationDescriptor);
     for (const candidate of scopeJobs) {
       candidate.consumerPurging = true;
     }
-    consumerPurgeOperations.set(identity.consumerId, operationDescriptor);
+    const affectedExecutions = executingScopeJobs.map((candidate) => (
+      candidate.execution as Promise<void>
+    ));
+    for (const candidate of scopeJobs) {
+      if (!terminalJob(candidate)) {
+        finalizeCancellation(candidate, "user-requested");
+      }
+    }
 
     const assertCurrentConsumer = (): void => {
       const current = consumerPurgeOperations.get(identity.consumerId);
@@ -2950,6 +3278,17 @@ export function createChzzkVodJobManager({
     let scopeDetached = false;
     const operation = (async (): Promise<ChzzkVodConsumerCachePurgeResult> => {
       try {
+        assertCurrentConsumer();
+        const executionsSettled = await waitForAffectedExecutionsToSettle(
+          affectedExecutions,
+          consumerPurgeExecutionDrainTimeout
+        );
+        if (!executionsSettled) {
+          throw new ChzzkVodJobManagerError(
+            "취소한 VOD 준비 작업의 로컬 쓰기가 제한 시간 안에 끝나지 않아 세션 캐시를 삭제하지 않았습니다.",
+            "PURGE_NOT_ALLOWED"
+          );
+        }
         assertCurrentConsumer();
         const drained = await Promise.all(
           scopeJobs.map((candidate) => waitForActiveMediaReadsToDrain(candidate))
@@ -3068,13 +3407,10 @@ export function createChzzkVodJobManager({
   const close = async (): Promise<void> => {
     closing = true;
     for (const job of jobs.values()) {
-      if (!job.controller.signal.aborted && !terminalJob(job)) {
-        job.controller.abort(new DOMException("Kirinuki 내부 미디어 엔진을 종료합니다.", "AbortError"));
-        job.state = "cancelled";
-        job.progress = 0;
-        job.message = "Kirinuki 내부 미디어 엔진 종료로 VOD 구간 준비를 취소했습니다.";
-        job.updatedAt = now();
+      if (!terminalJob(job)) {
+        finalizeCancellation(job, "engine-shutdown");
       }
+      clearExecutionDeadlineTimer(job);
       finishObserverLeases(job);
     }
     if (!verificationController.signal.aborted) {

@@ -442,6 +442,7 @@ test("public VOD recovery capability는 같은 project와 같은 canonical sourc
       body: JSON.stringify({
         schema: CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
         consumerId: projectId,
+        continuationPolicy: "bounded-persistent-editor",
         sourceUrl: sourceA,
         clips: [{ id: "source-a", startMs: 1_000, endMs: 2_000 }],
         handleMs: 10_000,

@@ -7,6 +7,46 @@ import type {
 } from "../lib/ui-localization.js";
 
 const studioStaticCopy = {
+  "이 기기의 저장 공간을 안전하게 확인하지 못했습니다. 저장 장치를 확인한 뒤 다시 시도해 주세요.": {
+    en: "Kirinuki could not safely check this device's free space. Check the drive and try again.",
+    ja: "このデバイスの空き容量を安全に確認できませんでした。ドライブを確認して、もう一度お試しください。"
+  },
+  "VOD 구간을 안전하게 준비할 저장 공간이 부족합니다. 여유 공간을 확보한 뒤 다시 시도해 주세요.": {
+    en: "There is not enough free space to prepare the selected VOD clips safely. Free up space and try again.",
+    ja: "選択した VOD クリップを安全に準備するための空き容量が不足しています。空き容量を確保して、もう一度お試しください。"
+  },
+  "이전 영상 준비가 중단되었습니다. 다시 시도할 수 있습니다": {
+    en: "The previous media-preparation job stopped. You can try it again.",
+    ja: "前回の動画準備は中断されました。再試行できます。"
+  },
+  "대기 중 브라우저 연결이 만료되어 VOD 구간 준비를 다시 연결해야 합니다.": {
+    en: "The browser connection expired while the VOD job was queued. Reconnect and try again.",
+    ja: "VOD 準備の待機中にブラウザー接続が切れました。再接続してもう一度お試しください。"
+  },
+  "로컬 미리보기 연결이 만료되었습니다. 필요한 위치에서 다시 준비해 주세요.": {
+    en: "The local preview connection expired. Prepare it again at the position you need.",
+    ja: "ローカルプレビューの接続が切れました。必要な位置でもう一度準備してください。"
+  },
+  "영상 준비 도우미가 종료되어 VOD 구간 준비가 중단되었습니다. 도우미 연결을 다시 확인해 주세요.": {
+    en: "The media helper stopped, so VOD preparation ended. Check the helper connection and try again.",
+    ja: "動画準備ヘルパーが終了したため、VOD の準備が中断されました。ヘルパーの接続を確認してください。"
+  },
+  "VOD 구간 준비가 안전 실행 시간 한도를 넘었습니다. 선택한 구간을 확인한 뒤 다시 시도해 주세요.": {
+    en: "VOD preparation reached its safe runtime limit. Check the selected clips and try again.",
+    ja: "VOD の準備が安全な実行時間の上限に達しました。選択クリップを確認して、もう一度お試しください。"
+  },
+  "VOD 구간 준비가 사용자 요청과 다른 이유로 중단되었습니다.": {
+    en: "VOD preparation stopped for a reason other than a user request.",
+    ja: "ユーザー操作以外の理由で VOD の準備が中断されました。"
+  },
+  "VOD 구간 준비를 취소했습니다.": {
+    en: "Cancelled VOD preparation.",
+    ja: "VOD の準備をキャンセルしました。"
+  },
+  "VOD 준비 작업을 찾지 못했습니다.": {
+    en: "The VOD preparation job is no longer available. Use Retry to start it again.",
+    ja: "VOD 準備ジョブが見つかりません。再開するには「再試行」を選んでください。"
+  },
   "저장된 편집 전체의 브라우저 저장 데이터를 삭제했습니다.": {
     en: "Deleted all browser-saved edits.",
     ja: "保存済みの編集をすべてブラウザーから削除しました。"

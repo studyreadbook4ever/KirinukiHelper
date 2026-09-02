@@ -21,6 +21,7 @@ import {
   CHZZK_VOD_CONSUMER_CACHE_PURGE_REQUEST_SCHEMA,
   VOD_CONSUMER_PURGE_QUARANTINE_DIRECTORY,
   DEFAULT_COMPLETED_VOD_JOB_TTL_MS,
+  DEFAULT_VOD_JOB_EXECUTION_DEADLINE_MS,
   VOD_ARTIFACT_CHUNK_BYTES,
   createChzzkVodJobManager,
   normalizedChzzkVodArtifactDeviceId,
@@ -73,6 +74,7 @@ function request(overrides: Record<string, unknown> = {}) {
   return {
     schema: CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
     consumerId: "project-consumer-1",
+    continuationPolicy: "bounded-persistent-editor",
     sourceUrl: "https://chzzk.naver.com/video/14252987",
     clips: [{ id: "clip-a", startMs: 70_000, endMs: 80_000 }],
     handleMs: 10_000,
@@ -372,9 +374,10 @@ test("Windows consumer quarantine 이름은 짧고 case-fold-safe하며 exact pa
   ), null);
 });
 
-test("요청은 공개 CHZZK VOD, 고정 10초, 명시적 권리 확인만 받는다", () => {
+test("v4 요청은 공개 VOD, 고정 10초, 권리 확인과 명시적 지속 정책만 받는다", () => {
   assert.deepEqual(normalizeChzzkVodMaterializationRequest(request()), {
     consumerId: "project-consumer-1",
+    continuationPolicy: "bounded-persistent-editor",
     sourceUrl: "https://chzzk.naver.com/video/14252987",
     clips: [{ id: "clip-a", startMs: 70_000, endMs: 80_000 }],
     handleMs: 10_000
@@ -396,7 +399,7 @@ test("요청은 공개 CHZZK VOD, 고정 10초, 명시적 권리 확인만 받�
   );
   assert.throws(
     () => normalizeChzzkVodMaterializationRequest(request({
-      schema: "chzzk-kirinuki-vod-materialization-request/v2"
+      schema: "chzzk-kirinuki-vod-materialization-request/v3"
     })),
     /버전/u
   );
@@ -407,6 +410,18 @@ test("요청은 공개 CHZZK VOD, 고정 10초, 명시적 권리 확인만 받�
   assert.throws(
     () => normalizeChzzkVodMaterializationRequest(request({ handleMs: 9_999 })),
     /10초/
+  );
+  assert.throws(
+    () => normalizeChzzkVodMaterializationRequest(request({
+      continuationPolicy: "keep-running-forever"
+    })),
+    /지속 정책/u
+  );
+  assert.throws(
+    () => normalizeChzzkVodMaterializationRequest(request({
+      continuationPolicy: undefined
+    })),
+    /지속 정책/u
   );
   const resume = {
     materializationId: "a".repeat(32),
@@ -429,6 +444,7 @@ test("요청은 공개 CHZZK VOD, 고정 10초, 명시적 권리 확인만 받�
     base
   })), {
     consumerId: "project-consumer-1",
+    continuationPolicy: "bounded-persistent-editor",
     sourceUrl: "https://chzzk.naver.com/video/14252987",
     clips: [{ id: "clip-a", startMs: 70_000, endMs: 80_000 }],
     editableRanges: [{ id: "clip-a", startMs: 30_000, endMs: 120_000 }],
@@ -583,6 +599,104 @@ test("동일 의미 요청은 한 작업으로 합치고 완료 결과만 로컬
     verification(artifactBytes).chunkHashesSha256
   );
   assert.equal(await manager.resolveMedia(first.id, "wrong"), null);
+});
+
+test("신뢰된 native CHZZK snapshot은 최초 completed status의 중복 전체 hash를 생략한다", async () => {
+  const bytes = Buffer.alloc(VOD_ARTIFACT_CHUNK_BYTES + 17, 23);
+  const identity = inspected(bytes);
+  let managerHashCalls = 0;
+  const manager = createChzzkVodJobManager({
+    trustNativeChzzkArtifactVerification: true,
+    runner: async () => ({
+      manifest: validManifest(),
+      artifactPath: "/safe/local/native-snapshot.mp4",
+      artifact: integrity(bytes),
+      artifactVerification: {
+        identity,
+        ...verification(bytes)
+      },
+      reused: false
+    }),
+    inspectArtifactIdentity: async () => ({ ...identity }),
+    hashArtifact: async () => {
+      managerHashCalls += 1;
+      return verification(bytes);
+    }
+  });
+  const job = manager.create(request());
+  await nextTurn();
+  assert.equal(
+    (await manager.publicStatus(job, "http://127.0.0.1:4319")).state,
+    "completed"
+  );
+  assert.equal(managerHashCalls, 0);
+  await manager.close();
+});
+
+test("generic runner와 mismatched native snapshot은 기존 전체 hash 검증으로 fallback한다", async () => {
+  const bytes = Buffer.from("untrusted-or-stale-snapshot", "utf8");
+  const currentIdentity = inspected(bytes, { version: 1 });
+  for (const fixture of [
+    { trusted: false, identity: currentIdentity },
+    { trusted: true, identity: inspected(bytes, { version: 2 }) }
+  ]) {
+    let managerHashCalls = 0;
+    const manager = createChzzkVodJobManager({
+      trustNativeChzzkArtifactVerification: fixture.trusted,
+      runner: async () => ({
+        manifest: validManifest(),
+        artifactPath: "/safe/local/fallback-snapshot.mp4",
+        artifact: integrity(bytes),
+        artifactVerification: {
+          identity: fixture.identity,
+          ...verification(bytes)
+        },
+        reused: false
+      }),
+      inspectArtifactIdentity: async () => ({ ...currentIdentity }),
+      hashArtifact: async () => {
+        managerHashCalls += 1;
+        return verification(bytes);
+      }
+    });
+    const job = manager.create(request());
+    await nextTurn();
+    assert.equal(
+      (await manager.publicStatus(job, "http://127.0.0.1:4319")).state,
+      "completed"
+    );
+    assert.equal(managerHashCalls, 1);
+    await manager.close();
+  }
+});
+
+test("continuation policy는 artifact 내용과 별개인 scheduling identity로 dedupe를 분리한다", async () => {
+  const calls: Parameters<ChzzkVodMaterializationRunner>[0][] = [];
+  const manager = createChzzkVodJobManager({
+    maximumConcurrentJobs: 2,
+    runner: async (input) => {
+      calls.push(input);
+      return await new Promise<ChzzkVodRunnerResult>((_resolve, reject) => {
+        input.signal.addEventListener("abort", () => reject(input.signal.reason), {
+          once: true
+        });
+      });
+    }
+  });
+  const persistent = manager.create(request());
+  const persistentDuplicate = manager.create(request());
+  const ephemeral = manager.create(request({
+    continuationPolicy: "ephemeral-preview"
+  }));
+
+  assert.equal(persistentDuplicate, persistent);
+  assert.notEqual(ephemeral.id, persistent.id);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.continuationPolicy).sort(), [
+    "bounded-persistent-editor",
+    "ephemeral-preview"
+  ]);
+  await manager.close();
 });
 
 test("resume/base 검증 identity가 같을 때만 진행 중 작업을 dedupe한다", async () => {
@@ -835,6 +949,8 @@ test("strict clock·acquisition 내부 오류는 안정적인 공개 코드와 �
     ["HLS_FETCH_FAILED", "DOWNLOAD_FAILED"],
     ["UNSAFE_TRANSFER_URL", "DOWNLOAD_FAILED"],
     ["TRANSFER_TOO_LARGE", "MATERIALIZATION_QUOTA_EXCEEDED"],
+    ["INSUFFICIENT_DISK_SPACE", "INSUFFICIENT_DISK_SPACE"],
+    ["DISK_SPACE_CHECK_FAILED", "DISK_SPACE_CHECK_FAILED"],
     ["INVALID_FMP4_FRAGMENT", "MEDIA_VERIFICATION_FAILED"],
     ["UNSUPPORTED_HLS_PLAYLIST", "UNSUPPORTED_MEDIA"],
     ["UNSAFE_OUTPUT_PATH", "LOCAL_WRITE_FAILED"],
@@ -898,64 +1014,331 @@ test("대기 작업 취소는 runner를 시작하지 않고, 실행 작업 취�
   assert.equal(deferred.calls.length, 1);
   manager.cancel(queued.id);
   assert.equal(manager.get(queued.id)?.state, "cancelled");
+  assert.deepEqual(queued.cancellation, {
+    reason: "user-requested",
+    phase: "queued",
+    elapsedMs: 0
+  });
   manager.cancel(running.id);
   assert.equal(deferred.calls[0]?.signal.aborted, true);
   assert.equal(manager.get(running.id)?.state, "cancelled");
+  assert.equal(running.cancellation?.reason, "user-requested");
+  assert.equal(running.cancellation?.phase, "resolving");
+  const firstCancellation = running.cancellation;
+  manager.cancel(running.id);
+  assert.equal(running.cancellation, firstCancellation);
 });
 
-test("A 문서 observer가 사라지면 runner와 late 결과를 폐기하고 살아 있는 B의 queue slot을 회수한다", async () => {
+test("56컷·42-run persistent editor는 15초·60초·5분 observer 공백에도 계속되고 exact 요청이 reattach한다", async () => {
   const clock = deterministicObserverLeaseClock();
+  const fieldClips = Array.from({ length: 56 }, (_, index) => ({
+    id: `field-clip-${String(index + 1).padStart(2, "0")}`,
+    startMs: index * 3_000,
+    endMs: index * 3_000 + 2_000
+  }));
+  const fieldRequest = request({ clips: fieldClips });
   const calls: string[] = [];
-  const aSignals: AbortSignal[] = [];
-  const runner: ChzzkVodMaterializationRunner = async ({ clips, signal }) => {
+  const observedInputs: Parameters<ChzzkVodMaterializationRunner>[0][] = [];
+  let resolvePersistent!: (value: ChzzkVodRunnerResult) => void;
+  const runner: ChzzkVodMaterializationRunner = async (input) => {
+    const { clips, signal } = input;
     const clip = clips[0];
     assert.ok(clip);
-    calls.push(clip.id);
-    if (clip.id === "clip-a") {
-      aSignals.push(signal);
-      return await new Promise<ChzzkVodRunnerResult>((resolve) => {
-        signal.addEventListener("abort", () => resolve({
-          manifest: validManifest({ clips }),
-          artifactPath: "/safe/local/late-a.mp4",
-          artifact: integrity("late-a-must-not-attach"),
-          reused: false
-        }), { once: true });
-      });
-    }
-    return {
-      manifest: validManifest({ clips }),
-      artifactPath: "/safe/local/b.mp4",
-      artifact: integrity("b-artifact"),
-      reused: false
-    };
+    calls.push(`${clips.length} clips`);
+    observedInputs.push(input);
+    return await new Promise<ChzzkVodRunnerResult>((resolve, reject) => {
+      resolvePersistent = resolve;
+      signal.addEventListener("abort", () => {
+        reject(signal.reason);
+      }, { once: true });
+    });
   };
   const manager = createChzzkVodJobManager({
     runner,
+    observerLeaseTtlMs: 15_000,
+    observerLeaseScheduler: clock.scheduler,
+    now: clock.now
+  });
+  const first = manager.create(fieldRequest);
+  assert.equal(manager.observe(first.id, "observer-first-document"), true);
+  assert.deepEqual(calls, ["56 clips"]);
+
+  clock.advance(25);
+  observedInputs[0]?.onProgress({
+    stage: "muxing",
+    progress: 0.92,
+    message: "42개 run을 최종 MP4로 구성하는 중"
+  });
+  clock.advance(15_000 - 25);
+  assert.equal(observedInputs[0]?.signal.aborted, false);
+  assert.equal(
+    (await manager.publicStatus(first, "http://127.0.0.1:4319"))
+      .observation.state,
+    "detached"
+  );
+  clock.advance(60_000 - 15_000);
+  assert.equal(observedInputs[0]?.signal.aborted, false);
+  assert.equal(manager.get(first.id)?.state, "muxing");
+  clock.advance(5 * 60 * 1_000 - 60_000);
+  assert.equal(observedInputs[0]?.signal.aborted, false);
+  assert.equal(manager.get(first.id)?.state, "muxing");
+  const detached = await manager.publicStatus(first, "http://127.0.0.1:4319");
+  assert.deepEqual(detached.observation, {
+    state: "detached",
+    lastActivityAt: new Date(10_025).toISOString()
+  });
+  assert.equal(detached.cancellation, undefined);
+  assert.equal(JSON.stringify(detached).includes("observer-first-document"), false);
+
+  const exact = manager.create(fieldRequest);
+  assert.equal(exact, first);
+  assert.equal(manager.observe(exact.id, "observer-returned-document"), true);
+  const reattached = await manager.publicStatus(first, "http://127.0.0.1:4319");
+  assert.equal(reattached.observation.state, "attached");
+
+  resolvePersistent({
+    manifest: validManifest({ clips: fieldClips }),
+    artifactPath: "/safe/local/persistent-a.mp4",
+    artifact: integrity("persistent-a"),
+    reused: false
+  });
+  await nextTurn();
+  assert.equal(manager.get(first.id)?.state, "completed");
+  assert.equal(first.result?.artifactPath, "/safe/local/persistent-a.mp4");
+  assert.equal(calls.length, 1, "exact reattach가 runner를 중복 실행하면 안 됩니다.");
+  await manager.close();
+});
+
+test("observer가 사라진 queued 작업은 실행하지 않고 provenance와 queue slot을 보존한다", async () => {
+  const clock = deterministicObserverLeaseClock();
+  const calls: string[] = [];
+  const manager = createChzzkVodJobManager({
+    runner: async ({ clips, signal }) => {
+      const clip = clips[0];
+      assert.ok(clip);
+      calls.push(clip.id);
+      return await new Promise<ChzzkVodRunnerResult>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    },
     maximumConcurrentJobs: 1,
     observerLeaseTtlMs: 100,
     observerLeaseScheduler: clock.scheduler,
     now: clock.now
   });
-  const a = manager.create(request());
-  assert.equal(manager.observe(a.id, "observer-a-document"), true);
-  const b = manager.create(request({
+  const running = manager.create(request());
+  const queued = manager.create(request({
     clips: [{ id: "clip-b", startMs: 90_000, endMs: 100_000 }]
   }));
-  assert.equal(manager.observe(b.id, "observer-b-document"), true);
+  const queuedPreview = manager.create(request({
+    continuationPolicy: "ephemeral-preview",
+    clips: [{ id: "clip-c", startMs: 110_000, endMs: 120_000 }]
+  }));
+  assert.equal(manager.observe(queued.id, "observer-queued-document"), true);
+  assert.equal(
+    manager.observe(queuedPreview.id, "observer-queued-preview"),
+    true
+  );
   assert.deepEqual(calls, ["clip-a"]);
 
-  clock.advance(60);
-  assert.equal(manager.renewObserver(b.id, "observer-b-document"), true);
-  clock.advance(40);
-  await nextTurn();
+  clock.advance(100);
+  assert.equal(manager.get(queued.id)?.state, "cancelled");
+  assert.equal(manager.get(queuedPreview.id)?.state, "cancelled");
+  assert.equal(manager.queuedSize, 0);
+  assert.deepEqual(calls, ["clip-a"]);
+  const status = await manager.publicStatus(queued, "http://127.0.0.1:4319");
+  assert.deepEqual(status.cancellation, {
+    reason: "queued-observer-expired",
+    phase: "queued",
+    elapsedMs: 0
+  });
+  assert.equal(status.observation.state, "detached");
+  assert.deepEqual(queuedPreview.cancellation, {
+    reason: "queued-observer-expired",
+    phase: "queued",
+    elapsedMs: 0
+  });
+  manager.cancel(running.id);
+  await manager.close();
+});
+
+test("observer가 사라진 ephemeral preview는 runner만 bounded 취소하고 최초 사유를 보존한다", async () => {
+  const clock = deterministicObserverLeaseClock();
+  const signals: AbortSignal[] = [];
+  const manager = createChzzkVodJobManager({
+    runner: async ({ signal }) => {
+      signals.push(signal);
+      return await new Promise<ChzzkVodRunnerResult>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    },
+    observerLeaseTtlMs: 100,
+    observerLeaseScheduler: clock.scheduler,
+    now: clock.now,
+    monotonicNow: clock.now
+  });
+  const preview = manager.create(request({
+    continuationPolicy: "ephemeral-preview"
+  }));
+  assert.equal(manager.observe(preview.id, "observer-preview-document"), true);
+  clock.advance(100);
+  assert.equal(signals[0]?.aborted, true);
   await nextTurn();
 
-  assert.equal(aSignals[0]?.aborted, true);
-  assert.equal(manager.get(a.id)?.state, "cancelled");
-  assert.equal(a.result, undefined, "abort 뒤 도착한 A artifact를 노출하면 안 됩니다.");
-  assert.equal(await manager.resolveMedia(a.id, "unused"), null);
-  assert.deepEqual(calls, ["clip-a", "clip-b"]);
-  assert.equal(manager.get(b.id)?.state, "completed");
+  const status = await manager.publicStatus(preview, "http://127.0.0.1:4319");
+  assert.equal(status.state, "cancelled");
+  assert.deepEqual(status.cancellation, {
+    reason: "ephemeral-observer-expired",
+    phase: "resolving",
+    elapsedMs: 100
+  });
+  manager.cancel(preview.id);
+  await manager.close();
+  assert.deepEqual(preview.cancellation, status.cancellation);
+});
+
+test("overall deadline은 runner 시작부터 재고 마지막 정상 stage와 최초 취소 사유를 보존한다", async () => {
+  assert.ok(DEFAULT_VOD_JOB_EXECUTION_DEADLINE_MS >= 60 * 60 * 1_000);
+  const clock = deterministicObserverLeaseClock();
+  let runningInput: Parameters<ChzzkVodMaterializationRunner>[0] | undefined;
+  const manager = createChzzkVodJobManager({
+    runner: async (input) => {
+      runningInput = input;
+      return await new Promise<ChzzkVodRunnerResult>((_resolve, reject) => {
+        input.signal.addEventListener("abort", () => reject(input.signal.reason), {
+          once: true
+        });
+      });
+    },
+    executionDeadlineMs: 100,
+    executionDeadlineScheduler: clock.scheduler,
+    monotonicNow: clock.now,
+    now: clock.now
+  });
+  const job = manager.create(request());
+  assert.ok(runningInput);
+  clock.advance(30);
+  runningInput.onProgress({
+    stage: "muxing",
+    progress: 0.92,
+    message: "최종 MP4를 구성하는 중"
+  });
+  clock.advance(70);
+  assert.equal(runningInput.signal.aborted, true);
+  await nextTurn();
+
+  const status = await manager.publicStatus(job, "http://127.0.0.1:4319");
+  assert.equal(status.schema, "chzzk-kirinuki-vod-materialization-status/v2");
+  assert.equal(status.continuationPolicy, "bounded-persistent-editor");
+  assert.equal(status.state, "cancelled");
+  assert.deepEqual(status.cancellation, {
+    reason: "execution-deadline",
+    phase: "muxing",
+    elapsedMs: 100
+  });
+  assert.deepEqual(status.observation, {
+    state: "detached",
+    lastActivityAt: new Date(10_030).toISOString()
+  });
+  const provenance = job.cancellation;
+  manager.cancel(job.id);
+  await manager.close();
+  assert.equal(job.cancellation, provenance);
+});
+
+test("queued 대기 시간은 execution deadline을 소모하지 않는다", async () => {
+  const clock = deterministicObserverLeaseClock();
+  const signals = new Map<string, AbortSignal>();
+  const manager = createChzzkVodJobManager({
+    runner: async ({ clips, signal }) => {
+      const clipId = clips[0]?.id || "";
+      signals.set(clipId, signal);
+      return await new Promise<ChzzkVodRunnerResult>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    },
+    maximumConcurrentJobs: 1,
+    executionDeadlineMs: 100,
+    executionDeadlineScheduler: clock.scheduler,
+    monotonicNow: clock.now,
+    now: clock.now
+  });
+  const first = manager.create(request());
+  const second = manager.create(request({
+    clips: [{ id: "clip-b", startMs: 90_000, endMs: 100_000 }]
+  }));
+  assert.equal(signals.has("clip-a"), true);
+  assert.equal(signals.has("clip-b"), false);
+
+  clock.advance(100);
+  await nextTurn();
+  assert.equal(first.cancellation?.reason, "execution-deadline");
+  assert.equal(signals.has("clip-b"), true);
+  assert.equal(signals.get("clip-b")?.aborted, false);
+
+  clock.advance(99);
+  assert.equal(signals.get("clip-b")?.aborted, false);
+  clock.advance(1);
+  await nextTurn();
+  assert.deepEqual(second.cancellation, {
+    reason: "execution-deadline",
+    phase: "resolving",
+    elapsedMs: 100
+  });
+  await manager.close();
+});
+
+test("명시적 취소가 deadline보다 먼저 오면 최초 provenance만 남긴다", async () => {
+  const clock = deterministicObserverLeaseClock();
+  const manager = createChzzkVodJobManager({
+    runner: async ({ signal }) => await new Promise<ChzzkVodRunnerResult>(
+      (_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }
+    ),
+    executionDeadlineMs: 100,
+    executionDeadlineScheduler: clock.scheduler,
+    monotonicNow: clock.now,
+    now: clock.now
+  });
+  const job = manager.create(request());
+  clock.advance(40);
+  manager.cancel(job.id);
+  await nextTurn();
+  const provenance = job.cancellation;
+  assert.deepEqual(provenance, {
+    reason: "user-requested",
+    phase: "resolving",
+    elapsedMs: 40
+  });
+
+  clock.advance(1_000);
+  assert.equal(job.cancellation, provenance);
+  assert.equal(job.message, "VOD 구간 준비를 취소했습니다.");
+  await manager.close();
+  assert.equal(job.cancellation, provenance);
+});
+
+test("정상 terminal 작업은 execution deadline timer가 뒤늦게 취소로 바꾸지 않는다", async () => {
+  const clock = deterministicObserverLeaseClock();
+  const manager = createChzzkVodJobManager({
+    runner: async ({ clips }) => ({
+      manifest: validManifest({ clips }),
+      artifactPath: "/safe/local/deadline-completed.mp4",
+      artifact: integrity("deadline-completed"),
+      reused: false
+    }),
+    executionDeadlineMs: 100,
+    executionDeadlineScheduler: clock.scheduler,
+    monotonicNow: clock.now,
+    now: clock.now
+  });
+  const job = manager.create(request());
+  await nextTurn();
+  assert.equal(job.state, "completed");
+  clock.advance(1_000);
+  assert.equal(job.state, "completed");
+  assert.equal(job.cancellation, undefined);
   await manager.close();
 });
 
@@ -1110,6 +1493,9 @@ test("작업 기록·queue 상한은 active를 보존하고 종료 시 runner si
   assert.equal(observedSignals[0]?.aborted, true);
   assert.equal(manager.get(running.id)?.state, "cancelled");
   assert.equal(manager.get(queued.id)?.state, "cancelled");
+  assert.equal(running.cancellation?.reason, "engine-shutdown");
+  assert.equal(running.cancellation?.phase, "resolving");
+  assert.equal(queued.cancellation?.reason, "user-requested");
 });
 
 test("완료·실패 작업은 각 TTL 뒤 제거되지만 TTL 전 active 작업은 제거하지 않는다", async () => {
@@ -1857,6 +2243,275 @@ test("consumer session purge는 같은 consumer 전체만 원자 삭제하고 re
   assert.equal(repeated?.alreadyPurged, true);
   assert.equal(repeated?.releasedBytes, result?.releasedBytes);
   assert.equal(repeated?.releasedFiles, result?.releasedFiles);
+});
+
+test("consumer session purge는 같은 scope의 queued/running만 취소·settle하고 다른 consumer를 기다리지 않는다", async (t) => {
+  const directory = await mkdtemp(path.join(
+    tmpdir(),
+    "kirinuki-vod-consumer-purge-active-"
+  ));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const artifactRoot = path.join(directory, "managed");
+  const consumerA = "active-purge-consumer-a";
+  const consumerD = "active-purge-consumer-d";
+  const scopeA = vodConsumerScopeRoot(artifactRoot, consumerA);
+  const scopeD = vodConsumerScopeRoot(artifactRoot, consumerD);
+  const manifest = validManifest();
+  const artifactA = path.join(
+    scopeA,
+    "jobs",
+    "chzzk",
+    manifest.materializationId,
+    "materialized.mp4"
+  );
+  const partialC = path.join(scopeA, "content", "chzzk", "partial-c.ts");
+  const partialD = path.join(scopeD, "content", "chzzk", "partial-d.ts");
+  await mkdir(path.dirname(artifactA), { recursive: true });
+  const artifactBytes = Buffer.from("completed-anchor-a", "utf8");
+  const partialCBytes = Buffer.from("cancelled-running-c", "utf8");
+  const partialDBytes = Buffer.from("unrelated-running-d", "utf8");
+  await writeFile(artifactA, artifactBytes);
+
+  let releaseC!: () => void;
+  const cCleanupGate = new Promise<void>((resolve) => { releaseC = resolve; });
+  let markCStarted!: () => void;
+  const cStarted = new Promise<void>((resolve) => { markCStarted = resolve; });
+  let markDStarted!: () => void;
+  const dStarted = new Promise<void>((resolve) => { markDStarted = resolve; });
+  let cAbortObserved = false;
+  const manager = createChzzkVodJobManager({
+    artifactRoot,
+    maximumConcurrentJobs: 2,
+    consumerPurgeExecutionDrainTimeoutMs: 2_000,
+    runner: async (input) => {
+      const clipId = input.clips[0]?.id;
+      if (clipId === "clip-a") {
+        return {
+          manifest,
+          artifactPath: artifactA,
+          artifact: integrity(artifactBytes),
+          reused: false
+        };
+      }
+      if (clipId === "clip-c") {
+        await mkdir(path.dirname(partialC), { recursive: true });
+        await writeFile(partialC, partialCBytes);
+        markCStarted();
+        await new Promise<void>((resolve) => {
+          const finishAbort = (): void => {
+            cAbortObserved = true;
+            void cCleanupGate.then(resolve);
+          };
+          if (input.signal.aborted) {
+            finishAbort();
+          } else {
+            input.signal.addEventListener("abort", finishAbort, { once: true });
+          }
+        });
+        throw input.signal.reason;
+      }
+      if (clipId === "clip-d") {
+        await mkdir(path.dirname(partialD), { recursive: true });
+        await writeFile(partialD, partialDBytes);
+        markDStarted();
+        await new Promise<void>((_resolve, reject) => {
+          input.signal.addEventListener(
+            "abort",
+            () => reject(input.signal.reason),
+            { once: true }
+          );
+        });
+        throw input.signal.reason;
+      }
+      assert.fail("같은 consumer의 queued job은 runner를 시작하면 안 됩니다.");
+    }
+  });
+  const anchor = manager.create(request({ consumerId: consumerA }));
+  await nextTurn();
+  const anchorStatus = await manager.publicStatus(
+    anchor,
+    "http://127.0.0.1:4319"
+  );
+  const accessA = new URL(anchorStatus.media?.url || "")
+    .searchParams.get("access");
+  assert.ok(accessA);
+
+  const runningC = manager.create(request({
+    consumerId: consumerA,
+    clips: [{ id: "clip-c", startMs: 90_000, endMs: 100_000 }]
+  }));
+  const runningD = manager.create(request({
+    consumerId: consumerD,
+    clips: [{ id: "clip-d", startMs: 110_000, endMs: 120_000 }]
+  }));
+  await Promise.all([cStarted, dStarted]);
+  const queuedB = manager.create(request({
+    consumerId: consumerA,
+    clips: [{ id: "clip-b", startMs: 130_000, endMs: 140_000 }]
+  }));
+  assert.equal(queuedB.state, "queued");
+
+  const purgePromise = manager.purgeConsumerCache(
+    anchor.id,
+    accessA,
+    consumerPurgeIdentity(anchor.id, consumerA, manifest)
+  );
+  let purgeSettled = false;
+  void purgePromise.then(
+    () => { purgeSettled = true; },
+    () => { purgeSettled = true; }
+  );
+  await nextTurn();
+  assert.equal(cAbortObserved, true);
+  assert.equal(runningC.state, "cancelled");
+  assert.equal(queuedB.state, "cancelled");
+  assert.equal(runningC.controller.signal.aborted, true);
+  assert.equal(queuedB.controller.signal.aborted, true);
+  assert.equal(runningC.cancellation?.reason, "user-requested");
+  assert.equal(queuedB.cancellation?.reason, "user-requested");
+  assert.equal(purgeSettled, false);
+  assert.throws(
+    () => manager.create(request({
+      consumerId: consumerA,
+      clips: [{ id: "clip-e", startMs: 150_000, endMs: 160_000 }]
+    })),
+    (error: unknown) => Boolean(
+      error instanceof Error
+      && "code" in error
+      && error.code === "BUSY"
+    )
+  );
+  assert.equal(runningD.state, "resolving");
+  await Promise.all([access(scopeA), access(partialD)]);
+
+  releaseC();
+  const purged = await purgePromise;
+  assert.equal(purged?.releasedBytes, artifactBytes.byteLength + partialCBytes.byteLength);
+  assert.equal(purged?.releasedFiles, 2);
+  await assert.rejects(access(scopeA), { code: "ENOENT" });
+  await Promise.all([access(scopeD), access(partialD)]);
+  assert.equal(manager.get(runningD.id), runningD);
+  assert.equal(runningD.state, "resolving");
+  assert.equal(manager.get(anchor.id), null);
+  assert.equal(manager.get(runningC.id), null);
+  assert.equal(manager.get(queuedB.id), null);
+
+  const repeated = await manager.purgeConsumerCache(
+    anchor.id,
+    accessA,
+    consumerPurgeIdentity(anchor.id, consumerA, manifest)
+  );
+  assert.equal(repeated?.alreadyPurged, true);
+  await manager.close();
+});
+
+test("consumer session purge는 취소 runner가 미정이면 삭제하지 않고 settlement 뒤 재시도한다", async (t) => {
+  const directory = await mkdtemp(path.join(
+    tmpdir(),
+    "kirinuki-vod-consumer-purge-timeout-"
+  ));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const artifactRoot = path.join(directory, "managed");
+  const consumerId = "purge-timeout-consumer";
+  const scopeRoot = vodConsumerScopeRoot(artifactRoot, consumerId);
+  const manifest = validManifest();
+  const artifactPath = path.join(
+    scopeRoot,
+    "jobs",
+    "chzzk",
+    manifest.materializationId,
+    "materialized.mp4"
+  );
+  const partialPath = path.join(scopeRoot, "content", "chzzk", "partial.ts");
+  const artifactBytes = Buffer.from("timeout-anchor", "utf8");
+  await mkdir(path.dirname(artifactPath), { recursive: true });
+  await writeFile(artifactPath, artifactBytes);
+  let releaseRunner!: () => void;
+  const runnerGate = new Promise<void>((resolve) => { releaseRunner = resolve; });
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const manager = createChzzkVodJobManager({
+    artifactRoot,
+    maximumConcurrentJobs: 1,
+    consumerPurgeExecutionDrainTimeoutMs: 30,
+    runner: async (input) => {
+      if (input.clips[0]?.id === "clip-a") {
+        return {
+          manifest,
+          artifactPath,
+          artifact: integrity(artifactBytes),
+          reused: false
+        };
+      }
+      await mkdir(path.dirname(partialPath), { recursive: true });
+      await writeFile(partialPath, "pending-write");
+      markStarted();
+      await runnerGate;
+      throw input.signal.reason;
+    }
+  });
+  const anchor = manager.create(request({ consumerId }));
+  await nextTurn();
+  const status = await manager.publicStatus(anchor, "http://127.0.0.1:4319");
+  const mediaAccess = new URL(status.media?.url || "")
+    .searchParams.get("access");
+  assert.ok(mediaAccess);
+  const running = manager.create(request({
+    consumerId,
+    clips: [{ id: "clip-timeout", startMs: 90_000, endMs: 100_000 }]
+  }));
+  await started;
+  await assert.rejects(
+    manager.purgeConsumerCache(
+      anchor.id,
+      mediaAccess,
+      consumerPurgeIdentity(anchor.id, consumerId, manifest)
+    ),
+    (error: unknown) => Boolean(
+      error instanceof Error
+      && "code" in error
+      && error.code === "PURGE_NOT_ALLOWED"
+    )
+  );
+  assert.equal(running.state, "cancelled");
+  assert.equal(running.cancellation?.reason, "user-requested");
+  await Promise.all([access(scopeRoot), access(artifactPath), access(partialPath)]);
+  assert.throws(
+    () => manager.create(request({
+      consumerId,
+      clips: [{ id: "clip-new", startMs: 110_000, endMs: 120_000 }]
+    })),
+    (error: unknown) => Boolean(
+      error instanceof Error
+      && "code" in error
+      && error.code === "BUSY"
+    )
+  );
+  await assert.rejects(
+    manager.purgeConsumerCache(
+      anchor.id,
+      mediaAccess,
+      consumerPurgeIdentity(anchor.id, consumerId, manifest)
+    ),
+    (error: unknown) => Boolean(
+      error instanceof Error
+      && "code" in error
+      && error.code === "PURGE_NOT_ALLOWED"
+    )
+  );
+  await Promise.all([access(scopeRoot), access(artifactPath), access(partialPath)]);
+
+  releaseRunner();
+  await nextTurn();
+  await nextTurn();
+  const retried = await manager.purgeConsumerCache(
+    anchor.id,
+    mediaAccess,
+    consumerPurgeIdentity(anchor.id, consumerId, manifest)
+  );
+  assert.equal(retried?.state, "purged");
+  await assert.rejects(access(scopeRoot), { code: "ENOENT" });
+  await manager.close();
 });
 
 test("consumer session purge는 scope 내부 symlink와 scope 밖 hard link를 fail closed한다", async (t) => {

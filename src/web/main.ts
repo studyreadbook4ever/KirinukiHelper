@@ -78,13 +78,29 @@ import {
   localMediaEngineInstaller
 } from "../editor/local-media-engine-onboarding.js";
 import {
+  ChzzkVodMaterializationClientError,
   cancelChzzkVodMaterialization,
+  getChzzkVodMaterializationStatus,
   startChzzkVodMaterialization,
   waitForChzzkVodMaterialization
 } from "../editor/chzzk-vod-client.js";
 import type {
   ChzzkVodMaterializationStatus
 } from "../editor/chzzk-vod-client.js";
+import {
+  clearPendingVodEditorHandoff,
+  claimPendingVodEditorHandoffOwner,
+  createPendingVodEditorHandoff,
+  loadPendingVodEditorHandoff,
+  pendingVodEditorHandoffWithJob,
+  pendingVodEditorHandoffWithTerminal,
+  prunePendingVodEditorHandoffs,
+  retryPendingVodEditorHandoff,
+  savePendingVodEditorHandoff
+} from "./pending-vod-editor-handoff.js";
+import type {
+  PendingVodEditorHandoff
+} from "./pending-vod-editor-handoff.js";
 import {
   normalizeChzzkVodMaterialization
 } from "../lib/chzzk-vod-materialization.js";
@@ -345,6 +361,28 @@ let activeClipRow: HTMLElement | null = null;
 let localPreviewSourceStartSeconds = 0;
 let localPreviewSourceDurationSeconds = 0;
 let localPreviewProjectId = createFreshEditorProjectId();
+// Resolve the reload-stable owner before reading any durable handoff. A
+// duplicated tab receives a new owner while the original document's claim is
+// alive, so it cannot open or overwrite the original project's envelope.
+const pendingVodEditorOwnerClaim = Promise.resolve()
+  .then(() => prunePendingVodEditorHandoffs())
+  .catch(() => 0)
+  .then(() => claimPendingVodEditorHandoffOwner())
+  .catch(() => ({
+    ownerId: crypto.randomUUID(),
+    release: () => undefined
+  }));
+window.addEventListener("pagehide", (event) => {
+  if (!event.persisted) {
+    // Release before a reload successor starts claiming the same
+    // sessionStorage owner. A duplicated live tab keeps the original claim,
+    // so it still receives a distinct owner after the bounded lock wait.
+    void pendingVodEditorOwnerClaim.then((claim) => claim.release());
+  }
+});
+async function pendingVodEditorOwnerId(): Promise<string> {
+  return (await pendingVodEditorOwnerClaim).ownerId;
+}
 let localPreviewSourceUrl = "";
 let localPreviewToken = "";
 let localPreviewBusy = false;
@@ -1167,6 +1205,7 @@ async function materializeLocalPreviewRange({
       endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
       token,
       consumerId: projectId,
+      continuationPolicy: "ephemeral-preview",
       sourceUrl,
       clips: [{
         id: clipId,
@@ -1363,9 +1402,99 @@ async function prepareLocalPreview(targetSeconds = 0): Promise<void> {
   }
 }
 
+function selectedVodClips(
+  captureSeed: CaptureState
+): Array<{ id: string; startMs: number; endMs: number }> {
+  return (captureSeed.segments || []).map((segment, index) => {
+    const id = String(segment.id || "").trim();
+    const startSeconds = Number(segment.startSeconds);
+    const endSeconds = Number(segment.endSeconds);
+    if (
+      !id
+      || !Number.isFinite(startSeconds)
+      || !Number.isFinite(endSeconds)
+      || startSeconds < 0
+      || endSeconds - startSeconds < MINIMUM_SELECTION_SECONDS
+    ) {
+      throw new TypeError("선택한 VOD 구간을 부분 준비 범위로 바꾸지 못했습니다.");
+    }
+    return {
+      id: captureSegmentEditorClipId(segment, index),
+      startMs: Math.round(startSeconds * 1_000),
+      endMs: Math.round(endSeconds * 1_000)
+    };
+  });
+}
+
+async function startOrReattachSelectedVodMaterialization({
+  token,
+  projectId,
+  sourceUrl,
+  clips,
+  pendingHandoff,
+  initialCollectionPost
+}: {
+  token: string;
+  projectId: string;
+  sourceUrl: string;
+  clips: Array<{ id: string; startMs: number; endMs: number }>;
+  pendingHandoff: PendingVodEditorHandoff | undefined;
+  initialCollectionPost: boolean;
+}): Promise<ChzzkVodMaterializationStatus> {
+  const startExactRequest = () => startChzzkVodMaterialization({
+    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+    token,
+    consumerId: projectId,
+    continuationPolicy: "bounded-persistent-editor",
+    sourceUrl,
+    clips,
+    rightsConfirmed: true
+  });
+  const storedJobId = pendingHandoff?.jobId;
+  if (!storedJobId) {
+    // Callers without a durable handoff retain the legacy first-submit path.
+    return startExactRequest();
+  }
+  if (
+    pendingHandoff.projectId !== projectId
+    || pendingHandoff.request.consumerId !== projectId
+    || pendingHandoff.sourceUrl !== sourceUrl
+    || pendingHandoff.request.sourceUrl !== sourceUrl
+  ) {
+    throw new TypeError(
+      "이어갈 영상 준비 작업의 원본 또는 편집 세션 identity가 다릅니다."
+    );
+  }
+  let status: ChzzkVodMaterializationStatus;
+  if (initialCollectionPost) {
+    // The deterministic ID was durably recorded immediately before this first
+    // request. A reload after the request starts will therefore status-query
+    // instead of accidentally replacing a terminal runner.
+    status = await startExactRequest();
+  } else {
+    // pairCaptionAgent created `token` for this exact project+source scope.
+    // Querying the stored deterministic job ID therefore reattaches only that
+    // capability; it cannot silently replace a failed/cancelled runner. A
+    // missing record is terminal too: the helper may have forgotten an earlier
+    // failure, so only the visible Retry action may create a replacement.
+    status = await getChzzkVodMaterializationStatus({
+      endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+      token,
+      jobId: storedJobId
+    });
+  }
+  if (status.jobId !== storedJobId) {
+    throw new Error(
+      "도우미가 저장된 영상 준비 작업과 다른 identity를 반환했습니다."
+    );
+  }
+  return status;
+}
+
 async function prepareSelectedVodForEditor(
   projectId: string,
-  captureSeed: CaptureState
+  captureSeed: CaptureState,
+  pendingHandoff?: PendingVodEditorHandoff
 ): Promise<boolean> {
   if (forceManualFileForNextPreparation) {
     forceManualFileForNextPreparation = false;
@@ -1386,28 +1515,10 @@ async function prepareSelectedVodForEditor(
     );
     return false;
   }
-  const sourceUrl = String(
+  const sourceUrl = pendingHandoff?.request.sourceUrl || String(
     captureSeed.source?.canonicalUrl || captureSeed.source?.url || ""
   ).trim();
-  const clips = (captureSeed.segments || []).map((segment, index) => {
-    const id = String(segment.id || "").trim();
-    const startSeconds = Number(segment.startSeconds);
-    const endSeconds = Number(segment.endSeconds);
-    if (
-      !id
-      || !Number.isFinite(startSeconds)
-      || !Number.isFinite(endSeconds)
-      || startSeconds < 0
-      || endSeconds - startSeconds < MINIMUM_SELECTION_SECONDS
-    ) {
-      throw new TypeError("선택한 VOD 구간을 부분 준비 범위로 바꾸지 못했습니다.");
-    }
-    return {
-      id: captureSegmentEditorClipId(segment, index),
-      startMs: Math.round(startSeconds * 1_000),
-      endMs: Math.round(endSeconds * 1_000)
-    };
-  });
+  const clips = pendingHandoff?.request.clips || selectedVodClips(captureSeed);
   showCutPreparation("도우미와 이 편집만을 위한 안전한 연결을 만들고 있습니다", 0.03);
   const token = await pairCaptionAgent({
     endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
@@ -1415,14 +1526,33 @@ async function prepareSelectedVodForEditor(
     projectId,
     sourceUrl
   });
-  let status = await startChzzkVodMaterialization({
-    endpoint: DEFAULT_CAPTION_AGENT_SETTINGS.endpoint,
+  let initialCollectionPost = false;
+  if (pendingHandoff && !pendingHandoff.jobId) {
+    pendingHandoff = pendingVodEditorHandoffWithJob(
+      pendingHandoff,
+      `vod_${pendingHandoff.requestFingerprint.slice(0, 40)}`
+    );
+    // Commit the deterministic identity before the first helper POST. If the
+    // browser freezes after sending it but before receiving the response, the
+    // next document can only query this exact job first.
+    savePendingVodEditorHandoff(pendingHandoff);
+    initialCollectionPost = true;
+  }
+  let status = await startOrReattachSelectedVodMaterialization({
     token,
-    consumerId: projectId,
+    projectId,
     sourceUrl,
     clips,
-    rightsConfirmed: true
+    pendingHandoff,
+    initialCollectionPost
   });
+  if (pendingHandoff) {
+    pendingHandoff = pendingVodEditorHandoffWithJob(
+      pendingHandoff,
+      status.jobId
+    );
+    savePendingVodEditorHandoff(pendingHandoff);
+  }
   showCutPreparation(materializationStage(status), status.progress);
   if (status.state !== "completed") {
     status = await waitForChzzkVodMaterialization({
@@ -2754,6 +2884,107 @@ function installStreamFrameLoadHandler(frame: HTMLIFrameElement): void {
     }
   });
 }
+
+let pendingVodEditorResume: Promise<void> | null = null;
+
+function pendingVodTerminalCode(error: unknown): string | null {
+  if (error instanceof ChzzkVodMaterializationClientError) {
+    return error.code;
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "USER_REQUESTED";
+  }
+  return null;
+}
+
+async function persistPendingVodTerminal(
+  pending: PendingVodEditorHandoff,
+  terminalCode: string
+): Promise<PendingVodEditorHandoff> {
+  const latest = await loadPendingVodEditorHandoff(
+    await pendingVodEditorOwnerId()
+  );
+  const exact = latest?.requestFingerprint === pending.requestFingerprint
+    ? latest
+    : pending;
+  const terminal = pendingVodEditorHandoffWithTerminal(exact, terminalCode);
+  savePendingVodEditorHandoff(terminal);
+  return terminal;
+}
+
+function renderPendingVodTerminal(pending: PendingVodEditorHandoff): void {
+  elements.cutPreparationProgress.hidden = false;
+  elements.cutPreparationProgress.dataset.state = "error";
+  elements.cutPreparationStage.textContent =
+    "이전 영상 준비가 중단되었습니다. 다시 시도할 수 있습니다";
+  elements.cutPreparationErrorCode.textContent =
+    pending.terminalCode || "MATERIALIZATION_CANCELLED";
+  elements.cutPreparationRecovery.hidden = false;
+  elements.cutPreparationRetry.textContent = "다시 시도";
+  elements.cutPreparationDownload.hidden = true;
+  elements.cutPreparationManual.hidden = false;
+}
+
+function schedulePendingVodEditorHandoffResume(): void {
+  if (document.hidden || openingEditor || pendingVodEditorResume) {
+    return;
+  }
+  pendingVodEditorResume = (async () => {
+    const ownerId = await pendingVodEditorOwnerId();
+    let pending = await loadPendingVodEditorHandoff(ownerId);
+    if (!pending || document.hidden || openingEditor) {
+      return;
+    }
+    if (pending.lifecycle === "terminal") {
+      renderPendingVodTerminal(pending);
+      return;
+    }
+    openingEditor = true;
+    elements.startEditor.disabled = true;
+    try {
+      await requireSafeLocalProjectStateForEditorEntry();
+      setStatus(
+        "도우미가 선택한 구간만 준비합니다. 이 페이지에서 진행 상황을 확인할 수 있습니다.",
+        "success"
+      );
+      const preparedByHelper = await prepareSelectedVodForEditor(
+        pending.projectId,
+        pending.captureSeed,
+        pending
+      );
+      if (!preparedByHelper) {
+        clearPendingVodEditorHandoff(
+          ownerId,
+          pending.requestFingerprint
+        );
+      }
+      setStatus("같은 브라우저에서 편집기를 여는 중입니다…", "success");
+      const session = await beginWebEditorSession({
+        attestation: pending.attestation,
+        captureSeed: pending.captureSeed
+      });
+      clearPendingVodEditorHandoff(
+        ownerId,
+        pending.requestFingerprint
+      );
+      location.assign(session.editorUrl);
+    } catch (error) {
+      const terminalCode = pendingVodTerminalCode(error);
+      if (terminalCode) {
+        pending = await persistPendingVodTerminal(pending, terminalCode);
+      }
+      setStatus(errorMessage(error), "error");
+      if (!elements.cutPreparationProgress.hidden) {
+        showCutPreparationFailure(error);
+      }
+      openingEditor = false;
+      renderEditorEntryAvailability();
+    }
+  })().finally(() => {
+    pendingVodEditorResume = null;
+  });
+}
+
 elements.form.addEventListener("submit", (event) => {
   event.preventDefault();
   if (mobileEditorBlocked) {
@@ -2777,6 +3008,7 @@ elements.form.addEventListener("submit", (event) => {
   void (async () => {
     openingEditor = true;
     elements.startEditor.disabled = true;
+    let pendingHandoff: PendingVodEditorHandoff | undefined;
     if (localProjectLifecycleRefreshTimer !== null) {
       window.clearTimeout(localProjectLifecycleRefreshTimer);
       localProjectLifecycleRefreshTimer = null;
@@ -2804,19 +3036,60 @@ elements.form.addEventListener("submit", (event) => {
       }
       const attestation = createAttestation(target);
       if (captureSeed !== undefined) {
+        const ownerId = await pendingVodEditorOwnerId();
+        const sourceUrl = String(
+          captureSeed.source?.canonicalUrl || captureSeed.source?.url || ""
+        ).trim();
+        pendingHandoff = await createPendingVodEditorHandoff({
+          ownerId,
+          projectId: target.projectId,
+          sourceSessionId: target.sourceSessionId,
+          sourceUrl,
+          captureSeed,
+          attestation,
+          clips: selectedVodClips(captureSeed)
+        });
+        // This durable, secret-free envelope is committed before the helper
+        // request. A frozen/reloaded start document can therefore submit the
+        // same fingerprint and attach to the already running bounded job.
+        savePendingVodEditorHandoff(pendingHandoff);
         setStatus(
           "도우미가 선택한 구간만 준비합니다. 이 페이지에서 진행 상황을 확인할 수 있습니다.",
           "success"
         );
-        await prepareSelectedVodForEditor(target.projectId, captureSeed);
+        const preparedByHelper = await prepareSelectedVodForEditor(
+          target.projectId,
+          captureSeed,
+          pendingHandoff
+        );
+        if (!preparedByHelper) {
+          clearPendingVodEditorHandoff(
+            ownerId,
+            pendingHandoff.requestFingerprint
+          );
+          pendingHandoff = undefined;
+        }
       }
       setStatus("같은 브라우저에서 편집기를 여는 중입니다…", "success");
       const session = await beginWebEditorSession({
         attestation,
         ...(captureSeed === undefined ? {} : { captureSeed })
       });
+      if (pendingHandoff) {
+        clearPendingVodEditorHandoff(
+          await pendingVodEditorOwnerId(),
+          pendingHandoff.requestFingerprint
+        );
+      }
       location.assign(session.editorUrl);
     } catch (error) {
+      const terminalCode = pendingVodTerminalCode(error);
+      if (pendingHandoff && terminalCode) {
+        pendingHandoff = await persistPendingVodTerminal(
+          pendingHandoff,
+          terminalCode
+        );
+      }
       setStatus(errorMessage(error), "error");
       if (!elements.cutPreparationProgress.hidden) {
         showCutPreparationFailure(error);
@@ -2832,7 +3105,18 @@ elements.form.addEventListener("submit", (event) => {
 
 elements.cutPreparationRetry.addEventListener("click", () => {
   elements.cutPreparationRecovery.hidden = true;
-  elements.startEditor.click();
+  void pendingVodEditorOwnerId().then((ownerId) => (
+    loadPendingVodEditorHandoff(ownerId)
+  )).then((pending) => {
+    if (pending) {
+      if (pending.lifecycle === "terminal") {
+        savePendingVodEditorHandoff(retryPendingVodEditorHandoff(pending));
+      }
+      schedulePendingVodEditorHandoffResume();
+      return;
+    }
+    elements.startEditor.click();
+  });
 });
 elements.cutPreparationDownload.addEventListener("click", () => {
   const download = !elements.archHelperDownload.hidden
@@ -2863,7 +3147,10 @@ installStudioCaptureConsole();
 installStreamFrameLoadHandler(elements.streamFrame);
 prefillSourceFromLocation();
 updateStreamPreview();
-window.addEventListener("focus", scheduleLocalProjectLifecycleRefresh);
+window.addEventListener("focus", () => {
+  scheduleLocalProjectLifecycleRefresh();
+  schedulePendingVodEditorHandoffResume();
+});
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) {
     // A same-tab editor navigation can leave this start document in bfcache
@@ -2873,13 +3160,16 @@ window.addEventListener("pageshow", (event) => {
     renderMobileEditorAccess();
     clearCurrentTabWebEditorSession();
     requestAutomaticLocalProjectLifecycleCleanup();
+    schedulePendingVodEditorHandoffResume();
     return;
   }
   scheduleLocalProjectLifecycleRefresh();
+  schedulePendingVodEditorHandoffResume();
 });
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     scheduleLocalProjectLifecycleRefresh();
+    schedulePendingVodEditorHandoffResume();
   }
 });
 clearCurrentTabWebEditorSession();
@@ -2893,6 +3183,10 @@ const initialLocalProjectCleanup = localProjectLifecycleCleanupQueue.enqueue(asy
   }
 });
 observeLocalProjectLifecycleCleanup(initialLocalProjectCleanup);
+void initialLocalProjectCleanup.then(
+  schedulePendingVodEditorHandoffResume,
+  schedulePendingVodEditorHandoffResume
+);
 }
 
 // The public HTTPS deployment is the application, not a launcher for a

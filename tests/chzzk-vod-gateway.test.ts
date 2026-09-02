@@ -52,6 +52,7 @@ import {
   vodConsumerScopeRoot
 } from "../scripts/vod-consumer-scope.js";
 import type {
+  ChzzkVodContinuationPolicy,
   ChzzkVodMaterializationRunner
 } from "../scripts/chzzk-vod-job-manager.js";
 import {
@@ -171,12 +172,15 @@ const SOOP_SOURCE_CLOCK_IDENTITY = Object.freeze({
 });
 
 function requestBody(
-  sourceUrl = "https://chzzk.naver.com/video/14252987"
+  sourceUrl = "https://chzzk.naver.com/video/14252987",
+  continuationPolicy: ChzzkVodContinuationPolicy =
+    "bounded-persistent-editor"
 ) {
   const soop = /(?:sooplive|afreecatv)\.com/iu.test(sourceUrl);
   return {
     schema: CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
     consumerId: "gateway-project-1",
+    continuationPolicy,
     sourceUrl,
     ...(soop ? { sourceClockIdentity: SOOP_SOURCE_CLOCK_IDENTITY } : {}),
     clips: [{ id: "clip-a", startMs: 70_000, endMs: 80_000 }],
@@ -936,7 +940,217 @@ test("VOD 상태와 취소는 생성 문서 또는 같은 프로젝트의 새 ca
   assert.equal((await requestAs(sameProject, "DELETE")).status, 200);
 });
 
-test("authenticated status는 자기 observer lease만 갱신하고 닫힌 A를 회수한 뒤 B를 실행한다", async (t) => {
+test("persistent editor는 observer 만료 뒤 실행을 유지하고 exact POST와 새 status nonce를 다시 붙인다", async (t) => {
+  const clock = deterministicGatewayLeaseClock();
+  let aborted = false;
+  const port = await listenWithOptions(t, {
+    materializationRunner: async ({ signal }) => await new Promise<never>(
+      (_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          aborted = true;
+          reject(signal.reason);
+        }, { once: true });
+      }
+    ),
+    vodObserverLeaseTtlMs: 100,
+    vodObserverLeaseScheduler: clock.scheduler,
+    now: clock.now
+  });
+  const body = requestBody();
+  const created = await localRequest({
+    port,
+    requestPath: "/v1/vod/materializations",
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    },
+    body
+  });
+  assert.equal(created.status, 202, created.bytes.toString("utf8"));
+  const jobId = String(json(created).jobId || "");
+  assert.equal(json(created).continuationPolicy, "bounded-persistent-editor");
+
+  clock.advance(100);
+  assert.equal(aborted, false, "실행 중 editor job은 observer 만료로 abort되면 안 됩니다.");
+
+  const exactPostCapability = await issueCapability(
+    port,
+    "gateway-project-1",
+    ["vod"]
+  );
+  const exactPost = await rawLocalRequest({
+    port,
+    requestPath: "/v1/vod/materializations",
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${exactPostCapability.token}`,
+      "content-type": "application/json",
+      "x-kirinuki-client-nonce": exactPostCapability.clientNonce,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    },
+    body
+  });
+  assert.equal(exactPost.status, 202, exactPost.bytes.toString("utf8"));
+  assert.equal(json(exactPost).jobId, jobId);
+  assert.deepEqual(json(exactPost).observation, {
+    state: "attached",
+    lastActivityAt: "1970-01-01T00:00:10.000Z"
+  });
+
+  clock.advance(100);
+  assert.equal(aborted, false);
+  const statusCapability = await issueCapability(
+    port,
+    "gateway-project-1",
+    ["vod", "cache-delete"]
+  );
+  const resumedStatus = await rawLocalRequest({
+    port,
+    requestPath: `/v1/vod/materializations/${jobId}`,
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${statusCapability.token}`,
+      "x-kirinuki-client-nonce": statusCapability.clientNonce,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    }
+  });
+  assert.equal(resumedStatus.status, 200, resumedStatus.bytes.toString("utf8"));
+  assert.equal(
+    (json(resumedStatus).observation as Record<string, unknown>).state,
+    "attached"
+  );
+  assert.equal(aborted, false);
+
+  const cancelled = await rawLocalRequest({
+    port,
+    requestPath: `/v1/vod/materializations/${jobId}`,
+    method: "DELETE",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${statusCapability.token}`,
+      "x-kirinuki-client-nonce": statusCapability.clientNonce,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    }
+  });
+  assert.equal(cancelled.status, 200, cancelled.bytes.toString("utf8"));
+  assert.equal(
+    (json(cancelled).cancellation as Record<string, unknown>).reason,
+    "user-requested"
+  );
+  assert.equal(aborted, true);
+});
+
+test("ephemeral preview의 낯선 status nonce는 renew=false를 숨기지 않고 exact 재POST를 요구한다", async (t) => {
+  const clock = deterministicGatewayLeaseClock();
+  let aborted = false;
+  const port = await listenWithOptions(t, {
+    materializationRunner: async ({ signal }) => await new Promise<never>(
+      (_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          aborted = true;
+          reject(signal.reason);
+        }, { once: true });
+      }
+    ),
+    vodObserverLeaseTtlMs: 100,
+    vodObserverLeaseScheduler: clock.scheduler,
+    now: clock.now
+  });
+  const body = requestBody(undefined, "ephemeral-preview");
+  const created = await localRequest({
+    port,
+    requestPath: "/v1/vod/materializations",
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    },
+    body
+  });
+  assert.equal(created.status, 202, created.bytes.toString("utf8"));
+  const jobId = String(json(created).jobId || "");
+
+  clock.advance(60);
+  const second = await issueCapability(port, "gateway-project-1", ["vod"]);
+  const attached = await rawLocalRequest({
+    port,
+    requestPath: "/v1/vod/materializations",
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${second.token}`,
+      "content-type": "application/json",
+      "x-kirinuki-client-nonce": second.clientNonce,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    },
+    body
+  });
+  assert.equal(attached.status, 202, attached.bytes.toString("utf8"));
+  assert.equal(json(attached).jobId, jobId);
+
+  clock.advance(40);
+  assert.equal(aborted, false, "두 번째 exact observer가 살아 있습니다.");
+  const third = await issueCapability(
+    port,
+    "gateway-project-1",
+    ["vod", "cache-delete"]
+  );
+  const rejectedStatus = await rawLocalRequest({
+    port,
+    requestPath: `/v1/vod/materializations/${jobId}`,
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${third.token}`,
+      "x-kirinuki-client-nonce": third.clientNonce,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    }
+  });
+  assert.equal(rejectedStatus.status, 409, rejectedStatus.bytes.toString("utf8"));
+  assert.equal(
+    (json(rejectedStatus).error as Record<string, unknown>).code,
+    "OBSERVER_REATTACH_REQUIRED"
+  );
+  assert.equal(aborted, false);
+
+  const exactReattach = await rawLocalRequest({
+    port,
+    requestPath: "/v1/vod/materializations",
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${third.token}`,
+      "content-type": "application/json",
+      "x-kirinuki-client-nonce": third.clientNonce,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    },
+    body
+  });
+  assert.equal(exactReattach.status, 202, exactReattach.bytes.toString("utf8"));
+  assert.equal(json(exactReattach).jobId, jobId);
+
+  await rawLocalRequest({
+    port,
+    requestPath: `/v1/vod/materializations/${jobId}`,
+    method: "DELETE",
+    headers: {
+      origin: ORIGIN,
+      authorization: `Bearer ${third.token}`,
+      "x-kirinuki-client-nonce": third.clientNonce,
+      "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+    }
+  });
+  assert.equal(aborted, true);
+});
+
+test("ephemeral status는 자기 observer lease만 갱신하고 닫힌 A를 회수한 뒤 B를 실행한다", async (t) => {
   const clock = deterministicGatewayLeaseClock();
   const directory = await mkdtemp(path.join(tmpdir(), "kirinuki-vod-observer-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -987,7 +1201,10 @@ test("authenticated status는 자기 observer lease만 갱신하고 닫힌 A를 
         "content-type": "application/json",
         "x-kirinuki-protocol": CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
       },
-      body: { ...requestBody(), clips: [clip] }
+      body: {
+        ...requestBody(undefined, "ephemeral-preview"),
+        clips: [clip]
+      }
     });
     assert.equal(created.status, 202, created.bytes.toString("utf8"));
     return String(json(created).jobId || "");
@@ -1663,6 +1880,23 @@ test("플랫폼 중립 VOD 경로가 CHZZK와 YouTube·SOOP materializer를 자�
 
 test("공개 CHZZK live-rewind HLS는 typed VOD_UNAVAILABLE에서만 external 취득기로 전환한다", async () => {
   const artifact = integrity("chzzk-public-hls-fallback");
+  const forbiddenExternalVerification = {
+    identity: {
+      size: artifact.sizeBytes,
+      mtimeMs: 1,
+      rawDev: "1",
+      dev: "1",
+      ino: "1",
+      nlink: "1",
+      mtimeNs: "1",
+      ctimeNs: "1",
+      regular: true,
+      symlink: false
+    },
+    hashSha256: artifact.hashSha256,
+    chunkSizeBytes: 1048576 as const,
+    chunkHashesSha256: [artifact.hashSha256]
+  };
   const externalCalls: ExternalVodMaterializationRequest[] = [];
   const progressMessages: string[] = [];
   const runner = createPlatformMaterializationRunner({
@@ -1691,12 +1925,14 @@ test("공개 CHZZK live-rewind HLS는 typed VOD_UNAVAILABLE에서만 external �
         }),
         receipt: { artifact },
         artifactPath: "/safe/local/chzzk-public-hls.mp4",
+        artifactVerification: forbiddenExternalVerification,
         reused: false
       };
     }
   });
   const result = await runner({
     consumerId: "chzzk-hls-fallback-project",
+    continuationPolicy: "bounded-persistent-editor",
     sourceUrl: "https://chzzk.naver.com/video/14514980",
     clips: [{ id: "clip-a", startMs: 30_000, endMs: 32_000 }],
     editableRanges: [{ id: "clip-a", startMs: 20_000, endMs: 42_000 }],
@@ -1710,33 +1946,133 @@ test("공개 CHZZK live-rewind HLS는 typed VOD_UNAVAILABLE에서만 external �
     { id: "clip-a", startMs: 20_000, endMs: 42_000 }
   ]);
   assert.deepEqual(result.artifact, artifact);
+  assert.equal(result.artifactVerification, undefined);
   assert(progressMessages.some((message) => /VOD|구간|조각/u.test(message)));
 });
 
 test("CHZZK native 성공과 VOD_UNAVAILABLE 이외 오류는 external fallback을 호출하지 않는다", async () => {
   const artifact = integrity("chzzk-native-only");
+  const nativeVerification = {
+    identity: {
+      size: artifact.sizeBytes,
+      mtimeMs: 1,
+      rawDev: "1",
+      dev: "1",
+      ino: "1",
+      nlink: "1",
+      mtimeNs: "1",
+      ctimeNs: "1",
+      regular: true,
+      symlink: false
+    },
+    hashSha256: artifact.hashSha256,
+    chunkSizeBytes: 1048576 as const,
+    chunkHashesSha256: [artifact.hashSha256]
+  };
   let externalCallCount = 0;
+  const reportedProgress: Array<{
+    stage: string;
+    progress: number;
+    message: string;
+  }> = [];
   const nativeRunner = createPlatformMaterializationRunner({
-    chzzkMaterializer: async (input) => ({
-      manifest: validMaterialization({ clips: input.clips }),
-      receipt: { artifact },
-      artifactPath: "/safe/local/chzzk-native.mp4",
-      reused: true
-    }),
+    chzzkMaterializer: async (input) => {
+      for (const progress of [
+        {
+          phase: "planning" as const,
+          detailStage: "base-hash" as const,
+          completedRuns: 0,
+          totalRuns: 0,
+          processedBytes: 4_000,
+          totalBytes: 8_000
+        },
+        {
+          phase: "muxing" as const,
+          detailStage: "run-remux" as const,
+          completedRuns: 1,
+          totalRuns: 2,
+          processedBytes: 1_000,
+          totalBytes: 2_000
+        },
+        {
+          phase: "muxing" as const,
+          detailStage: "final-concat" as const,
+          completedRuns: 2,
+          totalRuns: 2,
+          processedBytes: 4_000,
+          totalBytes: 8_000
+        },
+        {
+          phase: "muxing" as const,
+          detailStage: "final-verify" as const,
+          completedRuns: 2,
+          totalRuns: 2,
+          processedBytes: 8_000,
+          totalBytes: 8_000
+        },
+        {
+          phase: "muxing" as const,
+          detailStage: "final-hash" as const,
+          completedRuns: 2,
+          totalRuns: 2,
+          processedBytes: 4_000,
+          totalBytes: 8_000
+        },
+        {
+          phase: "muxing" as const,
+          detailStage: "publishing" as const,
+          completedRuns: 2,
+          totalRuns: 2,
+          processedBytes: 8_000,
+          totalBytes: 8_000
+        }
+      ]) {
+        input.onProgress?.({
+          completedSegments: 8,
+          totalSegments: 8,
+          completedBytes: 8_000,
+          ...progress
+        });
+      }
+      return {
+        manifest: validMaterialization({ clips: input.clips }),
+        receipt: { artifact },
+        artifactPath: "/safe/local/chzzk-native.mp4",
+        artifactVerification: nativeVerification,
+        reused: true
+      };
+    },
     externalMaterializer: async () => {
       externalCallCount += 1;
       throw new Error("호출되면 안 됩니다.");
     }
   });
-  await nativeRunner({
+  const nativeResult = await nativeRunner({
     consumerId: "chzzk-native-project",
+    continuationPolicy: "bounded-persistent-editor",
     sourceUrl: "https://chzzk.naver.com/video/14252987",
     clips: [{ id: "clip-a", startMs: 1_000, endMs: 2_000 }],
     handleMs: 10_000,
     signal: new AbortController().signal,
-    onProgress: () => undefined
+    onProgress: (progress) => reportedProgress.push({ ...progress })
   });
   assert.equal(externalCallCount, 0);
+  assert.deepEqual(nativeResult.artifactVerification, nativeVerification);
+  assert.deepEqual(
+    reportedProgress.map(({ progress }) => progress),
+    [0.0875, 0.915, 0.955, 0.975, 0.986, 0.998]
+  );
+  assert.deepEqual(
+    reportedProgress.map(({ message }) => message),
+    [
+      "기존 편집용 VOD 캐시의 무결성을 확인하는 중",
+      "로컬 편집 구간 1/2 구성 중",
+      "준비한 구간을 최종 편집 MP4로 연결하는 중",
+      "최종 편집 MP4의 재생 경계와 코덱을 확인하는 중",
+      "최종 편집 MP4의 무결성을 확인하는 중",
+      "검증한 편집 MP4를 이 프로젝트에 연결하는 중"
+    ]
+  );
 
   const failedRunner = createPlatformMaterializationRunner({
     chzzkMaterializer: async () => {
@@ -1753,6 +2089,7 @@ test("CHZZK native 성공과 VOD_UNAVAILABLE 이외 오류는 external fallback�
   await assert.rejects(
     failedRunner({
       consumerId: "chzzk-native-error-project",
+      continuationPolicy: "bounded-persistent-editor",
       sourceUrl: "https://chzzk.naver.com/video/14252987",
       clips: [{ id: "clip-a", startMs: 1_000, endMs: 2_000 }],
       handleMs: 10_000,
@@ -1787,6 +2124,7 @@ test("SOOP source clock은 미제공 시 로컬 유도로 넘기고 제공된 �
   });
   const request = {
     consumerId: "soop-optional-clock-project",
+    continuationPolicy: "bounded-persistent-editor" as const,
     sourceUrl: "https://vod.sooplive.com/player/123456789",
     clips: [{ id: "clip-a", startMs: 1_000, endMs: 2_000 }],
     handleMs: 10_000 as const,
@@ -2141,6 +2479,7 @@ test("YouTube·SOOP runner는 resume와 hot-load 범위를 외부 materializer�
   };
   const result = await runner({
     consumerId: "gateway-runner-project",
+    continuationPolicy: "bounded-persistent-editor",
     sourceUrl: "https://www.youtube.com/watch?v=abcdefghijk",
     clips: [{ id: "clip-a", startMs: 1_000, endMs: 2_000 }],
     handleMs: 10_000,
@@ -2158,6 +2497,7 @@ test("YouTube·SOOP runner는 resume와 hot-load 범위를 외부 materializer�
   };
   await runner({
     consumerId: "gateway-runner-project",
+    continuationPolicy: "bounded-persistent-editor",
     sourceUrl: "https://www.youtube.com/watch?v=abcdefghijk",
     clips: [{ id: "clip-a", startMs: 1_000, endMs: 2_000 }],
     editableRanges: [{ id: "clip-a", startMs: 0, endMs: 42_000 }],

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import type { ChildProcess, SpawnOptions, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
+  appendFile,
   copyFile,
   mkdir,
   mkdtemp,
@@ -10,6 +11,7 @@ import {
   rm,
   symlink,
   stat,
+  truncate,
   writeFile
 } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -21,8 +23,13 @@ import test from "node:test";
 import {
   CHZZK_VOD_MATERIALIZATION_SCHEMA_ID,
   LEGACY_CHZZK_VOD_MATERIALIZATION_SCHEMA_ID,
+  MAX_CHZZK_VOD_WORK_BYTES,
   MAX_CHZZK_PROCESS_OUTPUT_BYTES,
+  MIN_CHZZK_VOD_DISK_HEADROOM_BYTES,
   ChzzkVodMaterializationError,
+  assertChzzkConsumerScopeBudget,
+  assertChzzkDiskHeadroom,
+  assertChzzkVodWorkByteQuota,
   buildCompactConcatArgs,
   buildConcatDescription,
   buildRunRemuxArgs,
@@ -39,10 +46,14 @@ import {
 } from "../scripts/chzzk-vod-materializer.js";
 import type {
   ChzzkVodMaterializerDependencies,
+  ChzzkVodMaterializationProgress,
   ProcessResult,
   ProcessRunOptions
 } from "../scripts/chzzk-vod-materializer.js";
-import { vodConsumerMaterializationDirectory } from
+import {
+  vodConsumerMaterializationDirectory,
+  vodConsumerScopeRoot
+} from
   "../scripts/vod-consumer-scope.js";
 
 const CONTENT_ID = "14252987";
@@ -139,6 +150,10 @@ function readJobLeaseRow(databasePath: string): Readonly<Record<string, unknown>
 type MaterializationRequest = Parameters<typeof materializeChzzkVodImplementation>[0];
 type MaterializerDependencies = Parameters<typeof materializeChzzkVodImplementation>[1];
 type ReopenRequest = Parameters<typeof reopenChzzkVodMaterializationImplementation>[0];
+const testStatFileSystem = async () => ({
+  bavail: BigInt(MAX_CHZZK_VOD_WORK_BYTES),
+  bsize: 1n
+});
 
 function materializeChzzkVod(
   request: Omit<MaterializationRequest, "consumerId"> & {
@@ -149,7 +164,10 @@ function materializeChzzkVod(
   return materializeChzzkVodImplementation({
     ...request,
     consumerId: request.consumerId ?? CONSUMER_ID
-  }, dependencies);
+  }, {
+    statFileSystem: testStatFileSystem,
+    ...dependencies
+  });
 }
 
 function reopenChzzkVodMaterialization(
@@ -411,6 +429,9 @@ function createHarness({
       };
     }
     if (args.includes("stream=codec_type,codec_name,start_time,duration")) {
+      const artifact = JSON.parse(await readFile(targetPath, "utf8")) as {
+        durationMs: number;
+      };
       return {
         exitCode: 0,
         stdout: JSON.stringify({
@@ -419,13 +440,13 @@ function createHarness({
               codec_type: "video",
               codec_name: "h264",
               start_time: "0.000000",
-              duration: "4.000000"
+              duration: String(artifact.durationMs / 1_000)
             },
             {
               codec_type: "audio",
               codec_name: "aac",
               start_time: "0.000000",
-              duration: "4.000000"
+              duration: String(artifact.durationMs / 1_000)
             }
           ]
         }),
@@ -661,7 +682,7 @@ test("consumer scope는 domain-separated SHA-256이고 잘못된 식별자를 �
   }
 });
 
-test("ffmpeg 명령은 모든 단계에서 stream-copy를 고정하고 run에 AAC 필터를 건다", () => {
+test("ffmpeg 명령은 모든 단계에서 stream-copy를 고정하고 최종 atom 재배치를 하지 않는다", () => {
   const runArgs = buildRunRemuxArgs("input.ts", "output.mp4");
   assert.deepEqual(runArgs.slice(runArgs.indexOf("-c"), runArgs.indexOf("-c") + 2), [
     "-c", "copy"
@@ -677,11 +698,99 @@ test("ffmpeg 명령은 모든 단계에서 stream-copy를 고정하고 run에 AA
   );
   assert(!runArgs.includes("libx264"));
   assert(!concatArgs.includes("libx264"));
+  assert(!runArgs.includes("-movflags"));
+  assert(!runArgs.includes("+faststart"));
+  assert(!concatArgs.includes("-movflags"));
+  assert(!concatArgs.includes("+faststart"));
   assert.equal(
     buildConcatDescription(["/tmp/a.mp4", "/tmp/b's.mp4"], [8_000, 4_000]),
     "file '/tmp/a.mp4'\ninpoint 0.000000\noutpoint 8.000000\nduration 8.000000\n"
       + "file '/tmp/b'\\''s.mp4'\ninpoint 0.000000\noutpoint 4.000000\nduration 4.000000\n"
   );
+});
+
+test("CHZZK 작업은 64 GiB aggregate 상한과 쓰기 전 디스크 headroom을 강제한다", async () => {
+  assert.equal(
+    assertChzzkVodWorkByteQuota(MAX_CHZZK_VOD_WORK_BYTES - 1, 1),
+    MAX_CHZZK_VOD_WORK_BYTES
+  );
+  assert.throws(
+    () => assertChzzkVodWorkByteQuota(MAX_CHZZK_VOD_WORK_BYTES, 1),
+    (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "MATERIALIZATION_QUOTA_EXCEEDED"
+      && /64 GiB/u.test(error.message)
+    )
+  );
+  await assert.rejects(
+    assertChzzkDiskHeadroom("/tmp", 1, async () => ({
+      bavail: 1,
+      bsize: 4_096
+    })),
+    (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "INSUFFICIENT_DISK_SPACE"
+    )
+  );
+  for (const fileSystem of [
+    { bavail: -1, bsize: 4_096 },
+    { bavail: 1, bsize: 0 },
+    { bavail: 1, bsize: -1 }
+  ]) {
+    await assert.rejects(
+      assertChzzkDiskHeadroom("/tmp", 0, async () => fileSystem),
+      (error: unknown) => (
+        error instanceof ChzzkVodMaterializationError
+        && error.code === "DISK_SPACE_CHECK_FAILED"
+      )
+    );
+  }
+});
+
+test("56 clips·42 runs·5.18 GB 재현 규모는 sparse logical bytes만 세어 빠르게 quota 경계를 검증한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-56x42-quota-"));
+  try {
+    const consumerScopeDirectory = vodConsumerScopeRoot(
+      stateDir,
+      CONSUMER_ID
+    );
+    const jobDirectory = path.join(
+      consumerScopeDirectory,
+      "jobs",
+      "chzzk",
+      "v3",
+      "a".repeat(32)
+    );
+    await mkdir(jobDirectory, { recursive: true });
+    const receipt = "{}\n";
+    for (let index = 0; index < 56; index += 1) {
+      await writeFile(path.join(jobDirectory, `clip-${index}.receipt.json`), receipt);
+    }
+    const targetLogicalBytes = 5_180_000_000;
+    const receiptBytes = Buffer.byteLength(receipt) * 56;
+    const runBytes = targetLogicalBytes - receiptBytes;
+    const baseRunBytes = Math.floor(runBytes / 42);
+    let assignedRunBytes = 0;
+    for (let index = 0; index < 42; index += 1) {
+      const sizeBytes = index === 41
+        ? runBytes - assignedRunBytes
+        : baseRunBytes;
+      const runPath = path.join(jobDirectory, `run-${index}.mp4`);
+      await writeFile(runPath, "");
+      await truncate(runPath, sizeBytes);
+      assignedRunBytes += sizeBytes;
+    }
+    assert.equal(
+      await assertChzzkConsumerScopeBudget(
+        consumerScopeDirectory,
+        0,
+        testStatFileSystem
+      ),
+      targetLogicalBytes
+    );
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
 });
 
 test("정상 sleep 완료와 취소 모두 AbortSignal listener를 정리한다", async () => {
@@ -1243,6 +1352,104 @@ test("segment 본문은 streaming으로 쓰고 선언·실측 크기 상한을 �
   }
 });
 
+test("낮은 Content-Length도 actual chunk마다 consumer quota와 headroom을 다시 검사한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-chunk-budget-"));
+  try {
+    const harness = createHarness({ keyframeSegments: new Set([2]) });
+    const fetchImpl = (async (
+      input: string | URL | Request,
+      init?: RequestInit
+    ): Promise<Response> => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      if (url.hostname !== "vod.pstatic.net") {
+        return await harness.fetchImpl(input, init);
+      }
+      await harness.fetchImpl(input, init);
+      return new Response(Buffer.from(transportStreamBytes(2)), {
+        status: 200,
+        headers: {
+          "content-length": "1",
+          "content-type": "application/octet-stream"
+        }
+      });
+    }) as typeof globalThis.fetch;
+
+    await assert.rejects(materializeChzzkVod({
+      sourceUrl: CANONICAL_URL,
+      clips: [{ id: "chunk-budget", startMs: 8_000, endMs: 10_000 }],
+      handleMs: 0,
+      stateDir
+    }, {
+      fetchImpl,
+      runProcess: harness.runProcess,
+      sleep: async () => undefined,
+      statFileSystem: async () => ({
+        bavail: BigInt(MIN_CHZZK_VOD_DISK_HEADROOM_BYTES + 100),
+        bsize: 1n
+      })
+    }), (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "INSUFFICIENT_DISK_SPACE"
+    ));
+    assert.deepEqual(harness.calls.segments, [2]);
+    assert.deepEqual(harness.calls.processes, []);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("network chunk 수와 무관하게 consumer tree/statfs 검사는 bounded commit 경계에서만 실행한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-bounded-scan-"));
+  try {
+    const harness = createHarness({ keyframeSegments: new Set([2]) });
+    const fetchImpl = (async (
+      input: string | URL | Request,
+      init?: RequestInit
+    ): Promise<Response> => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      if (url.hostname !== "vod.pstatic.net") {
+        return await harness.fetchImpl(input, init);
+      }
+      await harness.fetchImpl(input, init);
+      const bytes = transportStreamBytes(2);
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const byte of bytes) {
+            controller.enqueue(Uint8Array.of(byte));
+          }
+          controller.close();
+        }
+      }), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" }
+      });
+    }) as typeof globalThis.fetch;
+    let fileSystemInspectionCount = 0;
+    const result = await materializeChzzkVod({
+      sourceUrl: CANONICAL_URL,
+      clips: [{ id: "bounded-scan", startMs: 8_000, endMs: 10_000 }],
+      handleMs: 0,
+      stateDir
+    }, {
+      fetchImpl,
+      runProcess: harness.runProcess,
+      sleep: async () => undefined,
+      statFileSystem: async () => {
+        fileSystemInspectionCount += 1;
+        return testStatFileSystem();
+      }
+    });
+    assert.equal(result.reused, false);
+    assert.equal(harness.calls.segments.length, 1);
+    assert(
+      fileSystemInspectionCount < 20,
+      `564 network chunks에서 tree/statfs 검사가 ${fileSystemInspectionCount}회 실행됐습니다.`
+    );
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("완료 manifest/hash가 맞으면 조각과 ffmpeg 작업을 재사용한다", async () => {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-reuse-"));
   try {
@@ -1259,7 +1466,11 @@ test("완료 manifest/hash가 맞으면 조각과 ffmpeg 작업을 재사용한�
       sleep: async () => undefined
     });
     const secondHarness = createHarness({ keyframeSegments: new Set([2]) });
-    const second = await materializeChzzkVod(request, {
+    const reuseProgress: ChzzkVodMaterializationProgress[] = [];
+    const second = await materializeChzzkVod({
+      ...request,
+      onProgress: (progress) => reuseProgress.push({ ...progress })
+    }, {
       fetchImpl: secondHarness.fetchImpl,
       runProcess: secondHarness.runProcess,
       sleep: async () => undefined
@@ -1267,6 +1478,22 @@ test("완료 manifest/hash가 맞으면 조각과 ffmpeg 작업을 재사용한�
     assert.equal(first.reused, false);
     assert.equal(second.reused, true);
     assert.equal(second.artifactPath, first.artifactPath);
+    assert.equal(
+      second.artifactVerification.hashSha256,
+      second.receipt.artifact.hashSha256
+    );
+    assert.equal(second.artifactVerification.identity.size, (
+      await stat(second.artifactPath)
+    ).size);
+    assert.equal(
+      second.artifactVerification.chunkHashesSha256.length,
+      Math.ceil(second.receipt.artifact.sizeBytes / (1024 * 1024))
+    );
+    assert(reuseProgress.some((progress) => (
+      progress.detailStage === "final-hash"
+      && Number(progress.processedBytes) > 0
+      && progress.processedBytes === progress.totalBytes
+    )));
     assert.deepEqual(secondHarness.calls.segments, []);
     assert.deepEqual(secondHarness.calls.processes, []);
   } finally {
@@ -1365,7 +1592,8 @@ test("동일 semantic plan도 consumer별 artifact를 격리하고 한쪽 삭제
     }, {
       fetchImpl: firstHarness.fetchImpl,
       runProcess: firstHarness.runProcess,
-      sleep: async () => undefined
+      sleep: async () => undefined,
+      statFileSystem: testStatFileSystem
     });
     const secondHarness = createHarness({ keyframeSegments: new Set([2]) });
     const second = await materializeChzzkVodImplementation({
@@ -1377,7 +1605,8 @@ test("동일 semantic plan도 consumer별 artifact를 격리하고 한쪽 삭제
     }, {
       fetchImpl: secondHarness.fetchImpl,
       runProcess: secondHarness.runProcess,
-      sleep: async () => undefined
+      sleep: async () => undefined,
+      statFileSystem: testStatFileSystem
     });
 
     assert.equal(first.manifest.planFingerprint, second.manifest.planFingerprint);
@@ -1474,13 +1703,15 @@ test("hot-load 확장은 기존 clip을 부분집합 base로 재사용하고 새
       { id: "clip-new", startMs: 16_000, endMs: 20_000 }
     ] as const;
     const expandedHarness = createHarness({ keyframeSegments: new Set([1, 2, 4]) });
+    const expandedProgress: ChzzkVodMaterializationProgress[] = [];
     const expanded = await materializeChzzkVod({
       sourceUrl: CANONICAL_URL,
       clips: expandedClips,
       editableRanges,
       handleMs: 0,
       stateDir,
-      base
+      base,
+      onProgress: (progress) => expandedProgress.push({ ...progress })
     }, {
       fetchImpl: expandedHarness.fetchImpl,
       runProcess: expandedHarness.runProcess,
@@ -1488,6 +1719,20 @@ test("hot-load 확장은 기존 clip을 부분집합 base로 재사용하고 새
     });
     assert.equal(expanded.reused, false);
     assert.notEqual(expanded.manifest.materializationId, first.manifest.materializationId);
+    const planningIndex = expandedProgress.findIndex((progress) => (
+      progress.phase === "planning" && progress.detailStage === undefined
+    ));
+    const baseHashIndexes = expandedProgress
+      .map((progress, index) => ({ progress, index }))
+      .filter(({ progress }) => progress.detailStage === "base-hash")
+      .map(({ index }) => index);
+    const downloadingIndex = expandedProgress.findIndex((progress) => (
+      progress.phase === "downloading"
+    ));
+    assert(planningIndex >= 0);
+    assert(baseHashIndexes.length > 0);
+    assert(baseHashIndexes.every((index) => index > planningIndex));
+    assert(downloadingIndex > baseHashIndexes.at(-1)!);
     assert.deepEqual(expandedHarness.calls.segments, [1, 3, 4]);
     assert.deepEqual(expanded.manifest.clipRanges, [
       {
@@ -2120,6 +2365,535 @@ test("비연속 source run은 각각 MP4로 만든 뒤 명시적 duration 경계
     assert.equal(ffmpegCalls.length, 3);
     assert(ffmpegCalls.some((call) => call.args.includes("concat")));
     assert.equal(result.receipt.artifact.durationMs, 8_000);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("최종 검증 실패 뒤 exact run receipt만 재사용하고 손상된 run만 다시 만든다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-run-resume-"));
+  const request = {
+    sourceUrl: CANONICAL_URL,
+    clips: [
+      { id: "first", startMs: 0, endMs: 2_000 },
+      { id: "second", startMs: 16_000, endMs: 18_000 }
+    ],
+    handleMs: 0,
+    stateDir
+  } as const;
+  try {
+    let jobDirectory = "";
+    let firstStagedArtifact = "";
+    const firstHarness = createHarness({ keyframeSegments: new Set([0, 4]) });
+    const firstProcesses: Array<{ command: string; args: readonly string[] }> = [];
+    const firstRunProcess: NonNullable<
+      ChzzkVodMaterializerDependencies["runProcess"]
+    > = async (command, args, options) => {
+      firstProcesses.push({ command, args: [...args] });
+      if (command.includes("ffmpeg") && args.includes("concat")) {
+        const inputPath = args[args.indexOf("-i") + 1];
+        assert.ok(inputPath);
+        jobDirectory = path.dirname(inputPath);
+        firstStagedArtifact = args.at(-1) ?? "";
+      }
+      if (
+        firstStagedArtifact
+        && args.at(-1) === firstStagedArtifact
+        && args.includes("-show_format")
+      ) {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            streams: [
+              { codec_type: "video", codec_name: "h264" },
+              { codec_type: "audio", codec_name: "aac" }
+            ],
+            format: { duration: "99.000000" }
+          }),
+          stderr: ""
+        };
+      }
+      return firstHarness.runProcess(command, args, options);
+    };
+    await assert.rejects(materializeChzzkVod(request, {
+      fetchImpl: firstHarness.fetchImpl,
+      runProcess: firstRunProcess,
+      sleep: async () => undefined
+    }), (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "MEDIA_VERIFICATION_FAILED"
+    ));
+    assert(jobDirectory);
+    assert(firstStagedArtifact);
+    assert.equal(
+      firstProcesses.filter((call) => call.command.includes("ffmpeg")).length,
+      3
+    );
+    await assert.rejects(stat(firstStagedArtifact));
+    await assert.rejects(stat(path.join(jobDirectory, "materialized.mp4")));
+    await assert.rejects(stat(path.join(jobDirectory, "manifest.json")));
+    for (const index of [0, 1]) {
+      assert((await stat(path.join(jobDirectory, `run-${index}.mp4`))).isFile());
+      assert((await stat(path.join(
+        jobDirectory,
+        `run-${index}.receipt.json`
+      ))).isFile());
+      await assert.rejects(stat(path.join(jobDirectory, `run-${index}.ts`)));
+    }
+    const firstReceipt = JSON.parse(await readFile(
+      path.join(jobDirectory, "run-0.receipt.json"),
+      "utf8"
+    )) as {
+      schemaId: string;
+      recipeId: string;
+      sourceVersionId: string;
+      timelineDigest: string;
+      qualityIdentity: string;
+      planFingerprint: string;
+      editableSourceStartMs: number;
+      editableSourceEndMs: number;
+      fetchedSourceStartMs: number;
+      fetchedSourceEndMs: number;
+      decoderPrefixSegmentCount: number;
+      segments: Array<{ key: string; hashSha256: string; sizeBytes: number }>;
+      artifact: {
+        fileName: string;
+        hashSha256: string;
+        sizeBytes: number;
+        durationMs: number;
+        videoCodec: string;
+        audioCodec: string;
+        videoInpointMs: number;
+      };
+    };
+    assert.equal(firstReceipt.schemaId, "chzzk-kirinuki/chzzk-vod-run-receipt-v1");
+    assert.equal(
+      firstReceipt.recipeId,
+      "chzzk-kirinuki/chzzk-vod-run-remux-stream-copy-v1"
+    );
+    assert(firstReceipt.sourceVersionId);
+    assert(firstReceipt.timelineDigest);
+    assert(firstReceipt.qualityIdentity);
+    assert(firstReceipt.planFingerprint);
+    assert.deepEqual([
+      firstReceipt.editableSourceStartMs,
+      firstReceipt.editableSourceEndMs,
+      firstReceipt.fetchedSourceStartMs,
+      firstReceipt.fetchedSourceEndMs,
+      firstReceipt.decoderPrefixSegmentCount
+    ], [0, 2_000, 0, 4_000, 0]);
+    assert.deepEqual(firstReceipt.segments.map((segment) => segment.key), [
+      "0:0:4000"
+    ]);
+    assert.match(firstReceipt.segments[0]?.hashSha256 ?? "", /^[a-f0-9]{64}$/u);
+    assert.equal(firstReceipt.segments[0]?.sizeBytes, 188 * 3);
+    assert.deepEqual({
+      fileName: firstReceipt.artifact.fileName,
+      durationMs: firstReceipt.artifact.durationMs,
+      videoCodec: firstReceipt.artifact.videoCodec,
+      audioCodec: firstReceipt.artifact.audioCodec,
+      videoInpointMs: firstReceipt.artifact.videoInpointMs
+    }, {
+      fileName: "run-0.mp4",
+      durationMs: 4_000,
+      videoCodec: "h264",
+      audioCodec: "aac",
+      videoInpointMs: 0
+    });
+    assert.match(firstReceipt.artifact.hashSha256, /^[a-f0-9]{64}$/u);
+    assert.equal(
+      firstReceipt.artifact.sizeBytes,
+      (await stat(path.join(jobDirectory, "run-0.mp4"))).size
+    );
+
+    const changedReceipt = firstReceipt as unknown as Record<string, unknown>;
+    const changedArtifact = changedReceipt.artifact as Record<string, unknown>;
+    // This remains inside the plan tolerance, so only the exact re-probe check
+    // can distinguish the edited receipt from the real 4,000 ms run.
+    changedArtifact.durationMs = 4_100;
+    await writeFile(
+      path.join(jobDirectory, "run-0.receipt.json"),
+      `${JSON.stringify(changedReceipt)}\n`,
+      "utf8"
+    );
+
+    let secondStagedArtifact = "";
+    const secondHarness = createHarness({ keyframeSegments: new Set([0, 4]) });
+    const secondProcesses: Array<{ command: string; args: readonly string[] }> = [];
+    const secondRunProcess: NonNullable<
+      ChzzkVodMaterializerDependencies["runProcess"]
+    > = async (command, args, options) => {
+      secondProcesses.push({ command, args: [...args] });
+      if (command.includes("ffmpeg") && args.includes("concat")) {
+        secondStagedArtifact = args.at(-1) ?? "";
+      }
+      if (
+        secondStagedArtifact
+        && args.at(-1) === secondStagedArtifact
+        && args.includes("-show_format")
+      ) {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            streams: [
+              { codec_type: "video", codec_name: "h264" },
+              { codec_type: "audio", codec_name: "aac" }
+            ],
+            format: { duration: "99.000000" }
+          }),
+          stderr: ""
+        };
+      }
+      return secondHarness.runProcess(command, args, options);
+    };
+    await assert.rejects(materializeChzzkVod(request, {
+      fetchImpl: secondHarness.fetchImpl,
+      runProcess: secondRunProcess,
+      sleep: async () => undefined
+    }), (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "MEDIA_VERIFICATION_FAILED"
+    ));
+    assert.deepEqual(secondHarness.calls.segments, []);
+    const secondFfmpegCalls = secondProcesses.filter((call) => (
+      call.command.includes("ffmpeg")
+    ));
+    assert.equal(secondFfmpegCalls.length, 2);
+    assert.equal(
+      secondFfmpegCalls.filter((call) => !call.args.includes("concat")).length,
+      1
+    );
+    const secondRemuxCall = secondFfmpegCalls.find((call) => (
+      !call.args.includes("concat")
+    ));
+    assert.ok(secondRemuxCall);
+    assert.match(
+      secondRemuxCall.args[secondRemuxCall.args.indexOf("-i") + 1] ?? "",
+      /run-0\.ts$/u
+    );
+
+    await writeFile(
+      path.join(jobDirectory, "run-1.mp4"),
+      JSON.stringify({ durationMs: 4_000, tampered: true }),
+      "utf8"
+    );
+    const progress: Array<Parameters<
+      NonNullable<MaterializationRequest["onProgress"]>
+    >[0]> = [];
+    const thirdHarness = createHarness({ keyframeSegments: new Set([0, 4]) });
+    const result = await materializeChzzkVod({
+      ...request,
+      onProgress: (value) => progress.push({ ...value })
+    }, {
+      fetchImpl: thirdHarness.fetchImpl,
+      runProcess: thirdHarness.runProcess,
+      sleep: async () => undefined
+    });
+    assert.equal(result.reused, false);
+    assert.deepEqual(thirdHarness.calls.segments, []);
+    const thirdFfmpegCalls = thirdHarness.calls.processes.filter((call) => (
+      call.command.includes("ffmpeg")
+    ));
+    assert.equal(thirdFfmpegCalls.length, 2);
+    assert.equal(
+      thirdFfmpegCalls.filter((call) => !call.args.includes("concat")).length,
+      1
+    );
+    const thirdRemuxCall = thirdFfmpegCalls.find((call) => (
+      !call.args.includes("concat")
+    ));
+    assert.ok(thirdRemuxCall);
+    assert.match(
+      thirdRemuxCall.args[thirdRemuxCall.args.indexOf("-i") + 1] ?? "",
+      /run-1\.ts$/u
+    );
+    for (const stage of [
+      "run-remux",
+      "final-concat",
+      "final-verify",
+      "final-hash",
+      "publishing"
+    ] as const) {
+      assert(progress.some((value) => value.detailStage === stage));
+    }
+    assert(progress.some((value) => (
+      value.detailStage === "run-remux"
+      && value.completedRuns === 2
+      && value.totalRuns === 2
+      && value.processedBytes === value.totalBytes
+    )));
+    assert((await stat(path.join(jobDirectory, "materialized.mp4"))).isFile());
+    assert((await stat(path.join(jobDirectory, "manifest.json"))).isFile());
+    for (const index of [0, 1]) {
+      await assert.rejects(stat(path.join(jobDirectory, `run-${index}.ts`)));
+      await assert.rejects(stat(path.join(jobDirectory, `run-${index}.mp4`)));
+      await assert.rejects(stat(path.join(
+        jobDirectory,
+        `run-${index}.receipt.json`
+      )));
+    }
+    await assert.rejects(stat(path.join(jobDirectory, "runs.concat.txt")));
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("final concat은 실제 staging bytes와 변화 없는 liveness를 주기적으로 보고하고 timer를 정리한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-concat-progress-"));
+  try {
+    const harness = createHarness({ keyframeSegments: new Set([2]) });
+    let intervalCallback: (() => Promise<void>) | undefined;
+    const intervalHandle = Symbol("final-concat-progress");
+    let clearCount = 0;
+    let fileSystemInspectionCount = 0;
+    const progress: Array<Parameters<
+      NonNullable<MaterializationRequest["onProgress"]>
+    >[0]> = [];
+    const runProcess: NonNullable<
+      ChzzkVodMaterializerDependencies["runProcess"]
+    > = async (command, args, options) => {
+      if (command.includes("ffmpeg") && args.includes("concat")) {
+        const targetPath = args.at(-1);
+        assert.ok(targetPath);
+        assert.ok(intervalCallback);
+        const inspectionsBeforePolling = fileSystemInspectionCount;
+        await writeFile(targetPath, '{"durationMs":');
+        await intervalCallback();
+        await appendFile(targetPath, "4000}");
+        await intervalCallback();
+        // An unchanged file must still renew manager activity.
+        for (let index = 0; index < 28; index += 1) {
+          await intervalCallback();
+        }
+        assert.equal(
+          fileSystemInspectionCount - inspectionsBeforePolling,
+          1,
+          "30 liveness polls는 consumer tree를 한 번만 periodic reconcile해야 합니다."
+        );
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return await harness.runProcess(command, args, options);
+    };
+    const result = await materializeChzzkVod({
+      sourceUrl: CANONICAL_URL,
+      clips: [{ id: "concat-progress", startMs: 8_000, endMs: 10_000 }],
+      handleMs: 0,
+      stateDir,
+      onProgress: (value) => progress.push({ ...value })
+    }, {
+      fetchImpl: harness.fetchImpl,
+      runProcess,
+      sleep: async () => undefined,
+      statFileSystem: async () => {
+        fileSystemInspectionCount += 1;
+        return testStatFileSystem();
+      },
+      finalConcatProgressIntervalMs: 7,
+      setFinalConcatProgressInterval: (callback, milliseconds) => {
+        assert.equal(milliseconds, 7);
+        assert.equal(intervalCallback, undefined);
+        intervalCallback = callback;
+        return intervalHandle;
+      },
+      clearFinalConcatProgressInterval: (handle) => {
+        assert.equal(handle, intervalHandle);
+        clearCount += 1;
+      }
+    });
+    assert.equal(result.reused, false);
+    const concatProgress = progress.filter((value) => (
+      value.detailStage === "final-concat"
+    ));
+    assert(concatProgress.length >= 5);
+    const processed = concatProgress.map((value) => value.processedBytes ?? -1);
+    assert.deepEqual(processed, [...processed].sort((left, right) => left - right));
+    assert(processed.some((value, index) => (
+      value > 0 && value === processed[index - 1]
+    )), "변화 없는 staging 파일도 periodic liveness를 보고해야 합니다.");
+    for (const value of concatProgress) {
+      assert.equal(typeof value.totalBytes, "number");
+      assert((value.totalBytes ?? -1) >= (value.processedBytes ?? 0));
+    }
+    assert.equal(clearCount, 1);
+    const progressCountAfterCompletion = progress.length;
+    await intervalCallback?.();
+    assert.equal(progress.length, progressCountAfterCompletion);
+
+    let failedIntervalCallback: (() => Promise<void>) | undefined;
+    const failedHandle = Symbol("failed-final-concat-progress");
+    const failingHarness = createHarness({ keyframeSegments: new Set([2]) });
+    await assert.rejects(materializeChzzkVod({
+      sourceUrl: CANONICAL_URL,
+      clips: [{ id: "concat-progress-failure", startMs: 8_000, endMs: 10_000 }],
+      handleMs: 0,
+      stateDir
+    }, {
+      fetchImpl: failingHarness.fetchImpl,
+      runProcess: async (command, args, options) => (
+        command.includes("ffmpeg") && args.includes("concat")
+          ? { exitCode: 1, stdout: "", stderr: "expected failure" }
+          : await failingHarness.runProcess(command, args, options)
+      ),
+      sleep: async () => undefined,
+      setFinalConcatProgressInterval: (callback) => {
+        failedIntervalCallback = callback;
+        return failedHandle;
+      },
+      clearFinalConcatProgressInterval: (handle) => {
+        assert.equal(handle, failedHandle);
+        clearCount += 1;
+      }
+    }), (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "MEDIA_MUX_FAILED"
+    ));
+    assert.ok(failedIntervalCallback);
+    assert.equal(clearCount, 2);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("final artifact는 verified inode로 atomic replace되고 crash 경계에서도 이전 manifest가 pointer-last로 남는다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-atomic-publish-"));
+  const request = {
+    sourceUrl: CANONICAL_URL,
+    clips: [{ id: "atomic-publish", startMs: 8_000, endMs: 10_000 }],
+    handleMs: 0,
+    stateDir
+  } as const;
+  try {
+    const firstHarness = createHarness({ keyframeSegments: new Set([2]) });
+    const first = await materializeChzzkVod(request, {
+      fetchImpl: firstHarness.fetchImpl,
+      runProcess: firstHarness.runProcess,
+      sleep: async () => undefined
+    });
+    const manifestPath = path.join(path.dirname(first.artifactPath), "manifest.json");
+    const oldManifest = await readFile(manifestPath, "utf8");
+    await writeFile(
+      first.artifactPath,
+      '{"durationMs":4000,"tampered":true}'
+    );
+
+    const retryHarness = createHarness({ keyframeSegments: new Set([2]) });
+    const replacementRunProcess: NonNullable<
+      ChzzkVodMaterializerDependencies["runProcess"]
+    > = async (command, args, options) => {
+      const result = await retryHarness.runProcess(command, args, options);
+      if (command.includes("ffmpeg") && args.includes("concat")) {
+        const targetPath = args.at(-1);
+        assert.ok(targetPath);
+        await appendFile(targetPath, "\n");
+      }
+      return result;
+    };
+    let crashBoundaryObserved = false;
+    await assert.rejects(materializeChzzkVod(request, {
+      fetchImpl: retryHarness.fetchImpl,
+      runProcess: replacementRunProcess,
+      sleep: async () => undefined,
+      afterFinalArtifactPublishBeforeManifest: async () => {
+        crashBoundaryObserved = true;
+        assert((await stat(first.artifactPath)).size > 0);
+        assert.equal(await readFile(manifestPath, "utf8"), oldManifest);
+        assert.equal(
+          await readFile(first.artifactPath, "utf8"),
+          '{"durationMs":4000}\n'
+        );
+        throw new Error("simulated publication crash");
+      }
+    }), /simulated publication crash/u);
+    assert.equal(crashBoundaryObserved, true);
+    assert.equal(await readFile(manifestPath, "utf8"), oldManifest);
+    assert.equal(
+      await readFile(first.artifactPath, "utf8"),
+      '{"durationMs":4000}\n'
+    );
+    assert.equal(await reopenChzzkVodMaterialization({
+      materializationId: first.manifest.materializationId,
+      planFingerprint: first.manifest.planFingerprint,
+      contentId: first.manifest.source.contentId,
+      clips: request.clips,
+      handleMs: request.handleMs,
+      stateDir
+    }), undefined, "old pointer와 새 artifact hash 조합은 fail-closed여야 합니다.");
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("재시작 시 같은 consumer sibling cache까지 64 GiB logical quota에 포함하고 다른 scope·quarantine·lock DB는 제외한다", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-work-quota-"));
+  const request = {
+    sourceUrl: CANONICAL_URL,
+    clips: [{ id: "clip", startMs: 8_000, endMs: 10_000 }],
+    handleMs: 0,
+    stateDir
+  } as const;
+  try {
+    const otherConsumerDirectory = scopedJobDirectory(
+      stateDir,
+      "e".repeat(32),
+      "kirinuki-test-project-other"
+    );
+    await mkdir(otherConsumerDirectory, { recursive: true });
+    const otherConsumerWork = path.join(otherConsumerDirectory, "other.part");
+    await writeFile(otherConsumerWork, "");
+    await truncate(otherConsumerWork, MAX_CHZZK_VOD_WORK_BYTES + 1);
+    const quarantineDirectory = path.join(stateDir, ".purge-quarantine", "orphan");
+    await mkdir(quarantineDirectory, { recursive: true });
+    const quarantineWork = path.join(quarantineDirectory, "old.part");
+    await writeFile(quarantineWork, "");
+    await truncate(quarantineWork, MAX_CHZZK_VOD_WORK_BYTES + 1);
+    const siblingDirectory = scopedJobDirectory(stateDir, "f".repeat(32));
+    await mkdir(siblingDirectory, { recursive: true });
+    const siblingLeaseDatabase = path.join(
+      siblingDirectory,
+      JOB_LEASE_DATABASE_FILENAME
+    );
+    await writeFile(siblingLeaseDatabase, "");
+    await truncate(siblingLeaseDatabase, MAX_CHZZK_VOD_WORK_BYTES + 1);
+
+    const seedHarness = createHarness({ keyframeSegments: new Set([2]) });
+    const seed = await materializeChzzkVod(request, {
+      fetchImpl: seedHarness.fetchImpl,
+      runProcess: seedHarness.runProcess,
+      sleep: async () => undefined
+    });
+    const jobDirectory = path.dirname(seed.artifactPath);
+    await rm(path.join(jobDirectory, "manifest.json"), { force: true });
+    const oversizedWorkFile = path.join(siblingDirectory, "interrupted-run.part");
+    await writeFile(oversizedWorkFile, "");
+    await truncate(oversizedWorkFile, MAX_CHZZK_VOD_WORK_BYTES + 1);
+
+    const retryHarness = createHarness({ keyframeSegments: new Set([2]) });
+    await assert.rejects(materializeChzzkVod(request, {
+      fetchImpl: retryHarness.fetchImpl,
+      runProcess: retryHarness.runProcess,
+      sleep: async () => undefined
+    }), (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "MATERIALIZATION_QUOTA_EXCEEDED"
+    ));
+    assert.deepEqual(retryHarness.calls.segments, []);
+    assert.deepEqual(retryHarness.calls.processes, []);
+
+    await rm(oversizedWorkFile, { force: true });
+    const outsideFile = path.join(stateDir, "outside-user-file.txt");
+    await writeFile(outsideFile, "never-follow");
+    await symlink(outsideFile, path.join(siblingDirectory, "unsafe-link"));
+    const symlinkHarness = createHarness({ keyframeSegments: new Set([2]) });
+    await assert.rejects(materializeChzzkVod(request, {
+      fetchImpl: symlinkHarness.fetchImpl,
+      runProcess: symlinkHarness.runProcess,
+      sleep: async () => undefined
+    }), (error: unknown) => (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "CACHE_INTEGRITY_FAILED"
+    ));
+    assert.deepEqual(symlinkHarness.calls.segments, []);
+    assert.deepEqual(symlinkHarness.calls.processes, []);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

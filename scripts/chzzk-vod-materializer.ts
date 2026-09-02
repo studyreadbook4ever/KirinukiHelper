@@ -4,18 +4,19 @@ import {
   constants as fsConstants,
   createReadStream
 } from "node:fs";
-import type { BigIntStats } from "node:fs";
+import type { BigIntStats, Dirent } from "node:fs";
 import {
   chmod,
-  copyFile,
   lstat,
   mkdir,
   open,
   readFile,
+  readdir,
   realpath,
   rename,
   rm,
   stat,
+  statfs as statFileSystem,
   writeFile
 } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -50,7 +51,8 @@ import type {
 import {
   vodConsumerChzzkContentRoot,
   vodConsumerMaterializationDirectory,
-  vodConsumerScopeHash
+  vodConsumerScopeHash,
+  vodConsumerScopeRootFromHash
 } from "./vod-consumer-scope.js";
 import {
   terminatePosixProcessGroup
@@ -63,6 +65,10 @@ export const LEGACY_CHZZK_VOD_MATERIALIZATION_SCHEMA_ID =
   "chzzk-kirinuki/chzzk-vod-materialization-v1";
 export const CHZZK_VOD_MATERIALIZATION_SCHEMA_ID =
   "chzzk-kirinuki/chzzk-vod-materialization-v2";
+const CHZZK_VOD_RUN_RECEIPT_SCHEMA_ID =
+  "chzzk-kirinuki/chzzk-vod-run-receipt-v1";
+const CHZZK_VOD_RUN_REMUX_RECIPE_ID =
+  "chzzk-kirinuki/chzzk-vod-run-remux-stream-copy-v1";
 export const DEFAULT_CHZZK_VOD_HANDLE_MS = 10_000;
 export const DEFAULT_CHZZK_VOD_STATE_DIRECTORY_NAME =
   "kirinuki-vod-runtime/vod-fragments";
@@ -82,6 +88,17 @@ const MIN_TS_PACKETS = 3;
 const TS_PACKET_BYTES = 188;
 const MAX_SEGMENT_BYTES = 256 * 1024 * 1024;
 const MAX_SAFE_REDIRECTS = 5;
+const MAX_CHZZK_RUN_RECEIPT_BYTES = 2 * 1024 * 1024;
+const MAX_CHZZK_RUN_DURATION_DRIFT_MS = 250;
+/** One consumer's complete managed VOD cache may consume at most 64 GiB logically. */
+export const MAX_CHZZK_VOD_WORK_BYTES = 64 * 1024 * 1024 * 1024;
+/** Keep this much filesystem capacity unused while materializing a VOD. */
+export const MIN_CHZZK_VOD_DISK_HEADROOM_BYTES = 512 * 1024 * 1024;
+const MAX_CHZZK_CONSUMER_SCOPE_ENTRIES = 30_000;
+const DEFAULT_CHZZK_FINAL_CONCAT_PROGRESS_INTERVAL_MS = 2_000;
+const CHZZK_ARTIFACT_VERIFICATION_CHUNK_BYTES: 1048576 = 1048576;
+const CHZZK_FINAL_CONCAT_RECONCILE_EVERY_POLLS = 30;
+const CHZZK_KNOWN_WRITE_RECONCILE_EVERY_COMMITS = 256;
 const CHZZK_JOB_LEASE_SCHEMA_ID = "chzzk-kirinuki/chzzk-vod-job-lease-v3";
 const CHZZK_JOB_LEASE_DATABASE_FILENAME = ".materializing-lock.sqlite3";
 const CHZZK_STORAGE_GENERATION = "v3";
@@ -176,6 +193,17 @@ export interface ChzzkVodMaterializationProgress {
   completedSegments: number;
   totalSegments: number;
   completedBytes: number;
+  detailStage?:
+    | "base-hash"
+    | "run-remux"
+    | "final-concat"
+    | "final-verify"
+    | "final-hash"
+    | "publishing";
+  completedRuns?: number;
+  totalRuns?: number;
+  processedBytes?: number;
+  totalBytes?: number;
 }
 
 export interface ChzzkVodMaterializationRequest {
@@ -211,13 +239,33 @@ export interface ReopenChzzkVodMaterializationRequest
   handleMs?: number;
   stateDir?: string;
   signal?: AbortSignal;
+  onProgress?: (progress: ChzzkVodMaterializationProgress) => void;
 }
 
 export interface ChzzkVodMaterializationResult {
   manifest: ChzzkVodMaterialization;
   receipt: ChzzkVodMaterializationManifest;
   artifactPath: string;
+  artifactVerification: ChzzkVodMaterializationArtifactVerification;
   reused: boolean;
+}
+
+export interface ChzzkVodMaterializationArtifactVerification {
+  identity: {
+    size: number;
+    mtimeMs: number;
+    rawDev: string;
+    dev: string;
+    ino: string;
+    nlink: string;
+    mtimeNs: string;
+    ctimeNs: string;
+    regular: boolean;
+    symlink: boolean;
+  };
+  hashSha256: string;
+  chunkSizeBytes: 1048576;
+  chunkHashesSha256: readonly string[];
 }
 
 export interface ProcessResult {
@@ -246,6 +294,20 @@ export interface ChzzkVodMaterializerDependencies {
   beforeStaleJobLeaseCompareAndSwap?: () => Promise<void>;
   /** Shorter cadence used only by deterministic lock protocol tests. */
   jobLeaseHeartbeatIntervalMs?: number;
+  /** Deterministic disk-capacity fixture used by quota protocol tests. */
+  statFileSystem?: (directory: string) => Promise<{
+    bavail: number | bigint;
+    bsize: number | bigint;
+  }>;
+  /** Injectable cadence used by deterministic final-concat liveness tests. */
+  setFinalConcatProgressInterval?: (
+    callback: () => Promise<void>,
+    milliseconds: number
+  ) => unknown;
+  clearFinalConcatProgressInterval?: (handle: unknown) => void;
+  finalConcatProgressIntervalMs?: number;
+  /** Deterministic crash-boundary hook used only by publication tests. */
+  afterFinalArtifactPublishBeforeManifest?: () => Promise<void>;
 }
 
 export class ChzzkVodMaterializationError extends Error {
@@ -300,6 +362,44 @@ interface MaterializationCheckpoint {
   sourceVersionId: string;
   qualityIdentity: string;
   segments: readonly SegmentCheckpointEntry[];
+}
+
+interface ChzzkVodRunReceiptSegment {
+  key: string;
+  hashSha256: string;
+  sizeBytes: number;
+}
+
+interface ChzzkVodRunReceipt {
+  schemaId: typeof CHZZK_VOD_RUN_RECEIPT_SCHEMA_ID;
+  recipeId: typeof CHZZK_VOD_RUN_REMUX_RECIPE_ID;
+  sourceVersionId: string;
+  timelineDigest: string;
+  qualityIdentity: string;
+  planFingerprint: string;
+  runIndex: number;
+  editableSourceStartMs: number;
+  editableSourceEndMs: number;
+  fetchedSourceStartMs: number;
+  fetchedSourceEndMs: number;
+  decoderPrefixSegmentCount: number;
+  segments: readonly ChzzkVodRunReceiptSegment[];
+  artifact: {
+    fileName: string;
+    hashSha256: string;
+    sizeBytes: number;
+    durationMs: number;
+    videoCodec: "h264";
+    audioCodec: "aac";
+    videoInpointMs: number;
+  };
+}
+
+interface ChzzkVodRunCacheIdentity {
+  sourceVersionId: string;
+  timelineDigest: string;
+  qualityIdentity: string;
+  planFingerprint: string;
 }
 
 interface ProbeStream {
@@ -2040,21 +2140,59 @@ async function ensurePrivateDirectory(directory: string): Promise<void> {
   await chmod(directory, 0o700);
 }
 
+async function syncChzzkParentDirectory(filePath: string): Promise<void> {
+  // libuv's Windows rename uses replacement semantics, but Node does not
+  // expose a durable directory handle there. The file itself is still synced
+  // before rename; POSIX filesystems additionally persist the directory entry.
+  if (process.platform === "win32") {
+    return;
+  }
+  let directory: FileHandle | undefined;
+  try {
+    directory = await open(
+      path.dirname(filePath),
+      fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY || 0)
+    );
+    await directory.sync();
+  } catch (error) {
+    if (["EINVAL", "ENOTSUP"].includes(nodeErrorCode(error) || "")) {
+      return;
+    }
+    fail("로컬 CHZZK 게시 경로를 안전하게 동기화하지 못했습니다.", "LOCAL_WRITE_FAILED");
+  } finally {
+    await directory?.close().catch(() => undefined);
+  }
+}
+
 async function atomicWriteJson(
   filePath: string,
   value: unknown,
-  beforePublish?: () => void
+  beforePublish?: () => void,
+  maximumBytes?: number,
+  syncParentAfterPublish = false
 ): Promise<void> {
   const temporary = `${filePath}.tmp-${randomBytes(8).toString("hex")}`;
+  const serialized = `${JSON.stringify(value)}\n`;
+  if (
+    maximumBytes !== undefined
+    && Buffer.byteLength(serialized, "utf8") > maximumBytes
+  ) {
+    fail("로컬 검증 문서가 안전한 저장 크기 상한을 넘었습니다.", "LOCAL_WRITE_FAILED");
+  }
+  let output: FileHandle | undefined;
   try {
-    await writeFile(temporary, `${JSON.stringify(value)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-      flag: "wx"
-    });
+    output = await open(temporary, "wx", 0o600);
+    await output.writeFile(serialized, { encoding: "utf8" });
+    await output.sync();
+    await output.close();
+    output = undefined;
     beforePublish?.();
     await rename(temporary, filePath);
+    if (syncParentAfterPublish) {
+      await syncChzzkParentDirectory(filePath);
+    }
   } finally {
+    await output?.close().catch(() => undefined);
     await rm(temporary, { force: true }).catch(() => undefined);
   }
 }
@@ -2088,6 +2226,274 @@ async function sha256File(
     hash.update(chunk as Buffer);
   }
   return hash.digest("hex");
+}
+
+interface VerifiedChzzkPrivateFile {
+  status: BigIntStats;
+  hashSha256: string;
+  sizeBytes: number;
+  chunkHashesSha256?: readonly string[];
+}
+
+function normalizedChzzkFileDeviceId(value: bigint): bigint {
+  return process.platform === "win32" ? BigInt.asUintN(32, value) : value;
+}
+
+function sameChzzkFileObject(
+  left: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">,
+  right: Pick<BigIntStats, "dev" | "ino" | "size" | "nlink">
+): boolean {
+  return normalizedChzzkFileDeviceId(left.dev)
+      === normalizedChzzkFileDeviceId(right.dev)
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.nlink === right.nlink;
+}
+
+function sameChzzkFileSnapshot(
+  left: BigIntStats,
+  right: BigIntStats
+): boolean {
+  return sameChzzkFileObject(left, right)
+    && left.mode === right.mode
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs;
+}
+
+function sameChzzkFileContentSnapshot(
+  left: BigIntStats,
+  right: BigIntStats
+): boolean {
+  return sameChzzkFileObject(left, right)
+    && left.mode === right.mode
+    && left.mtimeNs === right.mtimeNs;
+}
+
+function chzzkReadOnlyOpenFlags(): number {
+  return process.platform === "win32"
+    ? fsConstants.O_RDONLY
+    : fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
+}
+
+function chzzkReadWriteOpenFlags(): number {
+  return process.platform === "win32"
+    ? fsConstants.O_RDWR
+    : fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW || 0);
+}
+
+function validatedChzzkPrivateFileSize(
+  status: BigIntStats,
+  maximumBytes = Number.MAX_SAFE_INTEGER
+): number {
+  if (
+    !status.isFile()
+    || status.nlink !== 1n
+    || status.size <= 0n
+    || status.size > BigInt(maximumBytes)
+  ) {
+    fail("로컬 CHZZK 캐시 파일 형식이 안전하지 않습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+  return Number(status.size);
+}
+
+async function assertChzzkNamedPathMatchesOpenFile(
+  filePath: string,
+  status: BigIntStats
+): Promise<BigIntStats> {
+  const named = await lstat(filePath, { bigint: true }).catch(() => undefined);
+  if (
+    !named
+    || named.isSymbolicLink()
+    || !named.isFile()
+    || !sameChzzkFileObject(named, status)
+  ) {
+    fail("로컬 CHZZK 캐시 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+  return named;
+}
+
+async function hashChzzkFileHandle(
+  handle: FileHandle,
+  sizeBytes: number,
+  signal?: AbortSignal,
+  onProgress?: (processedBytes: number) => void,
+  includeArtifactChunks = false
+): Promise<{ hashSha256: string; chunkHashesSha256?: readonly string[] }> {
+  const digest = createHash("sha256");
+  const chunk = Buffer.allocUnsafe(
+    includeArtifactChunks
+      ? CHZZK_ARTIFACT_VERIFICATION_CHUNK_BYTES
+      : 4 * 1024 * 1024
+  );
+  const chunkHashesSha256 = includeArtifactChunks ? [] as string[] : undefined;
+  let position = 0;
+  while (position < sizeBytes) {
+    abortIfRequested(signal);
+    const length = Math.min(chunk.byteLength, sizeBytes - position);
+    let chunkOffset = 0;
+    while (chunkOffset < length) {
+      const { bytesRead } = await handle.read(
+        chunk,
+        chunkOffset,
+        length - chunkOffset,
+        position + chunkOffset
+      );
+      if (bytesRead <= 0) {
+        fail("로컬 CHZZK 캐시를 끝까지 읽지 못했습니다.", "CACHE_INTEGRITY_FAILED");
+      }
+      chunkOffset += bytesRead;
+    }
+    const exactChunk = chunk.subarray(0, length);
+    digest.update(exactChunk);
+    chunkHashesSha256?.push(
+      createHash("sha256").update(exactChunk).digest("hex")
+    );
+    position += length;
+    onProgress?.(position);
+  }
+  return {
+    hashSha256: digest.digest("hex"),
+    ...(chunkHashesSha256
+      ? { chunkHashesSha256: Object.freeze(chunkHashesSha256) }
+      : {})
+  };
+}
+
+async function inspectChzzkPrivateFile(
+  filePath: string,
+  signal?: AbortSignal,
+  onProgress?: (processedBytes: number, totalBytes: number) => void,
+  includeArtifactChunks = false
+): Promise<VerifiedChzzkPrivateFile> {
+  abortIfRequested(signal);
+  let handle: FileHandle;
+  try {
+    handle = await open(filePath, chzzkReadOnlyOpenFlags());
+  } catch {
+    fail("로컬 CHZZK 캐시를 안전하게 열지 못했습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+  try {
+    const before = await handle.stat({ bigint: true });
+    const sizeBytes = validatedChzzkPrivateFileSize(before);
+    const namedBefore = await assertChzzkNamedPathMatchesOpenFile(
+      filePath,
+      before
+    );
+    const verification = await hashChzzkFileHandle(
+      handle,
+      sizeBytes,
+      signal,
+      onProgress
+        ? (processedBytes) => onProgress(processedBytes, sizeBytes)
+        : undefined,
+      includeArtifactChunks
+    );
+    const after = await handle.stat({ bigint: true });
+    if (!sameChzzkFileSnapshot(before, after)) {
+      fail("로컬 CHZZK 캐시가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+    }
+    const namedAfter = await assertChzzkNamedPathMatchesOpenFile(
+      filePath,
+      after
+    );
+    if (!sameChzzkFileSnapshot(namedBefore, namedAfter)) {
+      fail("로컬 CHZZK 캐시 경로가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+    }
+    return {
+      status: namedAfter,
+      hashSha256: verification.hashSha256,
+      sizeBytes,
+      ...(verification.chunkHashesSha256
+        ? { chunkHashesSha256: verification.chunkHashesSha256 }
+        : {})
+    };
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+function artifactVerificationFromPrivateFile(
+  verified: VerifiedChzzkPrivateFile
+): ChzzkVodMaterializationArtifactVerification {
+  if (
+    !verified.chunkHashesSha256
+    || verified.chunkHashesSha256.length !== Math.ceil(
+      verified.sizeBytes / CHZZK_ARTIFACT_VERIFICATION_CHUNK_BYTES
+    )
+  ) {
+    fail(
+      "최종 로컬 MP4의 구간 무결성 검증값을 만들지 못했습니다.",
+      "CACHE_INTEGRITY_FAILED"
+    );
+  }
+  return Object.freeze({
+    identity: Object.freeze({
+      size: verified.sizeBytes,
+      mtimeMs: Number(verified.status.mtimeNs) / 1_000_000,
+      rawDev: verified.status.dev.toString(),
+      dev: normalizedChzzkFileDeviceId(verified.status.dev).toString(),
+      ino: verified.status.ino.toString(),
+      nlink: verified.status.nlink.toString(),
+      mtimeNs: verified.status.mtimeNs.toString(),
+      ctimeNs: verified.status.ctimeNs.toString(),
+      regular: verified.status.isFile(),
+      symlink: verified.status.isSymbolicLink()
+    }),
+    hashSha256: verified.hashSha256,
+    chunkSizeBytes: CHZZK_ARTIFACT_VERIFICATION_CHUNK_BYTES,
+    chunkHashesSha256: Object.freeze([...verified.chunkHashesSha256])
+  });
+}
+
+async function syncChzzkPrivateFile(filePath: string): Promise<void> {
+  let handle: FileHandle;
+  try {
+    handle = await open(filePath, chzzkReadWriteOpenFlags());
+  } catch {
+    fail("로컬 CHZZK 캐시를 안전하게 동기화하지 못했습니다.", "LOCAL_WRITE_FAILED");
+  }
+  try {
+    const before = await handle.stat({ bigint: true });
+    validatedChzzkPrivateFileSize(before);
+    await assertChzzkNamedPathMatchesOpenFile(filePath, before);
+    await handle.sync();
+    const after = await handle.stat({ bigint: true });
+    if (!sameChzzkFileSnapshot(before, after)) {
+      fail("로컬 CHZZK 캐시가 동기화 중 바뀌었습니다.", "LOCAL_WRITE_FAILED");
+    }
+    await assertChzzkNamedPathMatchesOpenFile(filePath, after);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+async function readChzzkPrivateJson(
+  filePath: string,
+  maximumBytes: number,
+  signal?: AbortSignal
+): Promise<unknown> {
+  abortIfRequested(signal);
+  let handle: FileHandle;
+  try {
+    handle = await open(filePath, chzzkReadOnlyOpenFlags());
+  } catch {
+    fail("로컬 CHZZK 검증 문서를 안전하게 열지 못했습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+  try {
+    const before = await handle.stat({ bigint: true });
+    validatedChzzkPrivateFileSize(before, maximumBytes);
+    await assertChzzkNamedPathMatchesOpenFile(filePath, before);
+    const serialized = await handle.readFile({ encoding: "utf8" });
+    abortIfRequested(signal);
+    const after = await handle.stat({ bigint: true });
+    if (!sameChzzkFileSnapshot(before, after)) {
+      fail("로컬 CHZZK 검증 문서가 읽는 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+    }
+    await assertChzzkNamedPathMatchesOpenFile(filePath, after);
+    return JSON.parse(serialized) as unknown;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 function validateTransportStreamBytes(bytes: Uint8Array): void {
@@ -2178,8 +2584,9 @@ async function saveCheckpoint(
   checkpointPath: string,
   resolved: ResolvedChzzkVod,
   entries: ReadonlyMap<string, SegmentCheckpointEntry>,
-  beforePublish?: () => void
-): Promise<void> {
+  beforePublish?: () => void,
+  assertWriteCapacity?: (bytes: number) => void
+): Promise<number> {
   const value: MaterializationCheckpoint = {
     schemaId: "chzzk-kirinuki/chzzk-vod-checkpoint-v2",
     canonicalUrl: resolved.canonicalUrl,
@@ -2189,7 +2596,352 @@ async function saveCheckpoint(
     qualityIdentity: qualityIdentity(resolved.quality),
     segments: [...entries.values()].sort((left, right) => left.key.localeCompare(right.key))
   };
+  const sizeBytes = Buffer.byteLength(`${JSON.stringify(value)}\n`, "utf8");
+  assertWriteCapacity?.(sizeBytes);
   await atomicWriteJson(checkpointPath, value, beforePublish);
+  return sizeBytes;
+}
+
+export function assertChzzkVodWorkByteQuota(
+  completedBytes: number,
+  nextBytes: number
+): number {
+  if (
+    !Number.isSafeInteger(completedBytes)
+    || !Number.isSafeInteger(nextBytes)
+    || completedBytes < 0
+    || nextBytes < 0
+    || completedBytes > MAX_CHZZK_VOD_WORK_BYTES - nextBytes
+  ) {
+    fail(
+      "CHZZK VOD 작업 파일이 64 GiB 안전 상한을 넘었습니다.",
+      "MATERIALIZATION_QUOTA_EXCEEDED"
+    );
+  }
+  return completedBytes + nextBytes;
+}
+
+function availableChzzkFileSystemBytes(fileSystem: {
+  bavail: number | bigint;
+  bsize: number | bigint;
+}): bigint {
+  let availableBlocks: bigint;
+  let blockSize: bigint;
+  try {
+    availableBlocks = BigInt(fileSystem.bavail);
+    blockSize = BigInt(fileSystem.bsize);
+  } catch {
+    fail(
+      "CHZZK VOD 작업 디스크의 여유 공간 값이 올바르지 않습니다.",
+      "DISK_SPACE_CHECK_FAILED"
+    );
+  }
+  if (availableBlocks < 0n || blockSize <= 0n) {
+    fail(
+      "CHZZK VOD 작업 디스크의 여유 공간 값이 올바르지 않습니다.",
+      "DISK_SPACE_CHECK_FAILED"
+    );
+  }
+  return availableBlocks * blockSize;
+}
+
+export async function assertChzzkDiskHeadroom(
+  directory: string,
+  additionalBytes = 0,
+  inspectFileSystem: NonNullable<
+    ChzzkVodMaterializerDependencies["statFileSystem"]
+  > = statFileSystem
+): Promise<void> {
+  if (
+    !Number.isSafeInteger(additionalBytes)
+    || additionalBytes < 0
+    || additionalBytes > MAX_CHZZK_VOD_WORK_BYTES
+  ) {
+    fail("CHZZK VOD 예상 작업 크기가 올바르지 않습니다.", "MATERIALIZATION_QUOTA_EXCEEDED");
+  }
+  let fileSystem: Awaited<ReturnType<typeof inspectFileSystem>>;
+  try {
+    fileSystem = await inspectFileSystem(directory);
+  } catch {
+    fail(
+      "CHZZK VOD 작업 디스크의 여유 공간을 확인하지 못했습니다.",
+      "DISK_SPACE_CHECK_FAILED"
+    );
+  }
+  const availableBytes = availableChzzkFileSystemBytes(fileSystem);
+  const requiredBytes = BigInt(additionalBytes)
+    + BigInt(MIN_CHZZK_VOD_DISK_HEADROOM_BYTES);
+  if (availableBytes < requiredBytes) {
+    fail(
+      "CHZZK VOD를 안전하게 준비할 디스크 여유 공간이 부족합니다.",
+      "INSUFFICIENT_DISK_SPACE"
+    );
+  }
+}
+
+function isChzzkJobLeaseDatabaseFile(fileName: string): boolean {
+  return fileName === CHZZK_JOB_LEASE_DATABASE_FILENAME
+    || ["-journal", "-shm", "-wal"].some((suffix) => (
+      fileName === `${CHZZK_JOB_LEASE_DATABASE_FILENAME}${suffix}`
+    ));
+}
+
+async function chzzkConsumerScopeBytes(
+  consumerScopeDirectory: string
+): Promise<number> {
+  let rootStatus: BigIntStats;
+  try {
+    rootStatus = await lstat(consumerScopeDirectory, { bigint: true });
+  } catch {
+    fail("CHZZK VOD 소비자 캐시를 검사하지 못했습니다.", "DISK_SPACE_CHECK_FAILED");
+  }
+  if (!rootStatus.isDirectory() || rootStatus.isSymbolicLink()) {
+    fail("CHZZK VOD 소비자 캐시 경계가 안전하지 않습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+
+  const pendingDirectories = [consumerScopeDirectory];
+  let entryCount = 0;
+  let totalBytes = 0;
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop();
+    if (!directory) {
+      continue;
+    }
+    let beforeDirectory: BigIntStats;
+    let entries: Dirent<string>[];
+    try {
+      beforeDirectory = await lstat(directory, { bigint: true });
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      fail("CHZZK VOD 소비자 캐시를 검사하지 못했습니다.", "DISK_SPACE_CHECK_FAILED");
+    }
+    if (!beforeDirectory.isDirectory() || beforeDirectory.isSymbolicLink()) {
+      fail("CHZZK VOD 소비자 캐시에 안전하지 않은 경로가 있습니다.", "CACHE_INTEGRITY_FAILED");
+    }
+    entryCount += entries.length;
+    if (entryCount > MAX_CHZZK_CONSUMER_SCOPE_ENTRIES) {
+      fail(
+        "CHZZK VOD 소비자 캐시 항목 수가 안전 상한을 넘었습니다.",
+        "MATERIALIZATION_QUOTA_EXCEEDED"
+      );
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name);
+      let entryStatus: BigIntStats;
+      try {
+        entryStatus = await lstat(entryPath, { bigint: true });
+      } catch {
+        fail("CHZZK VOD 소비자 캐시 항목을 검사하지 못했습니다.", "DISK_SPACE_CHECK_FAILED");
+      }
+      if (entry.isSymbolicLink() || entryStatus.isSymbolicLink()) {
+        fail("CHZZK VOD 소비자 캐시에 symlink가 있습니다.", "CACHE_INTEGRITY_FAILED");
+      }
+      if (entryStatus.isDirectory()) {
+        if (!entry.isDirectory()) {
+          fail("CHZZK VOD 소비자 캐시가 검사 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+        }
+        pendingDirectories.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile() || !entryStatus.isFile() || entryStatus.nlink !== 1n) {
+        fail("CHZZK VOD 소비자 캐시에 안전하지 않은 파일이 있습니다.", "CACHE_INTEGRITY_FAILED");
+      }
+      if (isChzzkJobLeaseDatabaseFile(entry.name)) {
+        continue;
+      }
+      if (entryStatus.size < 0n || entryStatus.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+        fail("CHZZK VOD 소비자 캐시 크기를 안전하게 계산하지 못했습니다.", "MATERIALIZATION_QUOTA_EXCEEDED");
+      }
+      totalBytes = assertChzzkVodWorkByteQuota(
+        totalBytes,
+        Number(entryStatus.size)
+      );
+    }
+    let afterDirectory: BigIntStats;
+    try {
+      afterDirectory = await lstat(directory, { bigint: true });
+    } catch {
+      fail("CHZZK VOD 소비자 캐시가 검사 중 바뀌었습니다.", "DISK_SPACE_CHECK_FAILED");
+    }
+    if (
+      !afterDirectory.isDirectory()
+      || afterDirectory.isSymbolicLink()
+      || normalizedChzzkFileDeviceId(beforeDirectory.dev)
+        !== normalizedChzzkFileDeviceId(afterDirectory.dev)
+      || beforeDirectory.ino !== afterDirectory.ino
+    ) {
+      fail("CHZZK VOD 소비자 캐시가 검사 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+    }
+  }
+  return totalBytes;
+}
+
+export async function assertChzzkConsumerScopeBudget(
+  consumerScopeDirectory: string,
+  additionalBytes: number,
+  inspectFileSystem: NonNullable<
+    ChzzkVodMaterializerDependencies["statFileSystem"]
+  >,
+  additionalDiskBytes = additionalBytes
+): Promise<number> {
+  const currentBytes = await chzzkConsumerScopeBytes(consumerScopeDirectory);
+  const projectedBytes = assertChzzkVodWorkByteQuota(
+    currentBytes,
+    additionalBytes
+  );
+  await assertChzzkDiskHeadroom(
+    consumerScopeDirectory,
+    additionalDiskBytes,
+    inspectFileSystem
+  );
+  return projectedBytes;
+}
+
+class ChzzkConsumerScopeBudgetTracker {
+  private trackedLogicalBytes = 0;
+  private availableBeyondHeadroom = 0n;
+  private knownCommitsSinceReconcile = 0;
+  private readonly consumerScopeDirectory: string;
+  private readonly inspectFileSystem: NonNullable<
+    ChzzkVodMaterializerDependencies["statFileSystem"]
+  >;
+
+  constructor(
+    consumerScopeDirectory: string,
+    inspectFileSystem: NonNullable<
+      ChzzkVodMaterializerDependencies["statFileSystem"]
+    >
+  ) {
+    this.consumerScopeDirectory = consumerScopeDirectory;
+    this.inspectFileSystem = inspectFileSystem;
+  }
+
+  async refreshDiskHeadroom(): Promise<void> {
+    let fileSystem: Awaited<ReturnType<typeof this.inspectFileSystem>>;
+    try {
+      fileSystem = await this.inspectFileSystem(this.consumerScopeDirectory);
+    } catch {
+      fail(
+        "CHZZK VOD 작업 디스크의 여유 공간을 확인하지 못했습니다.",
+        "DISK_SPACE_CHECK_FAILED"
+      );
+    }
+    const availableBytes = availableChzzkFileSystemBytes(fileSystem);
+    const headroom = BigInt(MIN_CHZZK_VOD_DISK_HEADROOM_BYTES);
+    if (availableBytes < headroom) {
+      fail(
+        "CHZZK VOD를 안전하게 준비할 디스크 여유 공간이 부족합니다.",
+        "INSUFFICIENT_DISK_SPACE"
+      );
+    }
+    this.availableBeyondHeadroom = availableBytes - headroom;
+  }
+
+  async reconcile(): Promise<void> {
+    const currentBytes = await chzzkConsumerScopeBytes(
+      this.consumerScopeDirectory
+    );
+    await this.refreshDiskHeadroom();
+    this.trackedLogicalBytes = currentBytes;
+    this.knownCommitsSinceReconcile = 0;
+  }
+
+  assertCapacity(additionalBytes: number): void {
+    assertChzzkVodWorkByteQuota(this.trackedLogicalBytes, additionalBytes);
+    if (BigInt(additionalBytes) > this.availableBeyondHeadroom) {
+      fail(
+        "CHZZK VOD를 안전하게 준비할 디스크 여유 공간이 부족합니다.",
+        "INSUFFICIENT_DISK_SPACE"
+      );
+    }
+  }
+
+  recordWrittenBytes(nextBytes: number): void {
+    this.assertCapacity(nextBytes);
+    this.trackedLogicalBytes = assertChzzkVodWorkByteQuota(
+      this.trackedLogicalBytes,
+      nextBytes
+    );
+    this.availableBeyondHeadroom -= BigInt(nextBytes);
+  }
+
+  recordDeletedBytes(deletedBytes: number): void {
+    if (
+      !Number.isSafeInteger(deletedBytes)
+      || deletedBytes < 0
+      || deletedBytes > this.trackedLogicalBytes
+    ) {
+      fail(
+        "CHZZK VOD 소비자 캐시 삭제 바이트를 안전하게 반영하지 못했습니다.",
+        "CACHE_INTEGRITY_FAILED"
+      );
+    }
+    this.trackedLogicalBytes -= deletedBytes;
+    // Do not credit physical free space until the next statfs reconciliation:
+    // sparse/compressed files make logical size an unsafe disk-space proxy.
+  }
+
+  async noteKnownCommit(): Promise<void> {
+    this.knownCommitsSinceReconcile += 1;
+    if (
+      this.knownCommitsSinceReconcile
+      >= CHZZK_KNOWN_WRITE_RECONCILE_EVERY_COMMITS
+    ) {
+      await this.reconcile();
+    }
+  }
+}
+
+async function createChzzkConsumerScopeBudgetTracker(
+  consumerScopeDirectory: string,
+  inspectFileSystem: NonNullable<
+    ChzzkVodMaterializerDependencies["statFileSystem"]
+  >
+): Promise<ChzzkConsumerScopeBudgetTracker> {
+  const tracker = new ChzzkConsumerScopeBudgetTracker(
+    consumerScopeDirectory,
+    inspectFileSystem
+  );
+  await tracker.reconcile();
+  return tracker;
+}
+
+async function managedChzzkFileSizeIfExists(
+  filePath: string
+): Promise<number | undefined> {
+  let status: BigIntStats | undefined;
+  try {
+    status = await lstat(filePath, { bigint: true });
+  } catch (error) {
+    if (nodeErrorCode(error) === "ENOENT") {
+      return undefined;
+    }
+    fail("CHZZK VOD 관리 파일을 검사하지 못했습니다.", "DISK_SPACE_CHECK_FAILED");
+  }
+  if (
+    !status.isFile()
+    || status.isSymbolicLink()
+    || status.nlink !== 1n
+    || status.size < 0n
+    || status.size > BigInt(Number.MAX_SAFE_INTEGER)
+  ) {
+    fail("CHZZK VOD 관리 파일 형식이 안전하지 않습니다.", "CACHE_INTEGRITY_FAILED");
+  }
+  return Number(status.size);
+}
+
+async function removeTrackedChzzkFile(
+  filePath: string,
+  budgetTracker: ChzzkConsumerScopeBudgetTracker
+): Promise<number> {
+  const sizeBytes = await managedChzzkFileSizeIfExists(filePath);
+  if (sizeBytes === undefined) {
+    return 0;
+  }
+  await rm(filePath);
+  budgetTracker.recordDeletedBytes(sizeBytes);
+  await budgetTracker.refreshDiskHeadroom();
+  return sizeBytes;
 }
 
 class ExpiredTransferAuthorization extends Error {}
@@ -2199,7 +2951,9 @@ async function downloadSegmentAttempt(
   url: URL,
   targetPath: string,
   signal?: AbortSignal,
-  assertLeaseOwned?: () => void
+  assertLeaseOwned?: () => void,
+  assertWriteCapacity?: (prospectiveBytes: number) => Promise<void>,
+  recordWrittenBytes?: (nextWriteBytes: number) => Promise<void>
 ): Promise<SegmentCheckpointEntry> {
   abortIfRequested(signal);
   const response = await fetchWithValidatedRedirects(
@@ -2230,10 +2984,24 @@ async function downloadSegmentAttempt(
     await response.body?.cancel().catch(() => undefined);
     fail("CHZZK 미디어 조각을 받지 못했습니다.", "SEGMENT_REQUEST_FAILED");
   }
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_SEGMENT_BYTES) {
+  const declaredLengthHeader = response.headers.get("content-length");
+  let declaredLength: number | undefined;
+  if (declaredLengthHeader !== null) {
+    const normalizedLength = declaredLengthHeader.trim();
+    if (!/^(?:0|[1-9]\d*)$/u.test(normalizedLength)) {
+      await response.body?.cancel().catch(() => undefined);
+      fail("CHZZK 미디어 조각 길이 정보가 올바르지 않습니다.", "INVALID_SEGMENT");
+    }
+    declaredLength = Number(normalizedLength);
+  }
+  if (
+    declaredLength !== undefined
+    && (!Number.isSafeInteger(declaredLength) || declaredLength > MAX_SEGMENT_BYTES)
+  ) {
+    await response.body?.cancel().catch(() => undefined);
     fail("CHZZK 미디어 조각 하나가 허용 크기를 초과했습니다.", "INVALID_SEGMENT");
   }
+  await assertWriteCapacity?.(declaredLength ?? MAX_SEGMENT_BYTES);
   if (!response.body) {
     fail("CHZZK 미디어 조각 응답 본문이 없습니다.", "INVALID_SEGMENT");
   }
@@ -2253,10 +3021,18 @@ async function downloadSegmentAttempt(
       if (!(chunk.value instanceof Uint8Array) || chunk.value.byteLength === 0) {
         continue;
       }
-      sizeBytes += chunk.value.byteLength;
-      if (sizeBytes > MAX_SEGMENT_BYTES) {
+      const nextSizeBytes = sizeBytes + chunk.value.byteLength;
+      if (nextSizeBytes > MAX_SEGMENT_BYTES) {
         fail("CHZZK 미디어 조각 하나가 허용 크기를 초과했습니다.", "INVALID_SEGMENT");
       }
+      // Reserve the actual incoming chunk before trusting either the declared
+      // length or writing a byte. A dishonest low Content-Length therefore
+      // cannot bypass the consumer quota or disk-headroom gate.
+      await recordWrittenBytes?.(chunk.value.byteLength);
+      if (declaredLength !== undefined && nextSizeBytes > declaredLength) {
+        fail("CHZZK 미디어 조각이 알린 길이를 초과했습니다.", "INVALID_SEGMENT");
+      }
+      sizeBytes = nextSizeBytes;
       hash.update(chunk.value);
       await writeAll(output, chunk.value);
     }
@@ -2265,8 +3041,7 @@ async function downloadSegmentAttempt(
     output = undefined;
     abortIfRequested(signal);
     if (
-      Number.isFinite(declaredLength)
-      && declaredLength >= 0
+      declaredLength !== undefined
       && declaredLength !== sizeBytes
     ) {
       fail("CHZZK 미디어 조각 길이가 응답 정보와 다릅니다.", "INVALID_SEGMENT");
@@ -2315,7 +3090,11 @@ async function ensureDownloadedSegment({
   refreshResolved,
   sleep,
   signal,
-  assertLeaseOwned
+  assertLeaseOwned,
+  assertWriteCapacity,
+  recordWrittenBytes,
+  reconcileWriteBudget,
+  removeTrackedFile
 }: {
   segment: ExpandedMpdSegment;
   segmentDirectory: string;
@@ -2326,15 +3105,33 @@ async function ensureDownloadedSegment({
   sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   signal?: AbortSignal;
   assertLeaseOwned?: () => void;
-}): Promise<{ filePath: string; downloadedBytes: number; reused: boolean }> {
+  assertWriteCapacity?: (prospectiveBytes: number) => Promise<void>;
+  recordWrittenBytes?: (nextWriteBytes: number) => Promise<void>;
+  reconcileWriteBudget?: () => Promise<void>;
+  removeTrackedFile?: (filePath: string) => Promise<void>;
+}): Promise<{
+  filePath: string;
+  downloadedBytes: number;
+  reused: boolean;
+  sizeBytes: number;
+}> {
   const key = segmentSemanticKey(segment);
   const filePath = path.join(segmentDirectory, segmentCacheFilename(segment));
   const checkpointEntry = checkpoint.get(key);
   if (await reusableSegment(filePath, checkpointEntry)) {
-    return { filePath, downloadedBytes: 0, reused: true };
+    return {
+      filePath,
+      downloadedBytes: 0,
+      reused: true,
+      sizeBytes: checkpointEntry!.sizeBytes
+    };
   }
   assertLeaseOwned?.();
-  await rm(filePath, { force: true }).catch(() => undefined);
+  if (removeTrackedFile) {
+    await removeTrackedFile(filePath);
+  } else {
+    await rm(filePath, { force: true }).catch(() => undefined);
+  }
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_SEGMENT_DOWNLOAD_ATTEMPTS; attempt += 1) {
     abortIfRequested(signal);
@@ -2348,16 +3145,20 @@ async function ensureDownloadedSegment({
         url,
         filePath,
         signal,
-        assertLeaseOwned
+        assertLeaseOwned,
+        assertWriteCapacity,
+        recordWrittenBytes
       );
       const completed: SegmentCheckpointEntry = { ...entry, key };
       checkpoint.set(key, completed);
       return {
         filePath,
         downloadedBytes: completed.sizeBytes,
-        reused: false
+        reused: false,
+        sizeBytes: completed.sizeBytes
       };
     } catch (error) {
+      await reconcileWriteBudget?.();
       abortIfRequested(signal);
       lastError = error;
       if (error instanceof ExpiredTransferAuthorization) {
@@ -2560,7 +3361,6 @@ export function buildRunRemuxArgs(inputPath: string, outputPath: string): string
     "-c", "copy",
     "-bsf:a", "aac_adtstoasc",
     "-avoid_negative_ts", "make_zero",
-    "-movflags", "+faststart",
     "-f", "mp4",
     outputPath
   ];
@@ -2623,19 +3423,21 @@ export function buildCompactConcatArgs(
     "-map", "0:a:0",
     "-c", "copy",
     "-avoid_negative_ts", "make_zero",
-    "-movflags", "+faststart",
+    // The managed loopback endpoint is byte-range capable, so moving `moov`
+    // across a multi-gigabyte file only adds a second full-file I/O pass.
     "-f", "mp4",
     outputPath
   ];
 }
 
-async function inspectRunVideoInpointMs(
+async function inspectRunMedia(
   runPath: string,
+  expectedDurationMs: number,
   runProcess: NonNullable<ChzzkVodMaterializerDependencies["runProcess"]>,
   ffprobeBinary: string,
   cwd: string,
   signal?: AbortSignal
-): Promise<number> {
+): Promise<{ videoInpointMs: number; durationMs: number }> {
   const result = await runCheckedProcess(
     runProcess,
     ffprobeBinary,
@@ -2653,27 +3455,464 @@ async function inspectRunVideoInpointMs(
   );
   const payload = parseProbePayload(result.stdout);
   assertH264AacStreams(payload);
-  const video = probeStreams(payload).find((stream) => stream.codec_type === "video");
+  const streams = probeStreams(payload);
+  const video = streams.find((stream) => (
+    stream.codec_type === "video" && stream.codec_name === "h264"
+  ));
+  const audio = streams.find((stream) => (
+    stream.codec_type === "audio" && stream.codec_name === "aac"
+  ));
   const startSeconds = numericValue(video?.start_time);
   if (startSeconds === undefined || startSeconds < 0 || startSeconds > 1) {
     fail("로컬 구간 MP4 영상 시작 시간이 허용 범위를 벗어났습니다.", "MEDIA_VERIFICATION_FAILED");
   }
-  return startSeconds * 1000;
+  const videoDurationSeconds = numericValue(video?.duration);
+  const audioDurationSeconds = numericValue(audio?.duration);
+  if (
+    videoDurationSeconds === undefined
+    || audioDurationSeconds === undefined
+    || videoDurationSeconds <= 0
+    || audioDurationSeconds <= 0
+  ) {
+    fail("로컬 구간 MP4 재생 시간을 확인하지 못했습니다.", "MEDIA_VERIFICATION_FAILED");
+  }
+  const durationMs = Math.round(videoDurationSeconds * 1_000);
+  const audioDurationMs = Math.round(audioDurationSeconds * 1_000);
+  if (
+    Math.abs(durationMs - expectedDurationMs) > MAX_CHZZK_RUN_DURATION_DRIFT_MS
+    || Math.abs(audioDurationMs - expectedDurationMs)
+      > MAX_CHZZK_RUN_DURATION_DRIFT_MS
+  ) {
+    fail("로컬 구간 MP4 재생 시간이 조각 계획과 다릅니다.", "MEDIA_VERIFICATION_FAILED");
+  }
+  return {
+    videoInpointMs: startSeconds * 1_000,
+    durationMs
+  };
+}
+
+function runMp4FileName(runIndex: number): string {
+  return `run-${runIndex}.mp4`;
+}
+
+function runReceiptFileName(runIndex: number): string {
+  return `run-${runIndex}.receipt.json`;
+}
+
+function runReceiptSegments(
+  run: PlannedSegmentRun,
+  checkpoint: ReadonlyMap<string, SegmentCheckpointEntry>
+): ChzzkVodRunReceiptSegment[] {
+  return run.segments.map((segment) => {
+    const key = segmentSemanticKey(segment);
+    const entry = checkpoint.get(key);
+    if (
+      !entry
+      || entry.key !== key
+      || !/^[a-f0-9]{64}$/u.test(entry.hashSha256)
+      || !Number.isSafeInteger(entry.sizeBytes)
+      || entry.sizeBytes <= 0
+    ) {
+      fail("검증된 CHZZK 조각 receipt를 찾지 못했습니다.", "CACHE_INTEGRITY_FAILED");
+    }
+    return {
+      key,
+      hashSha256: entry.hashSha256,
+      sizeBytes: entry.sizeBytes
+    };
+  });
+}
+
+function expectedRunReceipt(
+  run: PlannedSegmentRun,
+  runIndex: number,
+  segments: readonly ChzzkVodRunReceiptSegment[],
+  identity: ChzzkVodRunCacheIdentity,
+  artifact: ChzzkVodRunReceipt["artifact"]
+): ChzzkVodRunReceipt {
+  return {
+    schemaId: CHZZK_VOD_RUN_RECEIPT_SCHEMA_ID,
+    recipeId: CHZZK_VOD_RUN_REMUX_RECIPE_ID,
+    sourceVersionId: identity.sourceVersionId,
+    timelineDigest: identity.timelineDigest,
+    qualityIdentity: identity.qualityIdentity,
+    planFingerprint: identity.planFingerprint,
+    runIndex,
+    editableSourceStartMs: run.editableSourceStartMs,
+    editableSourceEndMs: run.editableSourceEndMs,
+    fetchedSourceStartMs: run.fetchedSourceStartMs,
+    fetchedSourceEndMs: run.fetchedSourceEndMs,
+    decoderPrefixSegmentCount: run.decoderPrefixSegmentCount,
+    segments: segments.map((segment) => ({ ...segment })),
+    artifact: { ...artifact }
+  };
+}
+
+function parseStoredRunReceipt(
+  value: unknown,
+  run: PlannedSegmentRun,
+  runIndex: number,
+  segments: readonly ChzzkVodRunReceiptSegment[],
+  identity: ChzzkVodRunCacheIdentity
+): ChzzkVodRunReceipt | undefined {
+  const record = objectRecord(value);
+  const artifact = objectRecord(record?.artifact);
+  const storedSegments = record?.segments;
+  const fileName = runMp4FileName(runIndex);
+  if (
+    !record
+    || !hasExactKeys(record, [
+      "schemaId",
+      "recipeId",
+      "sourceVersionId",
+      "timelineDigest",
+      "qualityIdentity",
+      "planFingerprint",
+      "runIndex",
+      "editableSourceStartMs",
+      "editableSourceEndMs",
+      "fetchedSourceStartMs",
+      "fetchedSourceEndMs",
+      "decoderPrefixSegmentCount",
+      "segments",
+      "artifact"
+    ])
+    || record.schemaId !== CHZZK_VOD_RUN_RECEIPT_SCHEMA_ID
+    || record.recipeId !== CHZZK_VOD_RUN_REMUX_RECIPE_ID
+    || record.sourceVersionId !== identity.sourceVersionId
+    || record.timelineDigest !== identity.timelineDigest
+    || record.qualityIdentity !== identity.qualityIdentity
+    || record.planFingerprint !== identity.planFingerprint
+    || record.runIndex !== runIndex
+    || record.editableSourceStartMs !== run.editableSourceStartMs
+    || record.editableSourceEndMs !== run.editableSourceEndMs
+    || record.fetchedSourceStartMs !== run.fetchedSourceStartMs
+    || record.fetchedSourceEndMs !== run.fetchedSourceEndMs
+    || record.decoderPrefixSegmentCount !== run.decoderPrefixSegmentCount
+    || !Array.isArray(storedSegments)
+    || storedSegments.length !== segments.length
+    || !artifact
+    || !hasExactKeys(artifact, [
+      "fileName",
+      "hashSha256",
+      "sizeBytes",
+      "durationMs",
+      "videoCodec",
+      "audioCodec",
+      "videoInpointMs"
+    ])
+    || artifact.fileName !== fileName
+    || typeof artifact.hashSha256 !== "string"
+    || !/^[a-f0-9]{64}$/u.test(artifact.hashSha256)
+    || !Number.isSafeInteger(artifact.sizeBytes)
+    || Number(artifact.sizeBytes) <= 0
+    || !Number.isSafeInteger(artifact.durationMs)
+    || Number(artifact.durationMs) <= 0
+    || Math.abs(
+      Number(artifact.durationMs)
+        - (run.fetchedSourceEndMs - run.fetchedSourceStartMs)
+    ) > MAX_CHZZK_RUN_DURATION_DRIFT_MS
+    || artifact.videoCodec !== "h264"
+    || artifact.audioCodec !== "aac"
+    || typeof artifact.videoInpointMs !== "number"
+    || !Number.isFinite(artifact.videoInpointMs)
+    || artifact.videoInpointMs < 0
+    || artifact.videoInpointMs > 1_000
+  ) {
+    return undefined;
+  }
+  for (let index = 0; index < segments.length; index += 1) {
+    const stored = objectRecord(storedSegments[index]);
+    const expected = segments[index];
+    if (
+      !stored
+      || !expected
+      || !hasExactKeys(stored, ["key", "hashSha256", "sizeBytes"])
+      || stored.key !== expected.key
+      || stored.hashSha256 !== expected.hashSha256
+      || stored.sizeBytes !== expected.sizeBytes
+    ) {
+      return undefined;
+    }
+  }
+  return expectedRunReceipt(run, runIndex, segments, identity, {
+    fileName,
+    hashSha256: artifact.hashSha256,
+    sizeBytes: Number(artifact.sizeBytes),
+    durationMs: Number(artifact.durationMs),
+    videoCodec: "h264",
+    audioCodec: "aac",
+    videoInpointMs: artifact.videoInpointMs
+  });
+}
+
+async function reusableRunReceipt({
+  run,
+  runIndex,
+  segments,
+  identity,
+  jobDirectory,
+  runProcess,
+  ffprobeBinary,
+  signal
+}: {
+  run: PlannedSegmentRun;
+  runIndex: number;
+  segments: readonly ChzzkVodRunReceiptSegment[];
+  identity: ChzzkVodRunCacheIdentity;
+  jobDirectory: string;
+  runProcess: NonNullable<ChzzkVodMaterializerDependencies["runProcess"]>;
+  ffprobeBinary: string;
+  signal?: AbortSignal;
+}): Promise<ChzzkVodRunReceipt | undefined> {
+  try {
+    const receipt = parseStoredRunReceipt(
+      await readChzzkPrivateJson(
+        path.join(jobDirectory, runReceiptFileName(runIndex)),
+        MAX_CHZZK_RUN_RECEIPT_BYTES,
+        signal
+      ),
+      run,
+      runIndex,
+      segments,
+      identity
+    );
+    if (!receipt) {
+      return undefined;
+    }
+    const mp4Path = path.join(jobDirectory, receipt.artifact.fileName);
+    const beforeProbe = await lstat(mp4Path, { bigint: true });
+    validatedChzzkPrivateFileSize(beforeProbe);
+    const probed = await inspectRunMedia(
+      mp4Path,
+      run.fetchedSourceEndMs - run.fetchedSourceStartMs,
+      runProcess,
+      ffprobeBinary,
+      jobDirectory,
+      signal
+    );
+    const verified = await inspectChzzkPrivateFile(mp4Path, signal);
+    if (
+      !sameChzzkFileSnapshot(beforeProbe, verified.status)
+      || verified.sizeBytes !== receipt.artifact.sizeBytes
+      || verified.hashSha256 !== receipt.artifact.hashSha256
+      || probed.durationMs !== receipt.artifact.durationMs
+      || probed.videoInpointMs !== receipt.artifact.videoInpointMs
+    ) {
+      return undefined;
+    }
+    return receipt;
+  } catch (error) {
+    if (
+      error instanceof ChzzkVodMaterializationError
+      && error.code === "CANCELLED"
+    ) {
+      throw error;
+    }
+    return undefined;
+  }
+}
+
+function safeChzzkByteSum(values: readonly number[]): number {
+  let total = 0;
+  for (const value of values) {
+    if (
+      !Number.isSafeInteger(value)
+      || value < 0
+      || total > Number.MAX_SAFE_INTEGER - value
+    ) {
+      fail("CHZZK 로컬 작업 바이트 합계를 안전하게 계산하지 못했습니다.", "CACHE_INTEGRITY_FAILED");
+    }
+    total += value;
+  }
+  return total;
+}
+
+interface ChzzkVodMuxDetailProgress {
+  detailStage: NonNullable<ChzzkVodMaterializationProgress["detailStage"]>;
+  completedRuns: number;
+  totalRuns: number;
+  processedBytes: number;
+  totalBytes?: number;
+}
+
+interface ChzzkVodRemuxRunsResult {
+  stagedArtifactPath: string;
+  stagedArtifactSizeBytes: number;
+}
+
+async function runFinalConcatWithProgress({
+  runProcess,
+  ffmpegBinary,
+  args,
+  jobDirectory,
+  temporaryArtifact,
+  expectedFinalBytes,
+  completedRuns,
+  budgetTracker,
+  signal,
+  setProgressInterval,
+  clearProgressInterval,
+  progressIntervalMs,
+  onProgress
+}: {
+  runProcess: NonNullable<ChzzkVodMaterializerDependencies["runProcess"]>;
+  ffmpegBinary: string;
+  args: readonly string[];
+  jobDirectory: string;
+  temporaryArtifact: string;
+  expectedFinalBytes: number;
+  completedRuns: number;
+  budgetTracker: ChzzkConsumerScopeBudgetTracker;
+  signal?: AbortSignal;
+  setProgressInterval: NonNullable<
+    ChzzkVodMaterializerDependencies["setFinalConcatProgressInterval"]
+  >;
+  clearProgressInterval: NonNullable<
+    ChzzkVodMaterializerDependencies["clearFinalConcatProgressInterval"]
+  >;
+  progressIntervalMs: number;
+  onProgress?: (progress: ChzzkVodMuxDetailProgress) => void;
+}): Promise<void> {
+  let active = true;
+  let observedBytes = 0;
+  let accountedFileBytes = 0;
+  let totalBytes = expectedFinalBytes;
+  let pendingPoll: Promise<void> | undefined;
+  let pollFailure: unknown;
+  let pollsSinceReconcile = 0;
+  const pollAbort = new AbortController();
+  const processSignal = signal
+    ? AbortSignal.any([signal, pollAbort.signal])
+    : pollAbort.signal;
+  const inspectStagingFile = async (): Promise<void> => {
+    if (!active || pollFailure !== undefined) {
+      return;
+    }
+    try {
+      let actualBytesThisPoll = 0;
+      const status = await lstat(temporaryArtifact, { bigint: true })
+        .catch((error: unknown) => {
+          if (nodeErrorCode(error) === "ENOENT") {
+            return undefined;
+          }
+          throw error;
+        });
+      if (status) {
+        if (
+          !status.isFile()
+          || status.isSymbolicLink()
+          || status.nlink !== 1n
+          || status.size < 0n
+          || status.size > BigInt(Number.MAX_SAFE_INTEGER)
+        ) {
+          fail("최종 CHZZK staging 파일 형식이 안전하지 않습니다.", "CACHE_INTEGRITY_FAILED");
+        }
+        const actualBytes = Number(status.size);
+        actualBytesThisPoll = actualBytes;
+        assertChzzkVodWorkByteQuota(0, actualBytes);
+        const newlyObservedBytes = Math.max(
+          0,
+          actualBytes - accountedFileBytes
+        );
+        if (newlyObservedBytes > 0) {
+          budgetTracker.recordWrittenBytes(newlyObservedBytes);
+        }
+        accountedFileBytes = Math.max(accountedFileBytes, actualBytes);
+        observedBytes = Math.max(observedBytes, actualBytes);
+        totalBytes = Math.max(totalBytes, observedBytes);
+      }
+      pollsSinceReconcile += 1;
+      if (pollsSinceReconcile >= CHZZK_FINAL_CONCAT_RECONCILE_EVERY_POLLS) {
+        await budgetTracker.reconcile();
+        accountedFileBytes = actualBytesThisPoll;
+        pollsSinceReconcile = 0;
+      }
+      onProgress?.({
+        detailStage: "final-concat",
+        completedRuns,
+        totalRuns: completedRuns,
+        processedBytes: observedBytes,
+        totalBytes
+      });
+    } catch (error) {
+      pollFailure ??= error instanceof ChzzkVodMaterializationError
+        ? error
+        : new ChzzkVodMaterializationError(
+          "최종 CHZZK staging 파일을 안전하게 검사하지 못했습니다.",
+          "DISK_SPACE_CHECK_FAILED"
+        );
+      pollAbort.abort();
+    }
+  };
+  const requestPoll = (): Promise<void> => {
+    if (!active) {
+      return Promise.resolve();
+    }
+    if (!pendingPoll) {
+      const currentPoll = inspectStagingFile();
+      pendingPoll = currentPoll;
+      void currentPoll.finally(() => {
+        if (pendingPoll === currentPoll) {
+          pendingPoll = undefined;
+        }
+      });
+    }
+    return pendingPoll;
+  };
+
+  const intervalHandle = setProgressInterval(requestPoll, progressIntervalMs);
+  let processFailure: unknown;
+  try {
+    try {
+      await runCheckedProcess(
+        runProcess,
+        ffmpegBinary,
+        args,
+        { cwd: jobDirectory, signal: processSignal },
+        "MEDIA_MUX_FAILED",
+        "CHZZK 편집 구간을 최종 로컬 MP4로 연결하지 못했습니다."
+      );
+      await requestPoll();
+    } catch (error) {
+      processFailure = error;
+    }
+  } finally {
+    active = false;
+    clearProgressInterval(intervalHandle);
+    await pendingPoll;
+  }
+  if (pollFailure !== undefined) {
+    throw pollFailure;
+  }
+  if (processFailure !== undefined) {
+    throw processFailure;
+  }
 }
 
 async function remuxRuns({
   runs,
   segmentPaths,
+  checkpoint,
+  cacheIdentity,
+  budgetTracker,
   jobDirectory,
   artifactPath,
   runProcess,
   ffmpegBinary,
   ffprobeBinary,
   signal,
-  assertLeaseOwned
+  assertLeaseOwned,
+  setFinalConcatProgressInterval,
+  clearFinalConcatProgressInterval,
+  finalConcatProgressIntervalMs,
+  onProgress
 }: {
   runs: readonly PlannedSegmentRun[];
   segmentPaths: ReadonlyMap<string, string>;
+  checkpoint: ReadonlyMap<string, SegmentCheckpointEntry>;
+  cacheIdentity: ChzzkVodRunCacheIdentity;
+  budgetTracker: ChzzkConsumerScopeBudgetTracker;
   jobDirectory: string;
   artifactPath: string;
   runProcess: NonNullable<ChzzkVodMaterializerDependencies["runProcess"]>;
@@ -2681,14 +3920,41 @@ async function remuxRuns({
   ffprobeBinary: string;
   signal?: AbortSignal;
   assertLeaseOwned?: () => void;
-}): Promise<void> {
+  setFinalConcatProgressInterval: NonNullable<
+    ChzzkVodMaterializerDependencies["setFinalConcatProgressInterval"]
+  >;
+  clearFinalConcatProgressInterval: NonNullable<
+    ChzzkVodMaterializerDependencies["clearFinalConcatProgressInterval"]
+  >;
+  finalConcatProgressIntervalMs: number;
+  onProgress?: (progress: ChzzkVodMuxDetailProgress) => void;
+}): Promise<ChzzkVodRemuxRunsResult> {
   const runMp4Paths: string[] = [];
+  const runMp4Sizes: number[] = [];
   const runDurationsMs: number[] = [];
   const runInpointsMs: number[] = [];
+  const receiptSegmentsByRun = runs.map((run) => (
+    runReceiptSegments(run, checkpoint)
+  ));
+  const totalRunInputBytes = safeChzzkByteSum(
+    receiptSegmentsByRun.flatMap((segments) => (
+      segments.map((segment) => segment.sizeBytes)
+    ))
+  );
+  let processedRunInputBytes = 0;
+  await budgetTracker.reconcile();
+  onProgress?.({
+    detailStage: "run-remux",
+    completedRuns: 0,
+    totalRuns: runs.length,
+    processedBytes: 0,
+    totalBytes: totalRunInputBytes
+  });
   for (let index = 0; index < runs.length; index += 1) {
     abortIfRequested(signal);
     const run = runs[index];
-    if (!run) {
+    const segments = receiptSegmentsByRun[index];
+    if (!run || !segments) {
       continue;
     }
     const inputPaths = run.segments.map((segment) => {
@@ -2699,64 +3965,179 @@ async function remuxRuns({
       return segmentPath;
     });
     const tsPath = path.join(jobDirectory, `run-${index}.ts`);
-    const mp4Path = path.join(jobDirectory, `run-${index}.mp4`);
-    assertLeaseOwned?.();
-    await rm(tsPath, { force: true }).catch(() => undefined);
-    assertLeaseOwned?.();
-    await rm(mp4Path, { force: true }).catch(() => undefined);
-    await concatenateTransportStreams(inputPaths, tsPath, signal);
-    await runCheckedProcess(
-      runProcess,
-      ffmpegBinary,
-      buildRunRemuxArgs(tsPath, mp4Path),
-      { cwd: jobDirectory, ...(signal ? { signal } : {}) },
-      "MEDIA_MUX_FAILED",
-      "CHZZK 미디어 조각을 무재인코딩 MP4로 구성하지 못했습니다."
-    );
-    const runStatus = await stat(mp4Path).catch(() => undefined);
-    if (!runStatus?.isFile() || runStatus.size <= 0) {
-      fail("구성된 로컬 MP4 파일이 비어 있습니다.", "MEDIA_MUX_FAILED");
-    }
-    runMp4Paths.push(mp4Path);
-    runDurationsMs.push(run.fetchedSourceEndMs - run.fetchedSourceStartMs);
-    runInpointsMs.push(await inspectRunVideoInpointMs(
-      mp4Path,
+    const mp4FileName = runMp4FileName(index);
+    const mp4Path = path.join(jobDirectory, mp4FileName);
+    const receiptPath = path.join(jobDirectory, runReceiptFileName(index));
+    let receipt = await reusableRunReceipt({
+      run,
+      runIndex: index,
+      segments,
+      identity: cacheIdentity,
+      jobDirectory,
       runProcess,
       ffprobeBinary,
-      jobDirectory,
-      signal
-    ));
+      ...(signal ? { signal } : {})
+    });
+    if (!receipt) {
+      assertLeaseOwned?.();
+      await removeTrackedChzzkFile(receiptPath, budgetTracker);
+      assertLeaseOwned?.();
+      await removeTrackedChzzkFile(tsPath, budgetTracker);
+      assertLeaseOwned?.();
+      await removeTrackedChzzkFile(mp4Path, budgetTracker);
+      const runInputBytes = safeChzzkByteSum(
+        segments.map((segment) => segment.sizeBytes)
+      );
+      budgetTracker.assertCapacity(runInputBytes);
+      await concatenateTransportStreams(inputPaths, tsPath, signal);
+      budgetTracker.recordWrittenBytes(runInputBytes);
+      let temporaryMp4Path = path.join(
+        jobDirectory,
+        `.run-${index}-${randomBytes(16).toString("hex")}.tmp.mp4`
+      );
+      try {
+        budgetTracker.assertCapacity(runInputBytes);
+        await runCheckedProcess(
+          runProcess,
+          ffmpegBinary,
+          buildRunRemuxArgs(tsPath, temporaryMp4Path),
+          { cwd: jobDirectory, ...(signal ? { signal } : {}) },
+          "MEDIA_MUX_FAILED",
+          "CHZZK 미디어 조각을 무재인코딩 MP4로 구성하지 못했습니다."
+        );
+        const completedTemporaryStatus = await lstat(temporaryMp4Path, {
+          bigint: true
+        });
+        const completedTemporaryBytes = validatedChzzkPrivateFileSize(
+          completedTemporaryStatus
+        );
+        budgetTracker.recordWrittenBytes(completedTemporaryBytes);
+        await chmod(temporaryMp4Path, 0o600);
+        await syncChzzkPrivateFile(temporaryMp4Path);
+        const beforeProbe = await lstat(temporaryMp4Path, { bigint: true });
+        validatedChzzkPrivateFileSize(beforeProbe);
+        const probed = await inspectRunMedia(
+          temporaryMp4Path,
+          run.fetchedSourceEndMs - run.fetchedSourceStartMs,
+          runProcess,
+          ffprobeBinary,
+          jobDirectory,
+          signal
+        );
+        const verified = await inspectChzzkPrivateFile(
+          temporaryMp4Path,
+          signal
+        );
+        if (!sameChzzkFileSnapshot(beforeProbe, verified.status)) {
+          fail("구성한 로컬 구간 MP4가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+        }
+        receipt = expectedRunReceipt(run, index, segments, cacheIdentity, {
+          fileName: mp4FileName,
+          hashSha256: verified.hashSha256,
+          sizeBytes: verified.sizeBytes,
+          durationMs: probed.durationMs,
+          videoCodec: "h264",
+          audioCodec: "aac",
+          videoInpointMs: probed.videoInpointMs
+        });
+        assertLeaseOwned?.();
+        await rename(temporaryMp4Path, mp4Path);
+        temporaryMp4Path = "";
+        const receiptBytes = Buffer.byteLength(
+          `${JSON.stringify(receipt)}\n`,
+          "utf8"
+        );
+        budgetTracker.assertCapacity(receiptBytes);
+        await atomicWriteJson(
+          receiptPath,
+          receipt,
+          assertLeaseOwned,
+          MAX_CHZZK_RUN_RECEIPT_BYTES
+        );
+        budgetTracker.recordWrittenBytes(receiptBytes);
+      } finally {
+        if (temporaryMp4Path) {
+          await rm(temporaryMp4Path, { force: true }).catch(() => undefined);
+        }
+      }
+    }
+    assertLeaseOwned?.();
+    await removeTrackedChzzkFile(tsPath, budgetTracker);
+    await budgetTracker.noteKnownCommit();
+    runMp4Paths.push(mp4Path);
+    runMp4Sizes.push(receipt.artifact.sizeBytes);
+    runDurationsMs.push(run.fetchedSourceEndMs - run.fetchedSourceStartMs);
+    runInpointsMs.push(receipt.artifact.videoInpointMs);
+    processedRunInputBytes = safeChzzkByteSum([
+      processedRunInputBytes,
+      ...segments.map((segment) => segment.sizeBytes)
+    ]);
+    onProgress?.({
+      detailStage: "run-remux",
+      completedRuns: index + 1,
+      totalRuns: runs.length,
+      processedBytes: processedRunInputBytes,
+      totalBytes: totalRunInputBytes
+    });
   }
   const temporaryArtifact = `${artifactPath}.part-${randomBytes(8).toString("hex")}.mp4`;
+  const expectedFinalBytes = safeChzzkByteSum(runMp4Sizes);
+  let keepTemporaryArtifact = false;
   try {
-    if (runMp4Paths.length === 1) {
-      await copyFile(runMp4Paths[0]!, temporaryArtifact, fsConstants.COPYFILE_EXCL);
-    } else {
-      const descriptionPath = path.join(jobDirectory, "runs.concat.txt");
-      assertLeaseOwned?.();
-      await writeFile(
-        descriptionPath,
-        buildConcatDescription(runMp4Paths, runDurationsMs, runInpointsMs),
-        { encoding: "utf8", mode: 0o600 }
-      );
-      await runCheckedProcess(
-        runProcess,
-        ffmpegBinary,
-        buildCompactConcatArgs(descriptionPath, temporaryArtifact),
-        { cwd: jobDirectory, ...(signal ? { signal } : {}) },
-        "MEDIA_MUX_FAILED",
-        "비연속 CHZZK 편집 구간을 하나의 로컬 MP4로 연결하지 못했습니다."
-      );
-    }
-    const outputStatus = await stat(temporaryArtifact).catch(() => undefined);
+    onProgress?.({
+      detailStage: "final-concat",
+      completedRuns: runs.length,
+      totalRuns: runs.length,
+      processedBytes: 0,
+      totalBytes: expectedFinalBytes
+    });
+    const descriptionPath = path.join(jobDirectory, "runs.concat.txt");
+    const description = buildConcatDescription(
+      runMp4Paths,
+      runDurationsMs,
+      runInpointsMs
+    );
+    const descriptionBytes = Buffer.byteLength(description, "utf8");
+    await removeTrackedChzzkFile(descriptionPath, budgetTracker);
+    budgetTracker.assertCapacity(descriptionBytes);
+    assertLeaseOwned?.();
+    await writeFile(
+      descriptionPath,
+      description,
+      { encoding: "utf8", mode: 0o600 }
+    );
+    budgetTracker.recordWrittenBytes(descriptionBytes);
+    budgetTracker.assertCapacity(expectedFinalBytes);
+    await runFinalConcatWithProgress({
+      runProcess,
+      ffmpegBinary,
+      args: buildCompactConcatArgs(descriptionPath, temporaryArtifact),
+      jobDirectory,
+      temporaryArtifact,
+      expectedFinalBytes,
+      completedRuns: runs.length,
+      budgetTracker,
+      ...(signal ? { signal } : {}),
+      setProgressInterval: setFinalConcatProgressInterval,
+      clearProgressInterval: clearFinalConcatProgressInterval,
+      progressIntervalMs: finalConcatProgressIntervalMs,
+      ...(onProgress ? { onProgress } : {})
+    });
+    await budgetTracker.reconcile();
+    const outputStatus = await lstat(temporaryArtifact).catch(() => undefined);
     if (!outputStatus?.isFile() || outputStatus.size <= 0) {
       fail("최종 로컬 MP4 파일이 비어 있습니다.", "MEDIA_MUX_FAILED");
     }
     await chmod(temporaryArtifact, 0o600);
-    assertLeaseOwned?.();
-    await rename(temporaryArtifact, artifactPath);
+    keepTemporaryArtifact = true;
+    return {
+      stagedArtifactPath: temporaryArtifact,
+      stagedArtifactSizeBytes: outputStatus.size
+    };
   } finally {
-    await rm(temporaryArtifact, { force: true }).catch(() => undefined);
+    if (!keepTemporaryArtifact) {
+      await rm(temporaryArtifact, { force: true }).catch(() => undefined);
+    }
   }
 }
 
@@ -3220,12 +4601,18 @@ function assertPublicManifestIsSecretFree(
   }
 }
 
+interface ReusableCompletedMaterialization {
+  receipt: ChzzkVodMaterializationManifest;
+  artifactVerification: ChzzkVodMaterializationArtifactVerification;
+}
+
 async function reusableCompletedMaterialization(
   manifestPath: string,
   artifactPath: string,
   expected: StoredManifestExpectation,
-  signal?: AbortSignal
-): Promise<ChzzkVodMaterializationManifest | undefined> {
+  signal?: AbortSignal,
+  onHashProgress?: (processedBytes: number, totalBytes: number) => void
+): Promise<ReusableCompletedMaterialization | undefined> {
   try {
     const manifest = parseStoredManifest(
       JSON.parse(await readFile(manifestPath, "utf8")) as unknown,
@@ -3234,16 +4621,25 @@ async function reusableCompletedMaterialization(
     if (!manifest) {
       return undefined;
     }
-    const artifactStatus = await stat(artifactPath);
+    const verifiedArtifact = await inspectChzzkPrivateFile(
+      artifactPath,
+      signal,
+      onHashProgress,
+      true
+    );
     if (
-      !artifactStatus.isFile()
-      || artifactStatus.size !== manifest.artifact.sizeBytes
-      || await sha256File(artifactPath, signal) !== manifest.artifact.hashSha256
+      verifiedArtifact.sizeBytes !== manifest.artifact.sizeBytes
+      || verifiedArtifact.hashSha256 !== manifest.artifact.hashSha256
     ) {
       return undefined;
     }
     assertPublicManifestIsSecretFree(manifest);
-    return manifest;
+    return {
+      receipt: manifest,
+      artifactVerification: artifactVerificationFromPrivateFile(
+        verifiedArtifact
+      )
+    };
   } catch (error) {
     if (
       error instanceof ChzzkVodMaterializationError
@@ -3353,7 +4749,7 @@ export async function reopenChzzkVodMaterialization(
   ];
   for (const jobDirectory of jobDirectories) {
     const artifactPath = path.join(jobDirectory, "materialized.mp4");
-    const receipt = await reusableCompletedMaterialization(
+    const reusable = await reusableCompletedMaterialization(
       path.join(jobDirectory, "manifest.json"),
       artifactPath,
       {
@@ -3362,18 +4758,30 @@ export async function reopenChzzkVodMaterialization(
         planFingerprint: identity.planFingerprint,
         materializationId: identity.materializationId
       },
-      request.signal
+      request.signal,
+      (processedBytes, totalBytes) => emitProgress(request.onProgress, {
+        phase: "muxing",
+        completedSegments: 0,
+        totalSegments: 0,
+        completedBytes: 0,
+        detailStage: "final-hash",
+        completedRuns: 0,
+        totalRuns: 0,
+        processedBytes,
+        totalBytes
+      })
     );
-    if (receipt && receiptExactlyContainsRequestedClips(
-      receipt,
+    if (reusable && receiptExactlyContainsRequestedClips(
+      reusable.receipt,
       clips,
       handleMs,
       desiredEditableRanges
     )) {
       return {
-        manifest: manifestMaterialization(receipt),
-        receipt,
+        manifest: manifestMaterialization(reusable.receipt),
+        receipt: reusable.receipt,
         artifactPath,
+        artifactVerification: reusable.artifactVerification,
         reused: true
       };
     }
@@ -3407,7 +4815,8 @@ async function validateBaseMaterialization(
   resolved: ResolvedChzzkVod,
   requested: readonly MaterializationClipCoverage[],
   handleMs: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (processedBytes: number, totalBytes: number) => void
 ): Promise<void> {
   let receipt: ChzzkVodMaterializationManifest | undefined;
   for (const jobDirectory of [
@@ -3422,7 +4831,7 @@ async function validateBaseMaterialization(
       base.materializationId
     )
   ]) {
-    receipt = await reusableCompletedMaterialization(
+    const reusable = await reusableCompletedMaterialization(
       path.join(jobDirectory, "manifest.json"),
       path.join(jobDirectory, "materialized.mp4"),
       {
@@ -3431,8 +4840,10 @@ async function validateBaseMaterialization(
         planFingerprint: base.planFingerprint,
         materializationId: base.materializationId
       },
-      signal
+      signal,
+      onProgress
     );
+    receipt = reusable?.receipt;
     if (receipt) {
       break;
     }
@@ -4113,7 +5524,8 @@ export async function materializeChzzkVod(
         : {}),
       ...(request.handleMs !== undefined ? { handleMs: request.handleMs } : {}),
       ...(request.stateDir !== undefined ? { stateDir: request.stateDir } : {}),
-      ...(request.signal ? { signal: request.signal } : {})
+      ...(request.signal ? { signal: request.signal } : {}),
+      ...(request.onProgress ? { onProgress: request.onProgress } : {})
     });
     if (reopened) {
       emitProgress(request.onProgress, {
@@ -4133,6 +5545,33 @@ export async function materializeChzzkVod(
   const ffmpegBinary = dependencies.ffmpegBinary?.trim() || "ffmpeg";
   const ffprobeBinary = dependencies.ffprobeBinary?.trim() || "ffprobe";
   const sleep = dependencies.sleep ?? sleepWithMaterializerAbort;
+  const inspectFileSystem = dependencies.statFileSystem ?? statFileSystem;
+  if (
+    Boolean(dependencies.setFinalConcatProgressInterval)
+    !== Boolean(dependencies.clearFinalConcatProgressInterval)
+  ) {
+    fail("최종 CHZZK 구성 진행률 타이머 설정이 올바르지 않습니다.", "INVALID_PROCESS_TIMEOUT");
+  }
+  const setFinalConcatProgressInterval =
+    dependencies.setFinalConcatProgressInterval
+    ?? ((callback: () => Promise<void>, milliseconds: number): unknown => (
+      setInterval(() => void callback(), milliseconds)
+    ));
+  const clearFinalConcatProgressInterval =
+    dependencies.clearFinalConcatProgressInterval
+    ?? ((handle: unknown): void => {
+      clearInterval(handle as ReturnType<typeof setInterval>);
+    });
+  const finalConcatProgressIntervalMs =
+    dependencies.finalConcatProgressIntervalMs
+    ?? DEFAULT_CHZZK_FINAL_CONCAT_PROGRESS_INTERVAL_MS;
+  if (
+    !Number.isSafeInteger(finalConcatProgressIntervalMs)
+    || finalConcatProgressIntervalMs <= 0
+    || finalConcatProgressIntervalMs > 60_000
+  ) {
+    fail("최종 CHZZK 구성 진행률 주기가 올바르지 않습니다.", "INVALID_PROCESS_TIMEOUT");
+  }
   const stateDirectory = resolveChzzkVodStateDirectory(request.stateDir);
   emitProgress(request.onProgress, {
     phase: "resolving",
@@ -4153,6 +5592,12 @@ export async function materializeChzzkVod(
     handleMs,
     desiredEditableRanges
   );
+  emitProgress(request.onProgress, {
+    phase: "planning",
+    completedSegments: 0,
+    totalSegments: 0,
+    completedBytes: 0
+  });
   if (base) {
     await validateBaseMaterialization(
       base,
@@ -4161,15 +5606,20 @@ export async function materializeChzzkVod(
       currentResolved,
       clipRanges,
       handleMs,
-      request.signal
+      request.signal,
+      (processedBytes, totalBytes) => emitProgress(request.onProgress, {
+        phase: "planning",
+        completedSegments: 0,
+        totalSegments: 0,
+        completedBytes: 0,
+        detailStage: "base-hash",
+        completedRuns: 0,
+        totalRuns: 0,
+        processedBytes,
+        totalBytes
+      })
     );
   }
-  emitProgress(request.onProgress, {
-    phase: "planning",
-    completedSegments: 0,
-    totalSegments: 0,
-    completedBytes: 0
-  });
   const logicalWindows = mergeMaterializationClipCoverages(clipRanges);
   let initialRuns: PlannedSegmentRun[];
   try {
@@ -4187,6 +5637,10 @@ export async function materializeChzzkVod(
     clipRanges
   );
   const materializationId = planFingerprint.slice(0, 32);
+  const consumerScopeDirectory = vodConsumerScopeRootFromHash(
+    stateDirectory,
+    consumerScopeHash
+  );
   const contentDirectory = path.join(
     vodConsumerChzzkContentRoot(stateDirectory, consumerScopeHash),
     currentResolved.contentId,
@@ -4212,32 +5666,47 @@ export async function materializeChzzkVod(
     sourceVersionId: currentResolved.sourceVersionId,
     planFingerprint
   };
+  const initialSegmentCount = new Set(initialRuns.flatMap((run) => (
+    run.segments.map(segmentSemanticKey)
+  ))).size;
+  const emitReusableHashProgress = (
+    processedBytes: number,
+    totalBytes: number
+  ): void => emitProgress(request.onProgress, {
+    phase: "muxing",
+    completedSegments: initialSegmentCount,
+    totalSegments: initialSegmentCount,
+    completedBytes: 0,
+    detailStage: "final-hash",
+    completedRuns: initialRuns.length,
+    totalRuns: initialRuns.length,
+    processedBytes,
+    totalBytes
+  });
   const existing = await reusableCompletedMaterialization(
     manifestPath,
     artifactPath,
     expectedIdentity,
-    request.signal
+    request.signal,
+    emitReusableHashProgress
   );
   if (existing && receiptExactlyContainsRequestedClips(
-    existing,
+    existing.receipt,
     clips,
     handleMs,
     desiredEditableRanges
   )) {
     emitProgress(request.onProgress, {
       phase: "completed",
-      completedSegments: new Set(initialRuns.flatMap((run) => (
-        run.segments.map(segmentSemanticKey)
-      ))).size,
-      totalSegments: new Set(initialRuns.flatMap((run) => (
-        run.segments.map(segmentSemanticKey)
-      ))).size,
+      completedSegments: initialSegmentCount,
+      totalSegments: initialSegmentCount,
       completedBytes: 0
     });
     return {
-      manifest: manifestMaterialization(existing),
-      receipt: existing,
+      manifest: manifestMaterialization(existing.receipt),
+      receipt: existing.receipt,
       artifactPath,
+      artifactVerification: existing.artifactVerification,
       reused: true
     };
   }
@@ -4261,24 +5730,30 @@ export async function materializeChzzkVod(
       manifestPath,
       artifactPath,
       expectedIdentity,
-      jobSignal
+      jobSignal,
+      emitReusableHashProgress
     );
     if (
       afterLockExisting
       && receiptExactlyContainsRequestedClips(
-        afterLockExisting,
+        afterLockExisting.receipt,
         clips,
         handleMs,
         desiredEditableRanges
       )
     ) {
       return {
-        manifest: manifestMaterialization(afterLockExisting),
-        receipt: afterLockExisting,
+        manifest: manifestMaterialization(afterLockExisting.receipt),
+        receipt: afterLockExisting.receipt,
         artifactPath,
+        artifactVerification: afterLockExisting.artifactVerification,
         reused: true
       };
     }
+    const budgetTracker = await createChzzkConsumerScopeBudgetTracker(
+      consumerScopeDirectory,
+      inspectFileSystem
+    );
     const checkpoint = await loadCheckpoint(checkpointPath, currentResolved);
     const segmentPaths = new Map<string, string>();
     const completedSegmentKeys = new Set<string>();
@@ -4309,18 +5784,36 @@ export async function materializeChzzkVod(
         refreshResolved,
         sleep,
         signal: jobSignal,
-        assertLeaseOwned: lockLease.assertOwned
+        assertLeaseOwned: lockLease.assertOwned,
+        assertWriteCapacity: async (prospectiveBytes) => {
+          budgetTracker.assertCapacity(prospectiveBytes);
+        },
+        recordWrittenBytes: async (nextWriteBytes) => {
+          budgetTracker.recordWrittenBytes(nextWriteBytes);
+        },
+        reconcileWriteBudget: () => budgetTracker.reconcile(),
+        removeTrackedFile: async (filePath) => {
+          await removeTrackedChzzkFile(filePath, budgetTracker);
+        }
       });
       segmentPaths.set(key, result.filePath);
       completedSegmentKeys.add(key);
       downloadedBytes += result.downloadedBytes;
       if (!result.reused) {
-        await saveCheckpoint(
+        const replacedCheckpointBytes = await managedChzzkFileSizeIfExists(
+          checkpointPath
+        );
+        const checkpointBytes = await saveCheckpoint(
           checkpointPath,
           currentResolved,
           checkpoint,
-          lockLease.assertOwned
+          lockLease.assertOwned,
+          (bytes) => budgetTracker.assertCapacity(bytes)
         );
+        budgetTracker.recordWrittenBytes(checkpointBytes);
+        budgetTracker.recordDeletedBytes(replacedCheckpointBytes ?? 0);
+        await budgetTracker.refreshDiskHeadroom();
+        await budgetTracker.noteKnownCommit();
       }
       emitProgress(request.onProgress, {
         phase: "downloading",
@@ -4396,77 +5889,219 @@ export async function materializeChzzkVod(
       totalSegments: plannedSegmentKeys.size,
       completedBytes: downloadedBytes
     });
-    lockLease.assertOwned();
-    await rm(artifactPath, { force: true }).catch(() => undefined);
-    await remuxRuns({
+    const emitMuxDetail = (detail: ChzzkVodMuxDetailProgress): void => {
+      emitProgress(request.onProgress, {
+        phase: "muxing",
+        completedSegments: completedSegmentKeys.size,
+        totalSegments: plannedSegmentKeys.size,
+        completedBytes: downloadedBytes,
+        ...detail
+      });
+    };
+    const remuxed = await remuxRuns({
       runs: mergedRuns,
       segmentPaths,
+      checkpoint,
+      cacheIdentity: {
+        sourceVersionId: currentResolved.sourceVersionId,
+        timelineDigest: currentResolved.timelineDigest,
+        qualityIdentity: qualityIdentity(currentResolved.quality),
+        planFingerprint
+      },
+      budgetTracker,
       jobDirectory,
       artifactPath,
       runProcess,
       ffmpegBinary,
       ffprobeBinary,
       signal: jobSignal,
-      assertLeaseOwned: lockLease.assertOwned
+      assertLeaseOwned: lockLease.assertOwned,
+      setFinalConcatProgressInterval,
+      clearFinalConcatProgressInterval,
+      finalConcatProgressIntervalMs,
+      onProgress: emitMuxDetail
     });
-    const boundariesMs = windows.slice(0, -1).map((window) => window.mediaEndMs);
-    const artifactDurationMs = await inspectFinalArtifact(
-      artifactPath,
-      mediaDurationMs,
-      boundariesMs,
-      runProcess,
-      ffprobeBinary,
-      jobDirectory,
-      jobSignal
-    );
-    const artifactStatus = await stat(artifactPath);
-    const preparedAt = new Date().toISOString();
-    const manifest: ChzzkVodMaterializationManifest = {
-      schemaId: CHZZK_VOD_MATERIALIZATION_SCHEMA_ID,
-      materializationId,
-      planFingerprint,
-      canonicalUrl,
-      contentId: currentResolved.contentId,
-      durationMs: currentResolved.durationMs,
-      mediaDurationMs,
-      handleMs,
-      quality: currentResolved.quality,
-      timelineDigest: currentResolved.timelineDigest,
-      sourceVersionId: currentResolved.sourceVersionId,
-      clips: createReceiptClips(clipRanges),
-      windows,
-      artifact: {
-        hashSha256: await sha256File(artifactPath, jobSignal),
-        sizeBytes: artifactStatus.size,
-        durationMs: artifactDurationMs
-      },
-      preparedAt
-    };
-    assertPublicManifestIsSecretFree(manifest);
-    await atomicWriteJson(manifestPath, manifest, lockLease.assertOwned);
-    for (let index = 0; index < mergedRuns.length; index += 1) {
+    let stagedArtifactPath = remuxed.stagedArtifactPath;
+    try {
+      await syncChzzkPrivateFile(stagedArtifactPath);
+      const beforeFinalInspection = await lstat(stagedArtifactPath, {
+        bigint: true
+      });
+      const stagedSizeBytes = validatedChzzkPrivateFileSize(
+        beforeFinalInspection
+      );
+      if (stagedSizeBytes !== remuxed.stagedArtifactSizeBytes) {
+        fail("최종 로컬 MP4 크기가 병합 결과와 다릅니다.", "CACHE_INTEGRITY_FAILED");
+      }
+      const boundariesMs = windows.slice(0, -1).map((window) => window.mediaEndMs);
+      emitMuxDetail({
+        detailStage: "final-verify",
+        completedRuns: mergedRuns.length,
+        totalRuns: mergedRuns.length,
+        processedBytes: 0,
+        totalBytes: stagedSizeBytes
+      });
+      const artifactDurationMs = await inspectFinalArtifact(
+        stagedArtifactPath,
+        mediaDurationMs,
+        boundariesMs,
+        runProcess,
+        ffprobeBinary,
+        jobDirectory,
+        jobSignal
+      );
+      emitMuxDetail({
+        detailStage: "final-verify",
+        completedRuns: mergedRuns.length,
+        totalRuns: mergedRuns.length,
+        processedBytes: stagedSizeBytes,
+        totalBytes: stagedSizeBytes
+      });
+      emitMuxDetail({
+        detailStage: "final-hash",
+        completedRuns: mergedRuns.length,
+        totalRuns: mergedRuns.length,
+        processedBytes: 0,
+        totalBytes: stagedSizeBytes
+      });
+      const verifiedArtifact = await inspectChzzkPrivateFile(
+        stagedArtifactPath,
+        jobSignal,
+        (processedBytes, totalBytes) => emitMuxDetail({
+          detailStage: "final-hash",
+          completedRuns: mergedRuns.length,
+          totalRuns: mergedRuns.length,
+          processedBytes,
+          totalBytes
+        }),
+        true
+      );
+      if (!sameChzzkFileSnapshot(
+        beforeFinalInspection,
+        verifiedArtifact.status
+      )) {
+        fail("최종 로컬 MP4가 검증 중 바뀌었습니다.", "CACHE_INTEGRITY_FAILED");
+      }
+      emitMuxDetail({
+        detailStage: "publishing",
+        completedRuns: mergedRuns.length,
+        totalRuns: mergedRuns.length,
+        processedBytes: verifiedArtifact.sizeBytes,
+        totalBytes: verifiedArtifact.sizeBytes
+      });
       lockLease.assertOwned();
-      await rm(path.join(jobDirectory, `run-${index}.ts`), { force: true })
-        .catch(() => undefined);
+      // Install only the fully synced and verified staging inode. rename()
+      // atomically replaces an older artifact, so readers see either complete
+      // generation and never a missing/partial fixed path. The old manifest is
+      // intentionally left in place until the new artifact identity is proven;
+      // during that short window its digest check fails closed.
+      const replacedArtifactBytes = await managedChzzkFileSizeIfExists(
+        artifactPath
+      );
+      await rename(stagedArtifactPath, artifactPath);
+      budgetTracker.recordDeletedBytes(replacedArtifactBytes ?? 0);
+      await budgetTracker.refreshDiskHeadroom();
+      await syncChzzkParentDirectory(artifactPath);
+      stagedArtifactPath = "";
+      const publishedStatus = await lstat(artifactPath, { bigint: true });
+      validatedChzzkPrivateFileSize(publishedStatus);
+      if (!sameChzzkFileContentSnapshot(
+        verifiedArtifact.status,
+        publishedStatus
+      )) {
+        fail("게시된 최종 로컬 MP4가 검증한 파일과 다릅니다.", "CACHE_INTEGRITY_FAILED");
+      }
+      const publishedArtifactVerification = artifactVerificationFromPrivateFile({
+        ...verifiedArtifact,
+        status: publishedStatus
+      });
+      await budgetTracker.reconcile();
+      await dependencies.afterFinalArtifactPublishBeforeManifest?.();
+      const preparedAt = new Date().toISOString();
+      const manifest: ChzzkVodMaterializationManifest = {
+        schemaId: CHZZK_VOD_MATERIALIZATION_SCHEMA_ID,
+        materializationId,
+        planFingerprint,
+        canonicalUrl,
+        contentId: currentResolved.contentId,
+        durationMs: currentResolved.durationMs,
+        mediaDurationMs,
+        handleMs,
+        quality: currentResolved.quality,
+        timelineDigest: currentResolved.timelineDigest,
+        sourceVersionId: currentResolved.sourceVersionId,
+        clips: createReceiptClips(clipRanges),
+        windows,
+        artifact: {
+          hashSha256: verifiedArtifact.hashSha256,
+          sizeBytes: verifiedArtifact.sizeBytes,
+          durationMs: artifactDurationMs
+        },
+        preparedAt
+      };
+      assertPublicManifestIsSecretFree(manifest);
+      const manifestBytes = Buffer.byteLength(
+        `${JSON.stringify(manifest)}\n`,
+        "utf8"
+      );
+      const replacedManifestBytes = await managedChzzkFileSizeIfExists(
+        manifestPath
+      );
+      budgetTracker.assertCapacity(manifestBytes);
+      // The manifest is the publication pointer and is committed last via its
+      // own synced temporary file + atomic rename + parent-directory fsync.
+      await atomicWriteJson(
+        manifestPath,
+        manifest,
+        lockLease.assertOwned,
+        undefined,
+        true
+      );
+      budgetTracker.recordWrittenBytes(manifestBytes);
+      budgetTracker.recordDeletedBytes(replacedManifestBytes ?? 0);
+      await budgetTracker.refreshDiskHeadroom();
+      await budgetTracker.noteKnownCommit();
+      for (let index = 0; index < mergedRuns.length; index += 1) {
+        lockLease.assertOwned();
+        await removeTrackedChzzkFile(
+          path.join(jobDirectory, `run-${index}.ts`),
+          budgetTracker
+        );
+        lockLease.assertOwned();
+        await removeTrackedChzzkFile(
+          path.join(jobDirectory, runMp4FileName(index)),
+          budgetTracker
+        );
+        lockLease.assertOwned();
+        await removeTrackedChzzkFile(
+          path.join(jobDirectory, runReceiptFileName(index)),
+          budgetTracker
+        );
+      }
       lockLease.assertOwned();
-      await rm(path.join(jobDirectory, `run-${index}.mp4`), { force: true })
-        .catch(() => undefined);
+      await removeTrackedChzzkFile(
+        path.join(jobDirectory, "runs.concat.txt"),
+        budgetTracker
+      );
+      await budgetTracker.reconcile();
+      emitProgress(request.onProgress, {
+        phase: "completed",
+        completedSegments: completedSegmentKeys.size,
+        totalSegments: plannedSegmentKeys.size,
+        completedBytes: downloadedBytes
+      });
+      return {
+        manifest: manifestMaterialization(manifest),
+        receipt: manifest,
+        artifactPath,
+        artifactVerification: publishedArtifactVerification,
+        reused: false
+      };
+    } finally {
+      if (stagedArtifactPath) {
+        await rm(stagedArtifactPath, { force: true }).catch(() => undefined);
+      }
     }
-    lockLease.assertOwned();
-    await rm(path.join(jobDirectory, "runs.concat.txt"), { force: true })
-      .catch(() => undefined);
-    emitProgress(request.onProgress, {
-      phase: "completed",
-      completedSegments: completedSegmentKeys.size,
-      totalSegments: plannedSegmentKeys.size,
-      completedBytes: downloadedBytes
-    });
-    return {
-      manifest: manifestMaterialization(manifest),
-      receipt: manifest,
-      artifactPath,
-      reused: false
-    };
   } catch (error) {
     jobFailed = true;
     if (lockLease.failure) {
