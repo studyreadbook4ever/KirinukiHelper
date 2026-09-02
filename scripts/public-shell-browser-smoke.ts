@@ -38,7 +38,8 @@ import {
 } from "./public-shell-server-core.js";
 import { PUBLIC_WEB_PACKAGE_FILES } from "./web-package-files.js";
 import {
-  CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+  CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
+  CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA
 } from "./chzzk-vod-job-manager.js";
 import {
   LOCAL_MEDIA_ENGINE_API_PROTOCOL,
@@ -68,6 +69,9 @@ import {
   type LocalMediaEngineV2Fixture,
   type LocalMediaEngineV2FixtureRecord
 } from "./local-media-engine-v2-fixture.js";
+import {
+  PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY
+} from "../src/web/pending-vod-editor-handoff.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const maximumArchiveBytes = 32 * 1024 * 1024;
@@ -112,6 +116,7 @@ interface ProxyRequestRecord {
 type LocalEngineProbeRecord = LocalMediaEngineV2FixtureRecord;
 
 interface LocalEngineSemanticFixtureState {
+  materializationJobIds: string[];
   materializationRequests: number;
   mediaRequests: number;
   sessionRequests: number;
@@ -153,6 +158,48 @@ function assert(condition: unknown, message: string): asserts condition {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function vodMaterializationJobId(
+  request: Readonly<Record<string, unknown>>
+): string {
+  const clips = (Array.isArray(request.clips) ? request.clips : [])
+    .filter(isRecord)
+    .map((clip) => ({
+      id: String(clip.id || ""),
+      startMs: Number(clip.startMs),
+      endMs: Number(clip.endMs)
+    }))
+    .sort((left, right) => (
+      left.startMs - right.startMs
+      || left.endMs - right.endMs
+      || left.id.localeCompare(right.id)
+    ));
+  const editableRanges = Array.isArray(request.editableRanges)
+    ? request.editableRanges
+      .filter(isRecord)
+      .map((range) => ({
+        id: String(range.id || ""),
+        startMs: Number(range.startMs),
+        endMs: Number(range.endMs)
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id))
+    : null;
+  const canonical = JSON.stringify({
+    consumerId: String(request.consumerId || ""),
+    continuationPolicy: String(request.continuationPolicy || ""),
+    sourceUrl: String(request.sourceUrl || ""),
+    sourceClockIdentity: request.sourceClockIdentity ?? null,
+    handleMs: Number(request.handleMs),
+    clips,
+    editableRanges,
+    resume: request.resume ?? null,
+    base: request.base ?? null
+  });
+  const fingerprint = createHash("sha256")
+    .update(canonical)
+    .digest("base64url");
+  return `vod_${fingerprint.slice(0, 40)}`;
 }
 
 function errorMessage(error: unknown): string {
@@ -477,7 +524,7 @@ async function createLocalEngineV2ProbeFixture(
   fixtureState: LocalEngineSemanticFixtureState
 ): Promise<Readonly<LocalMediaEngineV2Fixture>> {
   const mediaAccess = "M".repeat(43);
-  const jobId = "semantic_browser_job_0001";
+  const jobIds = new Set<string>();
   const publicOrigin = `https://${PUBLIC_SHELL_CANONICAL_HOST}`;
   let fixture: Readonly<LocalMediaEngineV2Fixture> | null = null;
   fixture = await createLocalMediaEngineV2Fixture({
@@ -509,11 +556,15 @@ async function createLocalEngineV2ProbeFixture(
       const sourceStartMs = Number(clip?.startMs);
       const sourceEndMs = Number(clip?.endMs);
       const previewRequest = clipId.startsWith("preview-");
+      const continuationPolicy = previewRequest
+        ? "ephemeral-preview"
+        : "bounded-persistent-editor";
       fixtureState.sessionRequests = fixture?.sessions.length || 0;
       assert(
         control.protocol === CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
           && control.mediaAccess === null
           && body.schema === CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+          && body.continuationPolicy === continuationPolicy
           && control.session.projectId === body.consumerId
           && control.session.sourceUrl === "https://chzzk.naver.com/video/14252987"
           && JSON.stringify(control.session.actions)
@@ -538,16 +589,26 @@ async function createLocalEngineV2ProbeFixture(
       const editableSourceEndMs = Math.min(600_000, sourceEndMs + 10_000);
       const materializedDurationMs = editableSourceEndMs - editableSourceStartMs;
       const planFingerprint = "b".repeat(64);
+      const jobId = vodMaterializationJobId(body);
+      jobIds.add(jobId);
+      if (!fixtureState.materializationJobIds.includes(jobId)) {
+        fixtureState.materializationJobIds.push(jobId);
+      }
       fixtureState.materializationRequests += 1;
       return {
         status: 202,
         payload: {
-          schema: "chzzk-kirinuki-vod-materialization-status/v1",
+          schema: CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA,
           jobId,
+          continuationPolicy,
           state: "completed",
           progress: 1,
           message: "공개 HTTPS semantic v2 fixture 준비 완료",
           reused: false,
+          observation: {
+            state: "detached",
+            lastActivityAt: "2026-09-02T10:00:00.000Z"
+          },
           materialization: {
             schema: "chzzk-kirinuki-chzzk-vod-materialization/v2",
             materializationId: planFingerprint.slice(0, 32),
@@ -594,7 +655,8 @@ async function createLocalEngineV2ProbeFixture(
     onMediaRequest: ({ method, path: mediaPath, request, response }) => {
       const requestUrl = new URL(mediaPath, "http://127.0.0.1:4319");
       if (
-        requestUrl.pathname !== `/v1/vod/media/${jobId}`
+        !requestUrl.pathname.startsWith("/v1/vod/media/")
+        || !jobIds.has(requestUrl.pathname.slice("/v1/vod/media/".length))
         || requestUrl.searchParams.get("access") !== mediaAccess
       ) {
         return false;
@@ -1353,6 +1415,7 @@ async function main(): Promise<void> {
   const proxyRecords: ProxyRequestRecord[] = [];
   const localEngineProbeRecords: LocalEngineProbeRecord[] = [];
   const semanticFixtureState: LocalEngineSemanticFixtureState = {
+    materializationJobIds: [],
     materializationRequests: 0,
     mediaRequests: 0,
     sessionRequests: 0
@@ -1484,6 +1547,7 @@ async function main(): Promise<void> {
     readonly publicInert: boolean;
     readonly resourceEntries: readonly { readonly initiatorType: string; readonly name: string }[];
     readonly scriptSources: readonly string[];
+    readonly sessionStorageEntries: readonly (readonly [string, string])[];
     readonly sessionStorageLength: number;
     readonly sourceInputLabel: string;
     readonly startTitle: string;
@@ -1523,6 +1587,7 @@ async function main(): Promise<void> {
         name: entry.name
       })),
       scriptSources: Array.from(document.scripts).map((script) => script.src),
+      sessionStorageEntries: Object.entries(sessionStorage),
       sessionStorageLength: sessionStorage.length,
       sourceInputLabel: document.querySelector('label[for="source-url"], label:has(#source-url) > span')?.textContent || "",
       startTitle: document.querySelector("#start-title")?.textContent || "",
@@ -1564,9 +1629,15 @@ async function main(): Promise<void> {
   );
   assert(
     page.localStorageLength === 0
-      && page.sessionStorageLength === 0
+      && page.sessionStorageLength === 1
+      && page.sessionStorageEntries.length === 1
+      && page.sessionStorageEntries[0]?.[0]
+        === PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY
+      && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(
+        page.sessionStorageEntries[0]?.[1] || ""
+      )
       && page.cookie === "",
-    "새 공개 웹 시작 화면이 사용자 동작 전에 문자열 저장소 또는 쿠키를 만들었습니다."
+    "새 공개 웹 시작 화면이 탭 범위 pending handoff owner 외 문자열 저장소 또는 쿠키를 만들었습니다."
   );
   assert(
     page.resourceEntries.some(({ name, initiatorType }) => (
@@ -2217,9 +2288,11 @@ async function main(): Promise<void> {
         && value.jobHidden
         && value.mediaName === "치지직 편집 영상 준비됨"
         && value.previewReadyState >= 1
-        && value.previewUrl.startsWith(
-          "http://127.0.0.1:4319/v1/vod/media/semantic_browser_job_0001?access="
-        )
+        && semanticFixtureState.materializationJobIds.some((jobId) => (
+          value.previewUrl.startsWith(
+            `http://127.0.0.1:4319/v1/vod/media/${jobId}?access=`
+          )
+        ))
         && Math.abs(value.duration - 21) < 0.1
         && value.toast.includes("필요한 편집 범위를 이 기기의 로컬 영상에 준비했습니다")
     ),

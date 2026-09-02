@@ -21,9 +21,9 @@ import {
 } from "./local-media-engine-transport.js";
 
 export const CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA =
-  "chzzk-kirinuki-vod-materialization-request/v3";
+  "chzzk-kirinuki-vod-materialization-request/v4";
 export const CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA =
-  "chzzk-kirinuki-vod-materialization-status/v1";
+  "chzzk-kirinuki-vod-materialization-status/v2";
 export const CHZZK_VOD_CACHE_PURGE_REQUEST_SCHEMA =
   "chzzk-kirinuki-vod-cache-purge-request/v1";
 export const CHZZK_VOD_CACHE_PURGE_RESULT_SCHEMA =
@@ -51,6 +51,19 @@ export type ChzzkVodJobState =
   | "completed"
   | "failed"
   | "cancelled";
+
+export type ChzzkVodContinuationPolicy =
+  | "bounded-persistent-editor"
+  | "ephemeral-preview";
+
+export type ChzzkVodObservationState = "attached" | "detached";
+
+export type ChzzkVodCancellationReason =
+  | "user-requested"
+  | "queued-observer-expired"
+  | "ephemeral-observer-expired"
+  | "engine-shutdown"
+  | "execution-deadline";
 
 export interface ChzzkVodClipRequest {
   id: string;
@@ -85,6 +98,16 @@ export interface ChzzkVodMaterializationStatus {
   progress: number;
   message: string;
   reused: boolean;
+  continuationPolicy: ChzzkVodContinuationPolicy;
+  observation: {
+    state: ChzzkVodObservationState;
+    lastActivityAt: string;
+  };
+  cancellation?: {
+    reason: ChzzkVodCancellationReason;
+    phase: Exclude<ChzzkVodJobState, "completed" | "failed" | "cancelled">;
+    elapsedMs: number;
+  };
   materialization?: unknown;
   media?: ChzzkVodLocalMedia;
   error?: {
@@ -153,6 +176,7 @@ export interface StartChzzkVodMaterializationOptions
   sourceClockIdentity?: unknown;
   clips: readonly ChzzkVodClipRequest[];
   rightsConfirmed: boolean;
+  continuationPolicy: ChzzkVodContinuationPolicy;
   handleMs?: number;
   editableRanges?: readonly ChzzkVodEditableRangeRequest[];
   resume?: ChzzkVodResumeReference;
@@ -213,8 +237,60 @@ const CHZZK_VOD_JOB_STATES = new Set<ChzzkVodJobState>([
   "cancelled"
 ]);
 
+const CHZZK_VOD_CONTINUATION_POLICIES = new Set<ChzzkVodContinuationPolicy>([
+  "bounded-persistent-editor",
+  "ephemeral-preview"
+]);
+
+const CHZZK_VOD_OBSERVATION_STATES = new Set<ChzzkVodObservationState>([
+  "attached",
+  "detached"
+]);
+
+const CHZZK_VOD_CANCELLATION_REASONS = new Set<ChzzkVodCancellationReason>([
+  "user-requested",
+  "queued-observer-expired",
+  "ephemeral-observer-expired",
+  "engine-shutdown",
+  "execution-deadline"
+]);
+
+const CHZZK_VOD_ACTIVE_STAGES = new Set<Exclude<
+  ChzzkVodJobState,
+  "completed" | "failed" | "cancelled"
+>>([
+  "queued",
+  "resolving",
+  "planning",
+  "downloading",
+  "verifying",
+  "muxing"
+]);
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeContinuationPolicy(
+  value: unknown
+): ChzzkVodContinuationPolicy {
+  const policy = String(value || "") as ChzzkVodContinuationPolicy;
+  if (!CHZZK_VOD_CONTINUATION_POLICIES.has(policy)) {
+    throw new Error("로컬 VOD 작업 유지 정책이 올바르지 않습니다.");
+  }
+  return policy;
+}
+
+function normalizedPublicIsoTimestamp(value: unknown, label: string): string {
+  const timestamp = typeof value === "string" ? value.trim() : "";
+  const milliseconds = Date.parse(timestamp);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(timestamp)
+    || !Number.isFinite(milliseconds)
+  ) {
+    throw new Error(`${label}이 올바르지 않습니다.`);
+  }
+  return new Date(milliseconds).toISOString();
 }
 
 function normalizeCacheConsumerId(value: unknown): string {
@@ -544,14 +620,69 @@ export function normalizeChzzkVodMaterializationStatus(
   if (!Number.isFinite(progressValue) || progressValue < 0 || progressValue > 1) {
     throw new Error("로컬 VOD 작업 진행률이 올바르지 않습니다.");
   }
+  const continuationPolicy = normalizeContinuationPolicy(
+    value.continuationPolicy
+  );
+  if (
+    !isRecord(value.observation)
+    || Object.keys(value.observation).some((key) => ![
+      "state",
+      "lastActivityAt"
+    ].includes(key))
+  ) {
+    throw new Error("로컬 VOD 작업 관찰 상태가 올바르지 않습니다.");
+  }
+  const observationState = String(
+    value.observation.state || ""
+  ) as ChzzkVodObservationState;
+  if (!CHZZK_VOD_OBSERVATION_STATES.has(observationState)) {
+    throw new Error("로컬 VOD 작업 관찰 상태가 올바르지 않습니다.");
+  }
   const normalized: ChzzkVodMaterializationStatus = {
     schema: CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA,
     jobId,
     state,
     progress: progressValue,
     message: boundedString(value.message, "진행 메시지", 500),
-    reused: Boolean(value.reused)
+    reused: Boolean(value.reused),
+    continuationPolicy,
+    observation: {
+      state: observationState,
+      lastActivityAt: normalizedPublicIsoTimestamp(
+        value.observation.lastActivityAt,
+        "로컬 VOD 작업의 마지막 활동 시각"
+      )
+    }
   };
+  if (value.cancellation !== undefined) {
+    if (
+      !isRecord(value.cancellation)
+      || Object.keys(value.cancellation).some((key) => ![
+        "reason",
+        "phase",
+        "elapsedMs"
+      ].includes(key))
+    ) {
+      throw new Error("로컬 VOD 작업 취소 정보가 올바르지 않습니다.");
+    }
+    const reason = String(
+      value.cancellation.reason || ""
+    ) as ChzzkVodCancellationReason;
+    const phase = String(value.cancellation.phase || "") as Exclude<
+      ChzzkVodJobState,
+      "completed" | "failed" | "cancelled"
+    >;
+    const elapsedMs = Number(value.cancellation.elapsedMs);
+    if (
+      !CHZZK_VOD_CANCELLATION_REASONS.has(reason)
+      || !CHZZK_VOD_ACTIVE_STAGES.has(phase)
+      || !Number.isSafeInteger(elapsedMs)
+      || elapsedMs < 0
+    ) {
+      throw new Error("로컬 VOD 작업 취소 정보가 올바르지 않습니다.");
+    }
+    normalized.cancellation = { reason, phase, elapsedMs };
+  }
   if (value.materialization !== undefined) {
     normalized.materialization = value.materialization;
   }
@@ -572,6 +703,12 @@ export function normalizeChzzkVodMaterializationStatus(
   }
   if (state === "failed" && !normalized.error) {
     throw new Error("실패한 로컬 VOD 작업의 오류 정보가 빠졌습니다.");
+  }
+  if (state === "cancelled" && !normalized.cancellation) {
+    throw new Error("취소된 로컬 VOD 작업의 취소 사유가 빠졌습니다.");
+  }
+  if (state !== "cancelled" && normalized.cancellation) {
+    throw new Error("진행 중이거나 완료된 로컬 VOD 작업에 취소 사유가 있습니다.");
   }
   return normalized;
 }
@@ -852,6 +989,7 @@ export async function startChzzkVodMaterialization({
   sourceClockIdentity,
   clips,
   rightsConfirmed,
+  continuationPolicy,
   editableRanges,
   resume,
   base,
@@ -870,6 +1008,9 @@ export async function startChzzkVodMaterialization({
     throw new Error("VOD 재개와 범위 확장 기준은 동시에 사용할 수 없습니다.");
   }
   const normalizedClips = normalizeClipRequests(clips);
+  const normalizedContinuationPolicy = normalizeContinuationPolicy(
+    continuationPolicy
+  );
   const normalizedConsumerId = normalizeCacheConsumerId(consumerId);
   const normalizedSourceUrl = String(sourceUrl || "").trim();
   const normalizedSourceClockIdentity = normalizedRequestSourceClockIdentity(
@@ -891,6 +1032,7 @@ export async function startChzzkVodMaterialization({
       ...(normalizedSourceClockIdentity
         ? { sourceClockIdentity: normalizedSourceClockIdentity }
         : {}),
+      continuationPolicy: normalizedContinuationPolicy,
       clips: normalizedClips,
       ...(normalizedEditableRanges
         ? { editableRanges: normalizedEditableRanges }
@@ -908,7 +1050,11 @@ export async function startChzzkVodMaterialization({
     credentials: "omit",
     redirect: "error"
     }, fetchImpl);
-  return parseStatusResponse(response, endpoint);
+  const status = await parseStatusResponse(response, endpoint);
+  if (status.continuationPolicy !== normalizedContinuationPolicy) {
+    throw new Error("로컬 VOD 작업 유지 정책이 요청과 다릅니다.");
+  }
+  return status;
 }
 
 export async function getChzzkVodMaterializationStatus({
@@ -1094,6 +1240,41 @@ function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+function materializationCancellationError(
+  status: ChzzkVodMaterializationStatus
+): Error {
+  const reason = status.cancellation?.reason;
+  if (reason === "user-requested") {
+    return new DOMException("VOD 구간 준비를 취소했습니다.", "AbortError");
+  }
+  const failures: Readonly<Record<
+    Exclude<ChzzkVodCancellationReason, "user-requested">,
+    { code: string; message: string }
+  >> = {
+    "queued-observer-expired": {
+      code: "QUEUED_OBSERVER_EXPIRED",
+      message: "대기 중 브라우저 연결이 만료되어 VOD 구간 준비를 다시 연결해야 합니다."
+    },
+    "ephemeral-observer-expired": {
+      code: "EPHEMERAL_OBSERVER_EXPIRED",
+      message: "로컬 미리보기 연결이 만료되었습니다. 필요한 위치에서 다시 준비해 주세요."
+    },
+    "engine-shutdown": {
+      code: "ENGINE_SHUTDOWN",
+      message: "영상 준비 도우미가 종료되어 VOD 구간 준비가 중단되었습니다. 도우미 연결을 다시 확인해 주세요."
+    },
+    "execution-deadline": {
+      code: "EXECUTION_DEADLINE",
+      message: "VOD 구간 준비가 안전 실행 시간 한도를 넘었습니다. 선택한 구간을 확인한 뒤 다시 시도해 주세요."
+    }
+  };
+  const failure = reason ? failures[reason] : undefined;
+  return new ChzzkVodMaterializationClientError(
+    failure?.message || "VOD 구간 준비가 사용자 요청과 다른 이유로 중단되었습니다.",
+    failure?.code || "MATERIALIZATION_CANCELLED"
+  );
+}
+
 export async function waitForChzzkVodMaterialization({
   endpoint,
   token,
@@ -1123,7 +1304,7 @@ export async function waitForChzzkVodMaterialization({
       );
     }
     if (status.state === "cancelled") {
-      throw new DOMException("VOD 구간 준비를 취소했습니다.", "AbortError");
+      throw materializationCancellationError(status);
     }
     await wait(interval, signal);
   }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import {
   access,
@@ -35,6 +36,11 @@ import {
   sessionArchiveCaptureFromJson
 } from "../src/web/session-archive-capture.js";
 import {
+  PENDING_VOD_EDITOR_HANDOFF_SCHEMA,
+  PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY,
+  PENDING_VOD_EDITOR_HANDOFF_STORAGE_PREFIX
+} from "../src/web/pending-vod-editor-handoff.js";
+import {
   LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
   LOCAL_MEDIA_ENGINE_PAIRING_STATE_HEADER,
   LOCAL_MEDIA_ENGINE_SERVER_CHALLENGE_HEADER,
@@ -56,6 +62,10 @@ import {
   type LocalMediaEngineV2Fixture,
   type LocalMediaEngineV2FixtureRecord
 } from "./local-media-engine-v2-fixture.js";
+import {
+  CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
+  CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA
+} from "./chzzk-vod-job-manager.js";
 import { buildWebJavaScript } from "./web-javascript-build.js";
 import {
   PINNED_WEB_ENGINE_RELEASE_CHANNEL,
@@ -226,6 +236,48 @@ let cleanupPromise: Promise<void> | null = null;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function vodMaterializationJobId(
+  request: Readonly<Record<string, unknown>>
+): string {
+  const clips = (Array.isArray(request.clips) ? request.clips : [])
+    .filter(isRecord)
+    .map((clip) => ({
+      id: String(clip.id || ""),
+      startMs: Number(clip.startMs),
+      endMs: Number(clip.endMs)
+    }))
+    .sort((left, right) => (
+      left.startMs - right.startMs
+      || left.endMs - right.endMs
+      || left.id.localeCompare(right.id)
+    ));
+  const editableRanges = Array.isArray(request.editableRanges)
+    ? request.editableRanges
+      .filter(isRecord)
+      .map((range) => ({
+        id: String(range.id || ""),
+        startMs: Number(range.startMs),
+        endMs: Number(range.endMs)
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id))
+    : null;
+  const canonical = JSON.stringify({
+    consumerId: String(request.consumerId || ""),
+    continuationPolicy: String(request.continuationPolicy || ""),
+    sourceUrl: String(request.sourceUrl || ""),
+    sourceClockIdentity: request.sourceClockIdentity ?? null,
+    handleMs: Number(request.handleMs),
+    clips,
+    editableRanges,
+    resume: request.resume ?? null,
+    base: request.base ?? null
+  });
+  const fingerprint = createHash("sha256")
+    .update(canonical)
+    .digest("base64url");
+  return `vod_${fingerprint.slice(0, 40)}`;
 }
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -833,25 +885,29 @@ interface LateMaterializationFixtureSnapshot {
   readonly pairedSessionScopes: readonly string[];
   readonly uniqueSessionTransportCount: number;
   readonly aStarted: boolean;
+  readonly aJobId: string;
   readonly aConsumerId: string;
   readonly aSourceUrl: string;
   readonly aStatusPolls: number;
   readonly aExplicitCancelRequests: number;
-  readonly aAbandonedJobsReclaimed: number;
+  readonly aObserverDetachments: number;
+  readonly aObservationState: "attached" | "detached";
   readonly aRunnerAborted: boolean;
   readonly aRunnerSettled: boolean;
   readonly aSlotReleased: boolean;
-  readonly aLateCompletionDiscarded: boolean;
-  readonly aLateArtifactExposed: boolean;
+  readonly aCompletedAfterDetach: boolean;
+  readonly aArtifactRetained: boolean;
   readonly aCachePurgeRequests: number;
   readonly aMediaRequests: number;
+  readonly bJobId: string;
   readonly bStartRequests: number;
   readonly bReusedStartRequests: number;
+  readonly bObserverDocumentCount: number;
   readonly bRequestBodies: readonly string[];
   readonly bConsumerId: string;
-  readonly bQueuedBeforeReclaim: boolean;
+  readonly bQueuedBeforeACompletion: boolean;
   readonly bStatusPolls: number;
-  readonly bStartedAfterReclaim: boolean;
+  readonly bStartedAfterACompletion: boolean;
   readonly bCompleted: boolean;
   readonly bMediaRequests: number;
   readonly unexpectedRequests: readonly string[];
@@ -859,16 +915,17 @@ interface LateMaterializationFixtureSnapshot {
 
 interface LateMaterializationFixtureInterception {
   readonly snapshot: () => LateMaterializationFixtureSnapshot;
+  readonly releasePersistentA: () => void;
   readonly assertHealthy: () => void;
   readonly close: () => Promise<void>;
 }
 
-async function createLeaseReclaimFixtureMedia(): Promise<Buffer> {
+async function createPersistentSlotFixtureMedia(): Promise<Buffer> {
   const ffmpeg = await resolveExecutable(
     "FFMPEG_BINARY",
     process.platform === "win32" ? ["ffmpeg.exe", "ffmpeg"] : ["ffmpeg"]
   );
-  const outputPath = path.join(tempRoot, "lease-reclaim-b.mp4");
+  const outputPath = path.join(tempRoot, "persistent-slot-b.mp4");
   const stderr: Buffer[] = [];
   const child = spawn(ffmpeg, [
     "-hide_banner", "-loglevel", "error", "-nostdin",
@@ -899,67 +956,106 @@ async function installLateMaterializationV2Fixture({
   sourceAUrl: string;
   sourceBUrl: string;
 }): Promise<LateMaterializationFixtureInterception> {
-  const observerLeaseTtlMs = 2_000;
-  const bMediaBytes = await createLeaseReclaimFixtureMedia();
+  const observerLeaseTtlMs = 6_000;
+  const bMediaBytes = await createPersistentSlotFixtureMedia();
   const state = {
     interceptedUrls: [] as string[],
     pairedSessionCount: 0,
     pairedSessionScopes: [] as string[],
     uniqueSessionTransportCount: 0,
     aStarted: false,
+    aJobId: "",
     aConsumerId: "",
     aSourceUrl: "",
     aStatusPolls: 0,
     aExplicitCancelRequests: 0,
-    aAbandonedJobsReclaimed: 0,
+    aObserverDetachments: 0,
+    aObservationState: "attached" as "attached" | "detached",
     aRunnerAborted: false,
     aRunnerSettled: false,
     aSlotReleased: false,
-    aLateCompletionDiscarded: false,
-    aLateArtifactExposed: false,
+    aCompletedAfterDetach: false,
+    aArtifactRetained: false,
     aCachePurgeRequests: 0,
     aMediaRequests: 0,
+    bJobId: "",
     bStartRequests: 0,
     bReusedStartRequests: 0,
+    bObserverDocumentCount: 0,
     bRequestBodies: [] as string[],
     bConsumerId: "",
-    bQueuedBeforeReclaim: false,
+    bQueuedBeforeACompletion: false,
     bStatusPolls: 0,
-    bStartedAfterReclaim: false,
+    bStartedAfterACompletion: false,
     bCompleted: false,
     bMediaRequests: 0,
     unexpectedRequests: [] as string[]
   };
-  const aJobId = "late_a_job_00000001";
-  const bJobId = "lease_b_job_00000001";
+  let aJobId = "";
+  let bJobId = "";
+  const aMediaAccess = Buffer.alloc(32, 0x59).toString("base64url");
   const bMediaAccess = Buffer.alloc(32, 0x5a).toString("base64url");
   let aObserverNonce = "";
   let bObserverNonce = "";
+  const bObserverNonces = new Set<string>();
+  let aRequest: Record<string, unknown> | null = null;
+  let aRequestIdentity = "";
   let bRequest: Record<string, unknown> | null = null;
   let bRequestIdentity = "";
   let aLeaseTimer: ReturnType<typeof setTimeout> | null = null;
   let aRunnerSettleTimer: ReturnType<typeof setTimeout> | null = null;
+  let allowPersistentACompletion = false;
   let fixtureClosed = false;
   let fixtureError: Error | null = null;
 
-  const queuedAStatus = () => ({
-    schema: "chzzk-kirinuki-vod-materialization-status/v1",
+  const activeAStatus = () => ({
+    schema: CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA,
     jobId: aJobId,
+    continuationPolicy: "bounded-persistent-editor",
     state: "downloading",
     progress: 0.72,
     message: "A fixture materialization is deliberately finishing late",
-    reused: false
+    reused: false,
+    observation: {
+      state: state.aObservationState,
+      lastActivityAt: "2026-09-02T10:00:00.000Z"
+    }
   });
   const queuedBStatus = () => ({
-    schema: "chzzk-kirinuki-vod-materialization-status/v1",
+    schema: CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA,
     jobId: bJobId,
+    continuationPolicy: "bounded-persistent-editor",
     state: "queued",
     progress: 0,
-    message: "B waits for the abandoned A runner slot",
-    reused: false
+    message: "B waits for persistent A to finish and release its runner slot",
+    reused: false,
+    observation: {
+      state: "attached",
+      lastActivityAt: "2026-09-02T10:00:01.000Z"
+    }
   });
-  const completedBStatus = (reused = false) => {
-    const clips = Array.isArray(bRequest?.clips) ? bRequest.clips : [];
+  const completedStatus = ({
+    request,
+    jobId,
+    contentId,
+    planFingerprint,
+    mediaAccess,
+    mediaName,
+    message,
+    windowId,
+    reused = false
+  }: {
+    request: Record<string, unknown> | null;
+    jobId: string;
+    contentId: string;
+    planFingerprint: string;
+    mediaAccess: string;
+    mediaName: string;
+    message: string;
+    windowId: string;
+    reused?: boolean;
+  }) => {
+    const clips = Array.isArray(request?.clips) ? request.clips : [];
     if (clips.length !== 1 || !isRecord(clips[0])) {
       throw new Error("lease B fixture는 정확히 한 개의 materialization clip을 기대합니다.");
     }
@@ -976,8 +1072,8 @@ async function installLateMaterializationV2Fixture({
     ) {
       throw new Error("lease B fixture materialization clip identity가 올바르지 않습니다.");
     }
-    const requestedEditableRanges = Array.isArray(bRequest?.editableRanges)
-      ? bRequest.editableRanges
+    const requestedEditableRanges = Array.isArray(request?.editableRanges)
+      ? request.editableRanges
       : [];
     const requestedEditable = requestedEditableRanges.find((candidate) => (
       isRecord(candidate) && String(candidate.id || "") === clipId
@@ -999,14 +1095,18 @@ async function installLateMaterializationV2Fixture({
     }
     const mediaDurationMs = editableSourceEndMs - editableSourceStartMs;
     assert(mediaDurationMs === 34_500, `lease B fixture duration 불일치: ${mediaDurationMs}`);
-    const planFingerprint = "c".repeat(64);
     return {
-      schema: "chzzk-kirinuki-vod-materialization-status/v1",
-      jobId: bJobId,
+      schema: CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA,
+      jobId,
+      continuationPolicy: "bounded-persistent-editor",
       state: "completed",
       progress: 1,
-      message: "B completed after A observer lease reclamation",
+      message,
       reused,
+      observation: {
+        state: "detached",
+        lastActivityAt: "2026-09-02T10:00:02.000Z"
+      },
       materialization: {
         schema: "chzzk-kirinuki-chzzk-vod-materialization/v2",
         materializationId: planFingerprint.slice(0, 32),
@@ -1014,14 +1114,14 @@ async function installLateMaterializationV2Fixture({
         source: {
           platform: "CHZZK",
           contentType: "vod",
-          contentId: "14514981",
+          contentId,
           sourceVersionId: "d".repeat(64)
         },
         sourceDurationMs: Math.max(600_000, editableSourceEndMs),
         handleMs: 10_000,
         mediaDurationMs,
         windows: [{
-          id: "lease-b-window-1",
+          id: windowId,
           editableSourceStartMs,
           editableSourceEndMs,
           fetchedSourceStartMs: editableSourceStartMs,
@@ -1041,36 +1141,77 @@ async function installLateMaterializationV2Fixture({
         localOnly: true
       },
       media: {
-        url: `http://127.0.0.1:4319/v1/vod/media/${bJobId}?access=${bMediaAccess}`,
-        name: "lease-b-materialized.mp4",
+        url: `http://127.0.0.1:4319/v1/vod/media/${jobId}?access=${mediaAccess}`,
+        name: mediaName,
         size: bMediaBytes.byteLength,
         type: "video/mp4",
         lastModified: 1_787_270_400_000
       }
     };
   };
-  const finishAbandonedARunner = () => {
+  const completedAStatus = () => completedStatus({
+    request: aRequest,
+    jobId: aJobId,
+    contentId: "14514980",
+    planFingerprint: "a".repeat(64),
+    mediaAccess: aMediaAccess,
+    mediaName: "persistent-a-materialized.mp4",
+    message: "Persistent A completed after its observer detached",
+    windowId: "persistent-a-window-1"
+  });
+  const completedBStatus = (reused = false) => completedStatus({
+    request: bRequest,
+    jobId: bJobId,
+    contentId: "14514981",
+    planFingerprint: "c".repeat(64),
+    mediaAccess: bMediaAccess,
+    mediaName: "lease-b-materialized.mp4",
+    message: "B completed after persistent A released its runner slot",
+    windowId: "lease-b-window-1",
+    reused
+  });
+  const finishPersistentARunner = () => {
     if (fixtureClosed || state.aRunnerSettled) return;
     state.aRunnerSettled = true;
-    state.aLateCompletionDiscarded = true;
-    state.aLateArtifactExposed = false;
+    state.aCompletedAfterDetach = state.aObservationState === "detached";
+    state.aArtifactRetained = true;
     state.aSlotReleased = true;
-    if (state.bStartRequests === 1) {
-      state.bStartedAfterReclaim = true;
+    if (state.bStartRequests >= 1) {
+      state.bStartedAfterACompletion = true;
       state.bCompleted = true;
     }
   };
-  const expireAObserverLease = () => {
-    aLeaseTimer = null;
-    if (fixtureClosed || state.aRunnerAborted) return;
-    state.aAbandonedJobsReclaimed += 1;
-    state.aRunnerAborted = true;
-    aRunnerSettleTimer = setTimeout(finishAbandonedARunner, 50);
+  const schedulePersistentARunnerCompletion = () => {
+    if (
+      fixtureClosed
+      || state.aRunnerSettled
+      || aRunnerSettleTimer
+      || !allowPersistentACompletion
+      || state.aObservationState !== "detached"
+      || state.bStatusPolls < 1
+    ) {
+      return;
+    }
+    // Hold A long enough for the refreshed document to read back its durable
+    // pending envelope after B's status-first reattachment. This makes the proof
+    // deterministic instead of racing the editor navigation that clears it.
+    aRunnerSettleTimer = setTimeout(finishPersistentARunner, 1_500);
     aRunnerSettleTimer.unref();
   };
+  const expireAObserverLease = () => {
+    aLeaseTimer = null;
+    if (fixtureClosed || state.aRunnerAborted || state.aRunnerSettled) return;
+    state.aObserverDetachments += 1;
+    state.aObservationState = "detached";
+    // A persistent editor job owns its bounded helper execution after the
+    // browser document disappears. Completion, not observer expiry, releases
+    // the single runner slot to B.
+    schedulePersistentARunnerCompletion();
+  };
   const renewAObserverLease = () => {
-    if (fixtureClosed || state.aRunnerAborted) return;
+    if (fixtureClosed || state.aRunnerAborted || state.aRunnerSettled) return;
     if (aLeaseTimer) clearTimeout(aLeaseTimer);
+    state.aObservationState = "attached";
     aLeaseTimer = setTimeout(expireAObserverLease, observerLeaseTtlMs);
     aLeaseTimer.unref();
   };
@@ -1083,6 +1224,23 @@ async function installLateMaterializationV2Fixture({
     records: fixtureRecords,
     onControlRequest: async (request) => {
       const url = new URL(request.path, "http://127.0.0.1:4319");
+      if (
+        /^\/v1\/vod\/materializations\/[^/]+$/u.test(url.pathname)
+        && request.protocol !== CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+      ) {
+        state.unexpectedRequests.push(
+          `${request.method} ${url.pathname} invalid-v4-protocol`
+        );
+        return {
+          status: 400,
+          payload: {
+            error: {
+              code: "INVALID_FIXTURE_PROTOCOL",
+              message: "fixture requires materialization request v4"
+            }
+          }
+        };
+      }
       if (
         url.pathname === "/v1/vod/materializations"
         && request.method === "POST"
@@ -1099,24 +1257,65 @@ async function installLateMaterializationV2Fixture({
             }
           };
         }
+        if (
+          request.protocol !== CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+          || request.body.schema !== CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+          || request.body.continuationPolicy !== "bounded-persistent-editor"
+        ) {
+          state.unexpectedRequests.push(
+            `${request.method} ${url.pathname} invalid-v4-continuation-policy`
+          );
+          return {
+            status: 400,
+            payload: {
+              error: {
+                code: "INVALID_FIXTURE_REQUEST",
+                message: "fixture requires persistent request v4"
+              }
+            }
+          };
+        }
         const sourceUrl = String(request.body.sourceUrl || "");
         if (sourceUrl === sourceAUrl) {
+          const requestIdentity = JSON.stringify(request.body);
+          const requestJobId = vodMaterializationJobId(request.body);
           state.aStarted = true;
           state.aConsumerId = String(request.body.consumerId || "");
           state.aSourceUrl = sourceUrl;
+          if (!aRequest) {
+            aRequest = request.body;
+            aRequestIdentity = requestIdentity;
+            aJobId = requestJobId;
+            state.aJobId = requestJobId;
+          } else if (
+            requestIdentity !== aRequestIdentity
+            || requestJobId !== aJobId
+          ) {
+            state.unexpectedRequests.push(
+              "A의 persistent 재연결 요청이 최초 exact 요청과 다릅니다."
+            );
+          }
           aObserverNonce = request.clientNonce;
+          if (state.aRunnerSettled) {
+            return { status: 202, payload: completedAStatus() };
+          }
           renewAObserverLease();
-          return { status: 202, payload: queuedAStatus() };
+          return { status: 202, payload: activeAStatus() };
         }
         if (sourceUrl === sourceBUrl) {
           const requestIdentity = JSON.stringify(request.body);
+          const requestJobId = vodMaterializationJobId(request.body);
           state.bStartRequests += 1;
           state.bRequestBodies.push(requestIdentity);
           state.bConsumerId = String(request.body.consumerId || "");
           bObserverNonce = request.clientNonce;
+          bObserverNonces.add(request.clientNonce);
+          state.bObserverDocumentCount = bObserverNonces.size;
           if (!bRequest) {
             bRequest = request.body;
             bRequestIdentity = requestIdentity;
+            bJobId = requestJobId;
+            state.bJobId = requestJobId;
           } else if (requestIdentity === bRequestIdentity) {
             state.bReusedStartRequests += 1;
           } else {
@@ -1124,15 +1323,21 @@ async function installLateMaterializationV2Fixture({
               "B 편집기 재확인 요청이 시작 화면의 exact range 요청과 다릅니다."
             );
           }
+          if (requestJobId !== bJobId) {
+            state.unexpectedRequests.push(
+              "B의 exact 요청 fingerprint에서 다른 job ID가 파생되었습니다."
+            );
+          }
           if (!state.aSlotReleased) {
-            state.bQueuedBeforeReclaim = true;
+            state.bQueuedBeforeACompletion = true;
           } else {
-            state.bStartedAfterReclaim = true;
+            state.bStartedAfterACompletion = true;
             state.bCompleted = true;
           }
           if (!aObserverNonce || bObserverNonce === aObserverNonce) {
             state.unexpectedRequests.push("A와 B가 document observer nonce를 공유했습니다.");
           }
+          schedulePersistentARunnerCompletion();
           return {
             status: 202,
             payload: state.bCompleted
@@ -1146,10 +1351,14 @@ async function installLateMaterializationV2Fixture({
         && request.method === "POST"
       ) {
         state.aStatusPolls += 1;
-        if (request.clientNonce === aObserverNonce) {
+        if (!state.aRunnerSettled) {
+          aObserverNonce = request.clientNonce;
           renewAObserverLease();
         }
-        return { status: 200, payload: queuedAStatus() };
+        return {
+          status: 200,
+          payload: state.aRunnerSettled ? completedAStatus() : activeAStatus()
+        };
       }
       if (
         url.pathname === `/v1/vod/materializations/${aJobId}`
@@ -1160,17 +1369,39 @@ async function installLateMaterializationV2Fixture({
           clearTimeout(aLeaseTimer);
           aLeaseTimer = null;
         }
+        if (aRunnerSettleTimer) {
+          clearTimeout(aRunnerSettleTimer);
+          aRunnerSettleTimer = null;
+        }
         state.aRunnerAborted = true;
-        finishAbandonedARunner();
+        state.aRunnerSettled = true;
+        state.aObservationState = "detached";
+        state.aSlotReleased = true;
+        state.aCompletedAfterDetach = false;
+        state.aArtifactRetained = false;
+        if (state.bStartRequests >= 1) {
+          state.bStartedAfterACompletion = true;
+          state.bCompleted = true;
+        }
         return {
           status: 200,
           payload: {
-            schema: "chzzk-kirinuki-vod-materialization-status/v1",
+            schema: CHZZK_VOD_MATERIALIZATION_STATUS_SCHEMA,
             jobId: aJobId,
+            continuationPolicy: "bounded-persistent-editor",
             state: "cancelled",
             progress: 0,
             message: "A fixture materialization was explicitly cancelled",
-            reused: false
+            reused: false,
+            observation: {
+              state: "detached",
+              lastActivityAt: "2026-09-02T10:00:03.000Z"
+            },
+            cancellation: {
+              reason: "user-requested",
+              phase: "downloading",
+              elapsedMs: observerLeaseTtlMs
+            }
           }
         };
       }
@@ -1179,9 +1410,12 @@ async function installLateMaterializationV2Fixture({
         && request.method === "POST"
       ) {
         state.bStatusPolls += 1;
-        if (request.clientNonce !== bObserverNonce) {
-          state.unexpectedRequests.push("B status observer nonce가 create와 다릅니다.");
+        if (!state.bCompleted) {
+          bObserverNonce = request.clientNonce;
+          bObserverNonces.add(request.clientNonce);
+          state.bObserverDocumentCount = bObserverNonces.size;
         }
+        schedulePersistentARunnerCompletion();
         return {
           status: 200,
           payload: state.bCompleted ? completedBStatus() : queuedBStatus()
@@ -1326,6 +1560,10 @@ async function installLateMaterializationV2Fixture({
   };
   return {
     snapshot,
+    releasePersistentA: () => {
+      allowPersistentACompletion = true;
+      schedulePersistentARunnerCompletion();
+    },
     assertHealthy: () => {
       if (fixtureErrors.length > 0) {
         throw new Error(fixtureErrors.join("\n"));
@@ -3251,7 +3489,8 @@ async function main(): Promise<void> {
       value.aStarted
       && value.aSourceUrl === chzzkUrl
       && value.aStatusPolls >= 1
-      && value.aAbandonedJobsReclaimed === 0
+      && value.aObserverDetachments === 0
+      && value.aObservationState === "attached"
       && !value.aRunnerAborted
     ),
     "A의 VOD materialization observer lease를 status poll로 시작하지 못했습니다.",
@@ -3316,6 +3555,99 @@ async function main(): Promise<void> {
     start.click();
     return true;
   `, [transitionChzzkUrl]);
+  const pendingHandoffSnapshot = () => execute<{
+    exists: boolean;
+    schema: string;
+    projectId: string;
+    sourceUrl: string;
+    requestSchema: string;
+    continuationPolicy: string;
+    jobId: string;
+    requestFingerprint: string;
+    secretKeys: string[];
+  }>(`
+    const ownerId = sessionStorage.getItem(arguments[0]) || "";
+    const pending = JSON.parse(
+      localStorage.getItem(arguments[1] + ownerId) || "null"
+    );
+    const secretKeys = [];
+    const walk = (value, prefix = "") => {
+      if (!value || typeof value !== "object") return;
+      for (const [key, child] of Object.entries(value)) {
+        const path = prefix ? prefix + "." + key : key;
+        if (/token|secret|authorization|mediaAccess/i.test(key)) {
+          secretKeys.push(path);
+        }
+        walk(child, path);
+      }
+    };
+    walk(pending);
+    return {
+      exists: Boolean(pending),
+      schema: String(pending?.schema || ""),
+      projectId: String(pending?.projectId || ""),
+      sourceUrl: String(pending?.sourceUrl || ""),
+      requestSchema: String(pending?.request?.schema || ""),
+      continuationPolicy: String(
+        pending?.request?.continuationPolicy || ""
+      ),
+      jobId: String(pending?.jobId || ""),
+      requestFingerprint: String(pending?.requestFingerprint || ""),
+      secretKeys
+    };
+  `, [
+    PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY,
+    PENDING_VOD_EDITOR_HANDOFF_STORAGE_PREFIX
+  ]);
+  const pendingBeforeReload = await waitFor(
+    async () => ({
+      fixture: lateMaterializationFixture.snapshot(),
+      pending: await pendingHandoffSnapshot()
+    }),
+    ({ fixture, pending }) => (
+      fixture.bStartRequests === 1
+      && fixture.bQueuedBeforeACompletion
+      && !fixture.aSlotReleased
+      && pending.exists
+      && pending.schema === PENDING_VOD_EDITOR_HANDOFF_SCHEMA
+      && pending.projectId === fixture.bConsumerId
+      && pending.sourceUrl === transitionChzzkUrl
+      && pending.requestSchema === CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA
+      && pending.continuationPolicy === "bounded-persistent-editor"
+      && pending.jobId === fixture.bJobId
+      && pending.jobId
+        === `vod_${pending.requestFingerprint.slice(0, 40)}`
+      && pending.secretKeys.length === 0
+    ),
+    "대기 중인 B의 secret-free persistent handoff를 새로고침 전에 저장하지 못했습니다.",
+    5_000
+  );
+  await webdriver("POST", `/session/${sessionId}/refresh`, {});
+  const pendingAfterReload = await waitFor(
+    async () => ({
+      href: await execute<string>("return location.href;"),
+      fixture: lateMaterializationFixture.snapshot(),
+      pending: await pendingHandoffSnapshot()
+    }),
+    ({ href, fixture, pending }) => (
+      href === `${studioOrigin}/`
+      && !fixture.aSlotReleased
+      && fixture.bStartRequests === 1
+      && fixture.bReusedStartRequests === 0
+      && fixture.bStatusPolls >= 1
+      && fixture.bObserverDocumentCount >= 1
+      && new Set(fixture.bRequestBodies).size === 1
+      && pending.exists
+      && pending.requestFingerprint
+        === pendingBeforeReload.pending.requestFingerprint
+      && pending.jobId === pendingBeforeReload.pending.jobId
+      && pending.jobId === fixture.bJobId
+      && pending.secretKeys.length === 0
+    ),
+    "새로고침한 시작 화면이 저장된 exact B 요청으로 persistent job에 다시 연결하지 못했습니다.",
+    5_000
+  );
+  lateMaterializationFixture.releasePersistentA();
   const editor = await waitFor(
     () => execute<{
       href: string;
@@ -3393,21 +3725,23 @@ async function main(): Promise<void> {
   const lateMaterializationAfterTransition = await waitFor(
     async () => lateMaterializationFixture.snapshot(),
     (value) => (
-      value.aAbandonedJobsReclaimed === 1
-      && value.aRunnerAborted
+      value.aObserverDetachments === 1
+      && value.aObservationState === "detached"
+      && !value.aRunnerAborted
       && value.aRunnerSettled
       && value.aSlotReleased
-      && value.aLateCompletionDiscarded
-      && !value.aLateArtifactExposed
+      && value.aCompletedAfterDetach
+      && value.aArtifactRetained
       && value.bStartRequests >= 1
       && value.bStartRequests <= 2
       && value.bReusedStartRequests === value.bStartRequests - 1
       && new Set(value.bRequestBodies).size === 1
-      && (!value.bQueuedBeforeReclaim || value.bStatusPolls >= 1)
-      && value.bStartedAfterReclaim
+      && value.bQueuedBeforeACompletion
+      && value.bStatusPolls >= 1
+      && value.bStartedAfterACompletion
       && value.bCompleted
     ),
-    "닫힌 A observer lease가 runner와 늦은 결과를 회수한 뒤 B에 queue slot을 넘기지 못했습니다.",
+    "관찰이 끊긴 persistent A가 중단 없이 완료된 뒤 B에 queue slot을 넘기지 못했습니다.",
     15_000
   );
   const preparedB = await waitFor(
@@ -3432,7 +3766,7 @@ async function main(): Promise<void> {
       && !value.toast.includes("VOD 편집 영상을 준비하지 못했습니다")
       && !value.toast.includes("자동으로 다시 연결하지 못했습니다")
     ),
-    "A runner 회수 뒤 B가 로컬 MP4를 받아 편집기에 연결하지 못했습니다.",
+    "persistent A 완료 뒤 B가 로컬 MP4를 받아 편집기에 연결하지 못했습니다.",
     20_000
   );
   await waitFor(
@@ -3936,27 +4270,29 @@ async function main(): Promise<void> {
       && [...expectedPairingScopes].every((scope) => (
         lateMaterializationFinal.pairedSessionScopes.includes(scope)
       ))
+      && /^vod_[A-Za-z0-9_-]{40}$/u.test(lateMaterializationFinal.aJobId)
+      && /^vod_[A-Za-z0-9_-]{40}$/u.test(lateMaterializationFinal.bJobId)
       && lateMaterializationFinal.aStatusPolls >= 1
       && lateMaterializationFinal.aExplicitCancelRequests === 0
-      && lateMaterializationFinal.aAbandonedJobsReclaimed === 1
-      && lateMaterializationFinal.aRunnerAborted
+      && lateMaterializationFinal.aObserverDetachments === 1
+      && lateMaterializationFinal.aObservationState === "detached"
+      && !lateMaterializationFinal.aRunnerAborted
       && lateMaterializationFinal.aRunnerSettled
       && lateMaterializationFinal.aSlotReleased
-      && lateMaterializationFinal.aLateCompletionDiscarded
-      && !lateMaterializationFinal.aLateArtifactExposed
+      && lateMaterializationFinal.aCompletedAfterDetach
+      && lateMaterializationFinal.aArtifactRetained
       && lateMaterializationFinal.aCachePurgeRequests === 0
       && lateMaterializationFinal.aMediaRequests === 0
       && lateMaterializationFinal.bStartRequests === 2
       && lateMaterializationFinal.bReusedStartRequests === 1
-      && (
-        !lateMaterializationFinal.bQueuedBeforeReclaim
-        || lateMaterializationFinal.bStatusPolls >= 1
-      )
-      && lateMaterializationFinal.bStartedAfterReclaim
+      && lateMaterializationFinal.bObserverDocumentCount >= 1
+      && lateMaterializationFinal.bQueuedBeforeACompletion
+      && lateMaterializationFinal.bStatusPolls >= 1
+      && lateMaterializationFinal.bStartedAfterACompletion
       && lateMaterializationFinal.bCompleted
       && lateMaterializationFinal.bMediaRequests >= 1
       && lateMaterializationFinal.unexpectedRequests.length === 0,
-    `닫힌 A 작업 회수와 B 편집 영상 연결 계약이 깨졌습니다: ${JSON.stringify(lateMaterializationFinal)}`
+    `persistent A 완료와 B 편집 영상 연결 계약이 깨졌습니다: ${JSON.stringify(lateMaterializationFinal)}`
   );
   await lateMaterializationFixture.close();
   await cdp("Network.setBlockedURLs", {
@@ -5009,7 +5345,7 @@ async function main(): Promise<void> {
       chrome: editorChrome
     },
     sessionTransition: {
-      mode: "A-late-materialization-back-B-different-source",
+      mode: "persistent-A-detach-complete-B-reload-reattach",
       returnedStart,
       firstProjectId: firstTransitionProjectId,
       secondProjectId: freshProjectId,
@@ -5020,18 +5356,32 @@ async function main(): Promise<void> {
       lateMaterialization: {
         aConsumerId: lateMaterializationFinal.aConsumerId,
         statusPollsBeforeTransition: lateAStarted.aStatusPolls,
-        reclaimedAfterTransition:
-          lateMaterializationAfterTransition.aAbandonedJobsReclaimed,
+        observerDetachmentsAfterTransition:
+          lateMaterializationAfterTransition.aObserverDetachments,
+        observationState: lateMaterializationFinal.aObservationState,
         runnerAborted: lateMaterializationFinal.aRunnerAborted,
         runnerSettled: lateMaterializationFinal.aRunnerSettled,
-        lateCompletionDiscarded:
-          lateMaterializationFinal.aLateCompletionDiscarded,
+        completedAfterDetach:
+          lateMaterializationFinal.aCompletedAfterDetach,
+        artifactRetained: lateMaterializationFinal.aArtifactRetained,
         explicitCancelRequests:
           lateMaterializationFinal.aExplicitCancelRequests,
         cachePurges: lateMaterializationFinal.aCachePurgeRequests,
         staleMediaRequests: lateMaterializationFinal.aMediaRequests,
-        bQueuedBeforeReclaim: lateMaterializationFinal.bQueuedBeforeReclaim,
-        bStartedAfterReclaim: lateMaterializationFinal.bStartedAfterReclaim,
+        bQueuedBeforeACompletion:
+          lateMaterializationFinal.bQueuedBeforeACompletion,
+        bStartedAfterACompletion:
+          lateMaterializationFinal.bStartedAfterACompletion,
+        bObserverDocumentCount:
+          lateMaterializationFinal.bObserverDocumentCount,
+        pendingReload: {
+          requestFingerprint:
+            pendingAfterReload.pending.requestFingerprint,
+          jobId: pendingAfterReload.pending.jobId,
+          exactRequestCount: pendingAfterReload.fixture.bStartRequests,
+          exactRequestReuses: pendingAfterReload.fixture.bReusedStartRequests,
+          secretKeys: pendingAfterReload.pending.secretKeys
+        },
         bMediaRequests: lateMaterializationFinal.bMediaRequests,
         bMediaAsset: freshProject?.mediaAsset ?? null
       }

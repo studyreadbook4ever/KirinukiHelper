@@ -216,6 +216,7 @@ import {
   ChzzkVodMaterializationClientError,
   KIRINUKI_MEDIA_ENGINE_ENDPOINT,
   cancelChzzkVodMaterialization,
+  getChzzkVodMaterializationStatus,
   purgeChzzkVodConsumerSessionCache,
   startChzzkVodMaterialization,
   waitForChzzkVodMaterialization
@@ -15846,6 +15847,7 @@ async function prepareChzzkVodMedia({
       endpoint,
       token: sessionToken,
       consumerId: sourceClockRootProject.id,
+      continuationPolicy: "bounded-persistent-editor",
       sourceUrl,
       ...(String(sourceClockProject.source?.platform || "").toUpperCase()
         === SOURCE_PLATFORM_SOOP
@@ -15917,11 +15919,11 @@ async function prepareChzzkVodMedia({
         if (!recoverableSessionLoss) {
           throw error;
         }
-        // A supervisor restart erases memory-only capability/AEAD state and
-        // in-memory job records. Re-authenticate once, then submit the exact
-        // same project/source/range request so the managed cache can safely
-        // resume or deduplicate it. The second poll is deliberately terminal:
-        // no unbounded recovery loop and no retry for 403/semantic failures.
+        // Re-authenticate once, then ask for the exact known job before doing
+        // anything else. A missing or terminal record is surfaced to the user
+        // and never replaced by a hidden collection POST; only the existing
+        // Prepare/Retry action may authorize a new execution.
+        const recoveringJobId = status.jobId;
         let recoveredToken = "";
         for (const [attempt, delayMs] of [0, 250, 750].entries()) {
           if (delayMs > 0) {
@@ -15952,7 +15954,15 @@ async function prepareChzzkVodMedia({
           throw new Error("로컬 엔진 session을 bounded retry 뒤에도 복구하지 못했습니다.");
         }
         vodMediaEngineToken = recoveredToken;
-        status = await startWithSession(recoveredToken);
+        status = await getChzzkVodMaterializationStatus({
+          endpoint,
+          token: recoveredToken,
+          jobId: recoveringJobId,
+          signal: controller.signal
+        });
+        if (status.jobId !== recoveringJobId) {
+          throw new Error("복구된 로컬 VOD 작업 ID가 기존 작업과 다릅니다.");
+        }
         activeChzzkVodJob = {
           jobId: status.jobId,
           endpoint,

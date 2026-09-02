@@ -31,7 +31,7 @@ test("확정 구간 요청은 사용자 선택을 millisecond 범위로 그대�
   );
   assert.match(
     source,
-    /prepareSelectedVodForEditor[\s\S]*captureSeed\.segments[\s\S]*id: captureSegmentEditorClipId\(segment, index\)[\s\S]*startMs: Math\.round\(startSeconds \* 1_000\)[\s\S]*endMs: Math\.round\(endSeconds \* 1_000\)/u
+    /function selectedVodClips[\s\S]*captureSeed\.segments[\s\S]*id: captureSegmentEditorClipId\(segment, index\)[\s\S]*startMs: Math\.round\(startSeconds \* 1_000\)[\s\S]*endMs: Math\.round\(endSeconds \* 1_000\)/u
   );
   assert.match(
     source,

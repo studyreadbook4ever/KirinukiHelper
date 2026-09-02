@@ -219,7 +219,10 @@ test("닫힌 writer 정리는 focus·pageshow·visibility 복귀에 멱등적으
   const { source } = await studioSources();
   assert.match(source, /createLatestSerialOperationQueue\(\)/u);
   assert.match(source, /createCoalescedAutomaticOperation\(/u);
-  assert.match(source, /window\.addEventListener\("focus", scheduleLocalProjectLifecycleRefresh\)/u);
+  assert.match(
+    source,
+    /window\.addEventListener\("focus", \(\) => \{[\s\S]*scheduleLocalProjectLifecycleRefresh\(\)[\s\S]*schedulePendingVodEditorHandoffResume\(\)[\s\S]*\}\)/u
+  );
   assert.match(
     source,
     /window\.addEventListener\("pageshow"[\s\S]*clearCurrentTabWebEditorSession\(\)[\s\S]*requestAutomaticLocalProjectLifecycleCleanup\(\)/u

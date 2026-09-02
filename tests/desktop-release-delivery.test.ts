@@ -30,6 +30,17 @@ test("ordinary CI persists only unsigned JSON evidence and never installer bytes
   assert.doesNotMatch(workflow, /contents:\s*write/u);
 });
 
+test("native semantic smoke는 편집용 VOD fixture를 persistent continuation으로 시작한다", async () => {
+  const source = await readFile(path.join(
+    root,
+    "scripts/local-media-engine-semantic-smoke.ts"
+  ), "utf8");
+  assert.match(
+    source,
+    /body: JSON\.stringify\(\{[\s\S]*continuationPolicy: "bounded-persistent-editor"[\s\S]*permission:/u
+  );
+});
+
 test("public installer release는 explicit manual/tag confirmation과 protected environment만 사용한다", async () => {
   const workflow = await readFile(path.join(
     root,

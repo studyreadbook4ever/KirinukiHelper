@@ -451,6 +451,7 @@ async function proveSource(
       body: JSON.stringify({
         schema: CHZZK_VOD_MATERIALIZATION_REQUEST_SCHEMA,
         consumerId: projectId,
+        continuationPolicy: "bounded-persistent-editor",
         sourceUrl: source.sourceUrl,
         ...(source.platform === "SOOP"
           ? {

@@ -261,6 +261,13 @@ function statusPayload(
     progress: state === "completed" ? 1 : 0.25,
     message: state === "completed" ? "준비 완료" : "필요한 조각을 받는 중",
     reused: false,
+    continuationPolicy: "bounded-persistent-editor",
+    observation: {
+      state: ["completed", "failed", "cancelled"].includes(state)
+        ? "detached"
+        : "attached",
+      lastActivityAt: "2026-09-02T10:00:00.000Z"
+    },
     ...(state === "completed"
       ? {
         materialization: { schema: "chzzk-kirinuki-materialization/v1" },
@@ -275,6 +282,15 @@ function statusPayload(
       : {}),
     ...(state === "failed"
       ? { error: { code: "DOWNLOAD_FAILED", message: "조각 확인 실패" } }
+      : {}),
+    ...(state === "cancelled"
+      ? {
+        cancellation: {
+          reason: "user-requested",
+          phase: "downloading",
+          elapsedMs: 4_000
+        }
+      }
       : {}),
     ...overrides
   };
@@ -309,6 +325,7 @@ test("시작 요청은 고정 ±10초와 권리 확인, 원본 좌표만 전송�
     sourceUrl: "https://chzzk.naver.com/video/14252987",
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
     rightsConfirmed: true,
+    continuationPolicy: "bounded-persistent-editor",
     fetchImpl: await encryptedTransportFixture(async (input, init) => {
       requestUrl = String(input);
       requestInit = init;
@@ -331,6 +348,7 @@ test("시작 요청은 고정 ±10초와 권리 확인, 원본 좌표만 전송�
   const body = JSON.parse(String(requestInit?.body)) as Record<string, unknown>;
   assert.equal(body.consumerId, CONSUMER_ID);
   assert.equal(body.handleMs, CHZZK_VOD_HANDLE_MS);
+  assert.equal(body.continuationPolicy, "bounded-persistent-editor");
   assert.deepEqual(body.clips, [
     { id: "clip-1", startMs: 70_000, endMs: 80_000 }
   ]);
@@ -339,6 +357,49 @@ test("시작 요청은 고정 ±10초와 권리 확인, 원본 좌표만 전송�
     scope: "owned-or-authorized-public-vod"
   });
   assert.equal(result.state, "queued");
+  assert.equal(result.continuationPolicy, "bounded-persistent-editor");
+  assert.deepEqual(result.observation, {
+    state: "attached",
+    lastActivityAt: "2026-09-02T10:00:00.000Z"
+  });
+});
+
+test("미리보기 요청은 브라우저 관찰 수명 정책을 명시해 전송한다", async () => {
+  let body: Record<string, unknown> = {};
+  await startChzzkVodMaterialization({
+    endpoint: ENDPOINT,
+    token: TOKEN,
+    consumerId: CONSUMER_ID,
+    sourceUrl: "https://chzzk.naver.com/video/14252987",
+    clips: [{ id: "preview-1", startMs: 70_000, endMs: 80_000 }],
+    rightsConfirmed: true,
+    continuationPolicy: "ephemeral-preview",
+    fetchImpl: await encryptedTransportFixture(async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse(statusPayload("queued", {
+        continuationPolicy: "ephemeral-preview"
+      }));
+    })
+  });
+  assert.equal(body.continuationPolicy, "ephemeral-preview");
+});
+
+test("시작 응답은 요청한 지속 정책과 정확히 같아야 한다", async () => {
+  await assert.rejects(
+    startChzzkVodMaterialization({
+      endpoint: ENDPOINT,
+      token: TOKEN,
+      consumerId: CONSUMER_ID,
+      sourceUrl: "https://chzzk.naver.com/video/14252987",
+      clips: [{ id: "preview-1", startMs: 70_000, endMs: 80_000 }],
+      rightsConfirmed: true,
+      continuationPolicy: "ephemeral-preview",
+      fetchImpl: await encryptedTransportFixture(async () => jsonResponse(
+        statusPayload("queued")
+      ))
+    }),
+    /유지 정책이 요청과 다릅니다/u
+  );
 });
 
 test("저장된 materialization 참조는 비밀 경로 없이 로컬 재개 힌트로 보낸다", async () => {
@@ -355,6 +416,7 @@ test("저장된 materialization 참조는 비밀 경로 없이 로컬 재개 힌
     sourceUrl: "https://chzzk.naver.com/video/14252987",
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
     rightsConfirmed: true,
+    continuationPolicy: "bounded-persistent-editor",
     resume,
     fetchImpl: await encryptedTransportFixture(async (_input, init) => {
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -376,6 +438,7 @@ test("SOOP 준비 요청은 legacy part 시계를 선택 검증값으로만 보�
     sourceClockIdentity: SOOP_SOURCE_CLOCK_IDENTITY,
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
     rightsConfirmed: true,
+    continuationPolicy: "bounded-persistent-editor",
     fetchImpl: await encryptedTransportFixture(async (_input, init) => {
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return jsonResponse(statusPayload("queued"));
@@ -394,6 +457,7 @@ test("SOOP 준비 요청은 legacy part 시계를 선택 검증값으로만 보�
     sourceUrl: "https://vod.sooplive.com/player/169475287",
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
     rightsConfirmed: true,
+    continuationPolicy: "bounded-persistent-editor",
     fetchImpl: await encryptedTransportFixture(async (_input, init) => {
       extensionFreeBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return jsonResponse(statusPayload("queued"));
@@ -408,6 +472,7 @@ test("SOOP 준비 요청은 legacy part 시계를 선택 검증값으로만 보�
     sourceClockIdentity: { ...SOOP_SOURCE_CLOCK_IDENTITY, contentId: "wrong" },
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
     rightsConfirmed: true,
+    continuationPolicy: "bounded-persistent-editor",
     fetchImpl: async () => jsonResponse(statusPayload("queued"))
   }), /part 시계 증명/u);
 });
@@ -427,6 +492,7 @@ test("hot-load 요청은 clip별 확장 범위와 비밀 없는 base identity만
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
     editableRanges: [{ id: "clip-1", startMs: 30_000, endMs: 120_000 }],
     rightsConfirmed: true,
+    continuationPolicy: "bounded-persistent-editor",
     base,
     fetchImpl: await encryptedTransportFixture(async (_input, init) => {
       body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -448,11 +514,20 @@ test("권리 확인 누락과 10초가 아닌 핸들은 요청 전에 거부한�
     consumerId: CONSUMER_ID,
     sourceUrl: "https://chzzk.naver.com/video/14252987",
     clips: [{ id: "clip-1", startMs: 70_000, endMs: 80_000 }],
+    continuationPolicy: "bounded-persistent-editor" as const,
     fetchImpl: async () => jsonResponse(statusPayload("queued"))
   };
   await assert.rejects(
     startChzzkVodMaterialization({ ...base, rightsConfirmed: false }),
     /편집 허가/
+  );
+  await assert.rejects(
+    startChzzkVodMaterialization({
+      ...base,
+      rightsConfirmed: true,
+      continuationPolicy: "keep-running-forever" as never
+    }),
+    /유지 정책/u
   );
   await assert.rejects(
     startChzzkVodMaterialization({
@@ -625,6 +700,124 @@ test("poll은 terminal 실패의 semantic 공개 오류 코드를 예외에 보�
     )
   );
   assert.deepEqual(observed, ["SOURCE_CLOCK_VERIFICATION_FAILED"]);
+});
+
+test("poll은 사용자 취소만 AbortError로, 실행 수명 취소는 typed 원인으로 보존한다", async () => {
+  await assert.rejects(
+    waitForChzzkVodMaterialization({
+      endpoint: ENDPOINT,
+      token: TOKEN,
+      jobId: JOB_ID,
+      pollIntervalMs: 1,
+      fetchImpl: await encryptedTransportFixture(async () => jsonResponse(
+        statusPayload("cancelled", {
+          cancellation: {
+            reason: "execution-deadline",
+            phase: "muxing",
+            elapsedMs: 43_200_000
+          }
+        })
+      ))
+    }),
+    (error: unknown) => Boolean(
+      error instanceof ChzzkVodMaterializationClientError
+      && error.code === "EXECUTION_DEADLINE"
+      && error.name !== "AbortError"
+      && /시간 한도/u.test(error.message)
+    )
+  );
+
+  await assert.rejects(
+    waitForChzzkVodMaterialization({
+      endpoint: ENDPOINT,
+      token: TOKEN,
+      jobId: JOB_ID,
+      pollIntervalMs: 1,
+      fetchImpl: await encryptedTransportFixture(async () => jsonResponse(
+        statusPayload("cancelled", {
+          continuationPolicy: "ephemeral-preview",
+          cancellation: {
+            reason: "ephemeral-observer-expired",
+            phase: "downloading",
+            elapsedMs: 5_000
+          }
+        })
+      ))
+    }),
+    (error: unknown) => Boolean(
+      error instanceof ChzzkVodMaterializationClientError
+      && error.code === "EPHEMERAL_OBSERVER_EXPIRED"
+      && error.name !== "AbortError"
+    )
+  );
+
+  await assert.rejects(
+    waitForChzzkVodMaterialization({
+      endpoint: ENDPOINT,
+      token: TOKEN,
+      jobId: JOB_ID,
+      pollIntervalMs: 1,
+      fetchImpl: await encryptedTransportFixture(async () => jsonResponse(
+        statusPayload("cancelled")
+      ))
+    }),
+    (error: unknown) => Boolean(
+      error instanceof DOMException
+      && error.name === "AbortError"
+    )
+  );
+});
+
+test("취소 status는 redacted reason·phase·elapsedMs를 모두 요구한다", () => {
+  const valid = normalizeChzzkVodMaterializationStatus(
+    statusPayload("cancelled", {
+      cancellation: {
+        reason: "engine-shutdown",
+        phase: "verifying",
+        elapsedMs: 12_345
+      }
+    }),
+    ENDPOINT
+  );
+  assert.deepEqual(valid.cancellation, {
+    reason: "engine-shutdown",
+    phase: "verifying",
+    elapsedMs: 12_345
+  });
+  for (const cancellation of [
+    undefined,
+    { reason: "internal-path-leak", phase: "muxing", elapsedMs: 10 },
+    { reason: "engine-shutdown", phase: "cancelled", elapsedMs: 10 },
+    { reason: "engine-shutdown", phase: "muxing", elapsedMs: -1 }
+  ]) {
+    assert.throws(
+      () => normalizeChzzkVodMaterializationStatus(
+        statusPayload("cancelled", { cancellation }),
+        ENDPOINT
+      ),
+      /취소/u
+    );
+  }
+});
+
+test("status v2는 실행 및 terminal 상태 모두 공개 observation을 요구한다", () => {
+  assert.throws(
+    () => normalizeChzzkVodMaterializationStatus(
+      statusPayload("downloading", { observation: undefined }),
+      ENDPOINT
+    ),
+    /관찰 상태/u
+  );
+  assert.deepEqual(
+    normalizeChzzkVodMaterializationStatus(
+      statusPayload("completed"),
+      ENDPOINT
+    ).observation,
+    {
+      state: "detached",
+      lastActivityAt: "2026-09-02T10:00:00.000Z"
+    }
+  );
 });
 
 test("poll HTTP 실패도 안전한 내부 엔진 오류 코드와 상태를 보존한다", async () => {
