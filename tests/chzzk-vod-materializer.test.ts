@@ -2832,6 +2832,11 @@ test("재시작 시 같은 consumer sibling cache까지 64 GiB logical quota에 
     stateDir
   } as const;
   try {
+    const quotaBoundaryFileSystem = async () => ({
+      bavail: BigInt(MAX_CHZZK_VOD_WORK_BYTES)
+        + BigInt(MIN_CHZZK_VOD_DISK_HEADROOM_BYTES),
+      bsize: 1n
+    });
     const otherConsumerDirectory = scopedJobDirectory(
       stateDir,
       "e".repeat(32),
@@ -2839,21 +2844,28 @@ test("재시작 시 같은 consumer sibling cache까지 64 GiB logical quota에 
     );
     await mkdir(otherConsumerDirectory, { recursive: true });
     const otherConsumerWork = path.join(otherConsumerDirectory, "other.part");
-    await writeFile(otherConsumerWork, "");
-    await truncate(otherConsumerWork, MAX_CHZZK_VOD_WORK_BYTES + 1);
+    await writeFile(otherConsumerWork, "other-consumer");
     const quarantineDirectory = path.join(stateDir, ".purge-quarantine", "orphan");
     await mkdir(quarantineDirectory, { recursive: true });
     const quarantineWork = path.join(quarantineDirectory, "old.part");
-    await writeFile(quarantineWork, "");
-    await truncate(quarantineWork, MAX_CHZZK_VOD_WORK_BYTES + 1);
+    await writeFile(quarantineWork, "quarantine");
     const siblingDirectory = scopedJobDirectory(stateDir, "f".repeat(32));
     await mkdir(siblingDirectory, { recursive: true });
     const siblingLeaseDatabase = path.join(
       siblingDirectory,
       JOB_LEASE_DATABASE_FILENAME
     );
-    await writeFile(siblingLeaseDatabase, "");
-    await truncate(siblingLeaseDatabase, MAX_CHZZK_VOD_WORK_BYTES + 1);
+    await writeFile(siblingLeaseDatabase, "ignored lease database");
+    const consumerScopeDirectory = vodConsumerScopeRoot(stateDir, CONSUMER_ID);
+    assert.equal(
+      await assertChzzkConsumerScopeBudget(
+        consumerScopeDirectory,
+        MAX_CHZZK_VOD_WORK_BYTES,
+        quotaBoundaryFileSystem
+      ),
+      MAX_CHZZK_VOD_WORK_BYTES,
+      "다른 consumer·quarantine·lease DB는 현재 consumer의 logical quota에 포함하지 않습니다."
+    );
 
     const seedHarness = createHarness({ keyframeSegments: new Set([2]) });
     const seed = await materializeChzzkVod(request, {
@@ -2863,21 +2875,27 @@ test("재시작 시 같은 consumer sibling cache까지 64 GiB logical quota에 
     });
     const jobDirectory = path.dirname(seed.artifactPath);
     await rm(path.join(jobDirectory, "manifest.json"), { force: true });
+    const baselineBytes = await assertChzzkConsumerScopeBudget(
+      consumerScopeDirectory,
+      0,
+      quotaBoundaryFileSystem
+    );
+    assert(baselineBytes > 0 && baselineBytes < MAX_CHZZK_VOD_WORK_BYTES);
     const oversizedWorkFile = path.join(siblingDirectory, "interrupted-run.part");
-    await writeFile(oversizedWorkFile, "");
-    await truncate(oversizedWorkFile, MAX_CHZZK_VOD_WORK_BYTES + 1);
+    await writeFile(oversizedWorkFile, "included sibling work");
 
-    const retryHarness = createHarness({ keyframeSegments: new Set([2]) });
-    await assert.rejects(materializeChzzkVod(request, {
-      fetchImpl: retryHarness.fetchImpl,
-      runProcess: retryHarness.runProcess,
-      sleep: async () => undefined
-    }), (error: unknown) => (
-      error instanceof ChzzkVodMaterializationError
-      && error.code === "MATERIALIZATION_QUOTA_EXCEEDED"
-    ));
-    assert.deepEqual(retryHarness.calls.segments, []);
-    assert.deepEqual(retryHarness.calls.processes, []);
+    await assert.rejects(
+      assertChzzkConsumerScopeBudget(
+        consumerScopeDirectory,
+        MAX_CHZZK_VOD_WORK_BYTES - baselineBytes,
+        quotaBoundaryFileSystem
+      ),
+      (error: unknown) => (
+        error instanceof ChzzkVodMaterializationError
+        && error.code === "MATERIALIZATION_QUOTA_EXCEEDED"
+      ),
+      "같은 consumer의 sibling 작업 바이트는 재시작 quota에 포함해야 합니다."
+    );
 
     await rm(oversizedWorkFile, { force: true });
     const outsideFile = path.join(stateDir, "outside-user-file.txt");
