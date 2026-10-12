@@ -16,6 +16,7 @@ import {
 } from "./external-vod-direct-acquirer.js";
 import {
   externalVodHlsPlaylistFingerprintSha256,
+  MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS,
   parseExternalVodHlsPersistedClockEvidence
 } from "./external-vod-hls-acquirer.js";
 import type {
@@ -396,7 +397,7 @@ function cloneHlsTimeline(
     || timeline.hasIndependentSegments !== true
     || !Array.isArray(timeline.segments)
     || timeline.segments.length === 0
-    || timeline.segments.length > 20_000
+    || timeline.segments.length > MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS
     || !Number.isSafeInteger(timeline.durationUs)
     || timeline.durationUs <= 0
   ) {

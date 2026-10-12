@@ -599,6 +599,30 @@ test("CHZZK HLS duration becomes the safe whole-millisecond planning authority",
   );
 });
 
+test("CHZZK clock resolution accepts a finite replay beyond the section fragment budget", async () => {
+  const source = hlsTimeline("CHZZK", "long-replay-token");
+  const longSource = withRecomputedHlsFingerprint({
+    ...source,
+    durationUs: 47_216_000_000,
+    segments: Array.from({ length: 23_608 }, (_, index) => ({
+      sequence: index,
+      startUs: index * 2_000_000,
+      durationUs: 2_000_000,
+      uri: `https://vod.pstatic.net/long-replay/${index}.m4s`,
+      semanticUri: `https://vod.pstatic.net/long-replay/${index}.m4s`
+    }))
+  });
+  const result = await resolveExternalVodClockProofSet(chzzkRequest(), {
+    async resolveSelectedPart() {
+      return { ...chzzkSelected("long-replay-token"), timeline: longSource };
+    }
+  });
+  assert.equal(result.authoritative.sourceDurationMs, 47_216_000);
+  assert.equal(result.runtime.parts[0]?.kind, "hls");
+  assert.deepEqual(parseExternalVodPersistedClockProofSet(result.persisted), result.persisted);
+  assert.doesNotMatch(JSON.stringify(result.persisted), /long-replay-token|pstatic/u);
+});
+
 test("CHZZK completion accepts CDN route rotation but rejects clock, format and content changes", async () => {
   const initialTimeline = withHlsContentEvidence(
     hlsTimeline("CHZZK", "first-token"),

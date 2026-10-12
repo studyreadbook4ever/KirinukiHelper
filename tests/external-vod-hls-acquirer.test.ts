@@ -10,6 +10,7 @@ import {
   EXTERNAL_VOD_HLS_PERSISTED_CLOCK_SCHEMA,
   EXTERNAL_VOD_HLS_SECTION_CLOCK_SCHEMA,
   MAX_EXTERNAL_VOD_HLS_STREAM_EDGE_TOLERANCE_MS,
+  MAX_EXTERNAL_VOD_HLS_SEGMENTS,
   ExternalVodHlsAcquisitionError,
   acquireExternalVodHlsSection as acquireExternalVodHlsSectionImplementation,
   buildExternalVodHlsConcatDescription,
@@ -160,6 +161,78 @@ test("segment selection uses the cumulative EXTINF clock with exact boundaries",
   assert.deepEqual(crossing.segments.map(({ sequence }) => sequence), [7, 8, 9]);
   assert.equal(crossing.firstSegmentOffsetUs, 1_501_000);
   assert.equal(crossing.sourceEndUs - crossing.sourceStartUs, 2_998_000);
+});
+
+test("a long replay downloads only the exact small section and its edge evidence", async () => {
+  const root = await temporaryRoot();
+  const fetched: string[] = [];
+  const source = timeline(Array.from({ length: 23_608 }, (_, index) => ({
+    sequence: index,
+    startUs: index * 2_000_000,
+    durationUs: 2_000_000,
+    uri: `https://media.example/long-replay/${index}.m4s`,
+    semanticUri: `https://media.example/long-replay/${index}.m4s`
+  })));
+  try {
+    const result = await acquireExternalVodHlsSection({
+      sectionId: "long-replay-small-section",
+      sourceStartMs: 2_001_500,
+      sourceEndMs: 2_004_500,
+      timeline: source,
+      workDirectory: root,
+      outputPath: path.join(root, "section.mp4")
+    }, dependencies({
+      async fetchValidatedBinary(request) {
+        fetched.push(request.url.pathname);
+        return {
+          bytes: request.kind === "init" ? initBytes : fragmentBytes,
+          finalUrl: request.url.href
+        };
+      }
+    }));
+    assert.deepEqual(result.evidence.segments.map(({ sequence }) => sequence), [1000, 1001, 1002]);
+    assert.deepEqual(fetched, [
+      "/init.mp4",
+      "/long-replay/1000.m4s",
+      "/long-replay/1001.m4s",
+      "/long-replay/1002.m4s",
+      "/long-replay/999.m4s"
+    ]);
+    assert.equal(result.evidence.mapping.sourceAnchorUs, 2_001_500_000);
+    assert.deepEqual(parseExternalVodHlsPersistedClockEvidence(result.persistedEvidence), result.persistedEvidence);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a section beyond the fragment budget fails before fetching any bytes", async () => {
+  const root = await temporaryRoot();
+  let fetchCalled = false;
+  const source = timeline(Array.from({ length: MAX_EXTERNAL_VOD_HLS_SEGMENTS + 1 }, (_, index) => ({
+    sequence: index,
+    startUs: index * 100_000,
+    durationUs: 100_000,
+    uri: `https://media.example/many-fragments/${index}.m4s`,
+    semanticUri: `https://media.example/many-fragments/${index}.m4s`
+  })));
+  try {
+    await assert.rejects(acquireExternalVodHlsSection({
+      sectionId: "oversized-section",
+      sourceStartMs: 0,
+      sourceEndMs: Math.floor(source.durationUs / 1_000),
+      timeline: source,
+      workDirectory: root,
+      outputPath: path.join(root, "section.mp4")
+    }, dependencies({
+      async fetchValidatedBinary() {
+        fetchCalled = true;
+        throw new Error("The oversized section must fail before download");
+      }
+    })), (error) => assertCode(error, "INVALID_SECTION"));
+    assert.equal(fetchCalled, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("concat manifest and FFmpeg args retain microsecond clock precision", () => {
