@@ -40,7 +40,7 @@ FFmpeg, yt-dlp, Electron, Whisper model 또는 npm build tool을 포함하지 �
 <!-- attribution-id: desktop-local-engine-runtime -->
 | 구성요소 | 고정점 | 상태 |
 | --- | --- | --- |
-| Electron runtime | `43.4.1` | Chromium·Node 전체 SBOM/notice 및 archive provenance 대기 |
+| Electron runtime | `43.7.9` | Chromium·Node 전체 SBOM/notice 및 archive provenance 대기 |
 | electron-builder | `26.15.3` | build-only transitive license 검토 대기 |
 | `@electron/asar` | `4.2.1` | build/ASAR 검증 도구 |
 | `@electron/packager` | `20.3.0` | BSD-2-Clause build 도구 |

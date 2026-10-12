@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   ExternalVodClockProofError,
+  MAX_EXTERNAL_VOD_MEDIA_PLAYLIST_BYTES,
   assertExternalVodSectionClockEvidenceMatches,
   createExternalVodSectionClockEvidence,
   parseDirectMediaFfprobeClockProof,
@@ -11,6 +12,9 @@ import {
   parseYtDlpSelectedInputsDump,
   planVodHlsSection
 } from "../scripts/external-vod-clock-proof.js";
+import {
+  MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS
+} from "../scripts/external-vod-hls-acquirer.js";
 
 const SHA = "a".repeat(64);
 
@@ -58,6 +62,20 @@ function playlist(token = "one"): string {
     `segment-8.m4s?token=${token}`,
     "#EXTINF:2.000001,",
     `segment-9.m4s?token=${token}`,
+    "#EXT-X-ENDLIST",
+    ""
+  ].join("\n");
+}
+
+function longPlaylist(segmentCount: number): string {
+  return [
+    "#EXTM3U",
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    "#EXT-X-TARGETDURATION:2",
+    '#EXT-X-MAP:URI="init.mp4"',
+    ...Array.from({ length: segmentCount }, (_, index) => (
+      `#EXTINF:2.000000,\n${index}.m4s`
+    )),
     "#EXT-X-ENDLIST",
     ""
   ].join("\n");
@@ -213,6 +231,53 @@ test("HLS parser rejects discontinuity, encryption and incomplete lists", () => 
       renditionFingerprintSha256: SHA
     }
   ));
+});
+
+test("a finite thirteen-hour CHZZK timeline keeps small sections exact", () => {
+  const source = parseVodHlsMediaPlaylist(longPlaylist(23_608), {
+    playlistUrl: "https://vod.pstatic.net/long-replay/media.m3u8",
+    renditionFingerprintSha256: SHA
+  });
+  assert.equal(source.durationUs, 47_216_000_000);
+  const section = planVodHlsSection(source, 2_561_324, 2_681_977);
+  assert.equal(section.segments.length, 61);
+  assert.equal(section.firstSegmentOffsetUs, 1_324_000);
+  assert.equal(section.sourceStartUs, 2_561_324_000);
+  assert.equal(section.sourceEndUs, 2_681_977_000);
+  const evidence = createExternalVodSectionClockEvidence({
+    platform: "CHZZK",
+    contentId: "15623645",
+    partId: "15623645",
+    partIndex: 0,
+    selectedFormatProofId: SHA,
+    timeline: source
+  });
+  assert.deepEqual(parseExternalVodSectionClockEvidence(evidence), evidence);
+  assert.equal(evidence.hls?.segmentCount, 23_608);
+});
+
+test("whole HLS timelines remain bounded by segment count and playlist bytes", () => {
+  assert.equal(MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS, 30_000);
+  const atLimit = parseVodHlsMediaPlaylist(longPlaylist(30_000), {
+    playlistUrl: "https://vod.pstatic.net/media.m3u8",
+    renditionFingerprintSha256: SHA
+  });
+  assert.equal(atLimit.segments.length, 30_000);
+  const oversized = longPlaylist(MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS + 1);
+  assert.ok(Buffer.byteLength(oversized) < MAX_EXTERNAL_VOD_MEDIA_PLAYLIST_BYTES);
+  for (const source of [
+    oversized,
+    `${playlist()}${" ".repeat(MAX_EXTERNAL_VOD_MEDIA_PLAYLIST_BYTES)}`
+  ]) {
+    assert.throws(() => parseVodHlsMediaPlaylist(source, {
+      playlistUrl: "https://vod.pstatic.net/media.m3u8",
+      renditionFingerprintSha256: SHA
+    }), (error: unknown) => {
+      assert(error instanceof ExternalVodClockProofError);
+      assert.equal(error.code, "INVALID_HLS_PLAYLIST");
+      return true;
+    });
+  }
 });
 
 test("YouTube exact direct inputs require zero-origin ffprobe proof", () => {

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   externalVodHlsPlaylistFingerprintSha256,
-  MAX_EXTERNAL_VOD_HLS_SEGMENTS,
+  MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS,
   selectExternalVodHlsSegmentRange
 } from "./external-vod-hls-acquirer.js";
 import type {
@@ -597,7 +597,7 @@ export function parseVodHlsMediaPlaylist(
     if (pendingDurationUs === undefined || sawEndList || !mapHref) {
       fail("HLS 세그먼트 URI 앞에 길이와 초기화 조각이 없습니다.", "INVALID_HLS_PLAYLIST");
     }
-    if (segments.length >= MAX_EXTERNAL_VOD_HLS_SEGMENTS) {
+    if (segments.length >= MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS) {
       fail("HLS 세그먼트 수가 안전 상한을 넘었습니다.", "INVALID_HLS_PLAYLIST");
     }
     const href = resolvedPlaylistUri(base, line, "HLS 세그먼트");
@@ -868,7 +868,7 @@ export function parseExternalVodSectionClockEvidence(
     normalizedHls = {
       playlistFingerprintSha256: safeSha(hls.playlistFingerprintSha256, "HLS 재생목록"),
       renditionFingerprintSha256: safeSha(hls.renditionFingerprintSha256, "HLS rendition"),
-      segmentCount: safeInteger(hls.segmentCount, 1, MAX_EXTERNAL_VOD_HLS_SEGMENTS, "HLS 세그먼트 수")
+      segmentCount: safeInteger(hls.segmentCount, 1, MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS, "HLS 세그먼트 수")
     };
   }
   if (isRecord(direct)) {

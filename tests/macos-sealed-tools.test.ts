@@ -270,7 +270,7 @@ test("public mac packager는 nested 도구를 먼저 서명하고 outer seal로 
   assert.match(runtime, /verifyMacosSealedDesktopTools/u);
 });
 
-test("Electron 43.4.1 pin은 dependency·builder·packager·provenance가 모두 일치한다", async () => {
+test("Electron 43.7.9 pin은 dependency·builder·packager·provenance가 모두 일치한다", async () => {
   const [packageJson, lock, testBuilder, releaseBuilder, packager, provenance] =
     await Promise.all([
       readFile(path.join(repositoryRoot, "package.json"), "utf8"),
@@ -289,12 +289,12 @@ test("Electron 43.4.1 pin은 dependency·builder·packager·provenance가 모두
   const lockValue = JSON.parse(lock) as {
     packages: Record<string, { version?: string; devDependencies?: { electron?: string } }>;
   };
-  assert.equal(packageValue.devDependencies.electron, "43.4.1");
-  assert.equal(lockValue.packages[""]?.devDependencies?.electron, "43.4.1");
-  assert.equal(lockValue.packages["node_modules/electron"]?.version, "43.4.1");
+  assert.equal(packageValue.devDependencies.electron, "43.7.9");
+  assert.equal(lockValue.packages[""]?.devDependencies?.electron, "43.7.9");
+  assert.equal(lockValue.packages["node_modules/electron"]?.version, "43.7.9");
   for (const source of [testBuilder, releaseBuilder]) {
-    assert.match(source, /electronVersion:\s*43\.4\.1/u);
+    assert.match(source, /electronVersion:\s*43\.7\.9/u);
   }
-  assert.match(packager, /ELECTRON_VERSION = "43\.4\.1"/u);
-  assert.match(provenance, /id: "electron", version: "43\.4\.1"/u);
+  assert.match(packager, /ELECTRON_VERSION = "43\.7\.9"/u);
+  assert.match(provenance, /id: "electron", version: "43\.7\.9"/u);
 });

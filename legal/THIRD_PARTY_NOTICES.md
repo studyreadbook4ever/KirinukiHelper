@@ -228,13 +228,13 @@ Astring의 MIT 조건은 저작권·허가 고지를 소프트웨어의 모든 �
 `legal/DESKTOP_BINARY_RELEASE_GATE.md`를 기준으로 합니다.
 
 <!-- attribution-id: desktop-local-engine-runtime -->
-### Electron 43.4.1 background runtime
+### Electron 43.7.9 background runtime
 
 - Electron source license: MIT
-- Source and license: https://github.com/electron/electron/tree/v43.4.1
-- npm package: `electron@43.4.1`
+- Source and license: https://github.com/electron/electron/tree/v43.7.9
+- npm package: `electron@43.7.9`
 - npm source artifact:
-  https://registry.npmjs.org/electron/-/electron-43.4.1.tgz
+  https://registry.npmjs.org/electron/-/electron-43.7.9.tgz
 
 Electron runtime에는 Chromium, Node.js와 다수의 제3자 구성요소가 포함됩니다.
 최종 패키지의 Electron `LICENSE`와 `LICENSES.chromium.html`을 보존하고 실제

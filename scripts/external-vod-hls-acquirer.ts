@@ -25,6 +25,11 @@ export const EXTERNAL_VOD_HLS_PERSISTED_CLOCK_SCHEMA =
 export const MAX_EXTERNAL_VOD_HLS_INIT_BYTES = 32 * 1024 * 1024;
 export const MAX_EXTERNAL_VOD_HLS_FRAGMENT_BYTES = 256 * 1024 * 1024;
 export const MAX_EXTERNAL_VOD_HLS_SECTION_BYTES = 64 * 1024 * 1024 * 1024;
+/** Bound the complete source independently from a section's download budget.
+ * Finite CHZZK replays can exceed 20,000 two-second fragments while their
+ * playlist remains below the parser's separate 4 MiB byte ceiling.
+ */
+export const MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS = 30_000;
 export const MAX_EXTERNAL_VOD_HLS_SEGMENTS = 20_000;
 export const MAX_EXTERNAL_VOD_HLS_SECTION_MS = 6 * 60 * 60 * 1_000;
 export const DEFAULT_EXTERNAL_VOD_HLS_DURATION_TOLERANCE_MS = 250;
@@ -463,7 +468,7 @@ function snapshotTimeline(
     || timeline.hasIndependentSegments !== true
     || !Array.isArray(timeline.segments)
     || timeline.segments.length === 0
-    || timeline.segments.length > MAX_EXTERNAL_VOD_HLS_SEGMENTS
+    || timeline.segments.length > MAX_EXTERNAL_VOD_HLS_TIMELINE_SEGMENTS
   ) {
     fail(
       "종료·독립 세그먼트가 증명된 유한 HLS 재생목록이 필요합니다.",
@@ -603,6 +608,9 @@ export function selectExternalVodHlsSegmentRange(
     segment.startUs + segment.durationUs > sourceStartUs
     && segment.startUs < sourceEndUs
   ));
+  if (segments.length > MAX_EXTERNAL_VOD_HLS_SEGMENTS) {
+    fail("HLS 요청 구간의 세그먼트 수가 안전 상한을 넘었습니다.", "INVALID_SECTION");
+  }
   const first = segments[0];
   const last = segments.at(-1);
   if (

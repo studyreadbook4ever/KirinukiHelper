@@ -194,6 +194,117 @@ function editorSafeInspection(
   };
 }
 
+interface FrameRateFixtureProfile {
+  frameRate: number;
+  nominalFrameRate?: number;
+}
+
+function editorFrameRateInspection(
+  durationMs: number,
+  profile: FrameRateFixtureProfile
+): ExternalMediaInspection {
+  return {
+    ...editorSafeInspection(durationMs),
+    frameRate: profile.frameRate,
+    ...(profile.nominalFrameRate === undefined
+      ? {}
+      : { nominalFrameRate: profile.nominalFrameRate })
+  };
+}
+
+function youtubeFrameRateFixture({
+  sectionProfiles,
+  finalProfile,
+  failOnceAtStartMs
+}: {
+  sectionProfiles: ReadonlyMap<number, FrameRateFixtureProfile>;
+  finalProfile: FrameRateFixtureProfile;
+  failOnceAtStartMs?: number;
+}): {
+  dependencies: ExternalVodMaterializerDependencies;
+  stats: {
+    downloadStarts: number[];
+    muxArgs: string[][];
+    failedOnce: boolean;
+  };
+} {
+  const stats = {
+    downloadStarts: [] as number[],
+    muxArgs: [] as string[][],
+    failedOnce: false
+  };
+  const inspectMedia = async (
+    filePath: string,
+    options?: ExternalProcessRunOptions
+  ): Promise<ExternalMediaInspection> => {
+    const content = await readFixtureMediaText(filePath, options);
+    const section = /^frame-section:(\d+):(\d+)$/u.exec(content);
+    if (section) {
+      const startMs = Number(section[1]);
+      const durationMs = Number(section[2]);
+      const profile = sectionProfiles.get(startMs);
+      assert.ok(profile, `구간 ${startMs}ms의 FPS fixture가 없습니다.`);
+      return editorFrameRateInspection(durationMs, profile);
+    }
+    const final = /^frame-final:(\d+)$/u.exec(content);
+    assert.ok(final, `알 수 없는 FPS fixture media: ${content}`);
+    return editorFrameRateInspection(Number(final[1]), finalProfile);
+  };
+  const runProcess: ExternalProcessRunner = async (command, args) => {
+    if (command === PYTHON_BINARY && args.includes("--dump-single-json")) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          id: YOUTUBE_ID,
+          extractor: "youtube",
+          duration: 120,
+          availability: "public",
+          live_status: "not_live",
+          timestamp: 1_700_000_000
+        }),
+        stderr: ""
+      };
+    }
+    assert.equal(command, "ffmpeg");
+    const outputPath = args.at(-1);
+    assert.ok(outputPath);
+    const durationMs = Math.round(Number(optionValue(args, "-t")) * 1_000);
+    if (isDirectAcquisitionPath(outputPath)) {
+      const startMs = Math.round(Number(optionValue(args, "-ss")) * 1_000);
+      stats.downloadStarts.push(startMs);
+      if (
+        failOnceAtStartMs === startMs
+        && !stats.failedOnce
+      ) {
+        stats.failedOnce = true;
+        throw new Error("forced frame-rate fixture download failure");
+      }
+      await writeFile(outputPath, `frame-section:${startMs}:${durationMs}`);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    stats.muxArgs.push([...args]);
+    await writeFile(outputPath, `frame-final:${durationMs}`);
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  return {
+    dependencies: {
+      runProcess,
+      inspectMedia,
+      inspectPacketCopyMedia: async (filePath, options) => ({
+        ...(await inspectMedia(filePath, options)),
+        packetCopySignature: "fixture-identical-h264-aac-parameters"
+      }),
+      pythonBinary: PYTHON_BINARY,
+      ytDlpBinary: YT_DLP_ARTIFACT,
+      statFileSystem: async () => ({
+        bavail: BigInt(MAX_EXTERNAL_VOD_WORK_BYTES),
+        bsize: 1n
+      })
+    },
+    stats
+  };
+}
+
 function fixtureBox(type: string): Buffer {
   const value = Buffer.alloc(8);
   value.writeUInt32BE(8, 0);
@@ -1822,6 +1933,319 @@ test("ffprobe 결과는 H.264와 선택적 AAC만 로컬 편집 MP4로 받는다
       format: { duration: 21, format_name: "mp4" }
     })), /인식된 비디오·오디오 스트림만/u);
   }
+});
+
+test("ffprobe 평균 FPS와 검증된 기준 cadence를 분리한다", () => {
+  const drifted = parseExternalMediaInspection(JSON.stringify({
+    streams: [
+      {
+        codec_type: "video",
+        codec_name: "h264",
+        width: 1920,
+        height: 1080,
+        avg_frame_rate: "174150/2903",
+        r_frame_rate: "60/1"
+      },
+      {
+        codec_type: "audio",
+        codec_name: "aac",
+        sample_rate: "48000",
+        channels: 2,
+        channel_layout: "stereo"
+      }
+    ],
+    format: { duration: "96.766667", format_name: "mov,mp4" }
+  }));
+  assert.equal(drifted.frameRate, 174_150 / 2_903);
+  assert.equal(drifted.nominalFrameRate, 60);
+
+  const unknownCadence = parseExternalMediaInspection(JSON.stringify({
+    streams: [{
+      codec_type: "video",
+      codec_name: "h264",
+      width: 1920,
+      height: 1080,
+      avg_frame_rate: "60000/1001",
+      r_frame_rate: "0/0"
+    }],
+    format: { duration: "3.000", format_name: "mov,mp4" }
+  }));
+  assert.equal(unknownCadence.frameRate, 60_000 / 1_001);
+  assert.equal(unknownCadence.nominalFrameRate, undefined);
+
+  assert.throws(() => parseExternalMediaInspection(JSON.stringify({
+    streams: [{
+      codec_type: "video",
+      codec_name: "h264",
+      width: 1920,
+      height: 1080,
+      avg_frame_rate: "60/1",
+      r_frame_rate: "120/1"
+    }],
+    format: { duration: "3.000", format_name: "mov,mp4" }
+  })), /1920x1080, 60fps/u);
+});
+
+test("같은 nominal 60fps 구간과 평균 FPS가 바뀐 concat 결과를 정상 materialize한다", async (t) => {
+  const stateDir = await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-external-fps-drift-"
+  ));
+  t.after(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  const observedDrift = 174_150 / 2_903;
+  const concatDrift = 14_340_000 / 239_999;
+  const fixture = youtubeFrameRateFixture({
+    sectionProfiles: new Map([
+      [10_000, { frameRate: 60, nominalFrameRate: 60 }],
+      [70_000, { frameRate: observedDrift, nominalFrameRate: 60 }]
+    ]),
+    finalProfile: { frameRate: concatDrift, nominalFrameRate: 60 }
+  });
+  const request = {
+    consumerId: `${TEST_CONSUMER_ID}-fps-drift`,
+    sourceUrl: YOUTUBE_URL,
+    clips: [
+      { id: "first", startMs: 20_000, endMs: 21_000 },
+      { id: "second", startMs: 80_000, endMs: 81_000 }
+    ],
+    stateDir
+  } as const;
+  const completed = await materializeExternalVod(request, fixture.dependencies);
+
+  assert.equal(completed.reused, false);
+  assert.equal(completed.manifest.mediaDurationMs, 42_000);
+  assert.deepEqual(fixture.stats.downloadStarts, [10_000, 70_000]);
+  assert.equal(fixture.stats.muxArgs.length, 1);
+  assert.equal(optionValue(fixture.stats.muxArgs[0]!, "-c"), "copy");
+  assert.deepEqual(
+    completed.receipt.sourceRoots.map((root) => ({
+      frameRate: root.streamSignature.frameRate,
+      nominalFrameRate: root.streamSignature.nominalFrameRate
+    })),
+    [
+      { frameRate: 60, nominalFrameRate: 60 },
+      { frameRate: observedDrift, nominalFrameRate: 60 }
+    ]
+  );
+
+  const reused = await materializeExternalVod(request, fixture.dependencies);
+  assert.equal(reused.reused, true);
+  assert.deepEqual(fixture.stats.downloadStarts, [10_000, 70_000]);
+  assert.equal(fixture.stats.muxArgs.length, 1);
+  assert.deepEqual(
+    reused.receipt.sourceRoots.map((root) => root.streamSignature.nominalFrameRate),
+    [60, 60]
+  );
+});
+
+test("평균 FPS가 같아도 실제 nominal cadence 60과 60000/1001은 거부한다", async (t) => {
+  const stateDir = await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-external-fps-mismatch-"
+  ));
+  t.after(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  const fixture = youtubeFrameRateFixture({
+    sectionProfiles: new Map([
+      [10_000, { frameRate: 60, nominalFrameRate: 60 }],
+      [70_000, { frameRate: 60, nominalFrameRate: 60_000 / 1_001 }]
+    ]),
+    finalProfile: { frameRate: 60, nominalFrameRate: 60 }
+  });
+
+  await assert.rejects(
+    materializeExternalVod({
+      consumerId: `${TEST_CONSUMER_ID}-fps-mismatch`,
+      sourceUrl: YOUTUBE_URL,
+      clips: [
+        { id: "first", startMs: 20_000, endMs: 21_000 },
+        { id: "second", startMs: 80_000, endMs: 81_000 }
+      ],
+      stateDir
+    }, fixture.dependencies),
+    (error: unknown) => {
+      assert(error instanceof ExternalVodMaterializationError);
+      assert.equal(error.code, "MEDIA_STREAM_MISMATCH");
+      return true;
+    }
+  );
+  assert.deepEqual(fixture.stats.downloadStarts, [10_000, 70_000]);
+  assert.equal(fixture.stats.muxArgs.length, 0);
+});
+
+test("nominal 없는 legacy partial은 검증한 root를 다시 받지 않고 재시도한다", async (t) => {
+  const stateDir = await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-external-fps-partial-"
+  ));
+  t.after(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  const fixture = youtubeFrameRateFixture({
+    sectionProfiles: new Map([
+      [10_000, { frameRate: 174_150 / 2_903, nominalFrameRate: 60 }],
+      [70_000, { frameRate: 60, nominalFrameRate: 60 }]
+    ]),
+    finalProfile: {
+      frameRate: 14_340_000 / 239_999,
+      nominalFrameRate: 60
+    },
+    failOnceAtStartMs: 70_000
+  });
+  const request = {
+    consumerId: `${TEST_CONSUMER_ID}-fps-partial`,
+    sourceUrl: YOUTUBE_URL,
+    clips: [
+      { id: "first", startMs: 20_000, endMs: 21_000 },
+      { id: "second", startMs: 80_000, endMs: 81_000 }
+    ],
+    stateDir
+  } as const;
+
+  await assert.rejects(materializeExternalVod(request, fixture.dependencies));
+  assert.deepEqual(fixture.stats.downloadStarts, [10_000, 70_000]);
+  const entries = await readdir(stateDir, { recursive: true });
+  const partialRelativePath = entries.find((entry) => (
+    path.basename(entry) === "partial-roots.json"
+  ));
+  assert.ok(partialRelativePath, "실패 전에 검증한 root checkpoint가 필요합니다.");
+  const partialPath = path.join(stateDir, partialRelativePath);
+  const partial = JSON.parse(await readFile(partialPath, "utf8")) as {
+    sourceRoots: Array<{
+      streamSignature: { nominalFrameRate?: unknown };
+    }>;
+  };
+  assert.equal(partial.sourceRoots.length, 1);
+  assert.equal(partial.sourceRoots[0]?.streamSignature.nominalFrameRate, 60);
+  delete partial.sourceRoots[0]!.streamSignature.nominalFrameRate;
+  await writeFile(partialPath, `${JSON.stringify(partial)}\n`);
+
+  const completed = await materializeExternalVod(request, fixture.dependencies);
+  assert.equal(completed.reused, false);
+  assert.deepEqual(
+    fixture.stats.downloadStarts,
+    [10_000, 70_000, 70_000],
+    "legacy checkpoint의 10초 root는 다시 받지 않아야 합니다."
+  );
+  assert.equal(
+    fixture.stats.downloadStarts.filter((startMs) => startMs === 10_000).length,
+    1
+  );
+  assert.deepEqual(
+    completed.receipt.sourceRoots.map((root) => (
+      root.streamSignature.nominalFrameRate
+    )),
+    [60, 60]
+  );
+});
+
+test("legacy 완료 receipt hot-load는 root cadence를 보강하고 malformed optional은 거부한다", async (t) => {
+  const stateDir = await mkdtemp(path.join(
+    os.tmpdir(),
+    "kirinuki-external-fps-hot-load-"
+  ));
+  t.after(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  const fixture = youtubeFrameRateFixture({
+    sectionProfiles: new Map([
+      [20_000, { frameRate: 60, nominalFrameRate: 60 }],
+      [30_000, { frameRate: 174_150 / 2_903, nominalFrameRate: 60 }],
+      [51_000, { frameRate: 60, nominalFrameRate: 60 }]
+    ]),
+    finalProfile: {
+      frameRate: 14_340_000 / 239_999,
+      nominalFrameRate: 60
+    }
+  });
+  const consumerId = `${TEST_CONSUMER_ID}-fps-hot-load`;
+  const clips = [{ id: "clip", startMs: 40_000, endMs: 41_000 }] as const;
+  const initial = await materializeExternalVod({
+    consumerId,
+    sourceUrl: YOUTUBE_URL,
+    clips,
+    stateDir
+  }, fixture.dependencies);
+  assert.deepEqual(fixture.stats.downloadStarts, [30_000]);
+
+  const initialReceiptPath = path.join(
+    path.dirname(initial.artifactPath),
+    "manifest.json"
+  );
+  const legacyReceipt = JSON.parse(
+    await readFile(initialReceiptPath, "utf8")
+  ) as {
+    sourceRoots: Array<{
+      streamSignature: { nominalFrameRate?: unknown };
+    }>;
+  };
+  assert.equal(legacyReceipt.sourceRoots.length, 1);
+  delete legacyReceipt.sourceRoots[0]!.streamSignature.nominalFrameRate;
+  await writeFile(initialReceiptPath, `${JSON.stringify(legacyReceipt)}\n`);
+
+  const expanded = await materializeExternalVod({
+    consumerId,
+    sourceUrl: YOUTUBE_URL,
+    clips,
+    editableRanges: [{ id: "clip", startMs: 20_000, endMs: 70_000 }],
+    base: {
+      materializationId: initial.manifest.materializationId,
+      planFingerprint: initial.manifest.planFingerprint,
+      contentId: YOUTUBE_ID
+    },
+    stateDir
+  }, fixture.dependencies);
+  assert.deepEqual(
+    fixture.stats.downloadStarts,
+    [30_000, 20_000, 51_000],
+    "기존 30초 root는 재검사만 하고 hot-load 차집합만 받아야 합니다."
+  );
+  const inheritedRoot = expanded.receipt.sourceRoots.find((root) => (
+    root.sourceStartMs === 30_000
+  ));
+  assert.equal(inheritedRoot?.streamSignature.frameRate, 174_150 / 2_903);
+  assert.equal(inheritedRoot?.streamSignature.nominalFrameRate, 60);
+  assert.ok(expanded.receipt.sourceRoots.every((root) => (
+    root.streamSignature.nominalFrameRate === 60
+  )));
+
+  const expandedReceiptPath = path.join(
+    path.dirname(expanded.artifactPath),
+    "manifest.json"
+  );
+  const malformedReceipt = JSON.parse(
+    await readFile(expandedReceiptPath, "utf8")
+  ) as {
+    sourceRoots: Array<{
+      streamSignature: { nominalFrameRate?: unknown };
+    }>;
+  };
+  malformedReceipt.sourceRoots[0]!.streamSignature.nominalFrameRate = "60";
+  await writeFile(expandedReceiptPath, `${JSON.stringify(malformedReceipt)}\n`);
+  const downloadsBeforeMalformedBase = fixture.stats.downloadStarts.length;
+  await assert.rejects(
+    materializeExternalVod({
+      consumerId,
+      sourceUrl: YOUTUBE_URL,
+      clips,
+      editableRanges: [{ id: "clip", startMs: 10_000, endMs: 80_000 }],
+      base: {
+        materializationId: expanded.manifest.materializationId,
+        planFingerprint: expanded.manifest.planFingerprint,
+        contentId: YOUTUBE_ID
+      },
+      stateDir
+    }, fixture.dependencies),
+    (error: unknown) => {
+      assert(error instanceof ExternalVodMaterializationError);
+      assert.equal(error.code, "INVALID_BASE_MATERIALIZATION");
+      return true;
+    }
+  );
+  assert.equal(fixture.stats.downloadStarts.length, downloadsBeforeMalformedBase);
 });
 
 test("ffprobe codec 초기화 정보는 엄격한 ephemeral packet-copy signature가 된다", () => {

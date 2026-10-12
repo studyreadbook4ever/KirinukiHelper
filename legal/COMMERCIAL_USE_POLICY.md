@@ -82,7 +82,7 @@ FFmpeg·ffprobe·yt-dlp를 포함하므로 이 system-provided 분류를 재사�
 실제 binary와 linked component를 별도 감사해야 하며 현재 공개 바이너리 승인을
 받지 않았습니다.
 
-Electron `43.4.1`, `electron-builder@26.15.3`, `@electron/asar@4.2.1`,
+Electron `43.7.9`, `electron-builder@26.15.3`, `@electron/asar@4.2.1`,
 `@electron/packager@20.3.0`, `@electron/fuses@2.1.3`,
 FFmpeg/ffprobe `n8.1.2`(Shaka build `n8.1.2-1`)와 yt-dlp `2026.07.04`를 핀했다는 사실은
 라이선스 승인과 다릅니다. Electron/Chromium/Node 전체 SBOM, packaging

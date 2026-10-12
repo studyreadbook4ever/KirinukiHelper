@@ -573,7 +573,7 @@ async function signMacPrepackaged(
     type: "distribution",
     identity,
     keychain,
-    version: "43.4.1",
+    version: "43.7.9",
     ignore: (filePath) => ignoredBinaries.has(path.resolve(filePath)),
     strictVerify: true,
     preAutoEntitlements: true
