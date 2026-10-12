@@ -328,7 +328,10 @@ export interface ExternalMediaInspection {
   audioCodec: "aac" | null;
   width: number;
   height: number;
+  /** Measured average frame rate, or the nominal rate when avg is unavailable. */
   frameRate: number;
+  /** Validated base cadence reported by ffprobe r_frame_rate, when available. */
+  nominalFrameRate?: number;
   audioSampleRate?: number;
   audioChannels?: number;
   audioChannelLayout?: string;
@@ -2638,6 +2641,9 @@ function externalFrameRate(value: unknown): number {
     return value;
   }
   const normalized = String(value || "").trim();
+  if (!normalized) {
+    return Number.NaN;
+  }
   const rational = /^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/u.exec(normalized);
   if (rational) {
     const numerator = Number(rational[1]);
@@ -2871,9 +2877,10 @@ export function parseExternalMediaInspection(rawJson: string): ExternalMediaInsp
   const width = Number(video.width);
   const height = Number(video.height);
   const averageFrameRate = externalFrameRate(video.avg_frame_rate);
+  const nominalFrameRate = externalFrameRate(video.r_frame_rate);
   const frameRate = Number.isFinite(averageFrameRate) && averageFrameRate > 0
     ? averageFrameRate
-    : externalFrameRate(video.r_frame_rate);
+    : nominalFrameRate;
   if (
     !Number.isSafeInteger(width)
     || width <= 0
@@ -2884,6 +2891,13 @@ export function parseExternalMediaInspection(rawJson: string): ExternalMediaInsp
     || !Number.isFinite(frameRate)
     || frameRate <= 0
     || frameRate > MAX_EXTERNAL_VOD_FRAME_RATE + 0.001
+    || (
+      Number.isFinite(nominalFrameRate)
+      && (
+        nominalFrameRate <= 0
+        || nominalFrameRate > MAX_EXTERNAL_VOD_FRAME_RATE + 0.001
+      )
+    )
   ) {
     fail(
       "로컬 편집 영상은 최대 1920x1080, 60fps여야 합니다.",
@@ -2917,6 +2931,9 @@ export function parseExternalMediaInspection(rawJson: string): ExternalMediaInsp
     width,
     height,
     frameRate,
+    ...(Number.isFinite(nominalFrameRate) && nominalFrameRate > 0
+      ? { nominalFrameRate }
+      : {}),
     ...(packetCopySignature ? { packetCopySignature } : {}),
     ...(audio
       ? {
@@ -3940,6 +3957,7 @@ function normalizedRootStreamSignature(
     "width",
     "height",
     "frameRate",
+    "nominalFrameRate",
     "audioCodec",
     "audioSampleRate",
     "audioChannels",
@@ -3948,6 +3966,10 @@ function normalizedRootStreamSignature(
   if (
     Object.keys(value).some((key) => !allowed.has(key))
     || (value.audioCodec !== "aac" && value.audioCodec !== null)
+    || (
+      value.nominalFrameRate !== undefined
+      && typeof value.nominalFrameRate !== "number"
+    )
   ) {
     return undefined;
   }
@@ -3959,6 +3981,9 @@ function normalizedRootStreamSignature(
       width: Number(value.width),
       height: Number(value.height),
       frameRate: Number(value.frameRate),
+      ...(value.nominalFrameRate === undefined
+        ? {}
+        : { nominalFrameRate: Number(value.nominalFrameRate) }),
       ...(value.audioCodec === "aac"
         ? {
           audioSampleRate: Number(value.audioSampleRate),
@@ -5517,7 +5542,7 @@ async function verifyReusableRootMedia({
   rootPath: string;
   inspectMedia: NonNullable<ExternalVodMaterializerDependencies["inspectMedia"]>;
   options: ExternalProcessRunOptions;
-}): Promise<void> {
+}): Promise<ExternalSectionStreamSignature> {
   const inspection = await inspectMedia(rootPath, options);
   assertExternalSectionCoverage(
     inspection,
@@ -5527,6 +5552,7 @@ async function verifyReusableRootMedia({
   );
   const signature = externalSectionStreamSignature(inspection);
   assertCompatibleSectionStreams(root.streamSignature, signature);
+  return signature;
 }
 
 function assertRootClockEvidenceMatchesProofSet(
@@ -5615,6 +5641,7 @@ async function loadPartialSourceRoots({
     assertRootsContainedInPlan(roots, plan);
     missingExternalVodSections(plan, roots);
     const paths = new Map<string, string>();
+    const verifiedRoots: ExternalVodSourceRootReceipt[] = [];
     for (const root of roots) {
       const rootPath = path.join(jobDirectory, "roots", root.cacheFileName);
       const snapshot = await inspectExternalRegularFileNoFollow(rootPath, {
@@ -5628,10 +5655,16 @@ async function loadPartialSourceRoots({
       ) {
         return { roots: [], paths: new Map() };
       }
-      await verifyReusableRootMedia({ root, rootPath, inspectMedia, options });
+      const streamSignature = await verifyReusableRootMedia({
+        root,
+        rootPath,
+        inspectMedia,
+        options
+      });
+      verifiedRoots.push({ ...root, streamSignature });
       paths.set(root.id, rootPath);
     }
-    return { roots, paths };
+    return { roots: verifiedRoots, paths };
   } catch (error) {
     if (
       error instanceof ExternalVodMaterializationError
@@ -5725,6 +5758,7 @@ export interface ExternalSectionStreamSignature {
   width: number;
   height: number;
   frameRate: number;
+  nominalFrameRate?: number;
   audioCodec: "aac" | null;
   audioSampleRate?: number;
   audioChannels?: number;
@@ -5744,6 +5778,14 @@ function externalSectionStreamSignature(
     || inspection.width > MAX_EXTERNAL_VOD_WIDTH
     || inspection.height > MAX_EXTERNAL_VOD_HEIGHT
     || inspection.frameRate > MAX_EXTERNAL_VOD_FRAME_RATE + 0.001
+    || (
+      inspection.nominalFrameRate !== undefined
+      && (
+        !Number.isFinite(inspection.nominalFrameRate)
+        || inspection.nominalFrameRate <= 0
+        || inspection.nominalFrameRate > MAX_EXTERNAL_VOD_FRAME_RATE + 0.001
+      )
+    )
   ) {
     fail(
       "다운로드 구간의 영상 프레임 크기를 확인하지 못해 안전하게 병합할 수 없습니다.",
@@ -5768,6 +5810,9 @@ function externalSectionStreamSignature(
     width: Number(inspection.width),
     height: Number(inspection.height),
     frameRate: inspection.frameRate,
+    ...(inspection.nominalFrameRate === undefined
+      ? {}
+      : { nominalFrameRate: inspection.nominalFrameRate }),
     audioCodec: inspection.audioCodec,
     ...(inspection.audioCodec === "aac"
       ? {
@@ -5788,8 +5833,26 @@ function assertCompatibleSectionStreams(
   if (
     expected.width !== actual.width
     || expected.height !== actual.height
-    || Math.abs(expected.frameRate - actual.frameRate) > 0.001
-    || expected.audioCodec !== actual.audioCodec
+  ) {
+    fail(
+      "다운로드 구간들의 해상도가 달라 손실 없이 병합할 수 없습니다.",
+      "MEDIA_STREAM_MISMATCH"
+    );
+  }
+  const frameRatesDiffer = (
+    expected.nominalFrameRate !== undefined
+    && actual.nominalFrameRate !== undefined
+  )
+    ? Math.abs(expected.nominalFrameRate - actual.nominalFrameRate) > 0.001
+    : Math.abs(expected.frameRate - actual.frameRate) > 0.001;
+  if (frameRatesDiffer) {
+    fail(
+      "다운로드 구간들의 기준 프레임 속도가 달라 손실 없이 병합할 수 없습니다.",
+      "MEDIA_STREAM_MISMATCH"
+    );
+  }
+  if (
+    expected.audioCodec !== actual.audioCodec
     || expected.audioSampleRate !== actual.audioSampleRate
     || expected.audioChannels !== actual.audioChannels
     || (
@@ -5799,7 +5862,7 @@ function assertCompatibleSectionStreams(
     )
   ) {
     fail(
-      "다운로드 구간들의 해상도 또는 오디오 구성이 달라 손실 없이 병합할 수 없습니다.",
+      "다운로드 구간들의 오디오 구성이 달라 손실 없이 병합할 수 없습니다.",
       "MEDIA_STREAM_MISMATCH"
     );
   }
@@ -6523,28 +6586,30 @@ export async function materializeExternalVod(
     const sourceRoots: ExternalVodSourceRootReceipt[] = [];
     const sourceRootPaths = new Map<string, string>();
     if (baseMaterialization) {
+      const verifiedBaseRoots: ExternalVodSourceRootReceipt[] = [];
       for (const root of baseMaterialization.receipt.sourceRoots) {
         const rootPath = baseMaterialization.sourceRootPaths.get(root.id);
         if (!rootPath) {
           fail("기존 원본 조각 경로를 찾지 못했습니다.", "CACHE_INTEGRITY_FAILED");
         }
         assertRootClockEvidenceMatchesProofSet(root, acquisitionClockProofSet);
-        await verifyReusableRootMedia({
+        const streamSignature = await verifyReusableRootMedia({
           root,
           rootPath,
           inspectMedia,
           options: localOptions
         });
+        verifiedBaseRoots.push({ ...root, streamSignature });
       }
       const inheritedPaths = await inheritExternalSourceRoots({
-        roots: baseMaterialization.receipt.sourceRoots,
+        roots: verifiedBaseRoots,
         sourcePaths: baseMaterialization.sourceRootPaths,
         jobDirectory,
         stagingDirectory: attemptDirectory,
         ...(request.signal ? { signal: request.signal } : {})
       });
       sourceRoots.push(
-        ...baseMaterialization.receipt.sourceRoots.map((root) => ({ ...root }))
+        ...verifiedBaseRoots
       );
       for (const [id, rootPath] of inheritedPaths) {
         sourceRootPaths.set(id, rootPath);

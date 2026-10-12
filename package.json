@@ -2,7 +2,7 @@
   "name": "kirinuki-app",
   "productName": "Kirinuki",
   "desktopName": "kr.eff0rtchung.kirinuki.desktop",
-  "version": "3.0.26",
+  "version": "3.0.28",
   "private": true,
   "license": "Unlicense",
   "type": "module",
@@ -85,7 +85,7 @@
     "@electron/osx-sign": "2.6.0",
     "@electron/packager": "20.3.0",
     "@types/node": "20.19.43",
-    "electron": "43.4.1",
+    "electron": "43.7.9",
     "electron-builder": "26.15.3",
     "tar": "7.5.22",
     "typescript": "5.9.3"

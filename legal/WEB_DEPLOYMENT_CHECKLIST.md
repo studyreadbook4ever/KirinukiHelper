@@ -180,7 +180,7 @@
 ## 9. 엔진·도구 라이선스
 
 <!-- attribution-id: desktop-local-engine-runtime -->
-- [ ] Electron `43.4.1` archive URL·size·SHA-256, `LICENSE`,
+- [ ] Electron `43.7.9` archive URL·size·SHA-256, `LICENSE`,
   `LICENSES.chromium.html`, Chromium·Node SBOM을 target별로 기록했다.
 - [ ] electron-builder `26.15.3`, asar, packager, fuses와 모든 transitive build
   package의 exact artifact/license 및 최종 비포함 여부를 검사했다.

@@ -109,7 +109,7 @@ installer·signed checksum과 함께 공개합니다. archive가 없거나 tree/
 
 | 구성요소 | 고정점 | 역할 |
 | --- | --- | --- |
-| Electron | `43.4.1` | background runtime; Chromium·Node 포함 |
+| Electron | `43.7.9` | background runtime; Chromium·Node 포함 |
 | electron-builder | `26.15.3` | NSIS·DMG·deb installer 생성 |
 | `@electron/asar` | `4.2.1` | ASAR exact-file 검증 |
 | `@electron/packager` | `20.3.0` | target app stage 생성 |
@@ -141,7 +141,7 @@ byte size, SHA-256과 upstream checksum을 release manifest에 기록하고, 최
 installer가 보존한 `LICENSE`·`LICENSES.chromium.html`을 packaged-file SBOM과
 대조해야 합니다.
 
-- Source/license: https://github.com/electron/electron/tree/v43.4.1
+- Source/license: https://github.com/electron/electron/tree/v43.7.9
 - Distribution guide: https://www.electronjs.org/docs/latest/tutorial/application-distribution/
 
 electron-builder와 모든 transitive build dependency는 build-only라는 이유로

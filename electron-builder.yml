@@ -2,7 +2,7 @@ appId: kr.eff0rtchung.kirinuki
 productName: Kirinuki
 executableName: Kirinuki
 copyright: Unlicense
-electronVersion: 43.4.1
+electronVersion: 43.7.9
 npmRebuild: false
 buildDependenciesFromSource: false
 forceCodeSigning: false
