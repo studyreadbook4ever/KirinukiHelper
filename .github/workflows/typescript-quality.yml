@@ -77,6 +77,20 @@ jobs:
           git diff --check
           git diff --exit-code
 
+      - name: Preserve the verified web release for deployment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-web-release-${{ github.sha }}
+          path: |
+            dist/kirinuki-web-v*.zip
+            dist/kirinuki-web-v*.zip.sha256
+            dist/kirinuki-release-v*.json
+            dist/kirinuki-release-v*.json.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
   native-desktop:
     name: Native desktop · ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}

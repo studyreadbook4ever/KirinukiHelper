@@ -43,6 +43,7 @@ import {
   cutPreparationRecoveryKind,
   safeCutPreparationErrorCode
 } from "./cut-preparation-recovery.js";
+import { DeletedCutHistory, studioCutReview } from "./cut-review.js";
 
 import {
   deleteAllProjectSessionsAtomically,
@@ -237,6 +238,8 @@ const elements = {
   selectionRail: requiredElement<HTMLElement>(".selection-rail"),
   clipTemplate: requiredElement<HTMLTemplateElement>("#clip-row-template"),
   addClip: requiredElement<HTMLButtonElement>("#add-clip"),
+  undoDeleteClip: requiredElement<HTMLButtonElement>("#undo-delete-clip"),
+  cutReviewStatus: requiredElement<HTMLElement>("#cut-review-status"),
   captureBackupStatus: requiredElement<HTMLElement>("#capture-backup-status"),
   localProjectManager: requiredElement<HTMLElement>("#recent-section"),
   localProjectsSummary: requiredElement<HTMLElement>("#local-projects-summary"),
@@ -358,6 +361,10 @@ let activeStreamEmbedUrl = "";
 let activeStreamPlatform = "";
 let streamLoadTimer: number | null = null;
 let activeClipRow: HTMLElement | null = null;
+const deletedCutHistory = new DeletedCutHistory<HTMLElement>();
+let cutReviewGeneration = 0;
+let activeCutSeek: object | null = null;
+let lastCutReviewRenderKey: string | null = null;
 let localPreviewSourceStartSeconds = 0;
 let localPreviewSourceDurationSeconds = 0;
 let localPreviewProjectId = createFreshEditorProjectId();
@@ -528,6 +535,7 @@ function renderEditorEntryAvailability(): void {
         || STUDIO_SELECTION_RANGE_INPUT_ERROR
       )
       : "권리 확인 후 편집기 열기 (단축키 A)";
+  syncCutReviewAvailability();
 }
 
 function renderMobileEditorAccess(): void {
@@ -783,7 +791,118 @@ function clipRows(): HTMLElement[] {
   return [...elements.clipList.querySelectorAll<HTMLElement>(".clip-row")];
 }
 
+function cutReviewSource(): string {
+  return elements.sourceUrl.value.trim();
+}
+
+function resetCutReviewSession(): void {
+  deletedCutHistory.clear();
+  cutReviewGeneration += 1;
+  activeCutSeek = null;
+  lastCutReviewRenderKey = null;
+  elements.cutReviewStatus.textContent = "";
+  syncCutReviewAvailability();
+}
+
+function cutReviewBusy(): boolean {
+  return openingEditor || Boolean(resumeProject) || activeCutSeek !== null
+    || localPreviewBusy;
+}
+
+function currentCutReviewDuration(): number | null {
+  let descriptor: ReturnType<typeof sourceEmbedDescriptor>;
+  try {
+    descriptor = sourceEmbedDescriptor(cutReviewSource(), {
+      studioOrigin: location.origin
+    });
+  } catch {
+    return null;
+  }
+  if (
+    !descriptor || descriptor.embedUrl !== activeStreamEmbedUrl
+    || descriptor.platform !== activeStreamPlatform
+  ) {
+    return null;
+  }
+  if (localVodPlaybackSourceUrl === descriptor.sourceUrl) {
+    return localVodPlayback?.snapshot()?.duration ?? null;
+  }
+  if (descriptor.platform === SOURCE_PLATFORM_YOUTUBE) {
+    return currentYouTubePlayerSnapshot()?.duration ?? null;
+  }
+  return localPreviewSourceUrl === descriptor.sourceUrl
+    && currentLocalPreviewSourceTime() !== null
+    ? localPreviewSourceDurationSeconds : null;
+}
+
+function syncCutReviewAvailability(): void {
+  const busy = cutReviewBusy();
+  const source = cutReviewSource();
+  const deletedCount = deletedCutHistory.count(source);
+  const duration = currentCutReviewDuration();
+  // Player snapshots arrive every 250ms. Review controls depend on readiness
+  // and duration, not playback position; row changes invalidate this cache.
+  const renderKey = JSON.stringify([
+    source, duration, busy, deletedCount, uiLocalization.language
+  ]);
+  if (lastCutReviewRenderKey === renderKey) {
+    return;
+  }
+  elements.undoDeleteClip.disabled = busy || deletedCount === 0;
+  for (const row of clipRows()) {
+    const review = studioCutReview(
+      requiredInputWithin(row, '[data-field="start"]').value,
+      requiredInputWithin(row, '[data-field="end"]').value,
+      duration
+    );
+    const durationLabel = row.querySelector<HTMLElement>(".clip-duration");
+    if (durationLabel) {
+      const label = uiLocalization.translate(review.durationSeconds === null
+        ? "길이 --:--" : `길이 ${formatStudioTimecode(review.durationSeconds)}`);
+      if (durationLabel.textContent !== label) {
+        durationLabel.textContent = label;
+      }
+    }
+    for (const [action, target] of [
+      ["seek-start", review.startTarget], ["seek-end", review.endTarget]
+    ] as const) {
+      const button = row.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+      if (button) {
+        button.disabled = busy || target === null;
+        button.title = uiLocalization.translate(review.durationSeconds === null
+          ? "먼저 올바른 시작과 끝 시각을 기록하세요."
+          : duration === null
+            ? "원본 플레이어가 준비되면 이 시각으로 이동합니다."
+            : target === null
+              ? "원본 길이 안의 시각으로 이동할 수 있습니다."
+              : "입력한 구간을 바꾸지 않고 원본 영상만 이동합니다.");
+      }
+    }
+  }
+  lastCutReviewRenderKey = renderKey;
+}
+
+function undoDeletedCut(): void {
+  if (cutReviewBusy()) {
+    return;
+  }
+  const deleted = deletedCutHistory.pop(cutReviewSource());
+  if (!deleted) {
+    syncCutReviewAvailability();
+    return;
+  }
+  // Reinsert the exact node, preserving raw input, identity, listeners and
+  // finalization state. Only the user-requested deletion is reversed.
+  elements.clipList.insertBefore(deleted.item, clipRows()[deleted.index] ?? null);
+  activeClipRow = deleted.item;
+  updateClipRows();
+  requiredInputWithin(deleted.item, '[data-field="start"]').focus({ preventScroll: true });
+  deleted.item.scrollIntoView({ block: "nearest" });
+  elements.cutReviewStatus.textContent = "삭제한 구간을 원래 위치로 되돌렸습니다.";
+}
+
 function updateClipRows(): void {
+  lastCutReviewRenderKey = null;
   const rows = clipRows();
   let validDurationSeconds = 0;
   let validRangeCount = 0;
@@ -905,14 +1024,22 @@ function createClipRow({
   });
   row.querySelector<HTMLButtonElement>('[data-action="remove"]')
     ?.addEventListener("click", () => {
-      if (clipRows().length > 1) {
+      const rows = clipRows();
+      if (rows.length > 1 && rows.includes(row) && !openingEditor && !resumeProject) {
+        deletedCutHistory.push(cutReviewSource(), row, rows.indexOf(row));
         row.remove();
         if (activeClipRow === row) {
           activeClipRow = clipRows().at(-1) ?? null;
         }
         updateClipRows();
+        elements.cutReviewStatus.textContent =
+          "구간을 삭제했습니다. ‘삭제 되돌리기’로 복구할 수 있습니다.";
       }
     });
+  for (const boundary of ["start", "end"] as const) {
+    row.querySelector<HTMLButtonElement>(`[data-action="seek-${boundary}"]`)
+      ?.addEventListener("click", () => { void seekToClipBoundary(row, boundary); });
+  }
   return row;
 }
 
@@ -1330,6 +1457,7 @@ async function prepareLocalPreview(targetSeconds = 0): Promise<void> {
   const generation = ++localPreviewGeneration;
   localPreviewBusy = true;
   elements.loadPreviewWindow.disabled = true;
+  syncCutReviewAvailability();
   try {
     elements.streamCutStatus.textContent =
       "이 PC의 영상 준비 도우미 연결을 확인하고 있습니다…";
@@ -1616,6 +1744,7 @@ function showResumePolicy(
   project: EditorProject,
   { recoveryDrafts = false }: { recoveryDrafts?: boolean } = {}
 ): void {
+  resetCutReviewSession();
   for (const acknowledgement of document.querySelectorAll<HTMLInputElement>(
     "#policy-section [data-ack]"
   )) {
@@ -1655,6 +1784,7 @@ function clearResumeMode(): void {
   elements.startEditor.textContent = "편집기 열기";
   elements.selectionRail.hidden = false;
   elements.selectionRail.inert = false;
+  syncCutReviewAvailability();
   setStatus("새 편집을 만들려면 원본 VOD와 한 개 이상의 구간이 필요합니다.");
   void refreshStoredSourceIntent();
 }
@@ -1732,6 +1862,7 @@ async function importSessionArchiveFile(file: File): Promise<void> {
     return row;
   });
 
+  resetCutReviewSession();
   clearResumeMode();
   elements.sourceUrl.value = imported.sourceUrl;
   elements.projectName.value = imported.projectName;
@@ -2436,6 +2567,66 @@ async function captureCurrentPlayerTime(field: "start" | "end"): Promise<void> {
     : `끝을 ${formatStudioTimecode(sourceSeconds)}로 기록했습니다.`;
 }
 
+async function seekToClipBoundary(row: HTMLElement, boundary: "start" | "end"): Promise<void> {
+  if (cutReviewBusy() || !row.isConnected) {
+    return;
+  }
+  const review = studioCutReview(
+    requiredInputWithin(row, '[data-field="start"]').value,
+    requiredInputWithin(row, '[data-field="end"]').value,
+    currentCutReviewDuration()
+  );
+  const target = boundary === "start" ? review.startTarget : review.endTarget;
+  if (target === null) {
+    syncCutReviewAvailability();
+    return;
+  }
+  const source = cutReviewSource();
+  const generation = cutReviewGeneration;
+  const operation = {};
+  const vod = localVodPlayback;
+  const youtube = youtubeController;
+  activeCutSeek = operation;
+  syncCutReviewAvailability();
+  const isCurrent = (): boolean => activeCutSeek === operation
+    && generation === cutReviewGeneration && cutReviewSource() === source
+    && row.isConnected && !openingEditor && !resumeProject;
+  try {
+    if (vod) {
+      const moved = await vod.seekAbsolute(target);
+      if (isCurrent() && vod === localVodPlayback) {
+        elements.cutReviewStatus.textContent =
+          `원본 영상을 ${formatStudioTimecode(moved.currentTime)}로 이동했습니다.`;
+        updateLocalVodTimeline();
+      }
+    } else if (youtube && activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE) {
+      youtube.seekTo(target);
+      elements.cutReviewStatus.textContent =
+        `원본 플레이어에 ${formatStudioTimecode(target)} 이동을 요청했습니다.`;
+    } else {
+      const mediaSeconds = localPreviewMediaSeconds(localPreviewSourceStartSeconds, target);
+      if (mediaSeconds < 0 || mediaSeconds > elements.streamVideo.duration) {
+        await prepareLocalPreview(target);
+      } else {
+        elements.streamVideo.currentTime = mediaSeconds;
+        elements.cutReviewStatus.textContent =
+          `원본 플레이어에 ${formatStudioTimecode(target)} 이동을 요청했습니다.`;
+      }
+    }
+  } catch (error) {
+    if (isCurrent()) {
+      elements.cutReviewStatus.textContent =
+        `구간 위치로 이동하지 못했습니다: ${errorMessage(error)}`;
+    }
+  } finally {
+    if (activeCutSeek === operation) {
+      activeCutSeek = null;
+      syncCutReviewAvailability();
+      updatePlayerClockDisplay();
+    }
+  }
+}
+
 async function seekPlayerBy(deltaSeconds: -5 | 5): Promise<void> {
   const youtubeSnapshot = currentYouTubePlayerSnapshot();
   if (youtubeSnapshot && youtubeController) {
@@ -2633,6 +2824,7 @@ function syncCaptureConsoleAvailability(): void {
       : elements.streamVideo.playbackRate);
   elements.playbackRateQuarter.ariaPressed = String(playbackRate === 0.25);
   elements.playbackRateDouble.ariaPressed = String(playbackRate === 2);
+  syncCutReviewAvailability();
   updatePlayerClockDisplay();
 }
 
@@ -2670,10 +2862,14 @@ function installStudioCaptureConsole(): void {
     updatePlayerClockDisplay();
     updateLocalVodTimeline();
   });
-  elements.streamVideo.addEventListener("seeking", updatePlayerClockDisplay);
+  elements.streamVideo.addEventListener("seeking", () => {
+    updatePlayerClockDisplay();
+    syncCutReviewAvailability();
+  });
   elements.streamVideo.addEventListener("seeked", () => {
     updatePlayerClockDisplay();
     updateLocalVodTimeline();
+    syncCutReviewAvailability();
   });
   elements.streamVideo.addEventListener("ratechange", () => {
     elements.playbackRateQuarter.ariaPressed = String(
@@ -2737,6 +2933,7 @@ elements.exportSessionArchive.addEventListener("click", () => {
   void exportCurrentCaptureSessionArchive();
 });
 elements.addClip.addEventListener("click", () => addClipRow());
+elements.undoDeleteClip.addEventListener("click", undoDeletedCut);
 elements.importSessionArchive.addEventListener("click", () => {
   elements.sessionArchiveInput.click();
 });
@@ -2756,6 +2953,7 @@ elements.sessionArchiveInput.addEventListener("change", () => {
     });
 });
 elements.sourceUrl.addEventListener("input", () => {
+  resetCutReviewSession();
   clearResumeMode();
   resetLocalVodWebPlayback();
   resetLocalPreviewSession();
@@ -2941,6 +3139,7 @@ function schedulePendingVodEditorHandoffResume(): void {
     }
     openingEditor = true;
     elements.startEditor.disabled = true;
+    syncCutReviewAvailability();
     try {
       await requireSafeLocalProjectStateForEditorEntry();
       setStatus(
@@ -3008,6 +3207,7 @@ elements.form.addEventListener("submit", (event) => {
   void (async () => {
     openingEditor = true;
     elements.startEditor.disabled = true;
+    syncCutReviewAvailability();
     let pendingHandoff: PendingVodEditorHandoff | undefined;
     if (localProjectLifecycleRefreshTimer !== null) {
       window.clearTimeout(localProjectLifecycleRefreshTimer);
@@ -3133,6 +3333,7 @@ elements.cutPreparationManual.addEventListener("click", () => {
 window.addEventListener(UI_LANGUAGE_CHANGE_EVENT, () => {
   renderLocalProjectEntries();
   renderLocalProjectManagerState(localProjectManagerRenderState);
+  syncCutReviewAvailability();
 });
 
 renderMobileEditorAccess();

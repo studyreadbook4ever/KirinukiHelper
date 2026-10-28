@@ -46,7 +46,7 @@ UI는 제품에 두지 않습니다.
 ## 화면 없는 로컬 미디어 엔진 설치기
 
 <!-- attribution-id: desktop-local-engine-runtime -->
-엔진은 Electron 43.7.9을 **UI shell이 아니라 background runtime**으로 사용합니다.
+엔진은 Electron 43.8.4을 **UI shell이 아니라 background runtime**으로 사용합니다.
 빌드 입력은 `electron-builder@26.15.3`, `@electron/asar@4.2.1`,
 `@electron/packager@20.3.0`, `@electron/fuses@2.1.3`과 exact lockfile입니다.
 설치 후 운영체제 로그인 시 화면 없이 시작하며 loopback에만 bind합니다.

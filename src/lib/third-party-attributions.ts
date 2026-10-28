@@ -632,20 +632,20 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
     kind: "desktop-local-engine-bundle",
     name: "Electron background local media engine installer runtime",
     version:
-      "Electron 43.7.9 / electron-builder 26.15.3 / asar 4.2.1 / packager 20.3.0 / fuses 2.1.3",
+      "Electron 43.8.4 / electron-builder 26.15.3 / asar 4.2.1 / packager 20.3.0 / fuses 2.1.3",
     license: "mixed-see-packages",
-    upstream: "https://github.com/electron/electron/tree/v43.7.9",
+    upstream: "https://github.com/electron/electron/tree/v43.8.4",
     purpose:
       "창 없는 로컬 구간 준비 엔진을 Windows x64·macOS arm64·Linux x64 설치기로 패키징합니다.",
     redistributed: true,
     publicReleaseBlocked: true,
     packages: [
-      "electron@43.7.9 (MIT plus bundled Chromium/Node notices)",
+      "electron@43.8.4 (MIT plus bundled Chromium/Node notices)",
       "@electron/asar@4.2.1 (MIT)",
       "@electron/packager@20.3.0 (BSD-2-Clause)",
       "@electron/fuses@2.1.3 (MIT)",
       "electron-builder@26.15.3 (MIT; build-only transitive licenses separately gated)",
-      "Electron 43.7.9 bundled Chromium/Node notices",
+      "Electron 43.8.4 bundled Chromium/Node notices",
       "FFmpeg/ffprobe n8.1.2 and yt-dlp 2026.07.04 target sidecars",
       "package-lock.json에 고정된 installer build transitive dependencies"
     ],

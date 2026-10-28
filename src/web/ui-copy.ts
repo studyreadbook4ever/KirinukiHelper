@@ -7,6 +7,41 @@ import type {
 } from "../lib/ui-localization.js";
 
 const studioStaticCopy = {
+  "삭제 되돌리기": {
+    en: "Undo cut deletion",
+    ja: "カット削除を元に戻す"
+  },
+  "최근 삭제한 구간 30개까지 이 탭에서 되돌릴 수 있습니다. 원본을 바꾸면 기록이 지워집니다.": {
+    en: "Restore up to 30 recently deleted cuts in this tab. Changing the source clears this history.",
+    ja: "このタブで最近削除したカットを30件まで元に戻せます。元動画を変更すると履歴は消去されます。"
+  },
+  "시작으로 이동": { en: "Go to start", ja: "開始へ移動" },
+  "끝으로 이동": { en: "Go to end", ja: "終了へ移動" },
+  "길이 --:--": { en: "Length --:--", ja: "長さ --:--" },
+  "원본 플레이어가 준비되면 이 시각으로 이동합니다.": {
+    en: "Go to this time once the source player is ready.",
+    ja: "元動画プレーヤーの準備ができたら、この時刻へ移動できます。"
+  },
+  "먼저 올바른 시작과 끝 시각을 기록하세요.": {
+    en: "Enter valid start and end times first.",
+    ja: "先に有効な開始・終了時刻を入力してください。"
+  },
+  "원본 길이 안의 시각으로 이동할 수 있습니다.": {
+    en: "Choose a time within the source video's duration.",
+    ja: "元動画の長さの範囲内にある時刻を指定してください。"
+  },
+  "입력한 구간을 바꾸지 않고 원본 영상만 이동합니다.": {
+    en: "Seek the source video while keeping your cut unchanged.",
+    ja: "入力したカット範囲を変えずに、元動画の再生位置だけを移動します。"
+  },
+  "삭제한 구간을 원래 위치로 되돌렸습니다.": {
+    en: "Restored the deleted cut to its original position.",
+    ja: "削除したカットを元の位置に戻しました。"
+  },
+  "구간을 삭제했습니다. ‘삭제 되돌리기’로 복구할 수 있습니다.": {
+    en: "Cut deleted. Select ‘Undo cut deletion’ to restore it.",
+    ja: "カットを削除しました。「カット削除を元に戻す」で復元できます。"
+  },
   "이 기기의 저장 공간을 안전하게 확인하지 못했습니다. 저장 장치를 확인한 뒤 다시 시도해 주세요.": {
     en: "Kirinuki could not safely check this device's free space. Check the drive and try again.",
     ja: "このデバイスの空き容量を安全に確認できませんでした。ドライブを確認して、もう一度お試しください。"
@@ -771,6 +806,26 @@ export const CUT_UI_COPY_CATALOG: UiCopyCatalog = mergeUiCopyCatalogs(
 );
 
 export const CUT_UI_COPY_PATTERNS = [
+  {
+    source: /^길이 ([0-9:.]+)$/u,
+    en: "Length $1",
+    ja: "長さ $1"
+  },
+  {
+    source: /^원본 영상을 ([0-9:.]+)로 이동했습니다\.$/u,
+    en: "Moved the source video to $1.",
+    ja: "元動画を$1へ移動しました。"
+  },
+  {
+    source: /^원본 플레이어에 ([0-9:.]+) 이동을 요청했습니다\.$/u,
+    en: "Asked the source player to seek to $1.",
+    ja: "元動画プレーヤーに$1への移動を要求しました。"
+  },
+  {
+    source: /^구간 위치로 이동하지 못했습니다: (.+)$/u,
+    en: "Could not seek to the cut boundary: $1",
+    ja: "カットの境界へ移動できませんでした：$1"
+  },
   {
     source: /^재생 중 · 라이브 지연 ([0-9.]+)초 · 클립 허용$/u,
     en: "Playing · Live latency $1 sec · Clipping allowed",

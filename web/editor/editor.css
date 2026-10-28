@@ -4401,6 +4401,40 @@ svg {
   width: 13px;
 }
 
+.cue-review-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.cue-review-navigation .secondary-action {
+  width: auto;
+  margin: 0;
+}
+
+.cue-list-tools {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.cue-list-tools .field,
+.cue-list-tools .field-help,
+.cue-list-tools .secondary-action {
+  margin: 0;
+}
+
+.cue-list-tools input,
+.cue-list-tools select {
+  width: 100%;
+  min-width: 0;
+}
+
 .cue-list {
   padding-top: 10px;
   display: flex;

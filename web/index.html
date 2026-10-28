@@ -9,7 +9,7 @@
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki</title>
-    <link rel="stylesheet" href="/studio.css?v=3.0.28">
+    <link rel="stylesheet" href="/studio.css?v=3.0.29">
   </head>
   <body>
     <header class="topbar">
@@ -215,10 +215,12 @@
                     <div class="selection-rail-actions" role="group" aria-label="가져올 구간 작업">
                       <button id="export-session-archive" class="button ghost" type="button">현재 컷 백업</button>
                       <button id="add-clip" class="button ghost" type="button">빈 구간 추가</button>
+                      <button id="undo-delete-clip" class="button ghost" type="button" title="최근 삭제한 구간 30개까지 이 탭에서 되돌릴 수 있습니다. 원본을 바꾸면 기록이 지워집니다." disabled>삭제 되돌리기</button>
                     </div>
                   </div>
                   <p id="capture-backup-status" class="capture-backup-status" role="status" aria-live="polite" aria-atomic="true">원본 링크·프로젝트 이름·구간 메모가 백업 파일에 포함됩니다. 영상은 포함되지 않습니다.</p>
                   <p class="section-copy">플레이어를 보면서 강조된 행에 E로 시작, R로 끝 시각을 기록합니다. 여러 구간은 T로 이어서 추가할 수 있습니다.</p>
+                  <p id="cut-review-status" class="cut-review-status" role="status" aria-live="polite" aria-atomic="true"></p>
                   <div id="clip-list" class="clip-list"></div>
                   <template id="clip-row-template">
                     <article class="clip-row">
@@ -228,6 +230,11 @@
                       <label class="clip-end"><span>끝</span><input data-field="end" type="text" inputmode="decimal" placeholder="00:01:35.000" required></label>
                       <label class="clip-note"><span>메모 (선택)</span><input data-field="note" type="text" maxlength="160" placeholder="장면 설명"></label>
                       <button data-action="remove" class="remove" type="button" aria-label="이 구간 삭제">삭제</button>
+                      <div class="clip-review">
+                        <button data-action="seek-start" class="button ghost" type="button" title="원본 플레이어가 준비되면 이 시각으로 이동합니다." disabled>시작으로 이동</button>
+                        <button data-action="seek-end" class="button ghost" type="button" title="원본 플레이어가 준비되면 이 시각으로 이동합니다." disabled>끝으로 이동</button>
+                        <span class="clip-duration">길이 --:--</span>
+                      </div>
                       <small class="coverage" role="status" aria-live="polite"></small>
                     </article>
                   </template>
@@ -357,6 +364,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="/studio.js?v=3.0.28"></script>
+    <script type="module" src="/studio.js?v=3.0.29"></script>
   </body>
 </html>
