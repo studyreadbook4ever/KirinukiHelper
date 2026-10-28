@@ -3257,6 +3257,32 @@ test("stale 관찰 뒤 새 owner가 CAS하면 늦은 contender는 그 owner를 �
   const stateDir = await mkdtemp(path.join(os.tmpdir(), "kirinuki-chzzk-cas-interleave-"));
   let releaseObserved: (() => void) | undefined;
   let releaseWinnerProcess: (() => void) | undefined;
+  const pending: ReturnType<typeof materializeChzzkVod>[] = [];
+  const waitForProgress = async (
+    stage: string,
+    progress: Promise<void>,
+    operation: ReturnType<typeof materializeChzzkVod>
+  ): Promise<void> => {
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        progress,
+        operation.then(
+          () => { throw new Error(`${stage}: materialization ended before the barrier.`); },
+          (error: unknown) => {
+            throw new Error(`${stage}: materialization failed before the barrier.`, { cause: error });
+          }
+        ),
+        new Promise<never>((_resolve, reject) => {
+          watchdog = setTimeout(() => {
+            reject(new Error(`${stage}: readiness barrier was not reached within 10 seconds.`));
+          }, 10_000);
+        })
+      ]);
+    } finally {
+      clearTimeout(watchdog);
+    }
+  };
   try {
     const fixture = await prepareJobLeaseFixture(stateDir, "cas-interleave");
     replaceJobLeaseRow(fixture.databasePath, {
@@ -3264,7 +3290,10 @@ test("stale 관찰 뒤 새 owner가 CAS하면 늦은 contender는 그 owner를 �
       pid: 99_999_999,
       heartbeatAtBootMs: Math.floor(os.uptime() * 1_000)
     });
-    let staleObserved = false;
+    let markStaleObserved: (() => void) | undefined;
+    const staleObserved = new Promise<void>((resolve) => {
+      markStaleObserved = resolve;
+    });
     const observedGate = new Promise<void>((resolve) => {
       releaseObserved = resolve;
     });
@@ -3274,16 +3303,18 @@ test("stale 관찰 뒤 새 owner가 CAS하면 늦은 contender는 그 owner를 �
       runProcess: lateHarness.runProcess,
       sleep: async () => undefined,
       beforeStaleJobLeaseCompareAndSwap: async () => {
-        staleObserved = true;
+        markStaleObserved?.();
         await observedGate;
       }
     });
-    for (let retry = 0; retry < 100 && !staleObserved; retry += 1) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    }
-    assert.equal(staleObserved, true);
+    pending.push(late);
+    void late.catch(() => undefined);
+    await waitForProgress("Stale lease observation", staleObserved, late);
 
-    let winnerEntered = false;
+    let markWinnerEntered: (() => void) | undefined;
+    const winnerEntered = new Promise<void>((resolve) => {
+      markWinnerEntered = resolve;
+    });
     let winnerFirstProcess = true;
     const winnerProcessGate = new Promise<void>((resolve) => {
       releaseWinnerProcess = resolve;
@@ -3294,17 +3325,16 @@ test("stale 관찰 뒤 새 owner가 CAS하면 늦은 contender는 그 owner를 �
       runProcess: async (command, args, options) => {
         if (winnerFirstProcess) {
           winnerFirstProcess = false;
-          winnerEntered = true;
+          markWinnerEntered?.();
           await winnerProcessGate;
         }
         return await winnerHarness.runProcess(command, args, options);
       },
       sleep: async () => undefined
     });
-    for (let retry = 0; retry < 100 && !winnerEntered; retry += 1) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    }
-    assert.equal(winnerEntered, true);
+    pending.push(winner);
+    void winner.catch(() => undefined);
+    await waitForProgress("Winning lease process entry", winnerEntered, winner);
     const winnerBeforeLateCas = readJobLeaseRow(fixture.databasePath);
     releaseObserved?.();
     await assert.rejects(late, (error: unknown) => (
@@ -3322,6 +3352,7 @@ test("stale 관찰 뒤 새 owner가 CAS하면 늦은 contender는 그 owner를 �
   } finally {
     releaseObserved?.();
     releaseWinnerProcess?.();
+    await Promise.allSettled(pending);
     await rm(stateDir, { recursive: true, force: true });
   }
 });

@@ -79,6 +79,11 @@ import {
   createCaptionPropertiesSheet
 } from "../lib/caption-properties-sheet.js";
 import {
+  createCaptionReviewList,
+  nextCaptionNeedingReview
+} from "../lib/caption-review.js";
+import type { CaptionReviewFilter } from "../lib/caption-review.js";
+import {
   KIRINUKI_STUDIO_ORIGIN_META_NAME,
   assertKirinukiStudioDocumentOrigin,
   isKirinukiStudioOrigin
@@ -935,6 +940,14 @@ const EDITOR_ELEMENT_IDS = [
   "caption-sheet-empty",
   "close-caption-sheet-dialog",
   "cue-list-tab",
+  "cue-list-panel",
+  "cue-search",
+  "cue-list-filter",
+  "cue-list-summary",
+  "cue-list-empty",
+  "clear-cue-search",
+  "cue-review-count",
+  "next-review-cue",
   "cue-selected-tab",
   "cue-selected-panel",
   "cue-count",
@@ -1643,6 +1656,9 @@ let initialVodAutoPrepareAttempted = false;
 let pointerEditActive = false;
 let pointerEditPreservePreviewClock = false;
 let inspectorMode = "selected";
+let captionReviewScope = "";
+let captionReviewQuery = "";
+let captionReviewFilter: CaptionReviewFilter = "all";
 let fieldEditSession: FieldEditSession | null = null;
 let focusBeforeJob: HTMLElement | null = null;
 let focusBeforeCaptionSheetDialog: HTMLElement | null = null;
@@ -4672,7 +4688,7 @@ function renderCueInspector() {
   elements.cue_list_tab.setAttribute("aria-selected", String(showingList));
   elements.cue_list_tab.tabIndex = showingList ? 0 : -1;
   elements.cue_selected_panel.hidden = showingList;
-  elements.cue_list.hidden = !showingList;
+  elements.cue_list_panel.hidden = !showingList;
   elements.cue_empty.hidden = Boolean(cue);
   elements.cue_editor.hidden = !cue;
   elements.previous_cue_in_lane.disabled = showingList || !previousCueInLane;
@@ -5363,29 +5379,44 @@ function renderPropertyInspector() {
 }
 
 function renderCueList() {
-  elements.cue_list.replaceChildren();
-  const sorted = [...project.subtitles].sort((a, b) => {
-    const rangeA = cueTimelineRange(project, a);
-    const rangeB = cueTimelineRange(project, b);
-    return (rangeA?.startMs || 0) - (rangeB?.startMs || 0);
+  const scope = JSON.stringify([
+    project.id,
+    sourceSessionIdentity(project.source),
+    workspaceMode,
+    workspaceMode === "short-form" ? currentShortWorkspaceId() : null
+  ]);
+  if (captionReviewScope !== scope) {
+    captionReviewScope = scope;
+    captionReviewQuery = "";
+    captionReviewFilter = "all";
+    elements.cue_search.value = "";
+    elements.cue_list_filter.value = "all";
+  }
+  const reviewList = createCaptionReviewList(project, {
+    query: captionReviewQuery,
+    filter: captionReviewFilter
   });
-  sorted.forEach((cue) => {
-    const range = cueTimelineRange(project, cue);
-    if (!range) {
-      return;
-    }
+  elements.cue_list_summary.textContent = `표시 ${reviewList.matchingEntries.length} / 활성 자막 ${reviewList.entries.length} · 빈 자막 ${reviewList.blankCount}`;
+  elements.cue_review_count.textContent = `검수 필요 ${reviewList.reviewCount}개`;
+  elements.next_review_cue.disabled = reviewList.reviewCount === 0;
+  elements.clear_cue_search.disabled = !captionReviewQuery && captionReviewFilter === "all";
+  elements.cue_list_empty.hidden = reviewList.matchingEntries.length > 0;
+  elements.cue_list_empty.textContent = reviewList.entries.length === 0
+    ? "활성 컷에 자막이 없습니다. 현재 위치에 자막을 추가해 주세요."
+    : "조건에 맞는 자막이 없습니다. 검색어나 보기 조건을 바꿔 주세요.";
+  elements.cue_list.replaceChildren();
+  reviewList.matchingEntries.forEach(({ cue, startMs, needsReview }) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "cue-list-item";
     button.classList.toggle("selected", cue.id === project.selectedCueId);
-    const reviewRequired = subtitleCueNeedsReview(cue);
-    button.classList.toggle("review-required", reviewRequired);
-    if (reviewRequired) {
+    button.classList.toggle("review-required", needsReview);
+    if (needsReview) {
       button.title = captionReviewMessage(cue);
     }
     button.dataset.id = cue.id;
     const time = document.createElement("time");
-    time.textContent = `L${cue.lane + 1} · ${formatTime(range.startMs, { compact: true }).slice(0, -4)}`;
+    time.textContent = `L${cue.lane + 1} · ${formatTime(startMs, { compact: true }).slice(0, -4)}`;
     const text = document.createElement("span");
     text.textContent = cue.text || "(빈 자막)";
     text.toggleAttribute(
@@ -20721,6 +20752,40 @@ function bindActions() {
     const cueId = item?.dataset.id;
     if (cueId) {
       selectCue(cueId, { seek: true });
+    }
+  });
+  const updateCaptionSearch = () => {
+    captionReviewQuery = elements.cue_search.value;
+    renderCueList();
+  };
+  elements.cue_search.addEventListener("input", (event) => {
+    if (!(event instanceof InputEvent) || !event.isComposing) {
+      updateCaptionSearch();
+    }
+  });
+  elements.cue_search.addEventListener("compositionend", updateCaptionSearch);
+  elements.cue_list_filter.addEventListener("change", () => {
+    const value = elements.cue_list_filter.value;
+    captionReviewFilter = value === "review" || value === "blank" ? value : "all";
+    renderCueList();
+  });
+  elements.clear_cue_search.addEventListener("click", () => {
+    captionReviewQuery = "";
+    captionReviewFilter = "all";
+    elements.cue_search.value = "";
+    elements.cue_list_filter.value = "all";
+    renderCueList();
+    elements.cue_search.focus({ preventScroll: true });
+  });
+  elements.next_review_cue.addEventListener("click", () => {
+    const cue = nextCaptionNeedingReview(
+      createCaptionReviewList(project).entries,
+      project.selectedCueId,
+      project.playheadMs
+    );
+    if (cue) {
+      selectCue(cue.id, { seek: true });
+      elements.next_review_cue.focus({ preventScroll: true });
     }
   });
   captionInspectorTab.addEventListener("click", () => {

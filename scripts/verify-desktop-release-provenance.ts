@@ -341,7 +341,7 @@ function validateSbom(
   const components = document.components as unknown[];
   const expected = [
     ...DESKTOP_RELEASE_SOURCE_COMPONENTS.map(({ id, version }) => ({ id, version })),
-    { id: "electron", version: "43.7.9" },
+    { id: "electron", version: "43.8.4" },
     { id: "yt-dlp", version: DESKTOP_YT_DLP_RELEASE.version },
     { id: "kirinuki-app", version: appVersion }
   ];

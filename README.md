@@ -185,8 +185,10 @@ binary replacement는 허용하지 않습니다.
 - 시작 화면과 편집기에서 상태를 잃지 않고 전환하는 한국어·영어·일본어 UI
 - 본편과 여러 개의 독립된 쇼츠 작업공간
 - 컷별 활성화, 순서와 위·아래 레이어 조정
+- 컷별 길이 확인, 원본 시작·끝으로 이동, 같은 작업에서 삭제한 최근 30개 구간 복구
 - 이미지와 추가 영상 레이어
 - 자막 레인, 위치, 글꼴, 색상, 배경, 외곽선과 겹침 검사
+- 자막 문구 검색, 검수 필요·빈 자막 필터, 레인을 넘나드는 다음 검수 자막 이동
 - 브라우저 안에서 실행하는 AudSeg 빈 타이밍
 - 사람이 완성한 컷을 유지한 채 노래 가사 타이밍을 1/60초 단위로 검수하는
   **에이전트로 자막 넣기** 프롬프트
@@ -276,6 +278,12 @@ smoke로 CHZZK·YouTube·SOOP을 각각 검사합니다. GitHub-hosted runner는
 YouTube 공개 oEmbed identity와 무쿠키 계약을 확인하고 CHZZK·SOOP 실제 구간을
 취득합니다. YouTube 실제 구간 취득은 같은 commit을 일반 사용자 네트워크에서
 별도로 통과해야 하며 cookie/login 우회는 허용하지 않습니다.
+
+main의 웹 패키징 job이 브라우저 검증·ZIP 재현성·저장소 정합성 검사를 통과하면
+웹 ZIP, release record와 각각의 SHA-256 파일을
+`verified-web-release-<commit SHA>` Actions artifact로 14일 동안 보관합니다.
+배포자는 해당 commit의 전체 quality workflow 성공과 release record를 확인한 뒤
+동일한 파일을 배포합니다. 설치 엔진 바이너리는 이 artifact에 포함하지 않습니다.
 
 저장소 구조의 주요 경계는 다음과 같습니다.
 

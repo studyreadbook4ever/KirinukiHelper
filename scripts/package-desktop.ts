@@ -62,7 +62,7 @@ import { pinnedElectronArchiveChecksums } from "./electron-archive-checksums.js"
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const require = createRequire(import.meta.url);
-const ELECTRON_VERSION = "43.7.9";
+const ELECTRON_VERSION = "43.8.4";
 export const DESKTOP_DARWIN_MINIMUM_SYSTEM_VERSION = "15.0";
 const DESKTOP_ICON_PATHS = Object.freeze({
   darwin: path.join(root, "build", "icon.icns"),

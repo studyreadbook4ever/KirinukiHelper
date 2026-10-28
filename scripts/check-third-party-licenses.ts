@@ -31,7 +31,7 @@ if (process.argv.slice(2).length > 0) {
   throw new TypeError("사용법: check-third-party-licenses.ts");
 }
 const EXPECTED_NPM_INVENTORY_SHA256 =
-  "27fc6634360658e7353494c0829dedf41ab1712b81c96aae3859cc3923f3f72a";
+  "ae0b8af6bb3a00062616edc0a17a8c040df10a775a3ce6bf4af5f52a8155353f";
 const EXPECTED_PROJECT_UNLICENSE_SIZE = 1_212;
 const EXPECTED_PROJECT_UNLICENSE_SHA256 =
   "b5065838cbac452dfc855ba6e6e031481ad2c68406f70d21ead9321374653e6c";
@@ -307,7 +307,7 @@ assertExactObject(
     "@electron/osx-sign": "2.6.0",
     "@electron/packager": "20.3.0",
     "@types/node": "20.19.43",
-    electron: "43.7.9",
+    electron: "43.8.4",
     "electron-builder": "26.15.3",
     tar: "7.5.22",
     typescript: "5.9.3"
@@ -982,7 +982,7 @@ console.log(JSON.stringify({
     "Paperlogy OFL-1.1"
   ],
   linuxPreviewRedistributedRuntime: [
-    "Electron 43.7.9 with bundled Chromium/Node notices",
+    "Electron 43.8.4 with bundled Chromium/Node notices",
     "FFmpeg/ffprobe n8.1.2 GPL-3.0-or-later sidecars with exact source offer",
     "yt-dlp 2026.07.04 standalone with pinned upstream source",
     "Kirinuki-Engine-linux-preview-SOURCE-OFFER.txt"

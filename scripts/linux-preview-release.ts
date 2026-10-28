@@ -174,7 +174,7 @@ Mbed TLS v3.4.1 — https://github.com/Mbed-TLS/mbedtls/tree/v3.4.1
 
 Other redistributed runtime source and notices:
 yt-dlp 2026.07.04 — https://github.com/yt-dlp/yt-dlp/tree/2026.07.04
-Electron 43.7.9 — https://github.com/electron/electron/tree/v43.7.9
+Electron 43.8.4 — https://github.com/electron/electron/tree/v43.8.4
 The installed package also carries the applicable license texts and Electron Chromium notices.
 
 If a source link becomes unavailable, request the exact corresponding source and build material

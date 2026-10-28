@@ -8,6 +8,19 @@ import type { UiCopyCatalog } from "../lib/ui-localization.js";
  * belongs in a separate catalog with typed interpolation patterns.
  */
 export const EDITOR_STATIC_UI_COPY = {
+  "검수 필요 0개": { en: "0 captions need review", ja: "要確認の字幕 0 件" },
+  "다음 검수 자막": { en: "Next to Review", ja: "次の要確認字幕" },
+  "모든 레인의 검수할 자막을 시간순으로 이동하며 마지막에서는 처음으로 돌아갑니다.": { en: "Visit captions needing review across all lanes in time order, wrapping to the first after the last.", ja: "すべてのレーンの要確認字幕を時間順に移動し、最後の次は最初に戻ります。" },
+  "자막 문구 검색": { en: "Search Caption Text", ja: "字幕の文言を検索" },
+  "찾을 자막 문구": { en: "Caption text to find", ja: "検索する字幕の文言" },
+  "보기 조건": { en: "Show", ja: "表示条件" },
+  "전체 자막": { en: "All Captions", ja: "すべての字幕" },
+  "검수 필요한 자막": { en: "Captions Needing Review", ja: "要確認の字幕" },
+  "빈 자막": { en: "Empty caption", ja: "空の字幕" },
+  "검색·보기 초기화": { en: "Clear Search & Filter", ja: "検索・表示条件をリセット" },
+  "표시 0 / 활성 자막 0 · 빈 자막 0": { en: "Showing 0 / 0 active captions · 0 empty", ja: "表示 0 / 有効な字幕 0 · 空の字幕 0" },
+  "활성 컷에 자막이 없습니다. 현재 위치에 자막을 추가해 주세요.": { en: "No captions in active clips. Add a caption at the playhead.", ja: "有効なクリップに字幕がありません。現在位置に字幕を追加してください。" },
+  "조건에 맞는 자막이 없습니다. 검색어나 보기 조건을 바꿔 주세요.": { en: "No matching captions. Change the search text or filter.", ja: "条件に一致する字幕がありません。検索語や表示条件を変更してください。" },
   "Kirinuki 영상 편집기": { en: "Kirinuki Video Editor", ja: "Kirinuki 動画エディター" },
   "이 주소에서는 편집기를 열 수 없습니다": { en: "The editor cannot be opened from this address", ja: "このアドレスからエディターを開くことはできません" },
   "정식 Kirinuki 웹사이트에서 다시 시작해 주세요.": { en: "Start again from the official Kirinuki website.", ja: "Kirinuki 公式サイトからやり直してください。" },

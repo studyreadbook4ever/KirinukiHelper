@@ -2769,6 +2769,16 @@ export const EDITOR_RUNTIME_UI_COPY = {
  * sentence patterns here: that could rewrite filenames or user-authored copy.
  */
 export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
+  {
+    source: /^검수 필요 (\d+)개$/u,
+    en: "$1 captions need review",
+    ja: "要確認の字幕 $1 件"
+  },
+  {
+    source: /^표시 (\d+) \/ 활성 자막 (\d+) · 빈 자막 (\d+)$/u,
+    en: "Showing $1 / $2 active captions · $3 empty",
+    ja: "表示 $1 / 有効な字幕 $2 · 空の字幕 $3"
+  },
   // Normal Shorts authoring path. These stay fully anchored so captured source
   // notes, image names, timecodes, and error details remain user-owned data.
   {

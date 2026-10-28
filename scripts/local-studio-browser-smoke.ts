@@ -21,7 +21,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   applyMediaAlignmentOffset,
-  createEditorProjectFromCapture
+  createEditorProjectFromCapture,
+  createSubtitleCue
 } from "../src/lib/editor-core.js";
 import type { EditorProject } from "../src/lib/editor-core.js";
 import {
@@ -2561,6 +2562,128 @@ async function main(): Promise<void> {
     `YouTube 원본 streaming iframe이 유지되지 않았습니다: ${JSON.stringify(youtubeStreamingFrame)}`
   );
   process.stderr.write("[browser-smoke] YouTube 원본 임베드 검증 완료\n");
+  // Fulfill only this exact iframe document locally. Its real YouTube origin
+  // exercises the production postMessage boundary without a live VOD request.
+  // Cross-origin iframe navigations belong to their own CDP target, so Fetch
+  // interception must be installed on that target rather than the parent page.
+  const seekFixtureFrame = await waitForIframeTarget(debuggerAddress, youtubeEmbed);
+  const seekFixtureConnection = await DevToolsConnection.open(
+    String(seekFixtureFrame.webSocketDebuggerUrl)
+  );
+  const seekFixtureErrors: string[] = [];
+  const seekFixtureHtml = `<!doctype html><meta charset="utf-8"><title>Cut seek fixture</title>
+    <script>
+      let currentTime = 5;
+      globalThis.__cutSeekCommands = [];
+      addEventListener("message", (event) => {
+        if (event.origin !== ${JSON.stringify(studioOrigin)} || event.source !== parent) return;
+        let message;
+        try { message = JSON.parse(event.data); } catch { return; }
+        if (message.event === "command" && message.func === "seekTo") {
+          globalThis.__cutSeekCommands.push(message.args);
+          currentTime = message.args[0];
+        }
+        parent.postMessage(JSON.stringify({
+          event: "infoDelivery", id: message.id,
+          info: { currentTime, duration: 120, playbackRate: 1, playerState: 2,
+            videoData: { video_id: "M7lc1UVf-VE" } }
+        }), ${JSON.stringify(studioOrigin)});
+      });
+    </script>`;
+  const stopSeekFixtureListener = seekFixtureConnection.on("Fetch.requestPaused", (params) => {
+    void seekFixtureConnection.send("Fetch.fulfillRequest", {
+      requestId: params.requestId,
+      responseCode: 200,
+      responseHeaders: [{ name: "Content-Type", value: "text/html; charset=utf-8" }],
+      body: Buffer.from(seekFixtureHtml).toString("base64")
+    }).catch((error: unknown) => seekFixtureErrors.push(errorMessage(error)));
+  });
+  try {
+    await seekFixtureConnection.send("Fetch.enable", {
+      patterns: [{ urlPattern: youtubeEmbed, resourceType: "Document", requestStage: "Request" }]
+    });
+    await seekFixtureConnection.send("Network.enable");
+    await seekFixtureConnection.send("Network.setBlockedURLs", {
+      urls: [gatewayPattern, ...externalEmbedPatterns.filter((pattern) => (
+        pattern !== "https://www.youtube-nocookie.com/*"
+      ))]
+    });
+    await cdp("Network.setBlockedURLs", {
+      urls: [gatewayPattern, ...externalEmbedPatterns.filter((pattern) => (
+        pattern !== "https://www.youtube-nocookie.com/*"
+      ))]
+    });
+    await execute(`
+      const frame = document.querySelector("#stream-preview-frame");
+      frame.src = arguments[0];
+      return true;
+    `, [youtubeEmbed]);
+    const seekFixtureTarget = await waitForIframeTarget(debuggerAddress, youtubeEmbed);
+    await waitFor(
+      () => evaluateTarget(seekFixtureTarget, "Array.isArray(globalThis.__cutSeekCommands)"),
+      (value) => value === true,
+      "YouTube 컷 이동 fixture가 준비되지 않았습니다."
+    );
+    const originalCutValues = await execute<string[]>(`
+      const row = document.querySelector(".clip-row");
+      const start = row.querySelector('[data-field="start"]');
+      const end = row.querySelector('[data-field="end"]');
+      const original = [start.value, end.value];
+      start.value = "00:00:10.125";
+      end.value = "00:01:30.500";
+      end.dispatchEvent(new Event("input", { bubbles: true }));
+      return original;
+    `);
+    await waitFor(
+      () => execute<boolean>(`return ["seek-start", "seek-end"].every((action) =>
+        document.querySelector('.clip-row [data-action="' + action + '"]')?.disabled === false);`),
+      (value) => value,
+      "준비된 YouTube 원본에서 구간 이동 버튼이 활성화되지 않았습니다."
+    );
+    for (const boundary of ["start", "end"] as const) {
+      await execute(`document.querySelector('.clip-row [data-action="seek-' + arguments[0] + '"]').click();`, [boundary]);
+    }
+    const seekCommands = await waitFor(
+      () => evaluateTarget(seekFixtureTarget, "JSON.stringify(globalThis.__cutSeekCommands)"),
+      (value) => value === "[[10.125,true],[90.5,true]]",
+      "구간 이동 버튼이 정확한 millisecond seekTo 명령을 전달하지 못했습니다."
+    );
+    const seekGuardState = await execute<{
+      unchanged: boolean; invalidDisabled: boolean; beyondEndDisabled: boolean;
+    }>(`
+      const row = document.querySelector(".clip-row");
+      const start = row.querySelector('[data-field="start"]');
+      const end = row.querySelector('[data-field="end"]');
+      const first = row.querySelector('[data-action="seek-start"]');
+      const last = row.querySelector('[data-action="seek-end"]');
+      const unchanged = start.value === "00:00:10.125" && end.value === "00:01:30.500";
+      end.value = "invalid";
+      end.dispatchEvent(new Event("input", { bubbles: true }));
+      const invalidDisabled = first.disabled && last.disabled;
+      first.click(); last.click();
+      end.value = "00:02:00.001";
+      end.dispatchEvent(new Event("input", { bubbles: true }));
+      const beyondEndDisabled = !first.disabled && last.disabled && end.value === "00:02:00.001";
+      last.click();
+      [start.value, end.value] = arguments[0];
+      end.dispatchEvent(new Event("input", { bubbles: true }));
+      return { unchanged, invalidDisabled, beyondEndDisabled };
+    `, [originalCutValues]);
+    assert(
+      seekGuardState.unchanged && seekGuardState.invalidDisabled && seekGuardState.beyondEndDisabled
+        && await evaluateTarget(seekFixtureTarget, "JSON.stringify(globalThis.__cutSeekCommands)") === seekCommands
+        && seekFixtureErrors.length === 0,
+      `구간 이동이 입력을 바꾸거나 유효하지 않은 시각을 전송했습니다: ${JSON.stringify(seekGuardState)}`
+    );
+    process.stderr.write("[browser-smoke] 시작·끝 이동의 exact YouTube 명령·입력 보존·범위 차단 검증 완료\n");
+  } finally {
+    await seekFixtureConnection.send("Fetch.disable");
+    stopSeekFixtureListener();
+    seekFixtureConnection.close();
+    await cdp("Network.setBlockedURLs", {
+      urls: [gatewayPattern, ...(liveEmbedSmoke ? [] : externalEmbedPatterns)]
+    });
+  }
   const soopFrame = await setSourceAndVerify({
     inputUrl: soopUrl,
     expectedSourceLabel: "SOOP VOD",
@@ -2917,6 +3040,55 @@ async function main(): Promise<void> {
     `구간 ±10초 안내가 올바르지 않습니다: ${clipState.coverage}`
   );
 
+  const cutReviewJourney = await execute<{
+    restoredExactly: boolean;
+    boundedUndo: boolean;
+    selectedDuration: string;
+    incompleteDuration: string;
+    seekControlsPresent: boolean;
+  }>(`
+    const rows = () => [...document.querySelectorAll(".clip-row")];
+    const snapshot = () => rows().map((row) => ({
+      id: row.dataset.selectionId,
+      values: [...row.querySelectorAll("input")].map((input) => input.value)
+    }));
+    const undo = document.querySelector("#undo-delete-clip");
+    if (!(undo instanceof HTMLButtonElement)) throw new Error("삭제 복구 버튼 없음");
+    document.querySelector("#add-clip").click();
+    const second = rows()[1];
+    second.dataset.selectionId = "cut-review-preserved-id";
+    second.querySelector('[data-field="start"]').value = "00:02:10.125";
+    second.querySelector('[data-field="end"]').value = "00:02:25.500";
+    const note = second.querySelector('[data-field="note"]');
+    note.value = "원래 메모 <복구> & 유지";
+    note.dispatchEvent(new Event("input", { bubbles: true }));
+    document.querySelector("#add-clip").click();
+    const before = JSON.stringify(snapshot());
+    second.querySelector('[data-action="remove"]').click();
+    if (undo.disabled) throw new Error("삭제 뒤 복구가 비활성화됨");
+    undo.click();
+    const restored = rows()[1];
+    const restoredExactly = JSON.stringify(snapshot()) === before;
+    const selectedDuration = restored.querySelector(".clip-duration")?.textContent || "";
+    const incompleteDuration = rows()[2].querySelector(".clip-duration")?.textContent || "";
+    const seekControlsPresent = ["seek-start", "seek-end"].every((action) =>
+      restored.querySelector('[data-action="' + action + '"]') instanceof HTMLButtonElement
+    );
+    rows()[2].querySelector('[data-action="remove"]').click();
+    rows()[1].querySelector('[data-action="remove"]').click();
+    return { restoredExactly, boundedUndo: rows().length === 1,
+      selectedDuration, incompleteDuration, seekControlsPresent };
+  `);
+  assert(
+    cutReviewJourney.restoredExactly
+      && cutReviewJourney.boundedUndo
+      && cutReviewJourney.selectedDuration.includes("15.375")
+      && cutReviewJourney.incompleteDuration.includes("--:--")
+      && cutReviewJourney.seekControlsPresent,
+    `컷 삭제 복구가 원래 ID·시각·메모·순서와 선택 길이를 보존하지 못했습니다: ${JSON.stringify(cutReviewJourney)}`
+  );
+  process.stderr.write("[browser-smoke] 컷 삭제 복구·개별 길이·검수 이동 버튼 검증 완료\n");
+
   await execute(`
     const row = document.querySelector(".clip-row");
     const note = row?.querySelector('[data-field="note"]');
@@ -3078,6 +3250,12 @@ async function main(): Promise<void> {
       && importedArchive.confirmMessage.includes("현재 입력을")
       && importedArchive.confirmMessage.includes("12개 구간"),
     `복원 JSON이 원본 링크·시작~끝 목록을 정확히 복원하지 못했습니다: ${JSON.stringify(importedArchive)}`
+  );
+  assert(
+    await execute<boolean>(`
+      return document.querySelector("#undo-delete-clip")?.disabled === true;
+    `),
+    "백업을 불러온 새 작업에 이전 작업의 삭제 복구 기록이 남았습니다."
   );
 
   const layout = await execute<{
@@ -4556,6 +4734,35 @@ async function main(): Promise<void> {
   );
   const deepEditorFixture: EditorProject = {
     ...deepEditorFixtureBase,
+    subtitleLaneCount: 2,
+    subtitles: [
+      createSubtitleCue(deepEditorFixtureBase, {
+        id: "review-human",
+        clipId: "clip-order-a",
+        text: "Find [exact] 한국어",
+        startOffsetMs: 0,
+        endOffsetMs: 1_000
+      }),
+      createSubtitleCue({ ...deepEditorFixtureBase, subtitleLaneCount: 2 }, {
+        id: "review-ai",
+        clipId: "clip-order-a",
+        text: "검수 A",
+        startOffsetMs: 1_500,
+        endOffsetMs: 2_500,
+        lane: 1,
+        origin: "ai",
+        remoteMeta: { reviewRequired: true, qualityCodes: ["LOW_CONFIDENCE"] }
+      }),
+      createSubtitleCue(deepEditorFixtureBase, {
+        id: "review-blank",
+        clipId: "clip-order-b",
+        text: "",
+        startOffsetMs: 0,
+        endOffsetMs: 1_000,
+        origin: "ai",
+        remoteMeta: { reviewRequired: true, qualityCodes: ["AUDSEG_BLANK_TIMING"] }
+      })
+    ],
     shortForm: layeredShortForm,
     shortFormWorkspaces: layeredShortFormWorkspaces,
     updatedAt: "2026-08-15T00:00:00.000Z"
@@ -4595,6 +4802,85 @@ async function main(): Promise<void> {
     "3컷 동적 순서 fixture를 현재 B 세션으로 다시 열지 못했습니다.",
     20_000
   );
+  // Establish the browser's normalized saved baseline before exercising the
+  // new view controls; fixture loading itself may normalize legacy fields.
+  await execute(`
+    document.querySelector("#cue-list-tab").click();
+    document.querySelector('#cue-list .cue-list-item[data-id="review-human"]').click();
+  `);
+  const beforeCaptionReview = await waitFor(
+    () => readBrowserProject(freshProjectId),
+    (value) => value?.selectedCueId === "review-human",
+    "자막 검수 전 기준 프로젝트가 저장되지 않았습니다."
+  );
+  const captionReviewJourney = await execute<{
+    initial: string[];
+    literal: string[];
+    review: string[];
+    blank: string[];
+    empty: boolean;
+    nextAcrossLanes: string[];
+    reset: string[];
+    searchPreservedWhileComposing: boolean;
+  }>(`
+    document.querySelector("#cue-list-tab").click();
+    const search = document.querySelector("#cue-search");
+    const filter = document.querySelector("#cue-list-filter");
+    const next = document.querySelector("#next-review-cue");
+    if (!(search instanceof HTMLInputElement)
+      || !(filter instanceof HTMLSelectElement)
+      || !(next instanceof HTMLButtonElement)) throw new Error("자막 검수 도구 없음");
+    const ids = () => [...document.querySelectorAll("#cue-list .cue-list-item")]
+      .map((row) => row.dataset.id);
+    const initial = ids();
+    search.value = "[EXACT]";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    const literal = ids();
+    search.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    search.value = "없는 검색어";
+    search.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+    const searchPreservedWhileComposing = JSON.stringify(ids()) === JSON.stringify(literal);
+    search.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    const empty = ids().length === 0 && !document.querySelector("#cue-list-empty").hidden;
+    document.querySelector("#clear-cue-search").click();
+    filter.value = "review";
+    filter.dispatchEvent(new Event("change", { bubbles: true }));
+    const review = ids();
+    filter.value = "blank";
+    filter.dispatchEvent(new Event("change", { bubbles: true }));
+    const blank = ids();
+    const nextAcrossLanes = [];
+    for (let i = 0; i < 3; i += 1) {
+      next.click();
+      nextAcrossLanes.push(document.querySelector(".cue-block.selected")?.dataset.id || "");
+    }
+    filter.value = "all";
+    filter.dispatchEvent(new Event("change", { bubbles: true }));
+    return { initial, literal, review, blank, empty, nextAcrossLanes, reset: ids(),
+      searchPreservedWhileComposing };
+  `);
+  assert(
+    captionReviewJourney.initial.join(",") === "review-human,review-ai,review-blank"
+      && captionReviewJourney.literal.join(",") === "review-human"
+      && captionReviewJourney.review.join(",") === "review-ai,review-blank"
+      && captionReviewJourney.blank.join(",") === "review-blank"
+      && captionReviewJourney.empty
+      && captionReviewJourney.searchPreservedWhileComposing
+      && captionReviewJourney.nextAcrossLanes.join(",") === "review-ai,review-blank,review-ai"
+      && captionReviewJourney.reset.join(",") === "review-human,review-ai,review-blank",
+    `자막 검색·검수 필터·레인 간 순환 이동이 올바르지 않습니다: ${JSON.stringify(captionReviewJourney)}`
+  );
+  await waitFor(
+    () => readBrowserProject(freshProjectId),
+    (value) => value?.selectedCueId === "review-ai",
+    "검수 자막 선택이 저장되지 않았습니다."
+  );
+  const afterCaptionReview = await readBrowserProject(freshProjectId);
+  assert(
+    JSON.stringify(afterCaptionReview?.subtitles) === JSON.stringify(beforeCaptionReview?.subtitles),
+    "검색·필터·검수 이동이 자막 내용 또는 타이밍을 변경했습니다."
+  );
+  process.stderr.write("[browser-smoke] 자막 검색·검수 필터·레인 간 이동·원문 보존 검증 완료\n");
   const longFormOrderJourney = await execute<{
     initial: string[];
     afterFirst: string[];

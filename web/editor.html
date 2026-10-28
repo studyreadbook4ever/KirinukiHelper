@@ -9,7 +9,7 @@
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki 영상 편집기</title>
-    <link rel="stylesheet" href="editor/editor.css?v=3.0.28">
+    <link rel="stylesheet" href="editor/editor.css?v=3.0.29">
   </head>
   <body>
     <main id="editor-origin-gate" class="editor-policy-gate" aria-labelledby="editor-origin-gate-title" hidden>
@@ -540,9 +540,14 @@
               >스타일 비교 열기</button>
             </section>
 
+            <div class="cue-review-navigation">
+              <span id="cue-review-count" role="status">검수 필요 0개</span>
+              <button id="next-review-cue" class="secondary-action" type="button" title="모든 레인의 검수할 자막을 시간순으로 이동하며 마지막에서는 처음으로 돌아갑니다." disabled>다음 검수 자막</button>
+            </div>
+
             <div class="inspector-tabs" role="tablist" aria-label="자막 편집 보기">
               <button id="cue-selected-tab" class="active" type="button" role="tab" aria-selected="true" aria-controls="cue-selected-panel">선택 자막</button>
-              <button id="cue-list-tab" type="button" role="tab" aria-selected="false" aria-controls="cue-list" tabindex="-1">전체 <span id="cue-count">0</span></button>
+              <button id="cue-list-tab" type="button" role="tab" aria-selected="false" aria-controls="cue-list-panel" tabindex="-1">전체 <span id="cue-count">0</span></button>
             </div>
 
             <div id="cue-selected-panel" role="tabpanel" aria-labelledby="cue-selected-tab">
@@ -631,7 +636,26 @@
               </div>
             </div>
 
-            <div id="cue-list" class="cue-list" hidden role="tabpanel" aria-labelledby="cue-list-tab"></div>
+            <div id="cue-list-panel" hidden role="tabpanel" aria-labelledby="cue-list-tab">
+              <div class="cue-list-tools">
+                <label class="field" for="cue-search">
+                  <span>자막 문구 검색</span>
+                  <input id="cue-search" type="search" placeholder="찾을 자막 문구" autocomplete="off" spellcheck="false" aria-controls="cue-list" aria-describedby="cue-list-summary">
+                </label>
+                <label class="field" for="cue-list-filter">
+                  <span>보기 조건</span>
+                  <select id="cue-list-filter" aria-controls="cue-list">
+                    <option value="all">전체 자막</option>
+                    <option value="review">검수 필요한 자막</option>
+                    <option value="blank">빈 자막</option>
+                  </select>
+                </label>
+                <button id="clear-cue-search" class="secondary-action" type="button" disabled>검색·보기 초기화</button>
+                <p id="cue-list-summary" class="field-help" role="status">표시 0 / 활성 자막 0 · 빈 자막 0</p>
+              </div>
+              <p id="cue-list-empty" class="field-help">활성 컷에 자막이 없습니다. 현재 위치에 자막을 추가해 주세요.</p>
+              <div id="cue-list" class="cue-list"></div>
+            </div>
           </div>
 
           <div id="asset-inspector-content" role="tabpanel" aria-labelledby="asset-mode-tab" hidden>
@@ -1389,6 +1413,6 @@
       </article>
     </template>
 
-    <script type="module" src="editor/editor.js?v=3.0.28"></script>
+    <script type="module" src="editor/editor.js?v=3.0.29"></script>
   </body>
 </html>
