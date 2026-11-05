@@ -1,3 +1,4 @@
+import { MIN_IMAGE_LANES, normalizeImageLaneLayout } from "./image-lanes.js";
 import type {
   EditorAudioRegion,
   EditorClip,
@@ -241,6 +242,7 @@ export interface EditorShortFormBranch {
   sourceAudioAssets: ShortFormSourceAudioAsset[];
   subtitles: EditorSubtitleCue[];
   imageAssets: EditorImageAsset[];
+  imageLaneCount?: number;
   audioRegions: EditorAudioRegion[];
   subtitleLaneCount: number;
   recentSubtitleColors: string[];
@@ -285,6 +287,7 @@ export interface ShortFormNormalizationContext {
   clips?: readonly EditorClip[];
   subtitles?: readonly EditorSubtitleCue[];
   imageAssets?: readonly EditorImageAsset[];
+  imageLaneCount?: number;
   audioRegions?: readonly EditorAudioRegion[];
   subtitleLaneCount?: number;
   recentSubtitleColors?: readonly string[];
@@ -2388,6 +2391,7 @@ export function createDefaultShortFormBranch(): EditorShortFormBranch {
     sourceAudioAssets: [],
     subtitles: [],
     imageAssets: [],
+    imageLaneCount: MIN_IMAGE_LANES,
     audioRegions: [],
     subtitleLaneCount: 2,
     recentSubtitleColors: [],
@@ -2465,7 +2469,11 @@ export function normalizeShortFormBranch(
   );
   const laneCount = integer(clamp(source.subtitleLaneCount, 2, 8, 2));
   const subtitles = normalizeSubtitleCues(source.subtitles, durationMs, laneCount);
-  const imageAssets = normalizeImageAssets(source.imageAssets, durationMs);
+  const { imageAssets, imageLaneCount } = normalizeImageLaneLayout(
+    normalizeImageAssets(source.imageAssets, durationMs),
+    [shortFormCanvasClip(durationMs)],
+    source.imageLaneCount
+  );
   const audioRegions = normalizeAudioRegions(source.audioRegions, durationMs);
   const selectedVideoLayerId = videoAssets.some((asset) => (
     asset.id === source.selectedVideoLayerId
@@ -2496,6 +2504,7 @@ export function normalizeShortFormBranch(
     sourceAudioAssets,
     subtitles,
     imageAssets,
+    imageLaneCount,
     audioRegions,
     subtitleLaneCount: laneCount,
     recentSubtitleColors: [...new Set(
@@ -3104,6 +3113,7 @@ export function shortFormWorkspaceProjectWithBranch(
     imageAssets: shortForm.imageAssets.map((asset) => ({ ...asset })),
     audioRegions: shortForm.audioRegions.map((region) => ({ ...region })),
     subtitleLaneCount: shortForm.subtitleLaneCount,
+    imageLaneCount: shortForm.imageLaneCount ?? MIN_IMAGE_LANES,
     recentSubtitleColors: [...shortForm.recentSubtitleColors],
     subtitleDefaults: shortForm.subtitleDefaults
       ? { ...shortForm.subtitleDefaults }
@@ -3189,6 +3199,19 @@ export function addShortFormVideoLane(
   return normalizeShortFormBranch({
     ...previous,
     videoLaneCount,
+    revision: nextRevision(previous)
+  });
+}
+
+export function removeShortFormVideoLane(branchValue: unknown, lane: number): EditorShortFormBranch {
+  const previous = normalizeShortFormBranch(branchValue);
+  if (previous.videoLaneCount <= SHORT_FORM_MIN_VIDEO_LANES
+    || !Number.isInteger(lane) || lane < 0 || lane >= previous.videoLaneCount
+    || previous.videoAssets.some((asset) => asset.lane === lane)) return previous;
+  return normalizeShortFormBranch({
+    ...previous, videoLaneCount: previous.videoLaneCount - 1,
+    videoAssets: previous.videoAssets.map((asset) => asset.lane > lane
+      ? { ...asset, lane: asset.lane - 1 } : asset),
     revision: nextRevision(previous)
   });
 }
@@ -3559,6 +3582,7 @@ function projectContext(project: EditorProject): ShortFormNormalizationContext {
     imageAssets: project.imageAssets,
     audioRegions: project.audioRegions,
     subtitleLaneCount: project.subtitleLaneCount,
+    imageLaneCount: project.imageLaneCount ?? MIN_IMAGE_LANES,
     recentSubtitleColors: project.recentSubtitleColors,
     subtitleDefaults: project.subtitleDefaults,
     ai: project.ai
@@ -3580,6 +3604,7 @@ export function createShortFormWorkspaceProject(
     imageAssets: shortForm.imageAssets.map((asset) => ({ ...asset })),
     audioRegions: shortForm.audioRegions.map((region) => ({ ...region })),
     subtitleLaneCount: shortForm.subtitleLaneCount,
+    imageLaneCount: shortForm.imageLaneCount ?? MIN_IMAGE_LANES,
     recentSubtitleColors: [...shortForm.recentSubtitleColors],
     subtitleDefaults: shortForm.subtitleDefaults
       ? { ...shortForm.subtitleDefaults }
@@ -3620,6 +3645,7 @@ export function shortFormBranchFromWorkspace(
     imageAssets: workspaceProject.imageAssets,
     audioRegions: workspaceProject.audioRegions,
     subtitleLaneCount: workspaceProject.subtitleLaneCount,
+    imageLaneCount: workspaceProject.imageLaneCount,
     recentSubtitleColors: workspaceProject.recentSubtitleColors,
     subtitleDefaults: workspaceProject.subtitleDefaults,
     ai: workspaceProject.ai,

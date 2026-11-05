@@ -20,6 +20,7 @@ import type {
 import {
   normalizeSoopVodSourceClockIdentity
 } from "./soop-vod-source-clock.js";
+import { MAX_IMAGE_LANES, MIN_IMAGE_LANES, normalizeImageLaneLayout } from "./image-lanes.js";
 
 export const EDITOR_SCHEMA = "chzzk-kirinuki-editor/v3";
 export const EDITOR_PROJECTS_STORE_KEY = "chzzkKirinukiEditorProjectsV1";
@@ -289,6 +290,8 @@ export interface EditorImageAsset extends DynamicRecord {
   clipId: string;
   startOffsetMs: number;
   endOffsetMs: number;
+  /** Missing only in legacy projects; normalization assigns a stable lane. */
+  lane?: number;
   name: string;
   mimeType: string;
   source: EditorImageAssetSource;
@@ -322,6 +325,7 @@ export interface EditorProject extends DynamicRecord {
   clips: EditorClip[];
   suppressedSelections: SuppressedSelection[];
   imageAssets: EditorImageAsset[];
+  imageLaneCount?: number;
   subtitles: EditorSubtitleCue[];
   subtitleLaneCount: number;
   recentSubtitleColors: string[];
@@ -1110,6 +1114,7 @@ export function createEditorProjectFromCapture(captureState: CaptureState = {}, 
     suppressedSelections: [],
     imageAssets,
     subtitles,
+    imageLaneCount: MIN_IMAGE_LANES,
     subtitleLaneCount: MIN_SUBTITLE_LANES,
     recentSubtitleColors,
     audioRegions,
@@ -1204,7 +1209,7 @@ export function normalizeEditorProject(raw: DynamicRecord | null | undefined): E
       region,
       clips.find((clip) => clip.id === region.clipId)!
     ));
-  const imageAssets = (Array.isArray(raw.imageAssets) ? raw.imageAssets : [])
+  const normalizedImageAssets = (Array.isArray(raw.imageAssets) ? raw.imageAssets : [])
     .filter((asset) => asset && clipIds.has(asset.clipId))
     .flatMap((asset) => {
       const normalized = normalizeImageAsset(
@@ -1213,6 +1218,9 @@ export function normalizeEditorProject(raw: DynamicRecord | null | undefined): E
       );
       return normalized ? [normalized] : [];
     });
+  const { imageAssets, imageLaneCount } = normalizeImageLaneLayout(
+    normalizedImageAssets, clips, raw.imageLaneCount
+  );
   const rawSubtitleDefaults = recordOrEmpty(raw.subtitleDefaults);
   const cleanDefaults = normalizedCaptionStyleDefaults(
     DEFAULT_CAPTION_STYLE_PRESET_ID
@@ -1481,6 +1489,7 @@ export function normalizeEditorProject(raw: DynamicRecord | null | undefined): E
     recentSubtitleColors: normalizeRecentSubtitleColors(raw.recentSubtitleColors),
     audioRegions,
     imageAssets,
+    imageLaneCount,
     shortForm,
     shortFormWorkspaces,
     selectedClipId,
@@ -2158,6 +2167,8 @@ export function normalizeImageAsset(
     startOffsetMs,
     endOffsetMs,
     name: String(asset.name || "이미지 에셋").trim() || "이미지 에셋",
+    ...(typeof asset.lane === "number" && Number.isSafeInteger(asset.lane) && asset.lane >= 0
+      ? { lane: asset.lane } : {}),
     mimeType,
     source,
     sourceUrl: String(asset.sourceUrl || "").trim(),
@@ -2178,6 +2189,7 @@ export function createImageAsset(project: EditorProject, {
   startOffsetMs = 0,
   endOffsetMs = 2000,
   name = "이미지 에셋",
+  lane,
   mimeType = "",
   source = null,
   dataUrl = "",
@@ -2201,6 +2213,7 @@ export function createImageAsset(project: EditorProject, {
     startOffsetMs,
     endOffsetMs,
     name,
+    lane,
     mimeType,
     source: source
       ?? (dataUrl ? { kind: "data-url", value: dataUrl } : null)
@@ -2218,7 +2231,9 @@ export function createImageAsset(project: EditorProject, {
   if (!normalized) {
     throw new Error("PNG, JPEG, WebP 또는 GIF 이미지 데이터가 필요합니다.");
   }
-  return normalized;
+  return normalizeImageLaneLayout(
+    [...project.imageAssets, normalized], project.clips, project.imageLaneCount
+  ).imageAssets.at(-1)!;
 }
 
 export function updateImageAsset(
@@ -2820,6 +2835,37 @@ export function addSubtitleLane(project: EditorProject): EditorProject {
     return project;
   }
   return { ...project, subtitleLaneCount, updatedAt: nowIso() };
+}
+
+export function addImageLane(project: EditorProject): EditorProject {
+  const count = project.imageLaneCount ?? MIN_IMAGE_LANES;
+  return count >= MAX_IMAGE_LANES ? project
+    : { ...project, imageLaneCount: count + 1, updatedAt: nowIso() };
+}
+
+/** Empty rows only, including disabled clips: removing a row never removes media. */
+export function removeImageLane(project: EditorProject, lane: number): EditorProject {
+  const count = project.imageLaneCount ?? MIN_IMAGE_LANES;
+  if (count <= MIN_IMAGE_LANES || !Number.isInteger(lane) || lane < 0 || lane >= count
+    || project.imageAssets.some((asset) => (asset.lane ?? 0) === lane)) return project;
+  return {
+    ...project, imageLaneCount: count - 1,
+    imageAssets: project.imageAssets.map((asset) => (asset.lane ?? 0) > lane
+      ? { ...asset, lane: asset.lane! - 1 } : asset),
+    updatedAt: nowIso()
+  };
+}
+
+export function removeSubtitleLane(project: EditorProject, lane: number): EditorProject {
+  const count = project.subtitleLaneCount;
+  if (count <= MIN_SUBTITLE_LANES || !Number.isInteger(lane) || lane < 0 || lane >= count
+    || project.subtitles.some((cue) => cue.lane === lane)) return project;
+  return {
+    ...project, subtitleLaneCount: count - 1,
+    subtitles: project.subtitles.map((cue) => cue.lane > lane
+      ? { ...cue, lane: cue.lane - 1 } : cue),
+    updatedAt: nowIso()
+  };
 }
 
 export function updateSubtitleCue(

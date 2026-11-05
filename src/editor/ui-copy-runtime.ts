@@ -12,6 +12,46 @@ import type {
  * anchored patterns at the end of this file.
  */
 export const EDITOR_RUNTIME_UI_COPY = {
+  "직접 저장 전": { en: "Not explicitly saved yet", ja: "直接保存前" },
+  " · 저장 이후 변경 있음": { en: " · Changes since saving", ja: " · 保存後の変更あり" },
+  "복구 확인하고 계속": { en: "Confirm recovery and continue", ja: "復元を確認して続ける" },
+  "선택한 버전을 복구하려면 이번 사용의 권리·책임을 확인해 주세요. 취소해도 현재 편집은 유지됩니다.": { en: "Confirm your rights and responsibilities for this restore. Cancelling keeps your current edit.", ja: "このバージョンを復元するため、今回の権利・責任を確認してください。キャンセルしても現在の編集は保持されます。" },
+  "필수 책임 확인 항목을 모두 선택해 주세요.": { en: "Select all required acknowledgements.", ja: "必須の責任確認項目をすべて選択してください。" },
+  "선택한 저장본과 이번 복구 확인을 확인하는 중…": { en: "Checking the selected version and recovery confirmation…", ja: "選択した保存版と今回の復元確認を確認中…" },
+  "확인 중 편집 내용이나 저장본이 바뀌었습니다. 목록에서 다시 선택해 주세요.": { en: "The edit or saved version changed during confirmation. Select a version again.", ja: "確認中に編集内容または保存版が変更されました。一覧から選び直してください。" },
+  "복구 확인이 완료됐습니다. 선택한 버전을 불러오면 현재 편집을 교체합니다.": { en: "Recovery confirmed. Restoring the selected version will replace the current edit.", ja: "復元確認が完了しました。選択したバージョンを読み込むと現在の編集が置き換わります。" },
+  "선택한 버전을 불러오면 현재 편집을 교체합니다. 직전 상태는 임시 복구본으로 보관됩니다.": { en: "Restoring this version replaces the current edit. The previous state is kept as temporary recovery.", ja: "このバージョンを読み込むと現在の編集が置き換わります。直前の状態は一時復元用に保持されます。" },
+  "선택한 버전은 이번 복구용 권리·책임 확인 후 불러올 수 있습니다.": { en: "You can restore this version after confirming rights and responsibilities for this restore.", ja: "今回の復元の権利・責任を確認すると、このバージョンを読み込めます。" },
+  "현재 편집과 다른 항목: ": { en: "Changes from the current edit: ", ja: "現在の編集との差分: " },
+  "현재 편집 내용과 같음": { en: "Same content as the current edit", ja: "現在の編集内容と同じ" },
+  "작업 정보": { en: "Project information", ja: "作業情報" },
+  "마지막 직접 저장 이후의 변경을 버리는 중…": { en: "Discarding changes since the last explicit save…", ja: "最後に直接保存してからの変更を破棄中…" },
+  "저장본을 확인하는 중…": { en: "Checking the saved version…", ja: "保存版を確認中…" },
+  "직전 상태를 보호하고 선택한 편집 내용을 적용하는 중…": { en: "Preserving the previous state and applying the selected edit…", ja: "直前の状態を保護して、選択した編集を適用中…" },
+  "편집 내용이 복구됐습니다. 영상 연결을 확인하는 중…": { en: "Edits restored. Checking the media connection…", ja: "編集内容を復元しました。動画の接続を確認中…" },
+  "편집 내용과 영상 연결이 복구됐습니다. 불러온 상태를 이어편집 기준으로 남기려면 지금 저장해 주세요. 직전 상태는 임시 복구본입니다.": { en: "Edits and media connection restored. Save now to resume from this state next time. The previous state is temporary recovery.", ja: "編集内容と動画接続を復元しました。次回この状態から続けるには今すぐ保存してください。直前の状態は一時復元用です。" },
+  "편집 내용은 복구됐으며 영상 연결이 필요합니다. 불러온 상태를 남기려면 지금 저장해 주세요. 영상만 다시 연결할 수 있습니다.": { en: "Edits restored; media needs reconnecting. Save now to keep this state. You can reconnect media without restoring again.", ja: "編集内容は復元されましたが、動画の接続が必要です。この状態を残すには今すぐ保存してください。再復元せず動画だけ再接続できます。" },
+  "저장본을 불러왔습니다. 직전 상태는 임시 복구본으로 보관했습니다.": { en: "Version restored. The previous state is kept as temporary recovery.", ja: "保存版を読み込みました。直前の状態は一時復元用に保持しました。" },
+  "복구 확인을 취소했습니다. 현재 편집과 선택한 버전은 유지됩니다.": { en: "Recovery confirmation cancelled. Your current edit and selected version are unchanged.", ja: "復元確認をキャンセルしました。現在の編集と選択したバージョンは保持されます。" },
+  "이 기기에 저장했습니다. 다음 이어편집도 이 상태에서 시작합니다.": { en: "Saved on this device. Your next edit will resume from this state.", ja: "このデバイスに保存しました。次回もこの状態から編集を再開します。" },
+  "편집 내용은 복구됐지만 화면을 갱신하지 못했습니다. 이 탭을 새로고침해 복구된 내용을 열어 주세요.": { en: "Edits were restored, but the view could not refresh. Reload this tab to open the restored content.", ja: "編集内容は復元されましたが、画面を更新できませんでした。このタブを再読み込みして復元内容を開いてください。" },
+  "현재 편집의 권리 확인 또는 탭 잠금이 달라 복구 확인을 적용하지 않았습니다.": { en: "Recovery confirmation was not applied because the editing confirmation or tab lock changed.", ja: "編集の権利確認またはタブロックが変わったため、復元確認を適用しませんでした。" },
+  "이미지 저장소의 키와 값 개수가 달라 저장 기준을 변경하지 않았습니다.": {
+    en: "The saved baseline was not changed because image storage key and value counts differ.",
+    ja: "画像ストレージのキーと値の数が一致しないため、保存基準を変更しませんでした。"
+  },
+  "저장할 프로젝트 이미지가 Blob이 아닙니다.": {
+    en: "The project image to save is not a Blob.",
+    ja: "保存するプロジェクト画像が Blob ではありません。"
+  },
+  "복구 직전본 ID는 선택한 저장본 ID와 달라야 합니다.": {
+    en: "The pre-restore snapshot ID must differ from the selected saved version ID.",
+    ja: "復元直前の保存版 ID は、選択した保存版の ID と異なる必要があります。"
+  },
+  "편집 세션 최초 프로젝트 상태가 올바르지 않습니다.": {
+    en: "The editing session's initial project state is invalid.",
+    ja: "編集セッション開始時のプロジェクト状態が正しくありません。"
+  },
   "이 기기의 저장 공간을 안전하게 확인하지 못했습니다. 저장 장치를 확인한 뒤 다시 시도해 주세요.": {
     en: "Kirinuki could not safely check this device's free space. Check the drive and try again.",
     ja: "このデバイスの空き容量を安全に確認できませんでした。ドライブを確認して、もう一度お試しください。"
@@ -2769,6 +2809,8 @@ export const EDITOR_RUNTIME_UI_COPY = {
  * sentence patterns here: that could rewrite filenames or user-authored copy.
  */
 export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
+  { source: /^이 기기에 저장됨 (.+)$/u, en: "Saved on this device $1", ja: "このデバイスに保存済み $1" },
+  { source: /^ · 저장·복구본 ([0-9]+)개$/u, en: " · $1 saved/recovery versions", ja: " · 保存・復元 $1 件" },
   {
     source: /^검수 필요 (\d+)개$/u,
     en: "$1 captions need review",

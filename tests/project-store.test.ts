@@ -130,141 +130,13 @@ async function waitForRequestCount(
 }
 
 function createLocalDraftDatabase({
-  projects = [],
-  drafts = [],
-  handles = []
+  projects = [], drafts = [], handles = []
 }: {
   projects?: ProjectRecord[];
   drafts?: DraftRecord[];
   handles?: ProjectSessionHandleRecord[];
-} = {}): MockDatabase & {
-  state: {
-    projects: Map<string, ProjectRecord>;
-    drafts: Map<string, DraftRecord>;
-    handles: Map<string, unknown>;
-  };
-} {
-  const state = {
-    projects: new Map(projects.map((project) => [project.id, structuredClone(project)])),
-    drafts: new Map(drafts.map((draft) => [draft.id, structuredClone(draft)])),
-    handles: new Map(handles.map((handle) => [
-      handle.projectId,
-      structuredClone(handle.value)
-    ]))
-  };
-
-  const database = {
-    state,
-    close() {},
-    transaction(
-      storeNames: string | string[],
-      mode?: IDBTransactionMode
-    ) {
-      const requestedStores = Array.isArray(storeNames) ? storeNames : [storeNames];
-      const tx: MockTransaction = {
-        error: null,
-        ...(mode === undefined ? {} : { mode })
-      };
-      let pendingRequests = 0;
-      let completionQueued = false;
-
-      const maybeComplete = () => {
-        if (pendingRequests > 0 || completionQueued) {
-          return;
-        }
-        completionQueued = true;
-        queueMicrotask(() => {
-          completionQueued = false;
-          if (pendingRequests === 0) {
-            tx.oncomplete?.();
-          } else {
-            maybeComplete();
-          }
-        });
-      };
-      const request = <T>(read: () => T): MockRequest<T> => {
-        const result: MockRequest<T> = {};
-        pendingRequests += 1;
-        queueMicrotask(() => {
-          try {
-            result.result = structuredClone(read());
-            result.onsuccess?.();
-          } catch (error) {
-            result.error = error;
-            tx.error = error;
-            result.onerror?.();
-            tx.onerror?.();
-          } finally {
-            pendingRequests -= 1;
-            maybeComplete();
-          }
-        });
-        return result;
-      };
-      const projectStore = {
-        put(project: ProjectRecord) {
-          state.projects.set(project.id, structuredClone(project));
-          return {};
-        },
-        get(projectId: string) {
-          return request(() => state.projects.get(projectId));
-        }
-      };
-      const draftStore = {
-        put(draft: DraftRecord) {
-          state.drafts.set(draft.id, structuredClone(draft));
-          return {};
-        },
-        get(draftId: string) {
-          return request(() => state.drafts.get(draftId));
-        },
-        delete(draftId: string) {
-          state.drafts.delete(draftId);
-          return {};
-        },
-        index(indexName: string) {
-          assert.equal(indexName, "projectId");
-          return {
-            getAll(projectId: string) {
-              return request(() => [...state.drafts.values()].filter(
-                (draft) => draft.projectId === projectId
-              ));
-            }
-          };
-        }
-      };
-      const handleStore = {
-        get(projectId: IDBValidKey) {
-          return request(() => state.handles.get(String(projectId)));
-        },
-        put(value: unknown, projectId: IDBValidKey) {
-          state.handles.set(String(projectId), structuredClone(value));
-          return {};
-        },
-        delete(projectId: IDBValidKey) {
-          state.handles.delete(String(projectId));
-          return {};
-        }
-      };
-
-      tx.objectStore = (storeName: string) => {
-        assert(requestedStores.includes(storeName));
-        if (storeName === "projects") {
-          return projectStore;
-        }
-        if (storeName === "local-drafts") {
-          return draftStore;
-        }
-        if (storeName === "media-handles") {
-          return handleStore;
-        }
-        throw new Error(`Unexpected store: ${storeName}`);
-      };
-      queueMicrotask(maybeComplete);
-      return tx;
-    }
-  };
-  return database;
+} = {}) {
+  return createEditingSessionCheckpointDatabase({ projects, drafts, handles });
 }
 
 function useOpenedDatabase(
@@ -299,7 +171,8 @@ function createShortVideoCacheDatabase(initialRecords: ShortVideoCacheRecord[] =
     state: { caches },
     close() {},
     transaction(storeNames: string | string[], mode?: IDBTransactionMode) {
-      assert.equal(storeNames, "short-video-caches");
+      assert.ok(storeNames === "short-video-caches" || (Array.isArray(storeNames)
+        && storeNames.includes("short-video-caches")));
       assert.ok(mode === "readonly" || mode === "readwrite");
       const tx: MockTransaction = {
         error: null,
@@ -374,6 +247,12 @@ function createShortVideoCacheDatabase(initialRecords: ShortVideoCacheRecord[] =
         }
       };
       tx.objectStore = (storeName: string) => {
+        if (storeName === "projects" || storeName === "editing-session-checkpoints") {
+          return { get: () => request(() => undefined) };
+        }
+        if (storeName === "local-drafts") {
+          return { index: () => ({ getAll: () => request(() => []) }) };
+        }
         assert.equal(storeName, "short-video-caches");
         return cacheStore;
       };
@@ -1017,6 +896,9 @@ function createEditingSessionCheckpointDatabase({
       };
 
       const draftStore = {
+        get(draftId: IDBValidKey) {
+          return request(() => staged.drafts.get(String(draftId)));
+        },
         getAll() {
           return request(() => [...staged.drafts.values()]);
         },
@@ -1058,6 +940,23 @@ function createEditingSessionCheckpointDatabase({
       };
 
       const imageStore = {
+        openKeyCursor() {
+          const keys = [...staged.images.values()].map((image) => image.key);
+          let index = 0;
+          const result: MockRequest<unknown> = {};
+          pendingRequests += 1;
+          const dispatch = (): void => {
+            queueMicrotask(() => {
+              if (aborted) { pendingRequests -= 1; return; }
+              const key = keys[index++];
+              result.result = key ? { key, primaryKey: key, continue: dispatch } : null;
+              result.onsuccess?.();
+              if (!key) { pendingRequests -= 1; maybeComplete(); }
+            });
+          };
+          dispatch();
+          return result;
+        },
         getAll() {
           return request(() => [...staged.images.values()].map(
             (entry) => entry.value
@@ -1608,6 +1507,14 @@ test("A 핸들 수동저장 뒤 B 핸들만 연결하고 닫아도 A 저장본�
       "explicit-project",
       { name: "source-A.mp4" }
     );
+    database.state.images.set(compoundKey("explicit-project", "manual-image"), {
+      key: ["explicit-project", "manual-image"],
+      value: new Blob(["manual"], { type: "image/png" })
+    });
+    database.state.caches.set(
+      compoundKey("explicit-project", "manual-video"),
+      sessionCache("explicit-project", "manual-video")
+    );
     const explicitDraft = await store.saveLocalDraft({
       id: "explicit-project",
       name: "explicitly saved",
@@ -1655,18 +1562,10 @@ test("A 핸들 수동저장 뒤 B 핸들만 연결하고 닫아도 A 저장본�
         "auto"
       )
     );
-    database.state.images.set(compoundKey("explicit-project", "manual-image"), {
-      key: ["explicit-project", "manual-image"],
-      value: new Blob(["manual"], { type: "image/png" })
-    });
     database.state.images.set(compoundKey("explicit-project", "orphan-image"), {
       key: ["explicit-project", "orphan-image"],
       value: new Blob(["orphan"], { type: "image/png" })
     });
-    database.state.caches.set(
-      compoundKey("explicit-project", "manual-video"),
-      sessionCache("explicit-project", "manual-video")
-    );
     database.state.caches.set(
       compoundKey("explicit-project", "orphan-video"),
       sessionCache("explicit-project", "orphan-video")
@@ -1697,6 +1596,211 @@ test("A 핸들 수동저장 뒤 B 핸들만 연결하고 닫아도 A 저장본�
     );
     assert.equal(database.state.checkpoints.size, 0);
     assert.equal(database.state.projects.get("other")?.name, "preserved");
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test("기존 A → 수동 B → 미저장 C는 종료와 abandoned 모두 B 본문·핸들·본편/쇼츠 자산으로 돌아간다", async () => {
+  for (const abandoned of [false, true]) {
+    const originalIndexedDb = globalThis.indexedDB;
+    const projectA = { id: "target", name: "A", mediaAsset: { fileHandleStored: true } };
+    const database = createEditingSessionCheckpointDatabase({
+      projects: [projectA, { id: "other", name: "untouched" }],
+      handles: [{ projectId: "target", value: { name: "A.mp4" } }]
+    });
+    useOpenedDatabase(database);
+    try {
+      const store = await freshProjectStore(`explicit-baseline-${abandoned}`);
+      await store.beginEditingSessionCheckpoint("target", "session");
+      const projectB = {
+        id: "target", name: "B", mediaAsset: { fileHandleStored: true },
+        clips: [{ id: "cut-B", startMs: 1200, endMs: 9876 }],
+        captions: [{ id: "caption-B", text: "saved B" }],
+        imageAssets: [{ id: "image-B", source: { kind: "blob-key", value: "image-B" } }],
+        shortFormWorkspaces: { workspaces: [{ id: "short-B", shortForm: {
+          imageAssets: [{ id: "short-image-B", source: { kind: "blob-key", value: "short-image-B" } }],
+          videoAssets: [{ id: "video-B" }],
+          sourceAudioAssets: [{ id: "audio-B" }]
+        } }] }
+      };
+      for (const id of ["image-B", "short-image-B"]) {
+        database.state.images.set(compoundKey("target", id), {
+          key: ["target", id], value: new Blob([`saved:${id}`], { type: "image/png" })
+        });
+      }
+      for (const id of ["video-B", "source-audio-cache:audio-B"]) {
+        database.state.caches.set(compoundKey("target", id), sessionCache("target", id));
+      }
+      database.state.handles.set("target", { name: "B.mp4" });
+      await store.saveLocalDraft(projectB, { reason: "manual", id: "manual-B", now: 2000 });
+      const checkpoint = (await store.listEditingSessionCheckpoints())[0]!;
+      assert.equal(checkpoint.initialProjectPresent, true);
+      assert.deepEqual(checkpoint.baseline.project, projectB);
+      assert.deepEqual(checkpoint.baseline.mediaHandle.handle, { name: "B.mp4" });
+      assert.equal(checkpoint.baseline.imageAssets.length, 2);
+      assert.equal(checkpoint.baseline.shortVideoCaches.length, 2);
+
+      // Reuse the same asset keys with different bytes to prove rollback owns
+      // B's full values, rather than borrowing C's current asset references.
+      database.state.projects.set("target", { id: "target", name: "C" });
+      database.state.handles.set("target", { name: "C.mp4" });
+      for (const image of database.state.images.values()) image.value = new Blob(["unsaved C"]);
+      for (const cache of database.state.caches.values()) {
+        cache.blob = new Blob(["unsaved C"], { type: cache.mimeType });
+        cache.sizeBytes = cache.blob.size;
+        cache.sourceFingerprint = "unsaved C";
+      }
+      const orphanCache = sessionCache("target", "orphan-C");
+      database.state.caches.set(compoundKey("target", "orphan-C"), orphanCache);
+      database.state.images.set(compoundKey("target", "orphan-C"), {
+        key: ["target", "orphan-C"], value: new Blob(["orphan C"])
+      });
+      for (let index = 0; index < 12; index += 1) {
+        await store.saveLocalDraft({ id: "target", name: `C-${index}` }, {
+          reason: index % 2 ? "pre-restore" : "auto", id: `temporary-${index}`, now: 3000 + index
+        });
+      }
+      const drafts = await store.listLocalDrafts("target");
+      assert.equal(drafts.filter((draft) => draft.reason === "manual").length, 1);
+      assert.equal(drafts.filter((draft) => draft.reason !== "manual").length, 5);
+      assert.equal(await store.pruneImageAssetBlobs("target"), 1);
+      assert.equal(await store.pruneShortVideoCaches("target"), 1);
+      assert.equal(database.state.images.size, 2);
+      assert.equal(database.state.caches.size, 2);
+
+      assert.equal(abandoned
+        ? await store.discardAbandonedEditingSessionCheckpoint("target")
+        : await store.discardEditingSessionCheckpoint("target", "session"), true);
+      assert.deepEqual(await store.loadProject("target"), projectB);
+      assert.deepEqual(database.state.handles.get("target"), { name: "B.mp4" });
+      assert.deepEqual((await store.listLocalDrafts("target")).map((draft) => draft.id), ["manual-B"]);
+      for (const id of ["image-B", "short-image-B"]) {
+        const image = database.state.images.get(compoundKey("target", id))!.value as Blob;
+        assert.equal(await image.text(), `saved:${id}`);
+      }
+      for (const id of ["video-B", "source-audio-cache:audio-B"]) {
+        const cache = database.state.caches.get(compoundKey("target", id))!;
+        assert.equal(cache.sourceFingerprint, sessionCache("target", id).sourceFingerprint);
+        assert.equal(await cache.blob.text(), await sessionCache("target", id).blob.text());
+      }
+      assert.equal(database.state.projects.get("other")?.name, "untouched");
+      assert.equal(database.state.checkpoints.size, 0);
+    } finally {
+      globalThis.indexedDB = originalIndexedDb;
+    }
+  }
+});
+
+test("새 편집 수동 저장 뒤 동일 세션 재진입은 최초 신규 상태와 마지막 명시 저장을 구분한다", async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const database = createEditingSessionCheckpointDatabase();
+  useOpenedDatabase(database);
+  try {
+    const store = await freshProjectStore("new-manual-reload");
+    const initial = await store.beginEditingSessionCheckpoint("new", "session", { now: 1000 });
+    assert.equal(initial.initialProjectPresent, false);
+    await store.saveLocalDraft({ id: "new", name: "B" }, { id: "manual-B", now: 2000 });
+    await store.saveProject({ id: "new", name: "C" });
+    const reentered = await store.beginEditingSessionCheckpoint("new", "session", { now: 3000 });
+    assert.equal(reentered.initialProjectPresent, false);
+    assert.equal(reentered.createdAt, initial.createdAt);
+    assert.equal(reentered.baseline.project?.name, "B");
+    assert.equal((await store.loadProject("new"))?.name, "C", "reload preserves current unsaved editing");
+    await store.discardAbandonedEditingSessionCheckpoint("new");
+    assert.equal((await store.loadProject("new"))?.name, "B");
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test("명시 저장 transaction의 CURRENT·버전·baseline 쓰기 실패는 모든 저장소를 유지한다", async () => {
+  for (const failure of ["project-put", "draft-put", "checkpoint-put"]) {
+    const originalIndexedDb = globalThis.indexedDB;
+    const database = createEditingSessionCheckpointDatabase({ projects: [{ id: "target", name: "A" }] });
+    useOpenedDatabase(database);
+    try {
+      const store = await freshProjectStore(`manual-failure-${failure}`);
+      await store.beginEditingSessionCheckpoint("target", "session");
+      database.state.projects.set("target", { id: "target", name: "unsaved B" });
+      database.state.handles.set("target", { name: "B.mp4" });
+      const before = structuredClone(database.state);
+      database.failMutationLabel = failure;
+      await assert.rejects(store.saveLocalDraft({
+        id: "target", name: "B", mediaAsset: { fileHandleStored: true }
+      }, { reason: "manual", id: "manual-B", now: 2000 }), /injected checkpoint mutation failure/u);
+      assert.deepEqual(database.state, before);
+      database.failMutationLabel = null;
+      await store.discardAbandonedEditingSessionCheckpoint("target");
+      assert.equal((await store.loadProject("target"))?.name, "A");
+    } finally {
+      globalThis.indexedDB = originalIndexedDb;
+    }
+  }
+});
+
+test("복구가 선택 저장본을 다시 검사하고 삭제된 선택은 CURRENT·기준·핸들을 바꾸지 않는다", async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const database = createEditingSessionCheckpointDatabase({ projects: [{ id: "target", name: "A" }] });
+  useOpenedDatabase(database);
+  try {
+    const store = await freshProjectStore("deleted-selected-draft");
+    await store.beginEditingSessionCheckpoint("target", "session");
+    const selected = await store.saveLocalDraft({ id: "target", name: "B" }, { id: "manual-B", now: 2000 });
+    database.state.drafts.delete(selected.id);
+    const before = structuredClone(database.state);
+    await assert.rejects(store.restoreLocalDraft({ id: "target", name: "C" }, selected), /불러올 수 있는 임시저장본/u);
+    assert.deepEqual(database.state, before);
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test("이전 수동본 복구는 저장 기준을 승격하지 않고 다시 직접 저장했을 때만 전체 기준을 바꾼다", async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const database = createEditingSessionCheckpointDatabase();
+  useOpenedDatabase(database);
+  try {
+    const store = await freshProjectStore("restore-then-explicit-save");
+    await store.beginEditingSessionCheckpoint("target", "session");
+    for (const [index, label] of ["A", "B"].entries()) {
+      database.state.images.set(compoundKey("target", `image-${label}`), {
+        key: ["target", `image-${label}`], value: new Blob([label], { type: "image/png" })
+      });
+      database.state.caches.set(compoundKey("target", `video-${label}`), sessionCache("target", `video-${label}`));
+      database.state.handles.set("target", { name: `${label}.mp4` });
+      await store.saveLocalDraft({
+        id: "target", name: label, mediaAsset: { fileHandleStored: true },
+        imageAssets: [{ id: `image-${label}`, source: { kind: "blob-key", value: `image-${label}` } }],
+        shortForm: { videoAssets: [{ id: `video-${label}` }] }
+      }, { id: `manual-${label}`, now: 1000 + index });
+    }
+    const selected = required(await store.loadLocalDraft("target", "manual-A"));
+    const restored = await store.restoreLocalDraft(required(await store.loadProject("target")), selected, {
+      id: "pre-restore-B", now: 2000
+    });
+    assert.equal(restored.project.name, "A");
+    assert.equal((await store.listEditingSessionCheckpoints())[0]?.baseline.project?.name, "B");
+    assert.ok(await store.loadLocalDraft("target", "manual-A"));
+    assert.equal(await store.pruneImageAssetBlobs("target"), 0);
+    assert.equal(await store.pruneShortVideoCaches("target"), 0);
+    assert.deepEqual(database.state.handles.get("target"), { name: "A.mp4" });
+    await store.saveLocalDraft(restored.project, { id: "manual-restored-A", now: 3000 });
+    const reentered = await store.beginEditingSessionCheckpoint("target", "session");
+    assert.equal(reentered.initialProjectPresent, false);
+    assert.equal(reentered.baseline.project?.name, "A");
+    assert.equal(reentered.baseline.imageAssets.length, 2);
+    assert.equal(reentered.baseline.shortVideoCaches.length, 2);
+    await store.saveProject({ id: "target", name: "unsaved C" });
+    database.state.handles.set("target", { name: "C.mp4" });
+    await store.discardAbandonedEditingSessionCheckpoint("target");
+    assert.equal((await store.loadProject("target"))?.name, "A");
+    assert.deepEqual(database.state.handles.get("target"), { name: "A.mp4" });
+    assert.deepEqual((await store.listLocalDrafts("target")).map((draft) => draft.id), [
+      "manual-restored-A", "manual-B", "manual-A"
+    ]);
+    assert.equal(database.state.images.size, 2);
+    assert.equal(database.state.caches.size, 2);
   } finally {
     globalThis.indexedDB = originalIndexedDb;
   }
@@ -1955,7 +2059,7 @@ test("닫힌 IndexedDB 연결은 캐시를 버리고 한 번 재개방해 트랜
   }
 });
 
-test("로컬 임시저장은 프로젝트별 최신 5개만 원자적으로 남기고 복사본을 반환한다", async () => {
+test("로컬 임시저장은 프로젝트별 수동 5개와 임시 5개만 원자적으로 남기고 복사본을 반환한다", async () => {
   const originalIndexedDb = globalThis.indexedDB;
   const database = createLocalDraftDatabase();
   const openedVersions: Array<number | undefined> = [];
@@ -1963,7 +2067,7 @@ test("로컬 임시저장은 프로젝트별 최신 5개만 원자적으로 남�
 
   try {
     const store = await freshProjectStore("local-draft-retention");
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 12; index += 1) {
       const project = {
         id: "target",
         name: `버전 ${index}`,
@@ -1990,29 +2094,29 @@ test("로컬 임시저장은 프로젝트별 최신 5개만 원자적으로 남�
     const targetDrafts = await store.listLocalDrafts("target");
     assert.deepEqual(
       targetDrafts.map((draft) => draft.id),
-      ["target-5", "target-4", "target-3", "target-2", "target-1"]
+      Array.from({ length: 10 }, (_, index) => `target-${11 - index}`)
     );
     assert.deepEqual(
       targetDrafts.map((draft) => draft.project.name),
-      ["버전 5", "버전 4", "버전 3", "버전 2", "버전 1"]
+      Array.from({ length: 10 }, (_, index) => `버전 ${11 - index}`)
     );
     assert.equal(database.state.drafts.has("target-0"), false);
     assert.equal(database.state.drafts.has("other-0"), true);
-    assert.equal(required(database.state.projects.get("target")).name, "버전 5");
+    assert.equal(required(database.state.projects.get("target")).name, "버전 11");
     assert.equal(required(database.state.projects.get("other")).name, "다른 프로젝트");
     assert.deepEqual(
       (await store.listLocalDrafts("target", { limit: 2 })).map((draft) => draft.id),
-      ["target-5", "target-4"]
+      ["target-11", "target-10"]
     );
 
-    const loaded = required(await store.loadLocalDraft("target", "target-5"));
-    assert.equal(loaded.project.name, "버전 5");
+    const loaded = required(await store.loadLocalDraft("target", "target-11"));
+    assert.equal(loaded.project.name, "버전 11");
     loaded.project.name = "불러온 복사본 변경";
     assert.equal(
-      required(database.state.drafts.get("target-5")).project.name,
-      "버전 5"
+      required(database.state.drafts.get("target-11")).project.name,
+      "버전 11"
     );
-    assert.equal(await store.loadLocalDraft("other", "target-5"), null);
+    assert.equal(await store.loadLocalDraft("other", "target-11"), null);
     assert.deepEqual(openedVersions, [5]);
   } finally {
     globalThis.indexedDB = originalIndexedDb;
@@ -2054,7 +2158,7 @@ test("가장 오래된 5번째 임시저장도 불러오기 직전본 생성 후
     assert.equal(restored.preRestoreDraft.reason, "pre-restore");
     assert.equal(restored.preRestoreDraft.restoredFromDraftId, "target-0");
     assert.equal(restored.preRestoreDraft.project.name, "불러오기 직전 현재 작업");
-    assert.equal(database.state.drafts.has("target-0"), false);
+    assert.equal(database.state.drafts.has("target-0"), true);
     assert.deepEqual(
       (await store.listLocalDrafts("target")).map((draft) => draft.id),
       [
@@ -2062,7 +2166,8 @@ test("가장 오래된 5번째 임시저장도 불러오기 직전본 생성 후
         "target-4",
         "target-3",
         "target-2",
-        "target-1"
+        "target-1",
+        "target-0"
       ]
     );
 
@@ -2623,7 +2728,7 @@ test("고아 이미지 Blob 정리는 본편·쇼츠 프로젝트와 임시저�
         storeName: string | string[],
         mode?: IDBTransactionMode
       ) {
-        assert.deepEqual(storeName, ["projects", "local-drafts", "image-assets"]);
+        assert.deepEqual(storeName, ["projects", "local-drafts", "image-assets", "editing-session-checkpoints"]);
         assert.equal(mode, "readwrite");
         const tx: MockTransaction = { error: null };
         const projectStore = {
@@ -2715,6 +2820,13 @@ test("고아 이미지 Blob 정리는 본편·쇼츠 프로젝트와 임시저�
           }
         };
         tx.objectStore = (name: string) => {
+          if (name === "editing-session-checkpoints") {
+            return { get: () => {
+              const result: MockRequest<unknown> = {};
+              queueMicrotask(() => result.onsuccess?.());
+              return result;
+            } };
+          }
           if (name === "projects") {
             return projectStore;
           }

@@ -759,6 +759,38 @@ async function readBrowserProject(projectId: string): Promise<EditorProject | nu
   return result.project;
 }
 
+interface BrowserLocalDraft {
+  id: string;
+  reason: string;
+  createdAtMs: number;
+  project: EditorProject;
+}
+
+async function readBrowserLocalDrafts(projectId: string): Promise<BrowserLocalDraft[]> {
+  return execute<BrowserLocalDraft[]>(`
+    return new Promise((resolve, reject) => {
+      const open = indexedDB.open("chzzk-kirinuki-studio");
+      open.onerror = () => reject(new Error("local draft database open failed"));
+      open.onsuccess = () => {
+        const database = open.result;
+        const transaction = database.transaction("local-drafts", "readonly");
+        const request = transaction.objectStore("local-drafts").getAll();
+        transaction.onabort = () => {
+          database.close();
+          reject(new Error("local draft read aborted"));
+        };
+        transaction.oncomplete = () => {
+          database.close();
+          resolve(request.result.filter((draft) => draft.projectId === arguments[0])
+            .map(({ id, reason, createdAtMs, project }) => ({
+              id, reason, createdAtMs, project
+            })).sort((left, right) => right.createdAtMs - left.createdAtMs));
+        };
+      };
+    });
+  `, [projectId]);
+}
+
 async function cdp<T>(cmd: string, params: Record<string, unknown>): Promise<T> {
   return webdriver<T>(
     "POST",
@@ -4494,7 +4526,11 @@ async function main(): Promise<void> {
     "late materialization fixture 종료 뒤 4319 gateway CDP 차단이 복원되지 않았습니다."
   );
 
-  const saveAndExitActiveEditor = async (context: string) => {
+  const saveAndExitActiveEditor = async (
+    context: string,
+    action: "save" | "discard" = "save"
+  ) => {
+    const actionSelector = `#${action}-and-exit-editing-session`;
     await waitFor(
       () => execute<boolean>(`
         const finish = document.querySelector("#finish-editing-session");
@@ -4517,23 +4553,23 @@ async function main(): Promise<void> {
     await waitFor(
       () => execute<boolean>(`
         const dialog = document.querySelector("#editing-session-exit-dialog");
-        const save = document.querySelector("#save-and-exit-editing-session");
+        const save = document.querySelector(arguments[0]);
         return dialog instanceof HTMLDialogElement
           && dialog.open
           && save instanceof HTMLButtonElement
           && !save.disabled;
-      `),
+      `, [actionSelector]),
       Boolean,
       `${context}: 편집 종료 확인창이 열리지 않았습니다.`
     );
     await execute(`
-      const save = document.querySelector("#save-and-exit-editing-session");
+      const save = document.querySelector(arguments[0]);
       if (!(save instanceof HTMLButtonElement) || save.disabled) {
         throw new Error("저장하고 나가기 버튼을 누를 수 없습니다.");
       }
       save.click();
       return true;
-    `);
+    `, [actionSelector]);
     return waitFor(
       () => execute<{
         href: string;
@@ -4554,8 +4590,12 @@ async function main(): Promise<void> {
 
   const resumeSavedEditorProject = async (
     projectId: string,
-    context: string
+    context: string,
+    action: "continue" | "recover" = "continue"
   ) => {
+    const expectedStartLabel = action === "recover"
+      ? "복구본 선택으로 계속"
+      : "저장한 편집 이어서 열기";
     await execute(`
       const refresh = document.querySelector("#refresh-local-projects");
       if (!(refresh instanceof HTMLButtonElement) || refresh.disabled) {
@@ -4573,14 +4613,14 @@ async function main(): Promise<void> {
         const row = document.querySelector(
           '.local-project-row[data-project-id="' + arguments[0] + '"]'
         );
-        const button = row?.querySelector('[data-project-action="continue"]');
+        const button = row?.querySelector('[data-project-action="' + arguments[1] + '"]');
         const manager = document.querySelector(".local-project-manager");
         return {
           found: row instanceof HTMLElement,
           disabled: !(button instanceof HTMLButtonElement) || button.disabled,
           busy: manager?.getAttribute("aria-busy") || ""
         };
-      `, [projectId]),
+      `, [projectId, action]),
       (value) => value.found && !value.disabled && value.busy === "false",
       `${context}: 저장 프로젝트의 계속 편집 동작이 준비되지 않았습니다.`,
       20_000
@@ -4589,18 +4629,19 @@ async function main(): Promise<void> {
       const row = document.querySelector(
         '.local-project-row[data-project-id="' + arguments[0] + '"]'
       );
-      const button = row?.querySelector('[data-project-action="continue"]');
+      const button = row?.querySelector('[data-project-action="' + arguments[1] + '"]');
       if (!(button instanceof HTMLButtonElement) || button.disabled) {
         throw new Error("계속 편집 버튼을 누를 수 없습니다.");
       }
       button.click();
       return true;
-    `, [projectId]);
+    `, [projectId, action]);
     await waitFor(
       () => execute<{
         startLabel: string;
         startDisabled: boolean;
         acknowledgementCount: number;
+        checkedAcknowledgementCount: number;
       }>(`
         const start = document.querySelector("#start-editor");
         return {
@@ -4608,13 +4649,17 @@ async function main(): Promise<void> {
           startDisabled: !(start instanceof HTMLButtonElement) || start.disabled,
           acknowledgementCount: document.querySelectorAll(
             "#policy-section [data-ack]"
+          ).length,
+          checkedAcknowledgementCount: document.querySelectorAll(
+            "#policy-section [data-ack]:checked"
           ).length
         };
       `),
       (value) => (
-        value.startLabel.includes("편집기 열기")
+        value.startLabel.trim() === expectedStartLabel
         && !value.startDisabled
         && value.acknowledgementCount === 6
+        && value.checkedAcknowledgementCount === 0
       ),
       `${context}: 저장 프로젝트의 이번 1회 사용자 확인을 열지 못했습니다.`
     );
@@ -4658,14 +4703,282 @@ async function main(): Promise<void> {
       `),
       (value) => (
         value.projectId === projectId
-        && value.purpose === "editor-resume"
+        && value.purpose === (action === "recover" ? "editor-recovery" : "editor-resume")
         && value.workspace === "main"
         && value.policyAbsent
         && !value.shellHidden
       ),
-      `${context}: 새 editor-resume 세션으로 저장 프로젝트를 열지 못했습니다.`,
+      `${context}: 새 ${action} 세션으로 저장 프로젝트를 열지 못했습니다.`,
       20_000
     );
+  };
+
+  const clickRecoveryControl = async (selector: string) => {
+    await waitFor(
+      () => execute<boolean>(`
+        const button = document.querySelector(arguments[0]);
+        return button instanceof HTMLButtonElement && !button.hidden && !button.disabled;
+      `, [selector]),
+      Boolean,
+      `복구 동작을 누를 수 없습니다: ${selector}`
+    );
+    await execute(`document.querySelector(arguments[0]).click(); return true;`, [selector]);
+  };
+  const readRecoveryState = () => execute<{
+    open: boolean; busy: boolean; policyVisible: boolean; ackCount: number;
+    checkedCount: number; selectedId: string; restoreDisabled: boolean;
+    restoreLabel: string; state: string; message: string; role: string;
+    live: string; focusedStatus: boolean; saveVisible: boolean;
+    reconnectVisible: boolean; purpose: string; recovery: string;
+  }>(`
+    const dialog = document.querySelector("#local-draft-dialog");
+    const policy = document.querySelector("#local-draft-policy");
+    const status = document.querySelector("#local-draft-operation-status");
+    const restore = document.querySelector("#restore-local-draft");
+    const session = JSON.parse(sessionStorage.getItem("kirinuki:local-web:active-usage-session") || "null");
+    return {
+      open: dialog instanceof HTMLDialogElement && dialog.open,
+      busy: dialog?.getAttribute("aria-busy") === "true",
+      policyVisible: Boolean(policy && !policy.hidden),
+      ackCount: policy?.querySelectorAll("[data-recovery-ack]").length || 0,
+      checkedCount: policy?.querySelectorAll("[data-recovery-ack]:checked").length || 0,
+      selectedId: document.querySelector('input[name="local-draft-choice"]:checked')?.value || "",
+      restoreDisabled: !(restore instanceof HTMLButtonElement) || restore.disabled,
+      restoreLabel: restore?.textContent || "",
+      state: status?.dataset.state || "", message: status?.textContent || "",
+      role: status?.getAttribute("role") || "", live: status?.getAttribute("aria-live") || "",
+      focusedStatus: document.activeElement === status,
+      saveVisible: !document.querySelector("#save-restored-local-draft")?.hidden,
+      reconnectVisible: !document.querySelector("#reconnect-restored-media")?.hidden,
+      purpose: session?.attestation?.target?.purpose || "",
+      recovery: new URL(location.href).searchParams.get("recovery") || ""
+    };
+  `);
+  const recoveryContent = (value: EditorProject | null) => JSON.stringify(value && {
+    clips: value.clips,
+    subtitles: value.subtitles,
+    imageAssets: value.imageAssets,
+    audioRegions: value.audioRegions,
+    shortForm: value.shortForm,
+    shortFormWorkspaces: value.shortFormWorkspaces,
+    mediaAsset: value.mediaAsset
+  });
+  const waitForRecoveryContent = (expected: EditorProject, context: string) => waitFor(
+    () => readBrowserProject(freshProjectId),
+    (value) => recoveryContent(value) === recoveryContent(expected),
+    `${context}: 자막의 본문·밀리초 시각·스타일 또는 컷·쇼츠·미디어가 달라졌습니다.`
+  );
+  const selectRecoveryDraft = async (draftId: string) => {
+    await waitFor(
+      () => execute<boolean>(`
+        const input = [...document.querySelectorAll('input[name="local-draft-choice"]')]
+          .find((candidate) => candidate.value === arguments[0]);
+        if (!(input instanceof HTMLInputElement) || input.disabled) return false;
+        input.click();
+        return input.checked;
+      `, [draftId]),
+      Boolean,
+      `복구할 합성 저장본을 선택하지 못했습니다: ${draftId}`
+    );
+  };
+  const confirmRecoveryAcknowledgements = async () => {
+    await execute(`
+      const inputs = [...document.querySelectorAll("#local-draft-policy [data-recovery-ack]")];
+      if (inputs.length !== 6) throw new Error("복구 책임 확인은 정확히 6개여야 합니다.");
+      for (const input of inputs) {
+        if (!(input instanceof HTMLInputElement) || input.disabled) throw new Error("복구 확인 항목을 선택할 수 없습니다.");
+        if (!input.checked) input.click();
+      }
+      return true;
+    `);
+    await clickRecoveryControl("#confirm-local-draft-policy");
+  };
+  const editRecoveryCue = async (text: string, variant: "saved" | "unsaved") => {
+    await execute(`
+      const cue = document.querySelector(".cue-block .cue-block-body");
+      if (!(cue instanceof HTMLButtonElement)) throw new Error("복구 검증용 자막 없음");
+      cue.click();
+      const input = document.querySelector("#cue-text");
+      if (!(input instanceof HTMLTextAreaElement)) throw new Error("자막 입력 없음");
+      input.focus(); input.value = arguments[0];
+      input.dispatchEvent(new Event("input", { bubbles: true })); input.blur();
+      const values = arguments[1] === "saved"
+        ? { "cue-start": "00:00.125", "cue-end": "00:01.875", "font-size": "5.25", "font-color": "#5ca8ef", "cue-x": "37" }
+        : { "cue-start": "00:00.625", "cue-end": "00:03.125", "font-size": "8.25", "font-color": "#ed726a", "cue-x": "61" };
+      for (const [id, value] of Object.entries(values)) {
+        const control = document.getElementById(id);
+        if (!(control instanceof HTMLInputElement)) throw new Error("자막 속성 입력 없음: " + id);
+        control.value = value;
+        if (!id.startsWith("cue-s") && id !== "cue-end") control.dispatchEvent(new Event("input", { bubbles: true }));
+        control.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return true;
+    `, [text, variant]);
+    const expected = variant === "saved"
+      ? { start: 125, end: 1875, scale: 0.0525, color: "#5ca8ef", x: 0.37 }
+      : { start: 625, end: 3125, scale: 0.0825, color: "#ed726a", x: 0.61 };
+    return waitFor(
+      () => readBrowserProject(freshProjectId),
+      (value) => Boolean(value?.subtitles.some((cue) => cue.text === text
+        && cue.startOffsetMs === expected.start && cue.endOffsetMs === expected.end
+        && cue.fontScale === expected.scale && cue.color === expected.color && cue.x === expected.x)),
+      "실제 자막 입력의 본문·밀리초 시각·스타일이 CURRENT에 기록되지 않았습니다."
+    );
+  };
+  const saveRecoveryVersion = async (expected: EditorProject, restored = false) => {
+    const previousIds = new Set((await readBrowserLocalDrafts(freshProjectId)).map(({ id }) => id));
+    await clickRecoveryControl(restored ? "#save-restored-local-draft" : "#create-local-draft");
+    const drafts = await waitFor(
+      () => readBrowserLocalDrafts(freshProjectId),
+      (value) => value.some((draft) => draft.reason === "manual" && !previousIds.has(draft.id)
+        && recoveryContent(draft.project) === recoveryContent(expected)),
+      "명시적 저장이 동일 내용의 새 수동 버전으로 기록되지 않았습니다."
+    );
+    if (restored) await waitFor(readRecoveryState,
+      (value) => value.open && !value.busy && value.state === "saved",
+      "불러온 버전의 명시적 저장 완료가 열린 모달에 표시되지 않았습니다.");
+    return drafts.find((draft) => draft.reason === "manual" && !previousIds.has(draft.id))!;
+  };
+
+  const newRecoveryEntry = await readRecoveryState();
+  assert(newRecoveryEntry.purpose === "editor-new" && !newRecoveryEntry.recovery,
+    "최초 seed 진입의 editor-new 목적이 변했습니다.");
+  await clickRecoveryControl("#add-cue");
+  const manualB = await editRecoveryCue("복구 검증 · 직접 저장한 B", "saved");
+  assert(manualB, "직접 저장할 B 프로젝트가 없습니다.");
+  const manualBDraft = await saveRecoveryVersion(manualB);
+  const unsavedC = await editRecoveryCue("복구 검증 · 폐기할 C", "unsaved");
+  assert(unsavedC && unsavedC.subtitles.length === manualB.subtitles.length,
+    "복구 비교는 자막 개수가 같은 서로 다른 내용이어야 합니다.");
+  await saveAndExitActiveEditor("새 프로젝트 B 저장 뒤 C 폐기", "discard");
+  await waitForRecoveryContent(manualB, "새 프로젝트 폐기 뒤 B durable 기준");
+  await resumeSavedEditorProject(freshProjectId, "명시 저장 B 계속 편집");
+  await waitForRecoveryContent(manualB, "계속 편집에서 B 정확히 재개");
+  const currentC = await editRecoveryCue("복구 검증 · 복구 직전 C", "unsaved");
+  assert(currentC, "복구 직전 C 프로젝트가 없습니다.");
+  await clickRecoveryControl("#open-local-drafts");
+  await selectRecoveryDraft(manualBDraft.id);
+  const normalSelection = await readRecoveryState();
+  assert(normalSelection.open && !normalSelection.restoreDisabled
+    && normalSelection.purpose === "editor-resume"
+    && normalSelection.restoreLabel.includes("복구 확인하고 계속"),
+  "일반 재개의 저장본 선택이 실행 가능한 복구 확인으로 이어지지 않습니다.");
+  await clickRecoveryControl("#restore-local-draft");
+  const uncheckedRecovery = await readRecoveryState();
+  assert(uncheckedRecovery.policyVisible && uncheckedRecovery.ackCount === 6
+    && uncheckedRecovery.checkedCount === 0 && uncheckedRecovery.purpose === "editor-resume",
+  "복구 확인이 새 체크 6개를 요구하지 않거나 확인 전에 목적을 바꿨습니다.");
+  await clickRecoveryControl("#confirm-local-draft-policy");
+  const missingRecoveryAck = await readRecoveryState();
+  assert(missingRecoveryAck.state === "error" && missingRecoveryAck.role === "alert"
+    && missingRecoveryAck.purpose === "editor-resume" && missingRecoveryAck.policyVisible,
+  "미선택 복구 확인이 차단되지 않았습니다.");
+  await clickRecoveryControl("#cancel-local-draft-policy");
+  const cancelledRecovery = await readRecoveryState();
+  assert(!cancelledRecovery.policyVisible && cancelledRecovery.selectedId === manualBDraft.id,
+    "복구 확인 취소가 선택한 저장본을 잃었습니다.");
+  await waitForRecoveryContent(currentC, "복구 확인 취소 후 현재 C 보존");
+
+  // Exercise the real BroadcastChannel admission boundary using a synthetic
+  // second instance in this isolated browser, without another editor writer.
+  await execute(`
+    const channel = new BroadcastChannel("kirinuki:local-web:editor-instances-v1");
+    channel.onmessage = ({ data }) => {
+      if (data?.type === "ping" && data.projectId === arguments[0]) channel.postMessage({
+        type: "pong", projectId: data.projectId, requestId: data.requestId,
+        instanceId: "synthetic-recovery-second-editor"
+      });
+    };
+    globalThis.__kirinukiRecoverySecondEditor = channel;
+    return true;
+  `, [freshProjectId]);
+  try {
+    await clickRecoveryControl("#restore-local-draft");
+    await confirmRecoveryAcknowledgements();
+    await waitFor(readRecoveryState,
+      (value) => !value.busy && value.state === "error" && value.message.includes("탭이 둘 이상"),
+      "다른 편집 탭이 있는 복구 확인이 차단되지 않았습니다.");
+    await waitForRecoveryContent(currentC, "다른 탭 guard 이후 현재 C 보존");
+  } finally {
+    await execute(`globalThis.__kirinukiRecoverySecondEditor.close(); delete globalThis.__kirinukiRecoverySecondEditor; return true;`);
+  }
+  await clickRecoveryControl("#restore-local-draft");
+  await execute(`
+    const key = "kirinuki:local-web:active-usage-session";
+    const raw = sessionStorage.getItem(key);
+    if (!raw) throw new Error("합성 세션 없음");
+    globalThis.__kirinukiRecoveryOriginalSession = raw;
+    const session = JSON.parse(raw);
+    session.sessionLeaseId = session.sessionLeaseId === "0".repeat(64) ? "1".repeat(64) : "0".repeat(64);
+    sessionStorage.setItem(key, JSON.stringify(session));
+    return true;
+  `);
+  try {
+    await confirmRecoveryAcknowledgements();
+    await waitFor(readRecoveryState,
+      (value) => !value.busy && value.state === "error" && value.purpose === "editor-resume",
+      "확인 도중 바뀐 lease가 복구 권한으로 승격됐습니다.");
+    await waitForRecoveryContent(currentC, "잘못된 lease 이후 현재 C 보존");
+  } finally {
+    await execute(`
+      sessionStorage.setItem("kirinuki:local-web:active-usage-session", globalThis.__kirinukiRecoveryOriginalSession);
+      delete globalThis.__kirinukiRecoveryOriginalSession; return true;
+    `);
+  }
+  await clickRecoveryControl("#restore-local-draft");
+  await confirmRecoveryAcknowledgements();
+  await waitFor(readRecoveryState,
+    (value) => !value.busy && !value.policyVisible && value.state === "confirmed"
+      && value.purpose === "editor-recovery" && value.recovery === "drafts"
+      && !value.restoreDisabled && value.restoreLabel.includes("선택한 버전 불러오기"),
+    "새 복구 확인이 동일 편집기 안의 recovery 목적과 URL을 함께 갱신하지 못했습니다.");
+  await waitForRecoveryContent(currentC, "확인만 마친 단계에서 현재 C 보존");
+  await clickRecoveryControl("#restore-local-draft");
+  const restoredInEditor = await waitFor(readRecoveryState,
+    (value) => value.open && !value.busy && value.state === "restored" && value.saveVisible,
+    "일반 재개에서 선택한 B 복구를 마치지 못했습니다.", 25_000);
+  assert(restoredInEditor.role === "status" && restoredInEditor.live === "polite"
+    && restoredInEditor.focusedStatus && restoredInEditor.restoreDisabled,
+  "복구 완료의 접근성 상태·포커스·중복 복구 잠금이 올바르지 않습니다.");
+  await waitForRecoveryContent(manualB, "선택한 B 내용 정확히 복구");
+  assert((await readBrowserLocalDrafts(freshProjectId)).some((draft) => draft.reason === "pre-restore"
+    && recoveryContent(draft.project) === recoveryContent(currentC)),
+  "복구 직전 C가 pre-restore로 보존되지 않았습니다.");
+  await saveRecoveryVersion(manualB, true);
+  await clickRecoveryControl("#close-local-draft-dialog");
+  const laterD = await editRecoveryCue("복구 검증 · 홈에서 되돌릴 D", "unsaved");
+  assert(laterD, "홈 복구 이전 D 프로젝트가 없습니다.");
+  await saveRecoveryVersion(laterD);
+  await saveAndExitActiveEditor("홈 복구 진입 전 D 저장");
+  await resumeSavedEditorProject(freshProjectId, "홈 복구본 선택으로 진입", "recover");
+  await waitFor(readRecoveryState,
+    (value) => value.open && !value.busy && value.purpose === "editor-recovery" && value.recovery === "drafts",
+    "홈 복구 진입이 초기화 뒤 recovery URL과 자동 저장본 목록을 유지하지 못했습니다.");
+  await selectRecoveryDraft(manualBDraft.id);
+  await clickRecoveryControl("#restore-local-draft");
+  const homeRecovery = await waitFor(readRecoveryState,
+    (value) => value.open && !value.busy && value.state === "restored" && value.saveVisible,
+    "홈에서 고른 과거 B 저장본을 복구하지 못했습니다.", 25_000);
+  await waitForRecoveryContent(manualB, "홈 복구의 B 텍스트·타이밍·스타일");
+  await saveRecoveryVersion(manualB, true);
+  await webdriver("POST", `/session/${sessionId}/refresh`, {});
+  const reloadedRecovery = await waitFor(readRecoveryState,
+    (value) => value.open && !value.busy && value.purpose === "editor-recovery" && value.recovery === "drafts",
+    "복구 저장 뒤 reload에서 목적·URL·자동 목록이 유지되지 않았습니다.", 25_000);
+  await waitForRecoveryContent(manualB, "복구 명시 저장과 reload 이후 정확한 B");
+  await clickRecoveryControl("#close-local-draft-dialog");
+  await saveAndExitActiveEditor("복구 reload 뒤 홈으로 나가기");
+  await resumeSavedEditorProject(freshProjectId, "복구 B 홈 계속 편집");
+  await waitForRecoveryContent(manualB, "복구 저장 B를 일반 재개로 이어편집");
+  const recoveryJourney = {
+    newManualSaveDiscardResume: "exact-B-preserved",
+    sameCueCountDifferentTextTimingStyle: true,
+    freshInEditorConfirmation: "six-unchecked-required-cancel-preserves-current",
+    duplicateTabAndChangedLease: "rejected-current-preserved",
+    preRestore: "exact-C-retained",
+    restoredInEditor,
+    homeRecovery,
+    reloadedRecovery
   };
 
   await saveAndExitActiveEditor("동적 fixture 설치 전 B 세션 종료");
@@ -4881,6 +5194,95 @@ async function main(): Promise<void> {
     "검색·필터·검수 이동이 자막 내용 또는 타이밍을 변경했습니다."
   );
   process.stderr.write("[browser-smoke] 자막 검색·검수 필터·레인 간 이동·원문 보존 검증 완료\n");
+  const uploadLaneSmokeImage = async (name: string, expectedCount: number) => {
+    await execute(`
+      const canvas = document.createElement("canvas");
+      canvas.width = 24; canvas.height = 24;
+      const context = canvas.getContext("2d");
+      context.fillStyle = arguments[0].includes("second") ? "#64c8ff" : "#ff8464";
+      context.fillRect(0, 0, 24, 24);
+      const bytes = Uint8Array.from(atob(canvas.toDataURL("image/png").split(",")[1]), (c) => c.charCodeAt(0));
+      const input = document.querySelector("#asset-input");
+      if (!(input instanceof HTMLInputElement)) throw new Error("이미지 파일 입력 없음");
+      const files = new DataTransfer();
+      files.items.add(new File([bytes], arguments[0] + ".png", { type: "image/png" }));
+      input.files = files.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    `, [name]);
+    await waitFor(() => execute<number>(`return document.querySelectorAll(".asset-block").length;`),
+      (count) => count === expectedCount, "실제 이미지 파일 입력이 타임라인에 추가되지 않았습니다.");
+  };
+  const readImageLaneState = () => execute<{
+    count: number; rows: number; lanes: string[]; ids: string[];
+    overlayIds: string[]; loadedImages: number; removeDisabled: boolean;
+  }>(`
+    return {
+      count: Number(document.querySelector("#image-lane-count")?.textContent),
+      rows: document.querySelectorAll(".image-lane-row").length,
+      lanes: [...document.querySelectorAll(".asset-block")].map((item) => item.dataset.lane),
+      ids: [...document.querySelectorAll(".asset-block")].map((item) => item.dataset.id),
+      overlayIds: [...document.querySelectorAll(".image-asset-overlay")].map((item) => item.dataset.assetId),
+      loadedImages: [...document.querySelectorAll(".image-asset-overlay img")]
+        .filter((item) => item.complete && item.naturalWidth === 24).length,
+      removeDisabled: Boolean(document.querySelector("#remove-image-lane")?.disabled)
+    };
+  `);
+  await uploadLaneSmokeImage("main-first", 1);
+  await uploadLaneSmokeImage("main-second", 2);
+  const mainImagesBeforeRows = await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.imageAssets.length === 2, "본편 이미지 두 개가 저장되지 않았습니다.");
+  const mainImageRows = await readImageLaneState();
+  assert(mainImageRows.count === 2 && mainImageRows.rows === 2
+    && mainImageRows.lanes.join(",") === "0,1" && mainImageRows.removeDisabled,
+  `동시 이미지가 독립 레인에 배치되지 않았습니다: ${JSON.stringify(mainImageRows)}`);
+  const emptyLaneControls = await execute<{
+    imageAdded: number; imageRemoved: number; captionsAdded: number; captionsRemoved: number;
+  }>(`
+    document.querySelector("#add-image-lane").click();
+    const imageAdded = Number(document.querySelector("#image-lane-count").textContent);
+    document.querySelector("#remove-image-lane").click();
+    const imageRemoved = Number(document.querySelector("#image-lane-count").textContent);
+    document.querySelector("#add-subtitle-lane").click();
+    const captionsAdded = Number(document.querySelector("#subtitle-lane-count").textContent);
+    document.querySelector("#remove-subtitle-lane").click();
+    return { imageAdded, imageRemoved, captionsAdded,
+      captionsRemoved: Number(document.querySelector("#subtitle-lane-count").textContent) };
+  `);
+  assert(emptyLaneControls.imageAdded === 3 && emptyLaneControls.imageRemoved === 2
+    && emptyLaneControls.captionsAdded === 3 && emptyLaneControls.captionsRemoved === 2,
+  `빈 레인 추가·제거가 올바르지 않습니다: ${JSON.stringify(emptyLaneControls)}`);
+  await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.imageLaneCount === 2 && value.subtitleLaneCount === 2
+      && JSON.stringify(value.imageAssets) === JSON.stringify(mainImagesBeforeRows?.imageAssets)
+      && JSON.stringify(value.subtitles) === JSON.stringify(mainImagesBeforeRows?.subtitles),
+    "빈 레인 추가·제거가 이미지·자막의 내용 또는 타이밍을 변경했습니다.");
+  const imageDragPoint = await execute<{ x: number; y: number }>(`
+    const body = document.querySelector('.asset-block[data-lane="1"] .asset-block-body');
+    if (!(body instanceof HTMLButtonElement)) throw new Error("끌어 옮길 이미지 없음");
+    body.scrollIntoView({ block: "center", inline: "center" });
+    const rect = body.getBoundingClientRect();
+    return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+  `);
+  await webdriver("POST", `/session/${sessionId}/actions`, { actions: [{
+    type: "pointer", id: "image-lane-drag", parameters: { pointerType: "mouse" }, actions: [
+      { type: "pointerMove", duration: 0, origin: "viewport", ...imageDragPoint },
+      { type: "pointerDown", button: 0 },
+      { type: "pointerMove", duration: 100, origin: "viewport", x: imageDragPoint.x + 1, y: imageDragPoint.y - 47 },
+      { type: "pointerUp", button: 0 }
+    ]
+  }] });
+  const draggedImageRows = await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.imageAssets.map(({ lane }) => lane).join(",") === "0,0",
+    "실제 포인터로 이미지 레인 사이를 이동하지 못했습니다.");
+  assert(draggedImageRows?.imageAssets.every((asset, index) => {
+    const before = mainImagesBeforeRows?.imageAssets[index];
+    return before && asset.id === before.id && asset.startOffsetMs === before.startOffsetMs
+      && asset.endOffsetMs === before.endOffsetMs && asset.x === before.x && asset.y === before.y;
+  }), "수직 이미지 레인 이동이 이미지 시각 또는 화면 위치를 변경했습니다.");
+  await execute(`document.querySelector("#undo").click(); return true;`);
+  await waitFor(readImageLaneState, (value) => value.lanes.join(",") === "0,1",
+    "이미지 레인 이동을 실행 취소하지 못했습니다.");
   const longFormOrderJourney = await execute<{
     initial: string[];
     afterFirst: string[];
@@ -5029,6 +5431,48 @@ async function main(): Promise<void> {
     "A 쇼츠 작업의 겹침 레이어 fixture를 열지 못했습니다.",
     20_000
   );
+  await uploadLaneSmokeImage("short-first", 1);
+  await uploadLaneSmokeImage("short-second", 2);
+  const shortImageRows = await waitFor(readImageLaneState,
+    (value) => value.count === 2 && value.loadedImages === 2 && value.overlayIds.join(",") === value.ids.join(","),
+    "쇼츠에서 이미지 두 개가 같은 시각에 원래 겹침 순서로 표시되지 않았습니다.");
+  const shortImagesBeforeRows = await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.shortForm.imageAssets.length === 2, "쇼츠 이미지 두 개가 저장되지 않았습니다.");
+  await execute(`
+    document.querySelector("#add-image-lane").click();
+    const select = document.querySelector("#asset-lane");
+    if (!(select instanceof HTMLSelectElement)) throw new Error("이미지 레인 선택 없음");
+    select.value = "2";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  `);
+  await waitFor(readImageLaneState, (value) => value.count === 3 && value.lanes.join(",") === "0,2",
+    "선택한 이미지의 레인을 변경하지 못했습니다.");
+  await execute(`document.querySelector("#remove-image-lane").click(); return true;`);
+  await waitFor(readImageLaneState,
+    (value) => value.count === 2 && value.lanes.join(",") === "0,1"
+      && value.loadedImages === 2 && value.overlayIds.join(",") === shortImageRows.ids.join(","),
+    "비어 있는 중간 이미지 레인 제거가 화면 겹침 순서 또는 이미지를 변경했습니다.");
+  const imageContentWithoutLane = (assets: EditorProject["imageAssets"] = []) => JSON.stringify(
+    assets.map(({ lane: _lane, updatedAt: _updatedAt, ...content }) => content)
+  );
+  const shortImagesAfterRows = await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.shortForm.imageLaneCount === 2
+      && value.shortForm.imageAssets.map(({ lane }) => lane).join(",") === "0,1",
+    "쇼츠 이미지 레인 변경이 저장되지 않았습니다.");
+  assert(imageContentWithoutLane(shortImagesBeforeRows?.shortForm.imageAssets)
+    === imageContentWithoutLane(shortImagesAfterRows?.shortForm.imageAssets),
+  "이미지 레인 변경이 이미지의 원본·시각·화면 위치·크기·불투명도·순서를 변경했습니다.");
+  const videoLaneControls = await execute<{ before: number; added: number; removed: number }>(`
+    const before = Number(document.querySelector("#video-lane-count").textContent);
+    document.querySelector("#add-video-lane").click();
+    const added = Number(document.querySelector("#video-lane-count").textContent);
+    document.querySelector("#remove-video-lane").click();
+    return { before, added, removed: Number(document.querySelector("#video-lane-count").textContent) };
+  `);
+  assert(videoLaneControls.added === videoLaneControls.before + 1
+    && videoLaneControls.removed === videoLaneControls.before,
+  `빈 쇼츠 영상 레인 추가·제거가 올바르지 않습니다: ${JSON.stringify(videoLaneControls)}`);
   await execute(`
     const name = document.querySelector("#short-workspace-name");
     if (!(name instanceof HTMLInputElement)) throw new Error("A 쇼츠 작업명 입력 없음");
@@ -5369,6 +5813,14 @@ async function main(): Promise<void> {
     .find(({ id }) => id === shortWorkspaceA.activeId);
   const persistedWorkspaceB = persistedShortWorkspaces?.shortFormWorkspaces.workspaces
     .find(({ id }) => id === shortWorkspaceB.activeId);
+  assert(persistedWorkspaceA?.shortForm.imageLaneCount === 2
+    && imageContentWithoutLane(persistedWorkspaceA.shortForm.imageAssets)
+      === imageContentWithoutLane(shortImagesBeforeRows?.shortForm.imageAssets)
+    && persistedWorkspaceB?.shortForm.imageLaneCount === 1
+    && persistedWorkspaceB.shortForm.imageAssets.length === 0
+    && persistedShortWorkspaces?.imageLaneCount === 2
+    && persistedShortWorkspaces.imageAssets.map(({ id }) => id).join(",") === mainImageRows.ids.join(","),
+  "쇼츠 A/B와 본편의 이미지 또는 레인 수가 서로 섞였습니다.");
   assert(
     persistedWorkspaceA
       && persistedWorkspaceB
@@ -5428,6 +5880,9 @@ async function main(): Promise<void> {
     "B 쇼츠의 URL identity·자막·빈 영상 상태가 reload 뒤 복원되지 않았습니다.",
     20_000
   );
+  const reloadedBImageRows = await readImageLaneState();
+  assert(reloadedBImageRows.count === 1 && reloadedBImageRows.ids.length === 0,
+    "B 쇼츠 재진입에 A 또는 본편 이미지 레인이 섞였습니다.");
   await execute(`
     const select = document.querySelector("#short-workspace-select");
     if (!(select instanceof HTMLSelectElement)) throw new Error("쇼츠 작업 선택기 없음");
@@ -5462,6 +5917,10 @@ async function main(): Promise<void> {
     ),
     "B reload 뒤 A 쇼츠로 전환했을 때 영상·자막이 섞였습니다."
   );
+  await waitFor(readImageLaneState,
+    (value) => value.count === 2 && value.lanes.join(",") === "0,1"
+      && value.ids.join(",") === shortImageRows.ids.join(",") && value.loadedImages === 2,
+    "저장·재진입·A/B 전환 뒤 A의 이미지 두 개 또는 레인 위치가 복원되지 않았습니다.");
   await saveAndExitActiveEditor("A 쇼츠 영속 재진입");
   const workspaceAResume = await resumeSavedEditorProject(
     freshProjectId,
@@ -5515,6 +5974,7 @@ async function main(): Promise<void> {
       ...longFormOrderJourney,
       reloaded: reloadedLongFormOrder.clipIds
     },
+    imageLanes: { main: mainImageRows, short: shortImageRows, emptyLaneControls, videoLaneControls },
     shortLayers: shortLayerDeleteJourney,
     workspaces: {
       aId: shortWorkspaceA.activeId,
@@ -5672,6 +6132,7 @@ async function main(): Promise<void> {
         bMediaAsset: freshProject?.mediaAsset ?? null
       }
     },
+    recoveryJourney,
     deepEditorJourney: deepWorkspaceJourney,
     completedEditorExit: {
       href: completedEditorExit.href,

@@ -297,8 +297,8 @@ test("웹 편집 종료는 진입 baseline을 먼저 잡고 명시적 저장·�
   assert.match(html, /id="save-and-exit-editing-session"[^>]*>이 기기에 저장하고 나가기</u);
   assert.match(html, /id="discard-and-exit-editing-session"[^>]*>저장하지 않고 나가기</u);
   assert.match(html, /id="cancel-editing-session-exit"[^>]*>취소</u);
-  assert.match(html, /탭을 그냥 닫으면 이번 변경은 저장되지 않습니다/u);
-  assert.match(html, /직접 만든 저장본은 남기고,[\s\S]*나머지는 열기 전 상태로 자동 정리합니다/u);
+  assert.match(html, /마지막으로 직접 저장한 뒤의 변경만 버립니다\. 이번에 직접 저장하지 않았다면 열기 전 상태로 돌아갑니다\./u);
+  assert.match(html, /탭을 닫으면 마지막으로 직접 저장한 상태는 남고, 그 이후 저장하지 않은 변경과 임시 복구본은 다음 시작 화면에서 정리됩니다\./u);
   assert.ok(writerLockIndex >= 0, "프로젝트 writer lock을 찾지 못했습니다.");
   assert.ok(
     checkpointIndex > writerLockIndex,
@@ -312,18 +312,19 @@ test("웹 편집 종료는 진입 baseline을 먼저 잡고 명시적 저장·�
   );
   assert.match(
     finish,
-    /const finalProject = await flushSave\(\);[\s\S]*commitEditingSessionCheckpoint\([\s\S]*finalProject[\s\S]*committed !== true/u
+    /const finalProject = await flushSave\(\);[\s\S]*await waitForProjectSaves\(\);[\s\S]*await localDraftOperationQueue;[\s\S]*await saveCurrentLocalDraft\("manual"\);[\s\S]*commitEditingSessionCheckpoint\([\s\S]*finalProject[\s\S]*committed !== true/u
   );
   assert.match(
     finish,
     /editorSessionCompleted = true;[\s\S]*await waitForProjectSaves\(\);[\s\S]*discardEditingSessionCheckpoint\([\s\S]*discarded !== true/u
   );
   assert.match(finish, /leaveCompletedStudioEditor\(\)/u);
+  assert.match(finish, /마지막 직접 저장 이후의 변경을 버리는 중…/u);
   for (const passiveExit of [beforeUnload, pageHide]) {
     assert.match(passiveExit, /flushSave\(\)/u);
     assert.doesNotMatch(
       passiveExit,
-      /commitEditingSessionCheckpoint|discardEditingSessionCheckpoint/u
+      /commitEditingSessionCheckpoint|discardEditingSessionCheckpoint|saveCurrentLocalDraft/u
     );
   }
 });

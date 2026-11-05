@@ -5143,6 +5143,64 @@ svg {
   height: var(--asset-track-height);
 }
 
+.image-lane-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 47px;
+  border-bottom: 1px solid var(--line);
+  padding: 2px 4px;
+  color: var(--subtle);
+  font-size: 8px;
+  pointer-events: none;
+}
+
+.track-labels .asset-track-label {
+  align-items: flex-start;
+  padding-top: 12px;
+}
+
+.track-labels .asset-track-label,
+.track-labels .caption-track-label,
+.editor-shell[data-workspace="short-form"] .track-labels .video-track-label {
+  gap: 3px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.track-labels .caption-track-label button,
+.editor-shell[data-workspace="short-form"] .track-labels .video-track-label button {
+  width: 18px;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.track-label .lane-actions {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: auto;
+}
+
+.track-labels .asset-track-label button {
+  width: 18px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line-bright);
+  border-radius: 5px;
+  color: #99cbff;
+  background: var(--panel-raised);
+}
+
+.track-labels .asset-track-label button:disabled {
+  opacity: 0.35;
+}
+
+.track-labels #remove-subtitle-lane,
+.track-labels #remove-video-lane {
+  flex-shrink: 0;
+  margin-left: 3px;
+}
+
 .audio-track {
   height: var(--audio-track-height);
 }
@@ -7047,3 +7105,10 @@ svg {
     grid-template-columns: 1fr;
   }
 }
+
+/* Recovery confirmation stays inside the version dialog. */
+.recovery-ack-list { display: grid; gap: 12px; margin: 16px 0; }
+.recovery-ack-list label { display: flex; align-items: flex-start; gap: 9px; line-height: 1.55; }
+.recovery-ack-list input { flex: 0 0 auto; margin-top: 4px; }
+#local-draft-operation-status[data-state="error"] { color: var(--danger, #e86d6d); }
+#local-draft-target { overflow-wrap: anywhere; }
