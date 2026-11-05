@@ -279,7 +279,8 @@ test("편집 세션은 진입 baseline 뒤 작업 사본을 저장하고 명시�
   ]) {
     assert.match(html, new RegExp(`id="${id}"`, "u"));
   }
-  assert.match(html, /탭을 그냥 닫으면 이번 변경은 저장되지 않습니다/u);
+  assert.match(html, /마지막으로 직접 저장한 뒤의 변경만 버립니다\. 이번에 직접 저장하지 않았다면 열기 전 상태로 돌아갑니다\./u);
+  assert.match(html, /탭을 닫으면 마지막으로 직접 저장한 상태는 남고, 그 이후 저장하지 않은 변경과 임시 복구본은 다음 시작 화면에서 정리됩니다\./u);
   assert.match(
     source,
     /feature === "Whisper"[\s\S]*현재 공개 설치판은 Whisper를 제공하지 않습니다\.[\s\S]*설치 안내가 보이면 이 PC용 영상 준비 도구를 한 번 설치한 뒤 같은 버튼을 다시 눌러 주세요\./u
@@ -314,8 +315,16 @@ test("편집 세션은 진입 baseline 뒤 작업 사본을 저장하고 명시�
   );
   assert.match(
     finish,
-    /const finalProject = await flushSave\(\)[\s\S]*await waitForProjectSaves\(\)[\s\S]*commitEditingSessionCheckpoint\([\s\S]*finalProject/u
+    /const finalProject = await flushSave\(\)[\s\S]*await waitForProjectSaves\(\)[\s\S]*await localDraftOperationQueue;[\s\S]*await saveCurrentLocalDraft\("manual"\);[\s\S]*commitEditingSessionCheckpoint\([\s\S]*finalProject/u
   );
+  const manualSaveIndex = finish.indexOf('await saveCurrentLocalDraft("manual")');
+  const completedIndex = finish.indexOf("editorSessionCompleted = true;");
+  const generationIndex = finish.indexOf("advanceProjectSessionGeneration()");
+  const commitIndex = finish.indexOf("await commitEditingSessionCheckpoint(");
+  assert.ok(manualSaveIndex >= 0, "종료 저장도 지금 저장과 같은 명시적 저장 기준을 남겨야 합니다.");
+  assert.ok(completedIndex > manualSaveIndex, "명시적 저장 실패 전에 편집을 완료 상태로 잠그면 안 됩니다.");
+  assert.ok(generationIndex > completedIndex);
+  assert.ok(commitIndex > generationIndex, "명시적 저장과 이전 쓰기 세대 정리가 끝난 뒤 checkpoint를 확정해야 합니다.");
   assert.match(
     finish,
     /discardPendingProjectSave\(\)[\s\S]*await waitForProjectSaves\(\)[\s\S]*discardEditingSessionCheckpoint\(/u
@@ -331,6 +340,6 @@ test("편집 세션은 진입 baseline 뒤 작업 사본을 저장하고 명시�
   assert.match(unload, /void flushSave\(\)/u);
   assert.doesNotMatch(
     unload,
-    /commitEditingSessionCheckpoint|discardEditingSessionCheckpoint/u
+    /commitEditingSessionCheckpoint|discardEditingSessionCheckpoint|saveCurrentLocalDraft/u
   );
 });

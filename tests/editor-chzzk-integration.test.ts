@@ -1481,7 +1481,7 @@ test("fresh editor-new만 지원 VOD 최초 ±10초 준비를 한 번 자동 시
   );
   assert.match(
     initialize,
-    /resolveStudioEditorEntry\(\{[\s\S]*checkpointBaselineHasProject: checkpoint\.baseline\.project !== null[\s\S]*"new-project-collision":[\s\S]*새 편집 ID가 이 기기의 저장 프로젝트와 충돌했습니다/u,
+    /resolveStudioEditorEntry\(\{[\s\S]*checkpointBaselineHasProject: checkpoint\.initialProjectPresent \?\? checkpoint\.baseline\.project !== null[\s\S]*"new-project-collision":[\s\S]*새 편집 ID가 이 기기의 저장 프로젝트와 충돌했습니다/u,
     "editor-new ID 충돌은 기존 CURRENT와 병합하지 않고 거부해야 합니다."
   );
   assert.doesNotMatch(

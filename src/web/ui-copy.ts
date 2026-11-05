@@ -7,6 +7,11 @@ import type {
 } from "../lib/ui-localization.js";
 
 const studioStaticCopy = {
+  "선택한 저장 작업을 엽니다. 다른 원본으로 새 작업을 만들려면 먼저 선택을 취소해 주세요.": { en: "Open the selected saved edit. To start a new project with another source, cancel this selection first.", ja: "選択した保存済み作業を開きます。別の元動画で新しい作業を始めるには、まず選択をキャンセルしてください。" },
+  "선택 취소하고 새 편집": { en: "Cancel selection and start new edit", ja: "選択をキャンセルして新規編集" },
+  "복구본 선택으로 계속": { en: "Continue to recovery versions", ja: "復元バージョンの選択へ" },
+  "저장한 편집 이어서 열기": { en: "Resume saved edit", ja: "保存した編集を再開" },
+  "직접 저장한 버전 5개와 임시 복구본 5개 중에서 선택": { en: "Choose from five saved versions and five temporary recovery snapshots", ja: "直接保存した5件と一時復元用の5件から選択" },
   "삭제 되돌리기": {
     en: "Undo cut deletion",
     ja: "カット削除を元に戻す"
@@ -806,6 +811,11 @@ export const CUT_UI_COPY_CATALOG: UiCopyCatalog = mergeUiCopyCatalogs(
 );
 
 export const CUT_UI_COPY_PATTERNS = [
+  {
+    source: /^저장으로 확정하지 않은 이전 작업 ([0-9,.]+)개를 정리했습니다\. 마지막 직접 저장 상태는 남기고 이후 미저장 변경만 정리했습니다\.$/u,
+    en: "Cleaned up $1 unfinished edits. The last explicit saves were kept; only later unsaved changes were discarded.",
+    ja: "未完了の編集 $1 件を整理しました。最後に直接保存した状態を残し、その後の未保存の変更だけを破棄しました。"
+  },
   {
     source: /^길이 ([0-9:.]+)$/u,
     en: "Length $1",

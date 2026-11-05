@@ -6,12 +6,15 @@ import {
   WEB_STUDIO_SESSION_STORAGE_KEY,
   WEB_STUDIO_TRANSITION_GENERATION_KEY,
   beginWebEditorSession,
+  bindStudioEditorProject,
+  confirmStudioRecoverySession,
   clearCurrentTabWebEditorSession,
   completeStudioEditorSession,
   runStudioSourceAction,
   studioEditorReady,
   verifyStudioUsagePolicyGate
 } from "../src/editor/studio-runtime-web.js";
+import type { ActiveStudioUsagePolicySession } from "../src/editor/studio-runtime-web.js";
 import {
   USAGE_POLICY_CONFIRMATION_PHRASE,
   createPerUseConfirmationAttestation
@@ -105,6 +108,56 @@ async function withWebRuntimeGlobals(
     }
   }
 }
+
+test("편집기 안의 복구 확인은 exact session/source를 유지하고 새 목적을 reload에 보존한다", async () => {
+  await withWebRuntimeGlobals(async (storage) => {
+    const projectId = "recovery-transition";
+    const sourceSessionId = "vod:recovery-transition";
+    const opened = await beginWebEditorSession({ attestation: attestation({ projectId, sourceSessionId }) });
+    const admitted = await verifyStudioUsagePolicyGate({ projectId, gateToken: opened.gateToken });
+    assert.equal(admitted.ok, true);
+    const expected = admitted.usagePolicy as ActiveStudioUsagePolicySession;
+    bindStudioEditorProject(projectId);
+    const proof = createPerUseConfirmationAttestation({
+      target: { projectId, sourceSessionId, purpose: "editor-recovery" },
+      confirmationText: USAGE_POLICY_CONFIRMATION_PHRASE
+    });
+    const before = storage.getItem(WEB_STUDIO_SESSION_STORAGE_KEY);
+    for (const patch of [{ projectId: "other" }, { sourceSessionId: "other" }, { sessionLeaseId: "0".repeat(64) }, { transitionGeneration: expected.transitionGeneration + 1 }]) {
+      assert.throws(() => confirmStudioRecoverySession({ expected: { ...expected, ...patch }, attestation: proof }));
+      assert.equal(storage.getItem(WEB_STUDIO_SESSION_STORAGE_KEY), before);
+    }
+    assert.throws(() => confirmStudioRecoverySession({ expected, attestation: { ...proof, target: { ...proof.target, sourceSessionId: "other" } } }));
+    assert.equal(storage.getItem(WEB_STUDIO_SESSION_STORAGE_KEY), before);
+    const confirmed = confirmStudioRecoverySession({ expected, attestation: proof });
+    assert.equal(confirmed.purpose, "editor-recovery");
+    assert.equal(confirmed.sessionLeaseId, expected.sessionLeaseId);
+    assert.equal(confirmed.transitionGeneration, expected.transitionGeneration);
+    assert.deepEqual((await verifyStudioUsagePolicyGate({ projectId, gateToken: "" })).usagePolicy, confirmed);
+    assert.throws(() => confirmStudioRecoverySession({ expected, attestation: proof }), /복구 확인/u);
+    bindStudioEditorProject("");
+  });
+});
+
+test("복구 확인은 미입장·만료·교체된 탭 세션을 승격하지 않는다", async () => {
+  await withWebRuntimeGlobals(async (storage) => {
+    const projectId = "recovery-unadmitted";
+    const sourceSessionId = "vod:recovery-unadmitted";
+    const opened = await beginWebEditorSession({ attestation: attestation({ projectId, sourceSessionId }) });
+    const unadmitted = JSON.parse(storage.getItem(WEB_STUDIO_SESSION_STORAGE_KEY) || "null") as { sessionLeaseId: string; transitionGeneration: number };
+    const expected: ActiveStudioUsagePolicySession = { projectId, sourceSessionId, purpose: "editor-new", basis: "per-use-confirmation", confirmedAt: "2026-08-15T00:00:00.000Z", ...unadmitted };
+    const proof = createPerUseConfirmationAttestation({ target: { projectId, sourceSessionId, purpose: "editor-recovery" }, confirmationText: USAGE_POLICY_CONFIRMATION_PHRASE });
+    bindStudioEditorProject(projectId);
+    assert.throws(() => confirmStudioRecoverySession({ expected, attestation: proof }));
+    const verified = await verifyStudioUsagePolicyGate({ projectId, gateToken: opened.gateToken });
+    const active = verified.usagePolicy as ActiveStudioUsagePolicySession;
+    await beginWebEditorSession({ attestation: attestation({ projectId, sourceSessionId }) });
+    assert.throws(() => confirmStudioRecoverySession({ expected: active, attestation: proof }));
+    storage.removeItem(WEB_STUDIO_SESSION_STORAGE_KEY);
+    assert.throws(() => confirmStudioRecoverySession({ expected: active, attestation: proof }));
+    bindStudioEditorProject("");
+  });
+});
 
 test("same-source 재진입은 confirmedAt이 같아도 새 lease·세대로 CAS된다", async () => {
   await withWebRuntimeGlobals(async (storage) => {

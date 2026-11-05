@@ -9,7 +9,7 @@
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki 영상 편집기</title>
-    <link rel="stylesheet" href="editor/editor.css?v=3.0.29">
+    <link rel="stylesheet" href="editor/editor.css?v=3.0.30">
   </head>
   <body>
     <main id="editor-origin-gate" class="editor-policy-gate" aria-labelledby="editor-origin-gate-title" hidden>
@@ -696,6 +696,11 @@
                 </label>
               </div>
               <p class="field-help">이미지 트랙 양끝 손잡이로도 표시 시간을 조정할 수 있어요.</p>
+              <label class="field" for="asset-lane">
+                <span>이미지 레인</span>
+                <select id="asset-lane"></select>
+              </label>
+              <p class="field-help">레인은 타임라인의 줄만 바꿉니다. 이미지의 화면 위치와 겹침 순서는 유지됩니다.</p>
               <div class="timing-match-control">
                 <button id="match-asset-to-cue" class="secondary-action timing-match-button" type="button" disabled>
                   선택 자막 구간에 정확히 맞춤
@@ -1020,16 +1025,21 @@
                 <span class="main-workspace-copy">영상</span>
                 <span class="short-form-workspace-copy">영상 <b id="video-lane-count">1</b></span>
                 <button id="add-video-lane" class="short-form-workspace-copy" type="button" title="영상 라인 추가" aria-label="영상 라인 추가">+</button>
+                <button id="remove-video-lane" class="short-form-workspace-copy" type="button" title="빈 영상 라인 제거" aria-label="빈 영상 라인 제거" disabled>−</button>
               </div>
               <div class="track-label asset-track-label">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m6 17 4-5 3 3 2-2 3 4"/><circle cx="16.5" cy="8.5" r="1.5"/></svg>
-              <span class="main-workspace-copy">이미지</span>
-              <span class="short-form-workspace-copy">이미지</span>
+                <span>이미지 <b id="image-lane-count">1</b></span>
+                <span class="lane-actions">
+                  <button id="add-image-lane" type="button" title="이미지 레인 추가" aria-label="이미지 레인 추가">+</button>
+                  <button id="remove-image-lane" type="button" title="빈 이미지 레인 제거" aria-label="빈 이미지 레인 제거" disabled>−</button>
+                </span>
               </div>
               <div class="track-label caption-track-label">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H8l-4 4Z"/><path d="M8 9h8M8 13h5"/></svg>
                 <span>자막 <b id="subtitle-lane-count">2</b></span>
                 <button id="add-subtitle-lane" type="button" title="자막 레인 추가" aria-label="자막 레인 추가">+</button>
+                <button id="remove-subtitle-lane" type="button" title="빈 자막 레인 제거" aria-label="빈 자막 레인 제거" disabled>−</button>
               </div>
               <div class="track-label audio-track-label">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h4l5-4v14l-5-4H5Z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg>
@@ -1187,7 +1197,7 @@
     <dialog id="local-draft-dialog" class="local-draft-dialog" aria-labelledby="local-draft-title" aria-describedby="local-draft-description">
       <div class="local-draft-dialog-header">
         <div>
-          <h2 id="local-draft-title">저장·복구본 최대 5개</h2>
+          <h2 id="local-draft-title">저장·복구본</h2>
         </div>
         <button id="close-local-draft-dialog" class="icon-action local-draft-close" type="button" aria-label="저장·복구본 목록 닫기" title="닫기">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
@@ -1196,7 +1206,7 @@
 
       <div class="local-draft-dialog-body">
         <div id="local-draft-description" class="local-draft-description">
-          <p>직접 저장한 버전과 편집 중 복구본을 합쳐 최근 5개까지 이 기기에 둡니다.</p>
+          <p>직접 저장한 버전 5개와 임시 복구본 5개를 따로 보관합니다. 임시 복구본이 직접 저장한 버전을 지우지 않습니다.</p>
           <p><strong>탭 종료 뒤에는 ‘지금 저장’으로 만든 버전만 남습니다.</strong> 편집 중·불러오기 전 복구본은 자동으로 정리됩니다.</p>
           <p class="local-draft-device-note">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6Z"/><path d="M10 17h4"/></svg>
@@ -1204,8 +1214,27 @@
           </p>
         </div>
 
+        <p id="local-draft-target" class="local-draft-description" data-kirinuki-ui-copy-ignore></p>
+        <p id="local-draft-operation-status" class="local-draft-description" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">불러올 버전을 선택해 주세요.</p>
+
         <div id="local-draft-list" class="local-draft-list" role="radiogroup" aria-label="불러올 저장·복구본"></div>
         <p id="local-draft-empty" class="local-draft-empty">아직 직접 저장한 버전이나 편집 중 복구본이 없습니다.</p>
+        <section id="local-draft-policy" class="local-draft-description" aria-labelledby="local-draft-policy-title" hidden>
+          <h3 id="local-draft-policy-title">이번 복구의 권리·책임 확인</h3>
+          <p>선택한 버전의 원본을 이번에 복구하고 편집할 권한을 직접 확인해 주세요. 취소하면 현재 편집과 선택한 버전은 유지됩니다.</p>
+          <div class="recovery-ack-list">
+            <label><input data-recovery-ack type="checkbox">이 원본 VOD가 실제 허용 또는 별도 권한 범위에 포함됨을 확인했습니다.</label>
+            <label><input data-recovery-ack type="checkbox">필요 구간의 로컬 취득과 편집이 그 허용 범위에 포함됨을 확인했습니다.</label>
+            <label><input data-recovery-ack type="checkbox">편집 허용과 게시·수익화 허용은 별개일 수 있음을 확인했습니다.</label>
+            <label><input data-recovery-ack type="checkbox">음악·이미지·인물 등 제3자 권리는 별도로 확인할 책임이 있음을 확인했습니다.</label>
+            <label><input data-recovery-ack type="checkbox">플랫폼 약관을 확인하고 접근 통제·DRM을 우회하지 않겠습니다.</label>
+            <label><input data-recovery-ack type="checkbox">입력 내용과 사용 결과의 책임이 전적으로(100%) 사용자에게 있음을 확인했습니다.</label>
+          </div>
+          <div class="local-draft-footer-actions">
+            <button id="cancel-local-draft-policy" class="button secondary" type="button">확인 취소</button>
+            <button id="confirm-local-draft-policy" class="button primary" type="button">확인하고 선택한 버전으로</button>
+          </div>
+        </section>
       </div>
 
       <div class="local-draft-dialog-footer">
@@ -1213,9 +1242,11 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7v5c0 4.7 3.2 7.7 8 9 4.8-1.3 8-4.3 8-9V7Z"/><path d="m9 12 2 2 4-4"/></svg>
           선택한 버전을 불러오기 전에 현재 상태의 편집 중 복구본을 만듭니다. 이 복구본도 탭 종료 시 폐기됩니다.
         </p>
-        <p>시작 화면에서 직접 저장본을 다시 열 때는 이번 사용의 사용자 진술을 다시 입력해야 합니다.</p>
+        <p>이번 복구 확인이 필요하면 이 화면에서 이어서 확인합니다. 불러온 상태는 ‘지금 저장’을 눌러 다음 이어편집의 기준으로 남겨 주세요.</p>
         <div class="local-draft-footer-actions">
           <button id="open-session-archive-file" class="button secondary" type="button">내보낸 편집 복원 파일 열기</button>
+          <button id="reconnect-restored-media" class="button secondary" type="button" hidden>영상만 다시 연결</button>
+          <button id="save-restored-local-draft" class="button primary" type="button" hidden>불러온 상태 지금 저장</button>
           <button id="restore-local-draft" class="button primary" type="button" disabled>선택한 버전 불러오기</button>
         </div>
       </div>
@@ -1313,10 +1344,10 @@
           </section>
           <section class="discard">
             <strong>저장하지 않고 나가기</strong>
-            <span>이번에 편집기를 연 뒤 생긴 변경을 버리고, 열기 전 상태로 되돌립니다. 직접 만든 저장본은 남깁니다.</span>
+            <span>마지막으로 직접 저장한 뒤의 변경만 버립니다. 이번에 직접 저장하지 않았다면 열기 전 상태로 돌아갑니다.</span>
           </section>
         </div>
-        <p class="editing-session-exit-tab-note">탭을 그냥 닫으면 이번 변경은 저장되지 않습니다. 다음 시작 화면에서 직접 만든 저장본은 남기고, 나머지는 열기 전 상태로 자동 정리합니다.</p>
+        <p class="editing-session-exit-tab-note">탭을 닫으면 마지막으로 직접 저장한 상태는 남고, 그 이후 저장하지 않은 변경과 임시 복구본은 다음 시작 화면에서 정리됩니다.</p>
         <p id="editing-session-exit-status" class="editing-session-exit-status" role="status" aria-live="polite" aria-atomic="true"></p>
         <footer class="editing-session-exit-actions">
           <button id="cancel-editing-session-exit" class="button secondary" type="button">취소</button>
@@ -1413,6 +1444,6 @@
       </article>
     </template>
 
-    <script type="module" src="editor/editor.js?v=3.0.29"></script>
+    <script type="module" src="editor/editor.js?v=3.0.30"></script>
   </body>
 </html>

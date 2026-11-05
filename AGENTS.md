@@ -188,6 +188,14 @@ npm run caption-stack:stop
 - 복구본은 exact project/source/workspace를 보여 준 뒤 사용자가 골랐을 때만
   적용한다. 오류를 이유로 오래된 복구본을 자동 우선하지 않는다.
 - 복구 전 현재본을 별도로 보존하고, 미래 schema는 fail closed한다.
+- 명시적 수동 저장은 다음 이어편집과 폐기의 기준을 본문·미디어 handle·이미지 Blob·
+  쇼츠 자산과 같은 transaction에서 갱신한다. 초기 진입의 프로젝트 존재 여부는
+  별도로 보존해 새 작업의 저장 후 reload를 충돌로 오판하지 않는다.
+- 직접 저장한 최근 5개와 auto/pre-restore 최근 5개는 별도 retention이다. 임시본이
+  수동본을 밀어내거나 복구 선택본을 조용히 제거하지 않는다.
+- 편집기 안의 복구 확인은 같은 project/source/lease에서 새로운 사용자 진술로만
+  전환한다. 확인 취소는 현재 편집을 보존하고, 복구 commit 이후 미디어 연결 실패를
+  편집 내용 복구 실패로 표시하지 않는다.
 - 파일 권한만 만료됐으면 프로젝트를 초기화하지 않고 동일 identity의 파일을
   다시 선택하게 한다. 파일 identity가 바뀌면 낡은 자막 체크포인트를 폐기한다.
 - 하나의 롱폼에서 여러 쇼츠 workspace를 만들 수 있다. 각 workspace는 독립 ID,
@@ -274,6 +282,9 @@ AudSeg 기준 구현은 `AudSeg/src/audseg/`, 브라우저 포트는
 - 영상 목록 기본 행에서는 수동 z-order 조작을 제공하지 않고 기존 z-index·paint/export 순서를 보존한다. 이미지 레이어의 순서 조작은 기존 계약을 유지한다.
 - 이미지·추가 음성·자막은 workspace에 명시적으로 추가하며 다른 workspace에서
   조용히 공유하거나 복사하지 않는다.
+- 이미지 레인은 workspace별로 저장하며 같은 시각의 여러 이미지를 허용한다.
+  레인 변경·빈 레인 제거는 자산의 시간·위치·크기·paint/export 순서를 바꾸지 않는다.
+  레인 제거로 자막·이미지·영상 내용을 삭제하지 않는다.
 - 내보내기 전에 사용자가 결과 파일 제목과 폴더를 정한다.
 - 영상, project recovery JSON과 자막이 있으면 SRT를 함께 저장하고 최종 파일의
   byte·duration·stream을 확인한다.

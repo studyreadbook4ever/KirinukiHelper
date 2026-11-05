@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import test from "node:test";
 
 import {
@@ -922,5 +923,147 @@ test("첫 LNA 질문은 재다운로드보다 먼저 나오고 내 파일 선택
     restore("navigator");
     restore("fetch");
     restore("document");
+  }
+});
+
+test("온보딩 모달은 기본 키 동작을 보존하며 Escape를 한 번 취소하고 모든 종료에서 키 리스너를 정리한다", async () => {
+  class ModalFixtureElement extends EventTarget {
+    dataset: Record<string, string> = {};
+    className = "";
+    download = "";
+    disabled = false;
+    hidden = false;
+    href = "";
+    open = false;
+    textContent = "";
+    closeCount = 0;
+    close(): void { this.closeCount += 1; this.open = false; }
+    focus(): void {}
+    showModal(): void { this.open = true; }
+    removeAttribute(name: string): void {
+      if (name === "href") this.href = "";
+      if (name === "download") this.download = "";
+    }
+  }
+  const selectors = new Map([
+    "#local-media-engine-dialog", "#local-media-engine-download",
+    "#local-media-engine-arch-download", "#local-media-engine-download-label",
+    "#local-media-engine-source-offer", "#local-media-engine-retry",
+    "#local-media-engine-reset", "#local-media-engine-cancel",
+    "#local-media-engine-status", "#local-media-engine-unsupported",
+    '[data-local-media-engine-step-title="download"]',
+    '[data-local-media-engine-step-detail="download"]',
+    '[data-local-media-engine-step-detail="install"]',
+    '[data-local-media-engine-step-detail="connect"]'
+  ].map((selector) => [selector, new ModalFixtureElement()]));
+  const globals = ["document", "navigator", "window"] as const;
+  const previous = new Map(globals.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+  const dialog = selectors.get("#local-media-engine-dialog")!;
+  const manualFile = selectors.get("#local-media-engine-cancel")!;
+  const controllers: AbortController[] = [];
+  const pending: Promise<unknown>[] = [];
+  const underlyingJobKeys: string[] = [];
+  let escapedSettlements = 0;
+
+  // Node EventTarget has no ancestor tree or native dialog defaults. Observe
+  // propagation while dispatch is active, model the editor's ancestor
+  // Escape consumer, and exercise the separate cancel event below.
+  const pressModalKey = (key: string): boolean => {
+    const event = new Event("keydown", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "key", { value: key });
+    const forwardToUnderlyingJob = (current: Event) => {
+      if (current.cancelBubble) return;
+      underlyingJobKeys.push(key);
+      if (key === "Escape") current.preventDefault();
+    };
+    dialog.addEventListener("keydown", forwardToUnderlyingJob);
+    try {
+      return dialog.dispatchEvent(event);
+    } finally {
+      dialog.removeEventListener("keydown", forwardToUnderlyingJob);
+    }
+  };
+  const beginOnboarding = async () => {
+    const controller = new AbortController();
+    controllers.push(controller);
+    const outcome = ensureLocalMediaEngineReady(controller.signal, {
+      permissionState: async () => "prompt",
+      probe: async () => { throw new Error("No network probe before explicit permission"); },
+      pair: async () => { throw new Error("No pairing before explicit permission"); }
+    });
+    pending.push(outcome);
+    void outcome.catch(() => undefined);
+    for (let attempt = 0; attempt < 20 && !dialog.open; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    assert.equal(dialog.open, true);
+    assert.equal(getEventListeners(dialog, "keydown").length, 1);
+    assert.equal(getEventListeners(dialog, "cancel").length, 1);
+    assert.equal(getEventListeners(controller.signal, "abort").length, 1);
+    return { controller, outcome };
+  };
+  const assertCleaned = (controller: AbortController, expectedCloses: number) => {
+    assert.equal(dialog.open, false);
+    assert.equal(dialog.closeCount, expectedCloses);
+    assert.equal(getEventListeners(dialog, "keydown").length, 0);
+    assert.equal(getEventListeners(dialog, "cancel").length, 0);
+    assert.equal(getEventListeners(manualFile, "click").length, 0);
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+    controller.abort();
+    dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    manualFile.dispatchEvent(new Event("click"));
+    assert.equal(dialog.closeCount, expectedCloses, "late events must not repeat a completed cancellation");
+  };
+
+  try {
+    invalidatePrimedLocalMediaEngineTrust();
+    Object.defineProperties(globalThis, {
+      document: { configurable: true, value: { querySelector: (selector: string) => selectors.get(selector) ?? null } },
+      navigator: { configurable: true, value: navigatorFixture({ platform: "Windows", architecture: "x86" }) },
+      window: { configurable: true, value: { clearTimeout, setTimeout } }
+    });
+    const escaped = await beginOnboarding();
+    for (const key of ["Tab", "Enter", " ", "ArrowRight"]) {
+      assert.equal(pressModalKey(key), true, `${key} must retain its browser/button default`);
+    }
+    assert.deepEqual(underlyingJobKeys, [], "onboarding keys must not operate the underlying editor");
+    assert.equal(dialog.open, true, "navigation/button keys alone must not cancel onboarding");
+    const rejected = assert.rejects(escaped.outcome.catch((error: unknown) => {
+      escapedSettlements += 1;
+      throw error;
+    }), { name: "AbortError" });
+    assert.equal(pressModalKey("Escape"), false, "handled Escape must prevent a second native cancellation");
+    assert.deepEqual(underlyingJobKeys, []);
+    await rejected;
+    assert.equal(escapedSettlements, 1);
+    assertCleaned(escaped.controller, 1);
+
+    const nativeCanceled = await beginOnboarding();
+    const nativeRejection = assert.rejects(nativeCanceled.outcome, { name: "AbortError" });
+    assert.equal(dialog.dispatchEvent(new Event("cancel", { cancelable: true })), false,
+      "native dialog cancellation must retain the same lifecycle");
+    await nativeRejection;
+    assertCleaned(nativeCanceled.controller, 2);
+
+    const selectedFile = await beginOnboarding();
+    assert.equal(pressModalKey("Enter"), true);
+    manualFile.dispatchEvent(new Event("click"));
+    assert.equal(await selectedFile.outcome, "manual-file", "native button activation must retain its existing result");
+    assertCleaned(selectedFile.controller, 3);
+
+    const aborted = await beginOnboarding();
+    const externalRejection = assert.rejects(aborted.outcome, { name: "AbortError" });
+    aborted.controller.abort(new DOMException("Fixture canceled job", "AbortError"));
+    await externalRejection;
+    assertCleaned(aborted.controller, 4);
+  } finally {
+    for (const controller of controllers) controller.abort();
+    await Promise.allSettled(pending);
+    invalidatePrimedLocalMediaEngineTrust();
+    for (const name of globals) {
+      const descriptor = previous.get(name);
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete (globalThis as Record<string, unknown>)[name];
+    }
   }
 });

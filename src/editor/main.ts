@@ -2,7 +2,11 @@ import {
   DEFAULT_SUBTITLE_COLOR,
   EDITOR_SEED_PREFIX,
   MAX_SUBTITLE_LANES,
+  MIN_SUBTITLE_LANES,
+  addImageLane,
   addSubtitleLane,
+  removeImageLane,
+  removeSubtitleLane,
   adjacentSubtitleCueInLane,
   appendAiSubtitleDrafts,
   applyCaptionStylePreset,
@@ -83,6 +87,7 @@ import {
   nextCaptionNeedingReview
 } from "../lib/caption-review.js";
 import type { CaptionReviewFilter } from "../lib/caption-review.js";
+import { MAX_IMAGE_LANES, MIN_IMAGE_LANES, imageLaneAvailable, lastEmptyLane, normalizeImageLaneLayout } from "../lib/image-lanes.js";
 import {
   KIRINUKI_STUDIO_ORIGIN_META_NAME,
   assertKirinukiStudioDocumentOrigin,
@@ -248,8 +253,14 @@ import {
 } from "./preview-transition.js";
 import type { PreviewClip } from "./preview-transition.js";
 import {
-  usagePolicyBasisLabel
+  usagePolicyBasisLabel,
+  createPerUseConfirmationAttestation,
+  USAGE_POLICY_CONFIRMATION_PHRASE
 } from "../lib/usage-policy.js";
+import {
+  recoveryChangedSections,
+  recoveryContentFingerprint
+} from "../lib/recovery-review.js";
 import type {
   UsagePolicyBasis,
   UsagePolicyPurpose
@@ -267,6 +278,7 @@ import {
   activeShortFormWorkspace,
   addShortFormWorkspace,
   addShortFormVideoLane,
+  removeShortFormVideoLane,
   addShortFormVideoAsset,
   canAddShortFormVideoAsset,
   createShortFormWorkspaceProject,
@@ -344,6 +356,7 @@ import {
   acquireStudioProjectWriter,
   bindStudioEditorProject,
   completeStudioEditorSession,
+  confirmStudioRecoverySession,
   countStudioProjectEditors,
   leaveCompletedStudioEditor,
   resolveStudioEditorEntry,
@@ -1014,8 +1027,14 @@ const EDITOR_ELEMENT_IDS = [
   "add-cue",
   "video-lane-count",
   "add-video-lane",
+  "remove-video-lane",
+  "image-lane-count",
+  "add-image-lane",
+  "remove-image-lane",
+  "asset-lane",
   "subtitle-lane-count",
   "add-subtitle-lane",
+  "remove-subtitle-lane",
   "toggle-timeline-collapse",
   "fit-timeline",
   "toggle-timeline-snap",
@@ -1064,6 +1083,13 @@ const EDITOR_ELEMENT_IDS = [
   "local-draft-empty",
   "local-draft-status",
   "restore-local-draft",
+  "local-draft-target",
+  "local-draft-operation-status",
+  "local-draft-policy",
+  "confirm-local-draft-policy",
+  "cancel-local-draft-policy",
+  "save-restored-local-draft",
+  "reconnect-restored-media",
   "open-session-archive-file",
   "close-local-draft-dialog",
   "export-options-dialog",
@@ -1245,10 +1271,15 @@ function syncEditorUrlToUsagePolicySession(
  * second time.
  */
 function markEditorUrlReloadable(): void {
+  const session = requireActiveUsagePolicySession();
   const url = new URL(location.href);
   url.searchParams.set("project", project.id);
   url.searchParams.set("session", RECOVERY_SESSION_MODE);
-  url.searchParams.delete("recovery");
+  if (session.purpose === "editor-recovery") {
+    url.searchParams.set("recovery", RECOVERY_DRAFTS_MODE);
+  } else {
+    url.searchParams.delete("recovery");
+  }
   url.searchParams.delete("usageGate");
   history.replaceState(null, "", url.href);
 }
@@ -1645,6 +1676,16 @@ let currentProjectSavePendingCount = 0;
 let lastCurrentProjectSavedAtMs = 0;
 let currentProjectSaveFailed = false;
 let knownLocalDraftCount = 0;
+let lastExplicitSaveFingerprint = "";
+let lastExplicitSaveAtMs = 0;
+let restoredLocalDraftId = "";
+let recoveryConfirmation: {
+  draftId: string;
+  projectId: string;
+  generation: number;
+  fingerprint: string;
+  policy: ActiveUsagePolicySession;
+} | null = null;
 const projectWriteQueue = createGenerationBoundSerialOperationQueue();
 let imageAssetPruneTimer: TimerHandle | null = null;
 let toastTimer: TimerHandle | null = null;
@@ -2489,8 +2530,15 @@ function renderLocalPersistenceStatus(): void {
         ? `편집 중 임시 복구됨 ${localSaveTimeFormatter().format(lastCurrentProjectSavedAtMs)}`
         : "편집 중 임시 복구 준비됨";
   replaceUiCopyParts(elements.local_draft_status, [
+    lastExplicitSaveAtMs > 0
+      ? `이 기기에 저장됨 ${localSaveTimeFormatter().format(lastExplicitSaveAtMs)}`
+      : "직접 저장 전",
+    lastExplicitSaveFingerprint && project
+      && lastExplicitSaveFingerprint !== recoveryContentFingerprint(persistedProjectSnapshotForWorkspaceCandidate(project))
+      ? " · 저장 이후 변경 있음" : "",
+    " · ",
     current,
-    ` · 현재 복구본 ${Math.min(5, knownLocalDraftCount)}/5`,
+    ` · 저장·복구본 ${knownLocalDraftCount}개`,
     " · 5분 간격",
     " · 탭 종료 시 임시본 폐기",
     lastAutomaticDraftAtMs > 0
@@ -2509,21 +2557,118 @@ function localDraftReasonLabel(reason: "manual" | "auto" | "pre-restore") {
 
 function setLocalDraftOperationActive(active: boolean) {
   localDraftOperationActive = Boolean(active);
+  elements.local_draft_dialog.setAttribute("aria-busy", String(localDraftOperationActive));
   elements.create_local_draft.disabled = localDraftOperationActive;
   elements.open_local_drafts.disabled = localDraftOperationActive;
+  elements.open_session_archive_file.disabled = localDraftOperationActive || recoveryConfirmation !== null;
   elements.reset_ai_caption_positions.disabled = localDraftOperationActive;
   elements.close_local_draft_dialog.disabled = localDraftOperationActive;
-  const selectedDraft = elements.local_draft_list.querySelector(
-    'input[name="local-draft-choice"]:checked'
-  );
-  elements.restore_local_draft.disabled = (
-    localDraftOperationActive
-    || !selectedDraft
-    || !canRestoreLocalDraftWithCurrentPolicy()
-  );
+  elements.save_restored_local_draft.disabled = localDraftOperationActive;
+  elements.reconnect_restored_media.disabled = localDraftOperationActive;
+  elements.confirm_local_draft_policy.disabled = localDraftOperationActive;
+  elements.cancel_local_draft_policy.disabled = localDraftOperationActive;
+  updateLocalDraftActions();
   for (const input of elements.local_draft_list.querySelectorAll("input")) {
-    input.disabled = localDraftOperationActive;
+    input.disabled = localDraftOperationActive || recoveryConfirmation !== null;
   }
+}
+
+function selectedLocalDraftId(): string {
+  return (elements.local_draft_list.querySelector(
+    'input[name="local-draft-choice"]:checked'
+  ) as HTMLInputElement | null)?.value || "";
+}
+
+function setLocalDraftMessage(message: string, state = "ready", focus = false): void {
+  elements.local_draft_operation_status.textContent = uiLocalization.translate(message);
+  elements.local_draft_operation_status.dataset.state = state;
+  elements.local_draft_operation_status.setAttribute("role", state === "error" ? "alert" : "status");
+  if (focus) elements.local_draft_operation_status.focus({ preventScroll: true });
+}
+
+function updateLocalDraftActions(): void {
+  elements.restore_local_draft.disabled = localDraftOperationActive
+    || !selectedLocalDraftId() || recoveryConfirmation !== null
+    || selectedLocalDraftId() === restoredLocalDraftId;
+  elements.restore_local_draft.textContent = uiLocalization.translate(
+    canRestoreLocalDraftWithCurrentPolicy()
+      ? "선택한 버전 불러오기" : "복구 확인하고 계속"
+  );
+}
+
+function cancelLocalDraftConfirmation(): void {
+  recoveryConfirmation = null;
+  elements.local_draft_policy.hidden = true;
+  for (const input of elements.local_draft_policy.querySelectorAll<HTMLInputElement>("input")) {
+    input.checked = false;
+  }
+  setLocalDraftOperationActive(localDraftOperationActive);
+}
+
+function requestLocalDraftConfirmation(): void {
+  try {
+    const policy = requireActiveUsagePolicySession();
+    const draftId = selectedLocalDraftId();
+    if (!draftId || localDraftOperationActive) return;
+    recoveryConfirmation = {
+      draftId, projectId: project.id, policy,
+      generation: projectWriteQueue.generation,
+      fingerprint: recoveryContentFingerprint(persistedProjectSnapshotForWorkspaceCandidate(project))
+    };
+    elements.local_draft_policy.hidden = false;
+    for (const input of elements.local_draft_policy.querySelectorAll<HTMLInputElement>("input")) {
+      input.checked = false;
+    }
+    setLocalDraftOperationActive(false);
+    setLocalDraftMessage("선택한 버전을 복구하려면 이번 사용의 권리·책임을 확인해 주세요. 취소해도 현재 편집은 유지됩니다.", "confirm");
+    elements.local_draft_policy.querySelector<HTMLInputElement>("input")?.focus();
+  } catch (error) {
+    setLocalDraftMessage(errorMessage(error), "error", true);
+  }
+}
+
+async function confirmLocalDraftRecoveryPolicy(): Promise<void> {
+  const target = recoveryConfirmation;
+  if (!target || localDraftOperationActive) return;
+  const acknowledgements = [...elements.local_draft_policy.querySelectorAll<HTMLInputElement>("[data-recovery-ack]")];
+  if (acknowledgements.length !== 6 || acknowledgements.some((input) => !input.checked)) {
+    setLocalDraftMessage("필수 책임 확인 항목을 모두 선택해 주세요.", "error");
+    acknowledgements.find((input) => !input.checked)?.focus();
+    return;
+  }
+  await queueLocalDraftOperation(async () => {
+    setLocalDraftMessage("선택한 저장본과 이번 복구 확인을 확인하는 중…", "checking");
+    if (await countSameProjectEditorTabs() > 1) {
+      throw new Error("같은 프로젝트 편집기 탭이 둘 이상 열려 있습니다. 다른 탭을 닫고 다시 불러와 주세요.");
+    }
+    const draft = await loadLocalDraft(target.projectId, target.draftId);
+    requireSameUsagePolicyLease(target.policy);
+    if (
+      !draft || recoveryConfirmation !== target
+      || target.projectId !== project.id
+      || target.generation !== projectWriteQueue.generation
+      || target.draftId !== selectedLocalDraftId()
+      || target.fingerprint !== recoveryContentFingerprint(persistedProjectSnapshotForWorkspaceCandidate(project))
+      || sourceSessionIdentity(recoverySourceRecord(draft.project.source) ?? undefined)
+        !== sourceSessionIdentity(recoverySourceRecord(rootProject.source) ?? undefined)
+    ) {
+      throw new Error("확인 중 편집 내용이나 저장본이 바뀌었습니다. 목록에서 다시 선택해 주세요.");
+    }
+    const confirmed = confirmStudioRecoverySession({
+      expected: target.policy,
+      attestation: createPerUseConfirmationAttestation({
+        target: { projectId: target.projectId, sourceSessionId: target.policy.sourceSessionId, purpose: "editor-recovery" },
+        confirmationText: USAGE_POLICY_CONFIRMATION_PHRASE
+      })
+    });
+    showVerifiedEditorShell(confirmed);
+    cancelLocalDraftConfirmation();
+    setLocalDraftMessage("복구 확인이 완료됐습니다. 선택한 버전을 불러오면 현재 편집을 교체합니다.", "confirmed");
+  }).catch((error: unknown) => {
+    cancelLocalDraftConfirmation();
+    setLocalDraftMessage(errorMessage(error), "error", true);
+  });
+  if (canRestoreLocalDraftWithCurrentPolicy()) elements.restore_local_draft.focus();
 }
 
 function queueLocalDraftOperation<T>(operation: () => T | PromiseLike<T>): Promise<T> {
@@ -2555,8 +2700,13 @@ function localDraftSummaryParts(draft: LocalDraftRecord): string[] {
 }
 
 function updateLocalDraftStatus(drafts: LocalDraftRecord[] = []) {
-  const count = Math.min(5, drafts.length);
+  const count = drafts.length;
   knownLocalDraftCount = count;
+  const explicit = drafts.find((draft) => draft.reason === "manual");
+  if (explicit) {
+    lastExplicitSaveAtMs = explicit.createdAtMs;
+    lastExplicitSaveFingerprint = recoveryContentFingerprint(explicit.project);
+  }
   renderLocalPersistenceStatus();
   elements.open_local_drafts.title = editorShortcutTitle(
     "open-local-drafts",
@@ -2569,6 +2719,7 @@ function renderLocalDraftList(
   selectedId = ""
 ) {
   const fragment = document.createDocumentFragment();
+  const currentSnapshot = persistedProjectSnapshotForWorkspaceCandidate(project);
   for (const draft of drafts) {
     const label = document.createElement("label");
     label.className = "local-draft-item";
@@ -2580,10 +2731,12 @@ function renderLocalDraftList(
     input.checked = draft.id === selectedId;
     input.disabled = localDraftOperationActive;
     input.addEventListener("change", () => {
-      elements.restore_local_draft.disabled = (
-        localDraftOperationActive
-        || !canRestoreLocalDraftWithCurrentPolicy()
-      );
+      cancelLocalDraftConfirmation();
+      elements.save_restored_local_draft.hidden = true;
+      elements.reconnect_restored_media.hidden = true;
+      setLocalDraftMessage(canRestoreLocalDraftWithCurrentPolicy()
+        ? "선택한 버전을 불러오면 현재 편집을 교체합니다. 직전 상태는 임시 복구본으로 보관됩니다."
+        : "선택한 버전은 이번 복구용 권리·책임 확인 후 불러올 수 있습니다.");
     });
 
     const copy = document.createElement("span");
@@ -2609,19 +2762,20 @@ function renderLocalDraftList(
     summary.className = "local-draft-item-meta";
     replaceUiCopyParts(summary, localDraftSummaryParts(draft));
 
-    copy.append(heading, summary);
+    const differences = document.createElement("span");
+    differences.className = "local-draft-item-meta";
+    const changed = recoveryChangedSections(currentSnapshot, draft.project);
+    replaceUiCopyParts(differences, changed.length > 0
+      ? ["현재 편집과 다른 항목: ", ...changed.flatMap((section, index) => index ? [" · ", section] : [section])]
+      : ["현재 편집 내용과 같음"]);
+
+    copy.append(heading, summary, differences);
     label.append(input, copy);
     fragment.append(label);
   }
   elements.local_draft_list.replaceChildren(fragment);
   elements.local_draft_empty.hidden = drafts.length > 0;
-  elements.restore_local_draft.disabled = (
-    localDraftOperationActive ||
-    !canRestoreLocalDraftWithCurrentPolicy() ||
-    !elements.local_draft_list.querySelector(
-      'input[name="local-draft-choice"]:checked'
-    )
-  );
+  updateLocalDraftActions();
   updateLocalDraftStatus(drafts);
 }
 
@@ -2631,7 +2785,7 @@ async function refreshLocalDraftList({ preserveSelection = true } = {}) {
       'input[name="local-draft-choice"]:checked'
     ) as EditorControl)?.value || ""
     : "";
-  const drafts = await listLocalDrafts(project.id, { limit: 5 });
+  const drafts = await listLocalDrafts(project.id, { limit: 10 });
   renderLocalDraftList(drafts, selectedId);
   return drafts;
 }
@@ -2666,13 +2820,21 @@ async function saveCurrentLocalDraft(reason: LocalDraftReason, {
   if (reason === "auto") {
     lastAutomaticDraftAtMs = draft.createdAtMs;
     localDraftAutosaveAnchorAtMs = draft.createdAtMs;
+  } else if (reason === "manual") {
+    lastExplicitSaveAtMs = draft.createdAtMs;
+    lastExplicitSaveFingerprint = recoveryContentFingerprint(draft.project);
   }
+  renderLocalPersistenceStatus();
   scheduleImageAssetBlobPrune();
-  if (elements.local_draft_dialog.open) {
-    await refreshLocalDraftList();
-  } else {
-    const drafts = await listLocalDrafts(project.id, { limit: 5 });
-    updateLocalDraftStatus(drafts);
+  try {
+    if (elements.local_draft_dialog.open) {
+      await refreshLocalDraftList();
+    } else {
+      const drafts = await listLocalDrafts(project.id, { limit: 10 });
+      updateLocalDraftStatus(drafts);
+    }
+  } catch (error: unknown) {
+    console.warn("저장은 완료됐지만 저장본 목록을 갱신하지 못했습니다.", error);
   }
   if (announce) {
     showToast("현재 상태를 이 기기에 저장했습니다.", "success");
@@ -2813,6 +2975,15 @@ async function openLocalDraftDialog() {
     ) {
       throw new Error("진행 중인 작업이 끝난 뒤 저장본 목록을 열어 주세요.");
     }
+    cancelLocalDraftConfirmation();
+    restoredLocalDraftId = "";
+    elements.save_restored_local_draft.hidden = true;
+    elements.reconnect_restored_media.hidden = true;
+    elements.local_draft_target.textContent = [
+      rootProject.name,
+      recoverySourceRecord(rootProject.source)?.canonicalUrl || ""
+    ].filter(Boolean).join(" · ");
+    setLocalDraftMessage("불러올 버전을 선택해 주세요.");
     focusBeforeLocalDraftDialog = elements.open_local_drafts;
     const drafts = await queueLocalDraftOperation(() => (
       refreshLocalDraftList({ preserveSelection: false })
@@ -2830,6 +3001,8 @@ async function openLocalDraftDialog() {
 }
 
 function closeLocalDraftDialog() {
+  if (localDraftOperationActive) return;
+  cancelLocalDraftConfirmation();
   if (elements.local_draft_dialog.open) {
     elements.local_draft_dialog.close();
   }
@@ -3076,7 +3249,7 @@ async function finishEditingSession(
     true,
     choice === "save"
       ? "현재 편집을 이 기기에 확정하는 중…"
-      : "이번 편집의 변경을 버리고 열기 전 상태로 되돌리는 중…"
+      : "마지막 직접 저장 이후의 변경을 버리는 중…"
   );
   stopLocalDraftAutosave();
   stopDevReloadObserver();
@@ -3089,6 +3262,7 @@ async function finishEditingSession(
       }
       await waitForProjectSaves();
       await localDraftOperationQueue;
+      await saveCurrentLocalDraft("manual");
       editorSessionCompleted = true;
       discardPendingProjectSave();
       advanceProjectSessionGeneration();
@@ -3533,12 +3707,23 @@ async function restoreSelectedLocalDraft() {
   if (!selectedId) {
     return;
   }
+  if (localDraftOperationActive || selectedId === restoredLocalDraftId) return;
+  if (!canRestoreLocalDraftWithCurrentPolicy()) {
+    requestLocalDraftConfirmation();
+    return;
+  }
   if (projectMutationLockCount > 0 || activeJobController) {
     showToast("다른 영상·불러오기 작업이 끝난 뒤 저장본을 불러와 주세요.", "error");
     return;
   }
+  const expectedGeneration = projectWriteQueue.generation;
+  const expectedPolicy = requireRecoveryUsagePolicySession();
+  const expectedProjectId = project.id;
+  let restoreCommitted = false;
+  let restoreAppliedInMemory = false;
   await queueLocalDraftOperation(async () => {
-    requireRecoveryUsagePolicySession();
+    setLocalDraftMessage("저장본을 확인하는 중…", "checking");
+    requireSameUsagePolicyLease(expectedPolicy);
     if (await countSameProjectEditorTabs() > 1) {
       throw new Error(
         "같은 프로젝트 편집기 탭이 둘 이상 열려 있습니다. 다른 탭을 닫고 다시 불러와 주세요."
@@ -3547,6 +3732,11 @@ async function restoreSelectedLocalDraft() {
     const draft = await loadLocalDraft(project.id, selectedId);
     if (!draft) {
       throw new Error("선택한 저장본을 찾지 못했습니다.");
+    }
+    if (!await refreshUsagePolicyLease(expectedPolicy)
+      || expectedGeneration !== projectWriteQueue.generation
+      || expectedProjectId !== project.id || selectedId !== selectedLocalDraftId()) {
+      throw new Error("확인 중 편집 내용이나 저장본이 바뀌었습니다. 목록에서 다시 선택해 주세요.");
     }
     const normalizedDraftProject = normalizeEditorProject(
       cloneProject(draft.project)
@@ -3626,6 +3816,7 @@ async function restoreSelectedLocalDraft() {
         currentPersistedProject
       ));
       advanceProjectSessionGeneration();
+      setLocalDraftMessage("직전 상태를 보호하고 선택한 편집 내용을 적용하는 중…", "applying");
       const restoreResult = await queueCurrentProjectSessionWrite(() => restoreLocalDraft(
         currentPersistedProject,
         exactDraft,
@@ -3634,6 +3825,8 @@ async function restoreSelectedLocalDraft() {
           id: crypto.randomUUID()
         }
       ));
+      restoreCommitted = true;
+      restoredLocalDraftId = selectedId;
       restoredBoundHandle = restoreResult.restoredMediaHandle;
       if (!reusesCurrentMaterializedTransport) {
         // The selected snapshot owns a different local transport authority.
@@ -3666,6 +3859,7 @@ async function restoreSelectedLocalDraft() {
         updateShortWorkspaceUrl(false);
         project = restoredProject;
       }
+      restoreAppliedInMemory = true;
       shortWorkspaceHistory.clear();
       const sameTransport = runtimeTransportMediaIdentityMatches(
         currentPersistedProject.mediaAsset,
@@ -3689,22 +3883,30 @@ async function restoreSelectedLocalDraft() {
       unlockProjectMutations();
     }
     let exactMediaReconnected = reusesCurrentMaterializedTransport;
-    if (!reusesCurrentMaterializedTransport && restoresMaterializedTransport) {
-      await restoreMedia();
-      exactMediaReconnected = Boolean(
-        mediaFile && projectUsesChzzkMaterializedMedia(project)
-      );
-    } else if (!restoresMaterializedTransport && restoredBoundHandle) {
-      await restoreMedia();
-      exactMediaReconnected = Boolean(mediaFile && mediaHandle);
-    } else if (reusesCurrentMaterializedTransport) {
-      await syncPreviewToPlayhead();
+    setLocalDraftMessage("편집 내용이 복구됐습니다. 영상 연결을 확인하는 중…", "media");
+    try {
+      if (!reusesCurrentMaterializedTransport && restoresMaterializedTransport) {
+        await restoreMedia();
+        exactMediaReconnected = Boolean(mediaFile && projectUsesChzzkMaterializedMedia(project));
+      } else if (!restoresMaterializedTransport && restoredBoundHandle) {
+        await restoreMedia();
+        exactMediaReconnected = Boolean(mediaFile && mediaHandle);
+      } else if (reusesCurrentMaterializedTransport) {
+        await syncPreviewToPlayhead();
+      }
+    } catch (error: unknown) {
+      exactMediaReconnected = false;
+      console.warn("편집 내용 복구 후 영상 연결이 완료되지 않았습니다.", error);
     }
     scheduleImageAssetBlobPrune();
-    closeLocalDraftDialog();
+    elements.save_restored_local_draft.hidden = false;
+    elements.reconnect_restored_media.hidden = exactMediaReconnected;
+    setLocalDraftMessage(exactMediaReconnected
+      ? "편집 내용과 영상 연결이 복구됐습니다. 불러온 상태를 이어편집 기준으로 남기려면 지금 저장해 주세요. 직전 상태는 임시 복구본입니다."
+      : "편집 내용은 복구됐으며 영상 연결이 필요합니다. 불러온 상태를 남기려면 지금 저장해 주세요. 영상만 다시 연결할 수 있습니다.", "restored", true);
     try {
       updateLocalDraftStatus(
-        await listLocalDrafts(project.id, { limit: 5 })
+        await listLocalDrafts(project.id, { limit: 10 })
       );
     } catch (error) {
       console.warn("복원 뒤 임시저장 상태를 갱신하지 못했습니다.", error);
@@ -3716,14 +3918,29 @@ async function restoreSelectedLocalDraft() {
         ? "저장본을 불러오고 이전 영상을 분리했습니다. 이 저장본의 원본 파일을 ‘내 파일 직접 연결’에서 다시 선택해 주세요."
         : !exactMediaReconnected
           ? "저장본을 불러오고 이전 영상을 분리했습니다. 저장본의 원본 파일 권한을 다시 허용하거나 파일을 직접 연결해 주세요."
-          : "저장본을 불러왔습니다. 직전 상태도 자동으로 저장했습니다.",
+          : "저장본을 불러왔습니다. 직전 상태는 임시 복구본으로 보관했습니다.",
       !exactMediaReconnected
         ? "warning"
         : "success",
       5200
     );
   }).catch((error: unknown) => {
-    showToast(`저장본 불러오기 실패: ${errorMessage(error)}`, "error", 0);
+    if (restoreCommitted) {
+      if (!restoreAppliedInMemory) {
+        discardPendingProjectSave();
+        advanceProjectSessionGeneration();
+        stopLocalDraftAutosave();
+        editorSessionCompleted = true;
+        elements.editor_shell.inert = true;
+        setLocalDraftMessage("편집 내용은 복구됐지만 화면을 갱신하지 못했습니다. 이 탭을 새로고침해 복구된 내용을 열어 주세요.", "error", true);
+        return;
+      }
+      elements.save_restored_local_draft.hidden = false;
+      elements.reconnect_restored_media.hidden = false;
+      setLocalDraftMessage("편집 내용은 복구됐으며 영상 연결이 필요합니다. 불러온 상태를 남기려면 지금 저장해 주세요. 영상만 다시 연결할 수 있습니다.", "restored", true);
+    } else {
+      setLocalDraftMessage(`저장본 불러오기 실패: ${errorMessage(error)}`, "error", true);
+    }
   });
 }
 
@@ -3797,7 +4014,7 @@ async function pruneUnusedImageAssetBlobs() {
     collectImageAssetBlobKeys(snapshot, keep);
   }
   collectImageAssetBlobKeys(fieldEditSession?.snapshot, keep);
-  const localDrafts = await listLocalDrafts(projectId, { limit: 5 });
+  const localDrafts = await listLocalDrafts(projectId, { limit: 10 });
   for (const draft of localDrafts) {
     collectImageAssetBlobKeys(draft.project, keep);
   }
@@ -4771,6 +4988,15 @@ function renderImageAssetInspector() {
     elements.asset_thumbnail.alt = "";
     return;
   }
+  elements.asset_lane.replaceChildren(...Array.from(
+    { length: project.imageLaneCount ?? MIN_IMAGE_LANES }, (_, lane) => {
+      const option = document.createElement("option");
+      option.value = String(lane);
+      option.textContent = `L${lane + 1}`;
+      return option;
+    }
+  ));
+  elements.asset_lane.value = String(asset.lane ?? 0);
   const range = imageAssetTimelineRange(project, asset);
   elements.asset_name.textContent = asset.name;
   elements.asset_name.dataset.kirinukiUiCopyIgnore = "";
@@ -10547,44 +10773,15 @@ function scheduleLiveTimelineGeometry() {
 }
 
 function layoutImageAssetSubrows(candidateProject: EditorProject) {
-  const entries = (candidateProject.imageAssets || [])
-    .map((asset, assetIndex) => ({
-      asset,
-      assetIndex,
-      range: imageAssetTimelineRange(candidateProject, asset)
-    }))
-    .filter((entry): entry is typeof entry & { range: TimelineRange } => (
-      entry.range !== null
-    ))
-    .sort((first, second) => (
-      first.range.startMs - second.range.startMs ||
-      first.range.endMs - second.range.endMs ||
-      first.assetIndex - second.assetIndex
-    ));
-  const subrowEndTimes: number[] = [];
-  const byAssetId = new Map<string, {
-    range: { startMs: number; endMs: number };
-    subrow: number;
-  }>();
-
-  entries.forEach((entry) => {
-    let subrow = subrowEndTimes.findIndex((endMs) => endMs <= entry.range.startMs);
-    if (subrow === -1) {
-      subrow = subrowEndTimes.length;
-      subrowEndTimes.push(entry.range.endMs);
-    } else {
-      subrowEndTimes[subrow] = entry.range.endMs;
-    }
-    byAssetId.set(entry.asset.id, {
-      range: entry.range,
-      subrow
-    });
-  });
-
-  return {
-    byAssetId,
-    subrowCount: Math.max(1, subrowEndTimes.length)
-  };
+  const layout = normalizeImageLaneLayout(
+    candidateProject.imageAssets || [], candidateProject.clips, candidateProject.imageLaneCount
+  );
+  const byAssetId = new Map<string, { range: TimelineRange; subrow: number }>();
+  for (const asset of layout.imageAssets) {
+    const range = imageAssetTimelineRange(candidateProject, asset);
+    if (range) byAssetId.set(asset.id, { range, subrow: asset.lane });
+  }
+  return { byAssetId, subrowCount: layout.imageLaneCount };
 }
 
 function layoutShortVideoAssetSubrows(candidateProject: EditorProject) {
@@ -11124,6 +11321,7 @@ function bindTimedBlockMove(
   event.stopPropagation();
   const pointerId = event.pointerId;
   const startX = event.clientX;
+  const startY = event.clientY;
   const originalStart = item.startOffsetMs;
   const originalEnd = item.endOffsetMs;
   const itemDuration = originalEnd - originalStart;
@@ -11147,7 +11345,8 @@ function bindTimedBlockMove(
       return;
     }
     const deltaX = moveEvent.clientX - startX;
-    if (!dragging && Math.abs(deltaX) < TIMED_BLOCK_DRAG_ACTIVATION_PX) {
+    if (!dragging && Math.abs(deltaX) < TIMED_BLOCK_DRAG_ACTIVATION_PX
+      && (kind !== "asset" || Math.abs(moveEvent.clientY - startY) < TIMED_BLOCK_DRAG_ACTIVATION_PX)) {
       return;
     }
     moveEvent.preventDefault();
@@ -11173,7 +11372,8 @@ function bindTimedBlockMove(
       block?.classList.add("moving", "selected");
     }
 
-    const rawDeltaMs = Math.round(deltaX / pixelsPerSecond * 1000);
+    const rawDeltaMs = kind === "asset" && Math.abs(deltaX) < TIMED_BLOCK_DRAG_ACTIVATION_PX
+      ? 0 : Math.round(deltaX / pixelsPerSecond * 1000);
     const rawStartOffsetMs = Math.max(
       0,
       Math.min(maximumStart, originalStart + rawDeltaMs)
@@ -11197,7 +11397,8 @@ function bindTimedBlockMove(
       minimumTimelineMs: clip!.timelineStartMs + itemDuration,
       maximumTimelineMs: clip!.timelineStartMs + clipDuration
     });
-    const match = [startMatch, endMatch]
+    const match = kind === "asset" && Math.abs(deltaX) < TIMED_BLOCK_DRAG_ACTIVATION_PX
+      ? null : [startMatch, endMatch]
       .filter(Boolean)
       .sort((first, second) => (
         first!.distanceMs - second!.distanceMs
@@ -11210,6 +11411,10 @@ function bindTimedBlockMove(
       Math.min(maximumStart, rawStartOffsetMs + snappedDeltaMs)
     );
     let nextEndOffsetMs = nextStartOffsetMs + itemDuration;
+    const imageLane = Math.max(0, Math.min(
+      (originalProject.imageLaneCount ?? MIN_IMAGE_LANES) - 1,
+      Math.floor((moveEvent.clientY - elements.asset_track.getBoundingClientRect().top) / ASSET_SUBROW_STRIDE_PX)
+    ));
     let nextProject = kind === "subtitle"
       ? updateSubtitleCue(originalProject, item.id, {
         startOffsetMs: nextStartOffsetMs,
@@ -11217,7 +11422,8 @@ function bindTimedBlockMove(
       })
       : updateImageAsset(originalProject, item.id, {
         startOffsetMs: nextStartOffsetMs,
-        endOffsetMs: nextEndOffsetMs
+        endOffsetMs: nextEndOffsetMs,
+        lane: imageLane
       });
 
     if (
@@ -11253,6 +11459,10 @@ function bindTimedBlockMove(
     if (block && range) {
       block.style.left = `${timelineX(range.startMs)}px`;
       block.style.width = `${Math.max(8, timelineX(range.endMs - range.startMs))}px`;
+      if (kind === "asset") {
+        block.dataset.lane = String(imageLane);
+        block.style.setProperty("--asset-block-top", `${ASSET_BLOCK_TOP_PX + imageLane * ASSET_SUBROW_STRIDE_PX}px`);
+      }
     }
     if (kind === "subtitle") {
       renderCueInspector();
@@ -11945,6 +12155,13 @@ function renderTimeline({ keepScroll = false } = {}) {
   );
   elements.subtitle_lane_count.textContent = String(laneCount);
   elements.add_subtitle_lane.disabled = laneCount >= MAX_SUBTITLE_LANES;
+  elements.remove_subtitle_lane.disabled = lastEmptyLane(laneCount, project.subtitles, MIN_SUBTITLE_LANES) === null;
+  elements.image_lane_count.textContent = String(assetLayout.subrowCount);
+  elements.add_image_lane.disabled = assetLayout.subrowCount >= MAX_IMAGE_LANES;
+  elements.remove_image_lane.disabled = lastEmptyLane(assetLayout.subrowCount, project.imageAssets, MIN_IMAGE_LANES) === null;
+  elements.remove_video_lane.disabled = workspaceMode !== "short-form"
+    || shortTimelineSourceControlsDisabled
+    || lastEmptyLane(project.shortForm.videoLaneCount, project.shortForm.videoAssets, 1) === null;
   elements.timeline_content.style.width = `${width}px`;
   elements.video_track.style.width = `${width}px`;
   elements.asset_track.style.width = `${width}px`;
@@ -11958,6 +12175,15 @@ function renderTimeline({ keepScroll = false } = {}) {
   renderRuler(width);
   elements.video_track.replaceChildren();
   elements.asset_track.replaceChildren();
+  for (let lane = 0; lane < assetLayout.subrowCount; lane += 1) {
+    const row = document.createElement("div");
+    row.className = "image-lane-row";
+    row.dataset.lane = String(lane);
+    row.style.top = `${lane * ASSET_SUBROW_STRIDE_PX}px`;
+    row.textContent = `L${lane + 1}`;
+    row.setAttribute("aria-hidden", "true");
+    elements.asset_track.append(row);
+  }
   elements.audio_track.replaceChildren();
   elements.source_audio_track.replaceChildren();
   elements.caption_tracks.replaceChildren();
@@ -12436,6 +12662,7 @@ function renderTimeline({ keepScroll = false } = {}) {
     block.classList.toggle("selected", asset.id === project.selectedImageAssetId);
     block.dataset.id = asset.id;
     block.dataset.subrow = String(subrow);
+    block.dataset.lane = String(subrow);
     block.style.left = `${timelineX(range.startMs)}px`;
     block.style.width = `${Math.max(8, timelineX(range.endMs - range.startMs))}px`;
     block.style.setProperty(
@@ -14698,11 +14925,17 @@ async function addImageAssetFromBlob(blob: Blob, {
     return null;
   }
   const id = `asset-${crypto.randomUUID()}`;
+  const availableLane = Array.from(
+    { length: Math.max(MAX_IMAGE_LANES, project.imageLaneCount ?? MIN_IMAGE_LANES) },
+    (_, lane) => lane
+  ).find((lane) => imageLaneAvailable(project.imageAssets, project.clips, lane,
+    clip!.timelineStartMs + startOffsetMs, clip!.timelineStartMs + endOffsetMs));
   const asset = createImageAsset(project, {
     id,
     clipId: clip!.id,
     startOffsetMs,
     endOffsetMs,
+    lane: availableLane ?? selectedImageAsset()?.lane ?? 0,
     name: String(name || pastedImageName(blob.type)).slice(0, 160),
     mimeType: blob.type,
     source: { kind: "blob-key", value: id },
@@ -14712,6 +14945,7 @@ async function addImageAssetFromBlob(blob: Blob, {
   const nextProject = {
     ...project,
     imageAssets: [...(project.imageAssets || []), asset],
+    imageLaneCount: Math.max(project.imageLaneCount ?? MIN_IMAGE_LANES, (asset.lane ?? 0) + 1),
     selectedImageAssetId: asset.id,
     selectedClipId: clip!.id
   };
@@ -19848,6 +20082,26 @@ function bindActions() {
   elements.restore_local_draft.addEventListener("click", () => {
     void restoreSelectedLocalDraft();
   });
+  elements.confirm_local_draft_policy.addEventListener("click", () => {
+    void confirmLocalDraftRecoveryPolicy();
+  });
+  elements.cancel_local_draft_policy.addEventListener("click", () => {
+    cancelLocalDraftConfirmation();
+    setLocalDraftMessage("복구 확인을 취소했습니다. 현재 편집과 선택한 버전은 유지됩니다.");
+    elements.restore_local_draft.focus();
+  });
+  elements.save_restored_local_draft.addEventListener("click", () => {
+    if (localDraftOperationActive) return;
+    void queueLocalDraftOperation(async () => {
+      await saveCurrentLocalDraft("manual");
+      setLocalDraftMessage("이 기기에 저장했습니다. 다음 이어편집도 이 상태에서 시작합니다.", "saved", true);
+    }).catch((error: unknown) => setLocalDraftMessage(`저장 실패: ${errorMessage(error)}`, "error", true));
+  });
+  elements.reconnect_restored_media.addEventListener("click", () => {
+    if (localDraftOperationActive) return;
+    closeLocalDraftDialog();
+    (projectUsesChzzkMaterializedMedia(project) ? elements.prepare_chzzk_vod : elements.pick_media).click();
+  });
   elements.open_session_archive_file.addEventListener("click", () => {
     elements.session_archive_input.click();
   });
@@ -19872,6 +20126,7 @@ function bindActions() {
     }
   });
   elements.local_draft_dialog.addEventListener("close", () => {
+    cancelLocalDraftConfirmation();
     elements.local_draft_dialog.hidden = true;
     if (focusBeforeLocalDraftDialog?.isConnected) {
       focusBeforeLocalDraftDialog.focus();
@@ -20602,6 +20857,33 @@ function bindActions() {
     }
     applyProject(next);
     showToast(`${next.subtitleLaneCount}번째 자막 레인을 추가했습니다.`, "success");
+  });
+  elements.add_image_lane.addEventListener("click", () => {
+    if (projectMutationLockCount > 0 || pointerEditActive) return;
+    applyProject(addImageLane(project));
+  });
+  elements.remove_image_lane.addEventListener("click", () => {
+    if (projectMutationLockCount > 0 || pointerEditActive) return;
+    const lane = lastEmptyLane(project.imageLaneCount ?? MIN_IMAGE_LANES, project.imageAssets, MIN_IMAGE_LANES);
+    if (lane !== null) applyProject(removeImageLane(project, lane));
+  });
+  elements.remove_subtitle_lane.addEventListener("click", () => {
+    if (projectMutationLockCount > 0 || pointerEditActive) return;
+    const lane = lastEmptyLane(project.subtitleLaneCount, project.subtitles, MIN_SUBTITLE_LANES);
+    if (lane !== null) applyProject(removeSubtitleLane(project, lane));
+  });
+  elements.remove_video_lane.addEventListener("click", () => {
+    if (workspaceMode !== "short-form" || shortTimelineSourceEditsBlocked()) return;
+    const lane = lastEmptyLane(project.shortForm.videoLaneCount, project.shortForm.videoAssets, 1);
+    if (lane !== null) applyProject({ ...project, shortForm: removeShortFormVideoLane(project.shortForm, lane) });
+  });
+  elements.asset_lane.addEventListener("change", () => {
+    if (projectMutationLockCount > 0 || pointerEditActive) return;
+    const asset = selectedImageAsset();
+    const lane = Number(elements.asset_lane.value);
+    if (asset && Number.isInteger(lane) && lane >= 0 && lane < (project.imageLaneCount ?? MIN_IMAGE_LANES)) {
+      applyProject(updateImageAsset(project, asset.id, { lane }));
+    }
   });
   elements.cue_text.addEventListener("input", () => {
     const cue = selectedCue();
@@ -21760,7 +22042,7 @@ async function initialize() {
     purpose: checkpointPolicy.purpose,
     hasCaptureSeed: captureState !== null,
     hasCurrentProject: storedProject !== null,
-    checkpointBaselineHasProject: checkpoint.baseline.project !== null
+    checkpointBaselineHasProject: checkpoint.initialProjectPresent ?? checkpoint.baseline.project !== null
   });
   if (entry.kind === "error") {
     const messages = {
@@ -22011,7 +22293,7 @@ async function initialize() {
     );
   }
   try {
-    const drafts = await listLocalDrafts(project.id, { limit: 5 });
+    const drafts = await listLocalDrafts(project.id, { limit: 10 });
     lastAutomaticDraftAtMs = Number(
       drafts.find((draft) => draft.reason === "auto")?.createdAtMs
     ) || 0;
@@ -22187,7 +22469,7 @@ async function applyLocalCaptionFirstPass(detail: unknown) {
     fieldEditSession = null;
     renderAll({ keepScroll: true });
     updateLocalDraftStatus(
-      await listLocalDrafts(project.id, { limit: 5 })
+      await listLocalDrafts(project.id, { limit: 10 })
     );
     showToast(
       `Codex 로컬 초벌 자막 ${addedCount}개를 기존 자막과 별도로 추가했습니다.`,

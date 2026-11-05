@@ -92,7 +92,7 @@ test("seek targets require a ready source clock and never clamp saved cut bounda
 test("cut review controls retain source, busy and asynchronous response guards", async () => {
   const source = await readFile(new URL("../src/web/main.ts", import.meta.url), "utf8");
   assert.match(source, /return openingEditor \|\| Boolean\(resumeProject\) \|\| activeCutSeek !== null\s*\|\| localPreviewBusy/u);
-  assert.match(source, /elements\.sourceUrl\.addEventListener\("input", \(\) => \{\s*resetCutReviewSession\(\)/u);
+  assert.match(source, /elements\.sourceUrl\.addEventListener\("input", \(\) => \{\s*if \(resumeProject\) return;\s*resetCutReviewSession\(\)/u);
   assert.match(source, /resetCutReviewSession\(\);\s*clearResumeMode\(\);\s*elements\.sourceUrl\.value = imported\.sourceUrl/u);
   const seek = source.slice(source.indexOf("async function seekToClipBoundary"), source.indexOf("async function seekPlayerBy"));
   assert.match(seek, /generation === cutReviewGeneration && cutReviewSource\(\) === source/u);

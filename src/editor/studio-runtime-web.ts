@@ -420,6 +420,47 @@ export async function verifyStudioUsagePolicyGate({
   return { ok: true, usagePolicy: activeSessionSummary(session) };
 }
 
+/** Confirms a new recovery purpose inside the already admitted editor tab.
+ * The writer lease and checkpoint remain owned by this document; a URL change
+ * alone can never supply the attestation or replace a stale session.
+ */
+export function confirmStudioRecoverySession({
+  expected,
+  attestation
+}: {
+  expected: ActiveStudioUsagePolicySession;
+  attestation: UsagePolicyAttestation;
+}): ActiveStudioUsagePolicySession {
+  const session = storedWebUsageSession();
+  const current = session && activeSessionSummary(session);
+  if (
+    !session?.admitted || !current
+    || webEditorProjectId !== expected.projectId
+    || (Object.keys(expected) as Array<keyof ActiveStudioUsagePolicySession>)
+      .some((key) => current[key] !== expected[key])
+    || (typeof navigator.locks?.request === "function" && (
+      !releaseWebProjectWriter
+      || webProjectWriterLockName !== `${WEB_PROJECT_WRITER_LOCK_PREFIX}${expected.projectId}`
+    ))
+  ) {
+    throw new Error("현재 편집의 권리 확인 또는 탭 잠금이 달라 복구 확인을 적용하지 않았습니다.");
+  }
+  const normalized = normalizeUsagePolicyAttestation(attestation, {
+    expectedTarget: {
+      projectId: expected.projectId,
+      sourceSessionId: expected.sourceSessionId,
+      purpose: "editor-recovery"
+    }
+  });
+  const confirmed: StoredWebUsageSession = {
+    ...session,
+    attestation: normalized,
+    lastSeenAtMs: Date.now()
+  };
+  saveWebUsageSession(confirmed);
+  return activeSessionSummary(confirmed);
+}
+
 export async function completeStudioEditorSession({
   projectId,
   sourceSessionId,

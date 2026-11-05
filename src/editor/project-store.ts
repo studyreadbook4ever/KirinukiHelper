@@ -14,7 +14,9 @@ const LOCAL_DRAFT_SCHEMA = "chzzk-kirinuki-local-draft/v1";
 export const SHORT_VIDEO_CACHE_SCHEMA = "chzzk-kirinuki-short-video-cache/v1";
 export const EDITING_SESSION_CHECKPOINT_SCHEMA =
   "chzzk-kirinuki-editing-session-checkpoint/v1";
-const MAX_LOCAL_DRAFTS = 5;
+const MAX_MANUAL_DRAFTS = 5;
+const MAX_TEMPORARY_DRAFTS = 5;
+const MAX_LOCAL_DRAFTS = MAX_MANUAL_DRAFTS + MAX_TEMPORARY_DRAFTS;
 const LOCAL_DRAFT_REASONS = new Set(["manual", "auto", "pre-restore"]);
 
 type LocalDraftReason = "manual" | "auto" | "pre-restore";
@@ -132,6 +134,8 @@ export interface EditingSessionCheckpointRecord {
   projectId: string;
   sessionId: string;
   createdAt: string;
+  /** Entry identity stays fixed when an explicit save advances the baseline. */
+  initialProjectPresent?: boolean;
   baseline: EditingSessionBaselineSnapshot;
 }
 
@@ -680,7 +684,76 @@ export async function pruneShortVideoCaches(
   for (const assetId of keepAssetIds) {
     keep.add(requiredCacheText(assetId, "숏폼 영상 에셋 ID"));
   }
-  return deleteProjectShortVideoCaches(normalizedProjectId, keep);
+  return transaction(
+    [PROJECTS, LOCAL_DRAFTS, EDITING_SESSION_CHECKPOINTS, SHORT_VIDEO_CACHES],
+    "readwrite",
+    (stores, activeTransaction) => {
+      const cacheStore = requiredStore(stores, SHORT_VIDEO_CACHES);
+      let count = 0;
+      readRetainedProjectReferences(stores, activeTransaction, normalizedProjectId, (projects) => {
+        for (const project of projects) {
+          for (const assetId of referencedShortVideoCacheIds(project)) keep.add(assetId);
+        }
+        const keys = cacheStore.index(SHORT_VIDEO_CACHE_PROJECT_INDEX).getAllKeys(normalizedProjectId);
+        keys.onsuccess = () => {
+          try {
+            for (const key of keys.result || []) {
+              if (!Array.isArray(key) || key.length !== 2 || String(key[0]) !== normalizedProjectId) {
+                throw new TypeError("숏폼 영상 캐시 인덱스 키가 올바르지 않습니다.");
+              }
+              if (!keep.has(String(key[1]))) {
+                cacheStore.delete(key);
+                count += 1;
+              }
+            }
+          } catch (error) {
+            abortTransaction(activeTransaction, error);
+          }
+        };
+      });
+      return { get result() { return count; } };
+    }
+  );
+}
+
+/** CURRENT, retained versions and the rollback baseline all own local assets. */
+function readRetainedProjectReferences(
+  stores: StoreMap,
+  activeTransaction: IDBTransaction,
+  projectId: string,
+  onProjects: (projects: StoredProject[]) => void
+): void {
+  const projects: StoredProject[] = [];
+  let pending = 3;
+  const finish = (read: () => void): void => {
+    try {
+      read();
+      pending -= 1;
+      if (pending === 0) onProjects(projects);
+    } catch (error) {
+      abortTransaction(activeTransaction, error);
+    }
+  };
+  const current = requiredStore(stores, PROJECTS).get(projectId);
+  current.onsuccess = () => finish(() => {
+    if (current.result !== undefined) projects.push(current.result as StoredProject);
+  });
+  const drafts = requiredStore(stores, LOCAL_DRAFTS).index(LOCAL_DRAFT_PROJECT_INDEX).getAll(projectId);
+  drafts.onsuccess = () => finish(() => {
+    for (const draft of drafts.result || []) {
+      if (!isLocalDraftRecord(draft, projectId)) {
+        throw new TypeError("편집 세션의 현재 임시저장 형식이 올바르지 않습니다.");
+      }
+      projects.push(draft.project);
+    }
+  });
+  const checkpoint = requiredStore(stores, EDITING_SESSION_CHECKPOINTS).get(projectId);
+  checkpoint.onsuccess = () => finish(() => {
+    if (checkpoint.result === undefined) return;
+    const { baseline } = parseEditingSessionCheckpointRecord(checkpoint.result, projectId);
+    if (baseline.project) projects.push(baseline.project);
+    projects.push(...baseline.localDrafts.map((draft) => draft.project));
+  });
 }
 
 function requiredProjectId(project: Partial<StoredProject> | null | undefined): string {
@@ -840,16 +913,125 @@ function compareLocalDraftsNewestFirst(
 function trimLocalDrafts(
   store: IDBObjectStore,
   projectId: string,
-  removedIds: string[]
+  removedIds: string[],
+  activeTransaction: IDBTransaction,
+  protectedIds: ReadonlySet<string> = new Set(),
+  onRetained?: (drafts: LocalDraftRecord[]) => void
 ): void {
   const request = store.index(LOCAL_DRAFT_PROJECT_INDEX).getAll(projectId);
   request.onsuccess = () => {
-    const drafts = (request.result || [])
-      .filter((draft) => isLocalDraftRecord(draft, projectId))
-      .sort(compareLocalDraftsNewestFirst);
-    for (const draft of drafts.slice(MAX_LOCAL_DRAFTS)) {
-      store.delete(draft.id);
-      removedIds.push(draft.id);
+    try {
+      const drafts = (request.result || [])
+        .filter((draft) => isLocalDraftRecord(draft, projectId));
+      const retained = retainedLocalDrafts(drafts, protectedIds);
+      const retainedIds = new Set(retained.map((draft) => draft.id));
+      for (const draft of drafts) {
+        if (!retainedIds.has(draft.id)) {
+          store.delete(draft.id);
+          removedIds.push(draft.id);
+        }
+      }
+      onRetained?.(retained);
+    } catch (error) {
+      abortTransaction(activeTransaction, error);
+    }
+  };
+}
+
+function retainedLocalDrafts(
+  drafts: LocalDraftRecord[],
+  protectedIds: ReadonlySet<string> = new Set()
+): LocalDraftRecord[] {
+  const unique = [...new Map(drafts.map((draft) => [draft.id, draft])).values()];
+  const prioritizeProtected = (first: LocalDraftRecord, second: LocalDraftRecord): number => (
+    Number(protectedIds.has(second.id)) - Number(protectedIds.has(first.id))
+    || compareLocalDraftsNewestFirst(first, second)
+  );
+  return [
+    ...unique.filter((draft) => draft.reason === "manual")
+      .sort(prioritizeProtected).slice(0, MAX_MANUAL_DRAFTS),
+    ...unique.filter((draft) => draft.reason !== "manual")
+      .sort(prioritizeProtected).slice(0, MAX_TEMPORARY_DRAFTS)
+  ].sort(compareLocalDraftsNewestFirst);
+}
+
+/** Advance the entire rollback snapshot in the explicit-save transaction. */
+function advanceExplicitSaveBaseline(
+  stores: StoreMap,
+  activeTransaction: IDBTransaction,
+  draft: LocalDraftRecord,
+  retainedDrafts: LocalDraftRecord[]
+): void {
+  const checkpointStore = requiredStore(stores, EDITING_SESSION_CHECKPOINTS);
+  const request = checkpointStore.get(draft.projectId);
+  request.onsuccess = () => {
+    try {
+      if (request.result === undefined) {
+        return;
+      }
+      const checkpoint = parseEditingSessionCheckpointRecord(request.result, draft.projectId);
+      const manualDrafts = retainedDrafts.filter((entry) => entry.reason === "manual");
+      const imageIds = new Set<string>();
+      const cacheIds = new Set<string>();
+      for (const project of [draft.project, ...manualDrafts.map((entry) => entry.project)]) {
+        for (const id of referencedImageAssetBlobIds(project)) imageIds.add(id);
+        for (const id of referencedShortVideoCacheIds(project)) cacheIds.add(id);
+      }
+      const imageStore = requiredStore(stores, IMAGE_ASSETS);
+      const cacheStore = requiredStore(stores, SHORT_VIDEO_CACHES);
+      let imageKeys: IDBValidKey[] = [];
+      let imageValues: unknown[] = [];
+      let caches: ShortVideoCacheRecord[] = [];
+      let pending = 3;
+      const finish = (read: () => void): void => {
+        try {
+          read();
+          pending -= 1;
+          if (pending !== 0) return;
+          if (imageKeys.length !== imageValues.length) {
+            throw new Error("이미지 저장소의 키와 값 개수가 달라 저장 기준을 변경하지 않았습니다.");
+          }
+          const images: EditingSessionImageAssetSnapshot[] = [];
+          imageKeys.forEach((key, index) => {
+            if (!Array.isArray(key) || String(key[0]) !== draft.projectId
+              || !imageIds.has(String(key[1]))) return;
+            const blob = imageValues[index];
+            if (!(blob instanceof Blob)) {
+              throw new TypeError("저장할 프로젝트 이미지가 Blob이 아닙니다.");
+            }
+            images.push({ key: cloneStoredValue(key), blob: cloneStoredValue(blob) });
+          });
+          const handle = exactLocalDraftMediaHandle(draft);
+          const updated: EditingSessionCheckpointRecord = {
+            ...checkpoint,
+            initialProjectPresent: checkpoint.initialProjectPresent
+              ?? checkpoint.baseline.project !== null,
+            baseline: {
+              project: cloneStoredValue(draft.project),
+              localDrafts: cloneStoredValue(manualDrafts),
+              imageAssets: images,
+              shortVideoCaches: caches.filter((cache) => cacheIds.has(cache.assetId)),
+              mediaHandle: { present: handle !== null, handle }
+            }
+          };
+          parseEditingSessionCheckpointRecord(updated, draft.projectId);
+          checkpointStore.put(updated);
+        } catch (error) {
+          abortTransaction(activeTransaction, error);
+        }
+      };
+      const keys = imageStore.getAllKeys();
+      keys.onsuccess = () => finish(() => { imageKeys = keys.result || []; });
+      const values = imageStore.getAll();
+      values.onsuccess = () => finish(() => { imageValues = values.result || []; });
+      const cacheRequest = cacheStore.index(SHORT_VIDEO_CACHE_PROJECT_INDEX).getAll(draft.projectId);
+      cacheRequest.onsuccess = () => finish(() => {
+        caches = (cacheRequest.result || []).map((cache) => cloneStoredValue(
+          parseShortVideoCacheRecord(cache, draft.projectId)
+        ));
+      });
+    } catch (error) {
+      abortTransaction(activeTransaction, error);
     }
   };
 }
@@ -915,7 +1097,9 @@ export async function saveLocalDraft(project: StoredProject, {
   });
   const removedIds: string[] = [];
   await transaction(
-    [PROJECTS, LOCAL_DRAFTS, HANDLES],
+    draft.reason === "manual"
+      ? [PROJECTS, LOCAL_DRAFTS, HANDLES, IMAGE_ASSETS, SHORT_VIDEO_CACHES, EDITING_SESSION_CHECKPOINTS]
+      : [PROJECTS, LOCAL_DRAFTS, HANDLES],
     "readwrite",
     (stores, activeTransaction) => {
       const projectStore = requiredStore(stores, PROJECTS);
@@ -930,7 +1114,12 @@ export async function saveLocalDraft(project: StoredProject, {
           );
           projectStore.put(storedProject);
           draftStore.put(draft);
-          trimLocalDrafts(draftStore, draft.projectId, removedIds);
+          trimLocalDrafts(draftStore, draft.projectId, removedIds, activeTransaction,
+            new Set([draft.id]), (retained) => {
+              if (draft.reason === "manual") {
+                advanceExplicitSaveBaseline(stores, activeTransaction, draft, retained);
+              }
+            });
         } catch (error) {
           abortTransaction(activeTransaction, error);
         }
@@ -969,15 +1158,16 @@ export async function restoreLocalDraft(
     throw new TypeError("임시저장본의 프로젝트 ID가 현재 프로젝트와 다릅니다.");
   }
   const storedCurrentProject = cloneStoredValue(currentProject);
-  const restoredMediaHandle = exactLocalDraftMediaHandle(
-    draftRecord as LocalDraftRecord
-  );
+  let restoredMediaHandle: FileSystemFileHandle | null = null;
   const preRestoreDraft = createLocalDraftRecord(storedCurrentProject, {
     reason: "pre-restore",
     restoredFromDraftId: draftRecord.id,
     now,
     id
   });
+  if (preRestoreDraft.id === draftRecord.id) {
+    throw new TypeError("복구 직전본 ID는 선택한 저장본 ID와 달라야 합니다.");
+  }
   const removedIds: string[] = [];
   await transaction(
     [PROJECTS, LOCAL_DRAFTS, HANDLES],
@@ -986,20 +1176,34 @@ export async function restoreLocalDraft(
       const projectStore = requiredStore(stores, PROJECTS);
       const draftStore = requiredStore(stores, LOCAL_DRAFTS);
       const handleStore = requiredStore(stores, HANDLES);
-      const handleRequest = handleStore.get(projectId);
-      handleRequest.onsuccess = () => {
+      const selectedRequest = draftStore.get(draftRecord.id);
+      selectedRequest.onsuccess = () => {
         try {
-          preRestoreDraft.mediaHandleBinding = localDraftMediaHandleBinding(
-            storedCurrentProject,
-            handleRequest.result
-          );
-          projectStore.put(restoredProject);
-          draftStore.put(preRestoreDraft);
-          handleStore.delete(projectId);
-          if (restoredMediaHandle) {
-            handleStore.put(restoredMediaHandle, projectId);
+          const selected = selectedRequest.result;
+          if (!isLocalDraftRecord(selected, projectId)
+            || selected.createdAtMs !== draftRecord.createdAtMs) {
+            throw new TypeError("이 프로젝트에서 불러올 수 있는 임시저장본이 아닙니다.");
           }
-          trimLocalDrafts(draftStore, projectId, removedIds);
+          restoredMediaHandle = exactLocalDraftMediaHandle(selected);
+          const handleRequest = handleStore.get(projectId);
+          handleRequest.onsuccess = () => {
+            try {
+              preRestoreDraft.mediaHandleBinding = localDraftMediaHandleBinding(
+                storedCurrentProject,
+                handleRequest.result
+              );
+              projectStore.put(restoredProject);
+              draftStore.put(preRestoreDraft);
+              handleStore.delete(projectId);
+              if (restoredMediaHandle) {
+                handleStore.put(restoredMediaHandle, projectId);
+              }
+              trimLocalDrafts(draftStore, projectId, removedIds, activeTransaction,
+                new Set([draftRecord.id, preRestoreDraft.id]));
+            } catch (error) {
+              abortTransaction(activeTransaction, error);
+            }
+          };
         } catch (error) {
           abortTransaction(activeTransaction, error);
         }
@@ -1060,6 +1264,10 @@ function parseEditingSessionCheckpointRecord(
   }
   requiredEditingSessionId(candidate.sessionId);
   editingSessionCheckpointTimestamp(String(candidate.createdAt || ""));
+  if (candidate.initialProjectPresent !== undefined
+    && typeof candidate.initialProjectPresent !== "boolean") {
+    throw new TypeError("편집 세션 최초 프로젝트 상태가 올바르지 않습니다.");
+  }
   const baseline = candidate.baseline;
   if (!baseline || typeof baseline !== "object" || Array.isArray(baseline)) {
     throw new TypeError("편집 세션 baseline 형식이 올바르지 않습니다.");
@@ -1271,6 +1479,7 @@ export async function beginEditingSessionCheckpoint(
               projectId: normalizedProjectId,
               sessionId: normalizedSessionId,
               createdAt,
+              initialProjectPresent: storedProject !== null,
               baseline: {
                 project: storedProject,
                 localDrafts,
@@ -1491,13 +1700,11 @@ function referencedShortVideoCacheIds(
 }
 
 /**
- * Restores the exact project-scoped browser data captured on entry and then
- * removes the checkpoint, all in one transaction. Manual drafts created after
- * entry are explicit user saves: keep the newest five and only the local
- * assets they reference. If a new session has such a draft, its newest
- * snapshot becomes CURRENT so the start screen can actually offer recovery;
- * only that exact snapshot's bound file handle may follow it. An existing
- * baseline always restores its own handle instead of the session's last one.
+ * Restores the last explicitly saved full baseline (or entry state when no
+ * manual save occurred), then removes the checkpoint atomically. Legacy
+ * checkpoints keep their original baseline rather than guessing which old
+ * manual snapshot and assets should be promoted. Only a legacy empty baseline
+ * may use its exact newest manual snapshot and bound handle as before.
  */
 async function discardEditingSessionCheckpointInternal(
   normalizedProjectId: string,
@@ -1562,12 +1769,10 @@ async function discardEditingSessionCheckpointInternal(
             const newManualDrafts = currentDrafts.filter((draft) => (
               draft.reason === "manual" && !baselineDraftIds.has(draft.id)
             ));
-            const finalDrafts = [
+            const finalDrafts = retainedLocalDrafts([
               ...baseline.localDrafts,
               ...newManualDrafts
-            ].sort(compareLocalDraftsNewestFirst).filter((draft, index, all) => (
-              all.findIndex((candidate) => candidate.id === draft.id) === index
-            )).slice(0, MAX_LOCAL_DRAFTS);
+            ]);
             const keptNewManualIds = new Set(
               finalDrafts
                 .filter((draft) => !baselineDraftIds.has(draft.id))
@@ -2148,86 +2353,35 @@ export async function pruneImageAssetBlobs(
   keepAssetIds: Iterable<unknown> = []
 ): Promise<number> {
   const targetProjectId = String(projectId || "");
-  const requestedKeep = new Set(
-    Array.from(keepAssetIds || [], (assetId) => String(assetId || ""))
-  );
-  const deletedCount = await transaction(
-    [PROJECTS, LOCAL_DRAFTS, IMAGE_ASSETS],
+  const keep = new Set(Array.from(keepAssetIds, (assetId) => String(assetId || "")));
+  return transaction(
+    [PROJECTS, LOCAL_DRAFTS, IMAGE_ASSETS, EDITING_SESSION_CHECKPOINTS],
     "readwrite",
-    (stores) => {
-      const projectStore = requiredStore(stores, PROJECTS);
-      const draftStore = requiredStore(stores, LOCAL_DRAFTS);
-      const imageAssetStore = requiredStore(stores, IMAGE_ASSETS);
+    (stores, activeTransaction) => {
+      const imageStore = requiredStore(stores, IMAGE_ASSETS);
       let count = 0;
-      let pendingReferenceReads = 2;
-      const keep = new Set(requestedKeep);
-      const collectReferencedAssets = (
-        candidateProject: Partial<StoredProject> | null | undefined
-      ): void => {
-        const assets = [
-          ...(candidateProject?.imageAssets || []),
-          ...(candidateProject?.shortForm?.imageAssets || []),
-          ...(candidateProject?.shortFormWorkspaces?.workspaces || []).flatMap(
-            (workspace) => workspace.shortForm?.imageAssets || []
-          )
-        ];
-        for (const asset of assets) {
-          if (asset?.source?.kind !== "blob-key") {
-            continue;
-          }
-          const blobKey = String(asset.source.value || asset.id || "");
-          if (blobKey) {
-            keep.add(blobKey);
-          }
+      readRetainedProjectReferences(stores, activeTransaction, targetProjectId, (projects) => {
+        for (const project of projects) {
+          for (const assetId of referencedImageAssetBlobIds(project)) keep.add(assetId);
         }
-      };
-      const scanImageAssetsAfterReferences = () => {
-        pendingReferenceReads -= 1;
-        if (pendingReferenceReads > 0) {
-          return;
-        }
-        const request = imageAssetStore.openKeyCursor();
+        const request = imageStore.openKeyCursor();
         request.onsuccess = () => {
-          const cursor = request.result;
-          if (!cursor) {
-            return;
+          try {
+            const cursor = request.result;
+            if (!cursor) return;
+            const key = cursor.primaryKey ?? cursor.key;
+            if (Array.isArray(key) && key.length >= 2
+              && String(key[0]) === targetProjectId && !keep.has(String(key[1]))) {
+              imageStore.delete(key);
+              count += 1;
+            }
+            cursor.continue();
+          } catch (error) {
+            abortTransaction(activeTransaction, error);
           }
-          const key = cursor.primaryKey ?? cursor.key;
-          if (
-            Array.isArray(key)
-            && key.length >= 2
-            && String(key[0]) === targetProjectId
-            && !keep.has(String(key[1]))
-          ) {
-            imageAssetStore.delete(key);
-            count += 1;
-          }
-          cursor.continue();
         };
-      };
-
-      const projectRequest = projectStore.get(targetProjectId);
-      projectRequest.onsuccess = () => {
-        collectReferencedAssets(projectRequest.result);
-        scanImageAssetsAfterReferences();
-      };
-      const draftsRequest = draftStore
-        .index(LOCAL_DRAFT_PROJECT_INDEX)
-        .getAll(targetProjectId);
-      draftsRequest.onsuccess = () => {
-        for (const draft of draftsRequest.result || []) {
-          if (isLocalDraftRecord(draft, targetProjectId)) {
-            collectReferencedAssets(draft.project);
-          }
-        }
-        scanImageAssetsAfterReferences();
-      };
-      return {
-        get result() {
-          return count;
-        }
-      };
+      });
+      return { get result() { return count; } };
     }
   );
-  return Number(deletedCount) || 0;
 }

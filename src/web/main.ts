@@ -202,6 +202,9 @@ function startLocalApplication(): void {
 setDocumentSurface("local");
 
 const elements = {
+  resumeIntentSummary: requiredElement<HTMLElement>("#resume-intent-summary"),
+  resumeIntentTarget: requiredElement<HTMLElement>("#resume-intent-target"),
+  cancelResumeIntent: requiredElement<HTMLButtonElement>("#cancel-resume-intent"),
   form: requiredElement<HTMLFormElement>("#start-form"),
   helperDownload: requiredElement<HTMLAnchorElement>(
     "#linux-helper-download"
@@ -1757,7 +1760,11 @@ function showResumePolicy(
     elements.sourceUrl.value = String(source.canonicalUrl);
   }
   elements.projectName.value = project.name;
-  elements.startEditor.textContent = "편집기 열기";
+  elements.projectName.readOnly = true;
+  elements.sourceUrl.readOnly = true;
+  elements.resumeIntentSummary.hidden = false;
+  elements.resumeIntentTarget.textContent = project.name;
+  elements.startEditor.textContent = recoveryDrafts ? "복구본 선택으로 계속" : "저장한 편집 이어서 열기";
   elements.selectionRail.hidden = true;
   elements.selectionRail.inert = true;
   elements.sourceCacheStatus.hidden = true;
@@ -1781,6 +1788,9 @@ function clearResumeMode(): void {
   }
   resumeProject = null;
   resumeRecoveryDrafts = false;
+  elements.projectName.readOnly = false;
+  elements.sourceUrl.readOnly = false;
+  elements.resumeIntentSummary.hidden = true;
   elements.startEditor.textContent = "편집기 열기";
   elements.selectionRail.hidden = false;
   elements.selectionRail.inert = false;
@@ -2097,7 +2107,7 @@ function renderLocalProjectEntries(): void {
       : hasOpenEditingSession
       ? busyTitle
       : draftCount > 0
-        ? "이 프로젝트의 최근 5개 자동·수동 복구본 중에서 선택"
+        ? "직접 저장한 버전 5개와 임시 복구본 5개 중에서 선택"
         : "이 프로젝트에는 선택할 복구본이 없습니다";
     remove.title = hasOpenEditingSession
       ? busyTitle
@@ -2184,7 +2194,7 @@ async function refreshLocalProjectManager({
       return normalized;
     });
     const draftCounts = await Promise.all(projects.map(async (project) => (
-      await listLocalDrafts(project.id, { limit: 5 })
+      await listLocalDrafts(project.id, { limit: 10 })
     ).length));
     localProjectEntries = projects.map((project, index) => ({
       project,
@@ -2214,7 +2224,7 @@ async function refreshLocalProjectManager({
     localProjectManagerLastError = null;
     if (rolledBackProjectIds.length > 0) {
       const message =
-        `저장으로 확정하지 않은 이전 작업 ${rolledBackProjectIds.length}개를 정리했습니다. 수동 임시저장은 남기고 나머지는 열기 전 상태로 되돌렸습니다.`;
+        `저장으로 확정하지 않은 이전 작업 ${rolledBackProjectIds.length}개를 정리했습니다. 마지막 직접 저장 상태는 남기고 이후 미저장 변경만 정리했습니다.`;
       setStatus(message, "success");
     } else if (announce) {
       setStatus(
@@ -2953,6 +2963,7 @@ elements.sessionArchiveInput.addEventListener("change", () => {
     });
 });
 elements.sourceUrl.addEventListener("input", () => {
+  if (resumeProject) return;
   resetCutReviewSession();
   clearResumeMode();
   resetLocalVodWebPlayback();
@@ -2962,8 +2973,13 @@ elements.sourceUrl.addEventListener("input", () => {
   scheduleStreamPreview();
 });
 elements.projectName.addEventListener("input", () => {
-  clearResumeMode();
+  if (resumeProject) return;
   void refreshStoredSourceIntent();
+});
+elements.cancelResumeIntent.addEventListener("click", () => {
+  clearResumeMode();
+  for (const input of document.querySelectorAll<HTMLInputElement>("#policy-section [data-ack]")) input.checked = false;
+  elements.sourceUrl.focus();
 });
 elements.openSource.addEventListener("click", () => {
   try {
