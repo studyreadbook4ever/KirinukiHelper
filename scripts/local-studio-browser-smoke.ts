@@ -3766,6 +3766,18 @@ async function main(): Promise<void> {
     return true;
   `, [transitionChzzkUrl]);
   const pendingHandoffSnapshot = () => execute<{
+    ownerId: string;
+    origin: string;
+    readyState: string;
+    visibilityState: string;
+    status: string;
+    preparationStage: string;
+    preparationErrorCode: string;
+    handoffs: Array<{
+      key: string; ownerId: string; projectId: string; lifecycle: string;
+      requestFingerprint: string; jobId: string; expiresAtMs: number | null;
+    }>;
+    locks: unknown;
     exists: boolean;
     schema: string;
     projectId: string;
@@ -3776,6 +3788,7 @@ async function main(): Promise<void> {
     requestFingerprint: string;
     secretKeys: string[];
   }>(`
+    return (async () => {
     const ownerId = sessionStorage.getItem(arguments[0]) || "";
     const pending = JSON.parse(
       localStorage.getItem(arguments[1] + ownerId) || "null"
@@ -3792,7 +3805,26 @@ async function main(): Promise<void> {
       }
     };
     walk(pending);
+    const handoffs = Object.keys(localStorage).filter((key) => key.startsWith(arguments[1]))
+      .sort().map((key) => {
+        let record = null;
+        try { record = JSON.parse(localStorage.getItem(key) || "null"); } catch {}
+        return {
+          key, ownerId: String(record?.ownerId || ""), projectId: String(record?.projectId || ""),
+          lifecycle: String(record?.lifecycle || ""), requestFingerprint: String(record?.requestFingerprint || ""),
+          jobId: String(record?.jobId || ""), expiresAtMs: Number.isFinite(record?.expiresAtMs) ? record.expiresAtMs : null
+        };
+      });
+    let locks = null;
+    try { locks = navigator.locks ? await navigator.locks.query() : { unavailable: true }; }
+    catch (error) { locks = { error: String(error) }; }
     return {
+      ownerId, origin: location.origin, readyState: document.readyState,
+      visibilityState: document.visibilityState,
+      status: document.querySelector("#form-status")?.textContent || "",
+      preparationStage: document.querySelector("#cut-preparation-stage")?.textContent || "",
+      preparationErrorCode: document.querySelector("#cut-preparation-error-code")?.textContent || "",
+      handoffs, locks,
       exists: Boolean(pending),
       schema: String(pending?.schema || ""),
       projectId: String(pending?.projectId || ""),
@@ -3805,6 +3837,7 @@ async function main(): Promise<void> {
       requestFingerprint: String(pending?.requestFingerprint || ""),
       secretKeys
     };
+    })();
   `, [
     PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY,
     PENDING_VOD_EDITOR_HANDOFF_STORAGE_PREFIX
@@ -3832,10 +3865,12 @@ async function main(): Promise<void> {
     "대기 중인 B의 secret-free persistent handoff를 새로고침 전에 저장하지 못했습니다.",
     5_000
   );
+  process.stderr.write(`[browser-smoke] persistent B before reload: ${JSON.stringify(pendingBeforeReload.pending)}\n`);
   await webdriver("POST", `/session/${sessionId}/refresh`, {});
   const pendingAfterReload = await waitFor(
     async () => ({
       href: await execute<string>("return location.href;"),
+      beforeReloadPending: pendingBeforeReload.pending,
       fixture: lateMaterializationFixture.snapshot(),
       pending: await pendingHandoffSnapshot()
     }),
