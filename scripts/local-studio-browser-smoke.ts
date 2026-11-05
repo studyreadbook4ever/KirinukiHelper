@@ -807,18 +807,21 @@ async function waitFor<T>(
 ): Promise<T> {
   const startedAt = Date.now();
   let latest: T | undefined;
+  let lastProbeError = "";
   while (Date.now() - startedAt < timeoutMs) {
     try {
       latest = await probe();
       if (predicate(latest)) {
         return latest;
       }
-    } catch {
+    } catch (error) {
       // Navigation 중 일시적으로 사라진 execution context는 재시도한다.
+      lastProbeError = errorMessage(error);
     }
     await delay(100);
   }
-  throw new Error(`${message}: ${JSON.stringify(latest)}`);
+  throw new Error(`${message}: ${JSON.stringify(latest)}${lastProbeError
+    ? `\n마지막 probe 오류: ${lastProbeError}` : ""}`);
 }
 
 function exactLoopbackDebuggerAddress(value: unknown): string {
@@ -3667,7 +3670,49 @@ async function main(): Promise<void> {
   await captureLocalMediaEngineProtocolAttempt(debuggerAddress);
   assert(localMediaEngineFixture, "v2 local media engine fixture가 시작되지 않았습니다.");
   await enrollLocalMediaEngineFixture(localMediaEngineFixture);
-  await webdriver("POST", `/session/${sessionId}/refresh`, {});
+  // An unhandled external-protocol request leaves headless Chrome's original
+  // WebContents suppressing trusted input, even after a normal navigation.
+  // Continue in a native opener-created tab, which inherits sessionStorage.
+  // Close the original before initialization so its writer lock is released.
+  // Do not reconstruct policy sessions, clear locks, or alter persisted data.
+  const protocolTab = await webdriver<string>("GET", `/session/${sessionId}/window`);
+  const protocolContinuation = await execute<{ href: string; storage: string }>(`
+    return { href: location.href,
+      storage: JSON.stringify(Object.entries(sessionStorage).sort(([a], [b]) => a.localeCompare(b))) };
+  `);
+  const protocolProjectId = new URL(protocolContinuation.href).searchParams.get("project") || "";
+  const protocolProjectBefore = await readBrowserProject(protocolProjectId);
+  await execute(`
+    const tab = window.open("about:blank", "_blank");
+    if (!tab) throw new Error("격리된 브라우저 후속 탭을 열지 못했습니다.");
+    return true;
+  `);
+  const continuationTab = await waitFor(
+    () => webdriver<string[]>("GET", `/session/${sessionId}/window/handles`),
+    (handles) => handles.length === 2 && handles.includes(protocolTab),
+    "protocol 검증 뒤 브라우저 후속 탭이 생성되지 않았습니다."
+  );
+  const nextTab = continuationTab.find((handle) => handle !== protocolTab)!;
+  await webdriver("DELETE", `/session/${sessionId}/window`);
+  await webdriver("POST", `/session/${sessionId}/window`, { handle: nextTab });
+  const clonedStorage = await execute<string>(`
+    return JSON.stringify(Object.entries(sessionStorage).sort(([a], [b]) => a.localeCompare(b)));
+  `);
+  assert(clonedStorage === protocolContinuation.storage,
+    "브라우저가 프로젝트·정책·lease를 포함한 기존 세션을 그대로 이어받지 못했습니다.");
+  assert(JSON.stringify(await readBrowserProject(protocolProjectId)) === JSON.stringify(protocolProjectBefore),
+    "protocol 검증 탭을 닫는 동안 저장 프로젝트가 바뀌었습니다.");
+  // Chrome's DevTools permission overrides are also target scoped.
+  for (const name of grantedLnaPermissions) {
+    await cdp("Browser.setPermission", {
+      permission: { name }, setting: "granted", origin: studioOrigin
+    });
+  }
+  await cdp("Network.enable", {});
+  await cdp("Network.setBlockedURLs", {
+    urls: liveEmbedSmoke ? [] : externalEmbedPatterns.filter((pattern) => pattern === "https://www.youtube.com/*")
+  });
+  await webdriver("POST", `/session/${sessionId}/url`, { url: protocolContinuation.href });
   await waitFor(
     () => execute<{
       href: string;
@@ -3716,14 +3761,16 @@ async function main(): Promise<void> {
       "kirinuki:local-web:active-usage-session"
     ) || "null");
     if (!session) throw new Error("첫 편집 세션 lease가 없습니다.");
-    history.back();
+    // The opener-cloned tab has no earlier start-page history entry.
+    // Navigate normally so pagehide still releases A's observer before B.
+    location.assign(arguments[0]);
     return {
       projectId: session.attestation?.target?.projectId || "",
       sourceSessionId: session.attestation?.target?.sourceSessionId || "",
       sessionLeaseId: session.sessionLeaseId || "",
       transitionGeneration: Number(session.transitionGeneration) || 0
     };
-  `);
+  `, [`${studioOrigin}/`]);
   assert(
     firstTransitionSession.projectId === firstTransitionProjectId
       && /^[a-f0-9]{64}$/u.test(firstTransitionSession.sessionLeaseId)
@@ -3746,12 +3793,28 @@ async function main(): Promise<void> {
       value.href === `${studioOrigin}/`
       && !value.startDisabled
     ),
-    "A 편집기에서 뒤로 간 시작 화면이 새 작업을 받을 수 있게 복원되지 않았습니다."
+    "A 편집기에서 돌아간 시작 화면이 새 작업을 받을 수 있게 복원되지 않았습니다."
   );
   await execute(`
     const source = document.querySelector("#source-url");
     if (!(source instanceof HTMLInputElement)) {
       throw new Error("A→B 전환의 원본 주소 입력을 찾지 못했습니다.");
+    }
+    // A fresh start-page navigation has no restored form controls. Enter B's
+    // name and exact range through the normal inputs rather than relying on
+    // the previous page's back/forward cache.
+    const name = document.querySelector("#project-name");
+    if (!(name instanceof HTMLInputElement)) throw new Error("B 편집 이름 입력 없음");
+    name.value = "localhost-browser-smoke";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    const rows = () => [...document.querySelectorAll(".clip-row")];
+    while (rows().length > 1) rows().at(-1).querySelector('[data-action="remove"]').click();
+    const first = rows()[0];
+    for (const [field, value] of [["start", "00:01:20.500"], ["end", "00:01:35.000"]]) {
+      const input = first?.querySelector('[data-field="' + field + '"]');
+      if (!(input instanceof HTMLInputElement)) throw new Error("B 구간 입력 없음");
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
     }
     source.value = arguments[0];
     source.dispatchEvent(new Event("input", { bubbles: true }));
@@ -3821,6 +3884,8 @@ async function main(): Promise<void> {
     return {
       ownerId, origin: location.origin, readyState: document.readyState,
       visibilityState: document.visibilityState,
+      engineDialogOpen: Boolean(document.querySelector("#local-media-engine-dialog")?.open),
+      engineStatus: document.querySelector("#local-media-engine-status")?.textContent || "",
       status: document.querySelector("#form-status")?.textContent || "",
       preparationStage: document.querySelector("#cut-preparation-stage")?.textContent || "",
       preparationErrorCode: document.querySelector("#cut-preparation-error-code")?.textContent || "",
@@ -3925,7 +3990,7 @@ async function main(): Promise<void> {
       && value.clipTimeCount === 1
       && value.clipTime === "00:01:20.500 → 00:01:35.000"
     ),
-    "A를 뒤로 닫은 뒤 다른 VOD의 B 편집기를 독립 세대로 열지 못했습니다.",
+    "A를 떠난 뒤 다른 VOD의 B 편집기를 독립 세대로 열지 못했습니다.",
     20_000
   );
   const secondTransitionSession = await execute<{
@@ -4623,6 +4688,111 @@ async function main(): Promise<void> {
     );
   };
 
+  const settleRecoveryMedia = async (
+    projectId: string,
+    context: string,
+    completion: "initialization" | "restoration" = "initialization"
+  ) => {
+    let beforeDismissal: EditorProject | null = null;
+    let dismissals = 0;
+    let dismissalAttempts = 0;
+    let dismissalStage = "waiting-for-onboarding";
+    let dismissalError = "";
+    const settled = await waitFor(
+      async () => {
+        const state = await execute<{
+          projectId: string;
+          runtimeReady: boolean;
+          jobHidden: boolean;
+          engineOpen: boolean;
+          engineOwnsFocus: boolean;
+          engineChoiceEnabled: boolean;
+          operationState: string;
+          operationBusy: boolean;
+        }>(`
+          const engine = document.querySelector("#local-media-engine-dialog");
+          const choice = document.querySelector("#local-media-engine-cancel");
+          return {
+            projectId: new URL(location.href).searchParams.get("project") || "",
+            runtimeReady: document.documentElement.dataset.kirinukiEditorRuntimeReady === "true",
+            jobHidden: Boolean(document.querySelector("#job-dialog")?.hidden),
+            engineOpen: engine instanceof HTMLDialogElement && engine.open,
+            engineOwnsFocus: Boolean(engine?.contains(document.activeElement)),
+            engineChoiceEnabled: choice instanceof HTMLButtonElement && !choice.hidden && !choice.disabled,
+            operationState: document.querySelector("#local-draft-operation-status")?.dataset.state || "",
+            operationBusy: document.querySelector("#local-draft-dialog")?.getAttribute("aria-busy") === "true"
+          };
+        `);
+        if (state.projectId === projectId && state.engineOpen
+          && state.engineOwnsFocus && state.engineChoiceEnabled) {
+          // The synthetic engine was intentionally stopped. Request cancellation
+          // only for its focused native onboarding dialog through the real cancel
+          // handler; "내 파일로 계속하기" would instead open an unrelated picker.
+          dismissalAttempts += 1;
+          try {
+            dismissalStage = "read-project-before-cancel";
+            beforeDismissal ??= await readBrowserProject(projectId);
+            dismissalStage = "verify-project-before-cancel";
+            assert(beforeDismissal?.id === projectId,
+              `${context}: 영상 연결을 닫기 전 정확한 프로젝트를 읽지 못했습니다.`);
+            dismissalStage = "native-dialog-cancel";
+            const cancelled = await execute<boolean>(`
+              const dialog = document.querySelector("#local-media-engine-dialog");
+              if (!(dialog instanceof HTMLDialogElement) || !dialog.open
+                || !dialog.contains(document.activeElement)) return false;
+              // Use the browser's cancel algorithm: the application handler
+              // aborts its pending connection and closes the dialog itself.
+              // Direct close() would skip that lifecycle and leave the job busy.
+              let cancelEvents = 0;
+              const countCancel = () => { cancelEvents += 1; };
+              dialog.addEventListener("cancel", countCancel);
+              try {
+                dialog.requestClose();
+              } finally {
+                dialog.removeEventListener("cancel", countCancel);
+              }
+              return cancelEvents === 1 && !dialog.open;
+            `);
+            assert(cancelled, `${context}: 영상 연결 안내의 취소 처리가 완료되지 않았습니다.`);
+            dismissals += 1;
+            dismissalStage = "native-dialog-cancelled";
+            dismissalError = "";
+          } catch (error) {
+            // waitFor retries navigation errors. Keep action failures in its
+            // returned state so a failed cancellation cannot look like a UI hang.
+            dismissalError = error instanceof Error ? error.message : String(error);
+          }
+        }
+        return {
+          ...state,
+          dismissalAttempts,
+          dismissals,
+          dismissalStage,
+          dismissalError,
+          storedProjectId: beforeDismissal?.id || ""
+        };
+      },
+      (value) => !value.dismissalError && value.projectId === projectId && value.runtimeReady
+        && value.jobHidden && !value.engineOpen
+        && (completion === "initialization"
+          || (value.operationState === "restored" && !value.operationBusy)),
+      `${context}: 영상 연결 안내를 닫은 뒤 편집 작업이 끝나지 않았습니다.`,
+      30_000
+    );
+    if (beforeDismissal) {
+      const afterDismissal = await readBrowserProject(projectId);
+      const content = (value: EditorProject | null) => JSON.stringify(value && {
+        id: value.id, source: value.source, clips: value.clips, subtitles: value.subtitles,
+        imageAssets: value.imageAssets, audioRegions: value.audioRegions,
+        shortForm: value.shortForm, shortFormWorkspaces: value.shortFormWorkspaces,
+        mediaAsset: value.mediaAsset
+      });
+      assert(content(afterDismissal) === content(beforeDismissal),
+        `${context}: 영상 연결 안내를 닫는 동안 프로젝트 내용이나 미디어 결속이 변했습니다.`);
+    }
+    return { ...settled, dismissals };
+  };
+
   const resumeSavedEditorProject = async (
     projectId: string,
     context: string,
@@ -4714,7 +4884,7 @@ async function main(): Promise<void> {
       start.click();
       return true;
     `);
-    return waitFor(
+    const resumed = await waitFor(
       () => execute<{
         href: string;
         projectId: string;
@@ -4746,6 +4916,8 @@ async function main(): Promise<void> {
       `${context}: 새 ${action} 세션으로 저장 프로젝트를 열지 못했습니다.`,
       20_000
     );
+    const mediaSettlement = await settleRecoveryMedia(projectId, context);
+    return { ...resumed, mediaSettlement };
   };
 
   const clickRecoveryControl = async (selector: string) => {
@@ -4803,18 +4975,61 @@ async function main(): Promise<void> {
     (value) => recoveryContent(value) === recoveryContent(expected),
     `${context}: 자막의 본문·밀리초 시각·스타일 또는 컷·쇼츠·미디어가 달라졌습니다.`
   );
-  const selectRecoveryDraft = async (draftId: string) => {
-    await waitFor(
-      () => execute<boolean>(`
-        const input = [...document.querySelectorAll('input[name="local-draft-choice"]')]
-          .find((candidate) => candidate.value === arguments[0]);
-        if (!(input instanceof HTMLInputElement) || input.disabled) return false;
-        input.click();
-        return input.checked;
-      `, [draftId]),
-      Boolean,
-      `복구할 합성 저장본을 선택하지 못했습니다: ${draftId}`
+  const selectRecoveryDraft = async (draftId: string, context: string) => {
+    process.stderr.write(`[browser-smoke] ${context}: recovery selection ${draftId}\n`);
+    const selected = await waitFor(
+      async () => {
+        const ui = await execute<{
+          selected: boolean;
+          dialogOpen: boolean;
+          dialogHidden: boolean;
+          busy: string;
+          operationState: string;
+          operationMessage: string;
+          runtimeReady: boolean;
+          jobHidden: boolean;
+          captionSheetOpen: boolean;
+          toast: string;
+          choices: Array<{ id: string; disabled: boolean; checked: boolean }>;
+        }>(`
+          const dialog = document.querySelector("#local-draft-dialog");
+          const inputs = [...document.querySelectorAll('input[name="local-draft-choice"]')];
+          const input = inputs.find((candidate) => candidate.value === arguments[0]);
+          if (dialog instanceof HTMLDialogElement && dialog.open
+            && input instanceof HTMLInputElement && !input.disabled) input.click();
+          const status = document.querySelector("#local-draft-operation-status");
+          return {
+            selected: input instanceof HTMLInputElement && input.checked,
+            dialogOpen: dialog instanceof HTMLDialogElement && dialog.open,
+            dialogHidden: Boolean(dialog?.hidden),
+            busy: dialog?.getAttribute("aria-busy") || "",
+            operationState: status?.dataset.state || "",
+            operationMessage: status?.textContent || "",
+            runtimeReady: document.documentElement.dataset.kirinukiEditorRuntimeReady === "true",
+            jobHidden: Boolean(document.querySelector("#job-dialog")?.hidden),
+            captionSheetOpen: Boolean(document.querySelector("#caption-sheet-dialog")?.open),
+            toast: [...document.querySelectorAll(".toast, #toast")]
+              .map((item) => item.textContent || "").join(" | "),
+            choices: inputs.map((candidate) => ({
+              id: candidate.value, disabled: candidate.disabled, checked: candidate.checked
+            }))
+          };
+        `, [draftId]);
+        const drafts = await readBrowserLocalDrafts(freshProjectId);
+        return {
+          ...ui,
+          requestedId: draftId,
+          storedDrafts: drafts.map(({ id, reason, createdAtMs }) => ({ id, reason, createdAtMs }))
+        };
+      },
+      (value) => value.dialogOpen && value.selected,
+      `${context}: 복구할 합성 저장본을 선택하지 못했습니다: ${draftId}`
     );
+    process.stderr.write(`[browser-smoke] ${context}: recovery selection ready ${JSON.stringify({
+      requestedId: draftId,
+      choices: selected.choices,
+      storedDrafts: selected.storedDrafts
+    })}\n`);
   };
   const confirmRecoveryAcknowledgements = async () => {
     await execute(`
@@ -4892,7 +5107,7 @@ async function main(): Promise<void> {
   const currentC = await editRecoveryCue("복구 검증 · 복구 직전 C", "unsaved");
   assert(currentC, "복구 직전 C 프로젝트가 없습니다.");
   await clickRecoveryControl("#open-local-drafts");
-  await selectRecoveryDraft(manualBDraft.id);
+  await selectRecoveryDraft(manualBDraft.id, "일반 이어편집에서 B 선택");
   const normalSelection = await readRecoveryState();
   assert(normalSelection.open && !normalSelection.restoreDisabled
     && normalSelection.purpose === "editor-resume"
@@ -4969,6 +5184,7 @@ async function main(): Promise<void> {
     "새 복구 확인이 동일 편집기 안의 recovery 목적과 URL을 함께 갱신하지 못했습니다.");
   await waitForRecoveryContent(currentC, "확인만 마친 단계에서 현재 C 보존");
   await clickRecoveryControl("#restore-local-draft");
+  await settleRecoveryMedia(freshProjectId, "편집기 안의 B 복구 후 영상 연결", "restoration");
   const restoredInEditor = await waitFor(readRecoveryState,
     (value) => value.open && !value.busy && value.state === "restored" && value.saveVisible,
     "일반 재개에서 선택한 B 복구를 마치지 못했습니다.", 25_000);
@@ -4989,14 +5205,16 @@ async function main(): Promise<void> {
   await waitFor(readRecoveryState,
     (value) => value.open && !value.busy && value.purpose === "editor-recovery" && value.recovery === "drafts",
     "홈 복구 진입이 초기화 뒤 recovery URL과 자동 저장본 목록을 유지하지 못했습니다.");
-  await selectRecoveryDraft(manualBDraft.id);
+  await selectRecoveryDraft(manualBDraft.id, "홈 복구 진입에서 B 선택");
   await clickRecoveryControl("#restore-local-draft");
+  await settleRecoveryMedia(freshProjectId, "홈에서 B 복구 후 영상 연결", "restoration");
   const homeRecovery = await waitFor(readRecoveryState,
     (value) => value.open && !value.busy && value.state === "restored" && value.saveVisible,
     "홈에서 고른 과거 B 저장본을 복구하지 못했습니다.", 25_000);
   await waitForRecoveryContent(manualB, "홈 복구의 B 텍스트·타이밍·스타일");
   await saveRecoveryVersion(manualB, true);
   await webdriver("POST", `/session/${sessionId}/refresh`, {});
+  await settleRecoveryMedia(freshProjectId, "복구 저장 뒤 reload 영상 연결");
   const reloadedRecovery = await waitFor(readRecoveryState,
     (value) => value.open && !value.busy && value.purpose === "editor-recovery" && value.recovery === "drafts",
     "복구 저장 뒤 reload에서 목적·URL·자동 목록이 유지되지 않았습니다.", 25_000);
@@ -5245,8 +5463,15 @@ async function main(): Promise<void> {
       input.dispatchEvent(new Event("change", { bubbles: true }));
       return true;
     `, [name]);
-    await waitFor(() => execute<number>(`return document.querySelectorAll(".asset-block").length;`),
-      (count) => count === expectedCount, "실제 이미지 파일 입력이 타임라인에 추가되지 않았습니다.");
+    await waitFor(() => execute<{ count: number; completed: boolean }>(`
+      const toast = document.querySelector("#toast");
+      return {
+        count: document.querySelectorAll(".asset-block").length,
+        completed: toast instanceof HTMLElement && !toast.hidden
+          && toast.classList.contains("success") && toast.textContent.includes(arguments[0] + ".png")
+      };
+    `, [name]), (value) => value.count === expectedCount && value.completed,
+    "실제 이미지 파일 입력의 저장·미리보기 이동이 완료되지 않았습니다.");
   };
   const readImageLaneState = () => execute<{
     count: number; rows: number; lanes: string[]; ids: string[];
@@ -5297,6 +5522,14 @@ async function main(): Promise<void> {
     if (!(body instanceof HTMLButtonElement)) throw new Error("끌어 옮길 이미지 없음");
     body.scrollIntoView({ block: "center", inline: "center" });
     const rect = body.getBoundingClientRect();
+    globalThis.__imageDragEvents = [];
+    globalThis.__imageDragProbeController = new AbortController();
+    for (const type of ["pointerdown", "pointermove", "pointerup"]) {
+      document.addEventListener(type, (event) => {
+        globalThis.__imageDragEvents.push({ type, trusted: event.isTrusted,
+          target: event.target?.className, x: event.clientX, y: event.clientY });
+      }, { capture: true, signal: globalThis.__imageDragProbeController.signal });
+    }
     return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
   `);
   await webdriver("POST", `/session/${sessionId}/actions`, { actions: [{
@@ -5307,6 +5540,19 @@ async function main(): Promise<void> {
       { type: "pointerUp", button: 0 }
     ]
   }] });
+  const imagePointerInput = await execute<{
+    events: Array<{ type: string; trusted: boolean; target: string }>;
+    focused: boolean; hit: string; dialogs: string[];
+  }>(`
+    globalThis.__imageDragProbeController.abort();
+    return { events: globalThis.__imageDragEvents, focused: document.hasFocus(),
+      hit: document.elementFromPoint(arguments[0].x, arguments[0].y)?.className || "",
+      dialogs: [...document.querySelectorAll("dialog[open]")].map((item) => item.id) };
+  `, [imageDragPoint]);
+  assert(imagePointerInput.events.some((event) => event.type === "pointerdown"
+    && event.trusted && event.target === "asset-block-body")
+    && imagePointerInput.events.some((event) => event.type === "pointerup" && event.trusted),
+  `실제 포인터 입력이 이미지 블록에 전달되지 않았습니다: ${JSON.stringify(imagePointerInput)}`);
   const draggedImageRows = await waitFor(() => readBrowserProject(freshProjectId),
     (value) => value?.imageAssets.map(({ lane }) => lane).join(",") === "0,0",
     "실제 포인터로 이미지 레인 사이를 이동하지 못했습니다.");
@@ -5508,7 +5754,15 @@ async function main(): Promise<void> {
   assert(videoLaneControls.added === videoLaneControls.before + 1
     && videoLaneControls.removed === videoLaneControls.before,
   `빈 쇼츠 영상 레인 추가·제거가 올바르지 않습니다: ${JSON.stringify(videoLaneControls)}`);
+  process.stderr.write("[browser-smoke] 본편 이미지 레인·실제 드래그·쇼츠 동시 이미지 미리보기·빈 레인 제거 검증 완료\n");
   await execute(`
+    const tab = document.querySelector("#short-framing-mode-tab");
+    if (!(tab instanceof HTMLButtonElement) || tab.hidden || tab.disabled) {
+      throw new Error("이미지 편집 뒤 쇼츠 영상 속성 탭을 열 수 없습니다.");
+    }
+    tab.click();
+    const panel = document.querySelector("#short-framing-inspector-content");
+    if (!(panel instanceof HTMLElement) || panel.hidden) throw new Error("쇼츠 영상 속성 패널이 숨겨져 있습니다.");
     const name = document.querySelector("#short-workspace-name");
     if (!(name instanceof HTMLInputElement)) throw new Error("A 쇼츠 작업명 입력 없음");
     name.value = "브라우저 A 작업";
@@ -5529,16 +5783,20 @@ async function main(): Promise<void> {
     const select = document.querySelector(
       '#short-video-layer-list .short-video-layer-select[data-layer-id="layer-c"]'
     );
-    const remove = document.querySelector(
-      '#short-video-layer-list [data-short-layer-delete][data-layer-id="layer-c"]'
-    );
     if (!(select instanceof HTMLButtonElement) || select.disabled) {
       throw new Error("layer-c 영상 행을 선택할 수 없습니다.");
     }
+    select.focus({ preventScroll: true });
+    if (document.activeElement !== select) throw new Error("보이는 layer-c 영상 행에 focus할 수 없습니다.");
+    select.click();
+    const remove = document.querySelector(
+      '#short-video-layer-list [data-short-layer-delete][data-layer-id="layer-c"]'
+    );
     if (!(remove instanceof HTMLButtonElement) || remove.disabled) {
       throw new Error("layer-c 행별 삭제 버튼을 누를 수 없습니다.");
     }
-    select.click();
+    remove.focus({ preventScroll: true });
+    if (document.activeElement !== remove) throw new Error("보이는 layer-c 삭제 버튼에 focus할 수 없습니다.");
     remove.click();
     return { initial, orderControlCount, initialDeleteCount, afterDelete: order() };
   `);

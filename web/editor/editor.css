@@ -4673,16 +4673,12 @@ svg {
 .timeline-grid {
   height: calc(100% - 43px);
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: max-content minmax(0, 1fr);
   align-items: start;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-color: var(--line-bright) transparent;
-}
-
-.editor-shell[data-workspace="short-form"] .timeline-grid {
-  grid-template-columns: 124px minmax(0, 1fr);
 }
 
 .editor-shell[data-timeline-collapsed="true"] .workspace,
@@ -4691,6 +4687,7 @@ svg {
 }
 
 .track-labels {
+  min-width: 124px;
   height: var(--timeline-content-height);
   border-right: 1px solid var(--line);
   background: #0e1116;

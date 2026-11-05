@@ -1262,6 +1262,7 @@ export async function ensureLocalMediaEngineReady(
       elements.reset.removeEventListener("click", resetPairing);
       elements.cancel.removeEventListener("click", useManualFile);
       elements.dialog.removeEventListener("cancel", cancelDialog);
+      elements.dialog.removeEventListener("keydown", handleDialogKeydown);
       signal?.removeEventListener("abort", abort);
     };
     let resolveOnboarding: (
@@ -1446,6 +1447,13 @@ export async function ensureLocalMediaEngineReady(
       event.preventDefault();
       abort();
     }
+    function handleDialogKeydown(event: KeyboardEvent): void {
+      // This modal owns its keys, including when a job dialog sits below it.
+      // Route Escape through the same cancel handler exactly once; retain
+      // native button and focus defaults for every other key.
+      event.stopPropagation();
+      if (event.key === "Escape") cancelDialog(event);
+    }
     function abort(): void {
       if (settled) {
         return;
@@ -1464,6 +1472,7 @@ export async function ensureLocalMediaEngineReady(
     elements.reset.addEventListener("click", resetPairing);
     elements.cancel.addEventListener("click", useManualFile);
     elements.dialog.addEventListener("cancel", cancelDialog);
+    elements.dialog.addEventListener("keydown", handleDialogKeydown);
     signal?.addEventListener("abort", abort, { once: true });
     if (!elements.dialog.open) {
       elements.dialog.showModal();
