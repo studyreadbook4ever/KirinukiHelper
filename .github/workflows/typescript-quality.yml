@@ -184,10 +184,55 @@ jobs:
 
       - name: Install and read back exact Linux deb runtime dependencies
         if: runner.os == 'Linux'
+        timeout-minutes: 6
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends libnotify4 libsecret-1-0
+          set -euo pipefail
+          apt_directory="$(mktemp -d "$RUNNER_TEMP/kirinuki-apt.XXXXXX")"
+          trap 'sudo rm -rf -- "$apt_directory"' EXIT
+          chmod 755 "$apt_directory"
+          mkdir "$apt_directory/sourceparts" "$apt_directory/lists"
+          # Keep Ubuntu suites, components, and signing keys; bypass the failing Azure mirror.
+          python3 - /etc/apt/sources.list.d/ubuntu.sources "$apt_directory/ubuntu.sources" <<'PYTHON'
+          import pathlib, re, sys
+          source = pathlib.Path(sys.argv[1]).read_text()
+          mirror = "mirror+file:/etc/apt/apt-mirrors.txt"
+          parts = re.split(r"(\n[ \t]*\n)", source)
+          for index, part in enumerate(parts):
+              if not any(line.strip() and not line.lstrip().startswith("#") for line in part.splitlines()):
+                  continue
+              uri = re.search(r"(?m)^URIs:[ \t]*(\S+)[ \t]*$", part)
+              if uri is None or len(re.findall(r"(?m)^URIs:", part)) != 1 or re.search(r"(?m)^URIs:[^\n]*\n[ \t]+\S", part):
+                  raise SystemExit("Ubuntu source requires one single-line URI")
+              if uri.group(1) != mirror:
+                  if not re.fullmatch(r"https?://(?:archive|security)\.ubuntu\.com/ubuntu/?", uri.group(1)):
+                      raise SystemExit("Ubuntu source contains an unsupported URI")
+                  continue
+              suites = re.search(r"(?m)^Suites:[ \t]*(.+)$", part)
+              if suites is None:
+                  raise SystemExit("Ubuntu mirror source has no Suites")
+              security = [suite.endswith("-security") for suite in suites.group(1).split()]
+              if not security or (any(security) and not all(security)):
+                  raise SystemExit("Ubuntu mirror source has unsupported mixed Suites")
+              host = "security.ubuntu.com" if all(security) else "archive.ubuntu.com"
+              start, end = uri.span(1)
+              parts[index] = part[:start] + "https://" + host + "/ubuntu/" + part[end:]
+          result = "".join(parts)
+          if "mirror+file:" in result:
+              raise SystemExit("Ubuntu source contains an unsupported mirror URI")
+          pathlib.Path(sys.argv[2]).write_text(result)
+          PYTHON
+          apt_options=(
+            -o "Dir::Etc::sourcelist=$apt_directory/ubuntu.sources"
+            -o "Dir::Etc::sourceparts=$apt_directory/sourceparts"
+            -o "Dir::State::lists=$apt_directory/lists"
+            -o Acquire::Retries=1
+            -o Acquire::http::Timeout=20
+            -o Acquire::https::Timeout=20
+            -o APT::Update::Error-Mode=any
+          )
+          sudo apt-get update "${apt_options[@]}"
+          sudo apt-get install --yes --no-install-recommends libnotify4 libsecret-1-0 "${apt_options[@]}"
           for dependency in libnotify4 libsecret-1-0; do
             test "$(dpkg-query --show --showformat='${Status}' "$dependency")" = "install ok installed"
           done
