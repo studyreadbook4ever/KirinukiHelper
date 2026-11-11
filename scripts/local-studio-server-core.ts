@@ -98,6 +98,7 @@ const MIME_TYPES = Object.freeze(new Map<string, string>([
   [".txt", "text/plain; charset=utf-8"],
   [".wasm", "application/wasm"],
   [".webp", "image/webp"],
+  [".ttf", "font/ttf"],
   [".woff2", "font/woff2"]
 ]));
 
@@ -110,7 +111,8 @@ const WEB_ASSET_EXTENSIONS = Object.freeze(new Set([
   ".svg",
   ".wasm",
   ".webp",
-  ".woff2"
+  ".woff2",
+  ".ttf"
 ]));
 
 const EDITOR_ASSET_EXTENSIONS = Object.freeze(new Set([
@@ -534,7 +536,7 @@ export function resolveStudioStaticAsset(
   if (target.startsWith("/editor/fonts/")) {
     const relative = target.slice("/editor/fonts/".length);
     const segments = safeSegments(relative);
-    return segments?.length === 1 && path.extname(relative) === ".woff2"
+    return segments?.length === 1 && [".woff2", ".ttf"].includes(path.extname(relative))
       ? asset(path.posix.join("web", "editor", "fonts", relative))
       : null;
   }

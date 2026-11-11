@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   PENDING_VOD_EDITOR_HANDOFF_STORAGE_PREFIX,
   PENDING_VOD_EDITOR_HANDOFF_TTL_MS,
+  PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY,
+  PENDING_VOD_EDITOR_HANDOFF_OWNER_LOCK_PREFIX,
   claimPendingVodEditorHandoffOwner,
   clearPendingVodEditorHandoff,
   createPendingVodEditorHandoff,
@@ -49,25 +51,20 @@ class FakeExclusiveLockManager {
     name: string,
     options: {
       mode: "exclusive";
-      signal: AbortSignal;
+      ifAvailable: true;
     },
     callback: (
       lock: { readonly name: string } | null
     ) => Promise<void> | void
   ): Promise<unknown> {
     assert.equal(options.mode, "exclusive");
-    if (options.signal.aborted) {
-      return Promise.reject(new DOMException("aborted", "AbortError"));
-    }
+    assert.equal(options.ifAvailable, true);
+    assert.equal(Object.hasOwn(options, "signal"), false, "ifAvailable and signal cannot be combined");
     if (this.held.has(name)) {
-      return new Promise((_resolve, reject) => {
-        options.signal.addEventListener("abort", () => {
-          reject(new DOMException("aborted", "AbortError"));
-        }, { once: true });
-      });
+      return Promise.resolve().then(() => callback(null));
     }
     this.held.add(name);
-    return Promise.resolve(callback({ name })).finally(() => {
+    return Promise.resolve().then(() => callback({ name })).finally(() => {
       this.held.delete(name);
     });
   }
@@ -355,7 +352,7 @@ test("복제 탭은 활성 owner lock을 재사용하지 않고 reload는 같은
   savePendingVodEditorHandoff(pending, sharedLocal);
 
   // Browsers copy sessionStorage when a live tab is duplicated. The copied
-  // candidate cannot acquire the original document's bounded exclusive lock
+  // candidate receives null for the original document's exclusive lock
   // and is replaced before any pending record can be read.
   const duplicateSession = new MemoryStorage();
   for (const [key, value] of firstSession.values) {
@@ -409,6 +406,124 @@ test("복제 탭은 활성 owner lock을 재사용하지 않고 reload는 같은
 
   reload.release();
   duplicate.release();
+});
+
+test("경쟁자가 없는 Web Lock callback이 160ms보다 늦어도 reload owner를 교체하지 않는다", async () => {
+  const session = new MemoryStorage();
+  session.setItem(PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY, ownerId);
+  const manager = new FakeExclusiveLockManager();
+  let deliverCallback: () => void = () => undefined;
+  const deliveryGate = new Promise<void>((resolve) => { deliverCallback = resolve; });
+  let returned = false;
+  const pending = claimPendingVodEditorHandoffOwner({
+    storage: session,
+    lockManager: {
+      request: (name, options, callback) => manager.request(name, options, async (lock) => {
+        await deliveryGate;
+        await callback(lock);
+      })
+    },
+    broadcastChannelFactory: null,
+    randomUUID: uuidSequence("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+  }).then((claim) => { returned = true; return claim; });
+  void pending.catch(() => undefined);
+  try {
+    // The manager has already granted the free lock; only delivery to this
+    // document is held back. A timer must not classify that as another tab.
+    assert.deepEqual([...manager.held], [`${PENDING_VOD_EDITOR_HANDOFF_OWNER_LOCK_PREFIX}${ownerId}`]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 220));
+    assert.equal(returned, false);
+    assert.equal(session.getItem(PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY), ownerId);
+    deliverCallback();
+    const claim = await pending;
+    assert.equal(claim.ownerId, ownerId);
+    claim.release();
+    claim.release();
+  } finally {
+    deliverCallback();
+    (await pending.catch(() => null))?.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.equal(manager.held.size, 0);
+});
+
+test("실제 활성 owner 충돌은 늦은 null 응답 뒤에만 복제 탭 owner를 분리한다", async () => {
+  const firstSession = new MemoryStorage();
+  firstSession.setItem(PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY, ownerId);
+  const manager = new FakeExclusiveLockManager();
+  const first = await claimPendingVodEditorHandoffOwner({
+    storage: firstSession, lockManager: manager, broadcastChannelFactory: null,
+    randomUUID: uuidSequence("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+  });
+  const duplicateSession = new MemoryStorage();
+  duplicateSession.setItem(PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY, ownerId);
+  const duplicateOwner = "22222222-2222-4222-8222-222222222222";
+  let deliverConflict: () => void = () => undefined;
+  const conflictGate = new Promise<void>((resolve) => { deliverConflict = resolve; });
+  let returned = false;
+  let conflictResponses = 0;
+  const pending = claimPendingVodEditorHandoffOwner({
+    storage: duplicateSession,
+    lockManager: {
+      request: (name, options, callback) => manager.request(name, options, async (lock) => {
+        if (!lock) {
+          conflictResponses += 1;
+          await conflictGate;
+        }
+        await callback(lock);
+      })
+    },
+    broadcastChannelFactory: null,
+    randomUUID: uuidSequence(
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", duplicateOwner,
+      "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    )
+  }).then((claim) => { returned = true; return claim; });
+  void pending.catch(() => undefined);
+  try {
+    await new Promise<void>((resolve) => setTimeout(resolve, 220));
+    assert.equal(conflictResponses, 1);
+    assert.equal(returned, false);
+    assert.equal(duplicateSession.getItem(PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY), ownerId);
+    deliverConflict();
+    const duplicate = await pending;
+    assert.equal(duplicate.ownerId, duplicateOwner);
+    assert.equal(firstSession.getItem(PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY), ownerId);
+    assert.equal(manager.held.size, 2, "both live documents have distinct held locks");
+    duplicate.release();
+  } finally {
+    deliverConflict();
+    (await pending.catch(() => null))?.release();
+    first.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.equal(manager.held.size, 0);
+});
+
+test("Web Locks의 동기·비동기 거부는 이전 owner를 재사용하지 않고 bounded fallback한다", async () => {
+  for (const synchronous of [true, false]) {
+    const session = new MemoryStorage();
+    session.setItem(PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY, ownerId);
+    let calls = 0;
+    let uuidIndex = 0;
+    const claim = await claimPendingVodEditorHandoffOwner({
+      storage: session,
+      lockManager: {
+        request: () => {
+          calls += 1;
+          const error = new DOMException("denied", "SecurityError");
+          if (synchronous) throw error;
+          return Promise.reject(error);
+        }
+      },
+      broadcastChannelFactory: null,
+      randomUUID: () => `${(++uuidIndex).toString(16).padStart(8, "0")}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`
+    });
+    assert.equal(calls, 4);
+    assert.notEqual(claim.ownerId, ownerId);
+    assert.equal(session.getItem(PENDING_VOD_EDITOR_HANDOFF_OWNER_STORAGE_KEY), claim.ownerId);
+    assert.doesNotThrow(() => { claim.release(); claim.release(); });
+  }
 });
 
 test("Web Locks가 없을 때도 BroadcastChannel handshake가 복제 탭 owner를 분리한다", async () => {

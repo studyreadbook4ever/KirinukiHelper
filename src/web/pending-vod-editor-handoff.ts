@@ -73,7 +73,7 @@ interface LockManagerLike {
     name: string,
     options: {
       mode: "exclusive";
-      signal: AbortSignal;
+      ifAvailable: true;
     },
     callback: (lock: LockLike | null) => Promise<void> | void
   ): Promise<unknown>;
@@ -159,23 +159,13 @@ function finiteClaimWaitMs(value: unknown): number {
 
 async function claimOwnerWithWebLock({
   ownerId,
-  lockManager,
-  waitMs
+  lockManager
 }: {
   ownerId: string;
   lockManager: LockManagerLike;
-  waitMs: number;
 }): Promise<PendingVodEditorHandoffOwnerClaim | null> {
   return new Promise((resolve) => {
     let settled = false;
-    let releaseLock: (() => void) | null = null;
-    const abortController = new AbortController();
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      abortController.abort();
-      resolve(null);
-    }, waitMs);
     const finish = (
       claim: PendingVodEditorHandoffOwnerClaim | null
     ): void => {
@@ -184,39 +174,37 @@ async function claimOwnerWithWebLock({
         return;
       }
       settled = true;
-      clearTimeout(timer);
       resolve(claim);
     };
-    void lockManager.request(
-      `${PENDING_VOD_EDITOR_HANDOFF_OWNER_LOCK_PREFIX}${ownerId}`,
-      {
-        mode: "exclusive",
-        signal: abortController.signal
-      },
-      async (lock) => {
-        if (!lock) {
-          finish(null);
-          return;
-        }
-        await new Promise<void>((release) => {
-          let released = false;
-          releaseLock = () => {
-            if (released) return;
-            released = true;
-            release();
-          };
-          finish({
-            ownerId,
-            release: () => releaseLock?.()
-          });
-          if (settled && abortController.signal.aborted) {
-            releaseLock();
+    try {
+      // Web Locks delivers even an uncontended grant asynchronously. Elapsed
+      // callback time is not evidence of another owner. ifAvailable makes an
+      // actual conflict return null without queuing behind a live document;
+      // it must not be combined with AbortSignal (Web Locks request contract).
+      void lockManager.request(
+        `${PENDING_VOD_EDITOR_HANDOFF_OWNER_LOCK_PREFIX}${ownerId}`,
+        { mode: "exclusive", ifAvailable: true },
+        async (lock) => {
+          if (!lock) {
+            finish(null);
+            return;
           }
-        });
-      }
-    ).catch(() => {
+          await new Promise<void>((release) => {
+            let released = false;
+            finish({
+              ownerId,
+              release: () => {
+                if (released) return;
+                released = true;
+                release();
+              }
+            });
+          });
+        }
+      ).catch(() => finish(null));
+    } catch {
       finish(null);
-    });
+    }
   });
 }
 
@@ -370,7 +358,7 @@ export async function claimPendingVodEditorHandoffOwner(
   ) {
     const claimantId = normalizedOwnerId(randomUUID());
     const claim = lockManager
-      ? await claimOwnerWithWebLock({ ownerId, lockManager, waitMs })
+      ? await claimOwnerWithWebLock({ ownerId, lockManager })
       : channelFactory
         ? await claimOwnerWithBroadcastChannel({
           ownerId,

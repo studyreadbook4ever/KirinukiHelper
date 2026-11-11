@@ -446,6 +446,10 @@ test("static resolver는 공개 allowlist만 받고 encoding과 traversal을 거
     "web/editor/editor.js"
   );
   assert.equal(
+    resolveStudioStaticAsset("/editor/fonts/Jua-Regular.ttf")?.contentType,
+    "font/ttf"
+  );
+  assert.equal(
     resolveStudioStaticAsset("/editor/fonts/Studio.woff2")?.contentType,
     "font/woff2"
   );

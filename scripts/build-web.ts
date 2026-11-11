@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { ADDITIONAL_CAPTION_FONTS } from "./additional-caption-fonts.js";
 import { PAPERLOGY_FONT } from "./paperlogy-font.js";
 import { PRETENDARD_FONT } from "./pretendard-font.js";
 import { buildWebJavaScript } from "./web-javascript-build.js";
@@ -69,6 +70,11 @@ export async function buildWebDistribution({
     )
   ]);
 
+  await Promise.all(ADDITIONAL_CAPTION_FONTS.flatMap((font) => [
+    assertSha256(font.sourceFontPath, font.fontSha256, font.family),
+    assertSha256(font.sourceLicensePath, font.licenseSha256, font.family)
+  ]));
+
   await buildWebJavaScript({
     rootDirectory: root,
     engineRelease,
@@ -121,6 +127,11 @@ export async function buildWebDistribution({
       path.join(webRoot, ".popovic-hosts")
     )
   ]);
+
+  await Promise.all(ADDITIONAL_CAPTION_FONTS.flatMap((font) => [
+    copyFile(path.join(root, font.sourceFontPath), path.join(webRoot, font.webFontPath)),
+    copyFile(path.join(root, font.sourceLicensePath), path.join(webRoot, font.webLicensePath))
+  ]));
 
   console.log("Kirinuki 웹 편집기 빌드 완료");
 }

@@ -44,6 +44,8 @@ import {
   safeCutPreparationErrorCode
 } from "./cut-preparation-recovery.js";
 import { DeletedCutHistory, studioCutReview } from "./cut-review.js";
+import { confirmedCutOrder, planCutMove } from "./cut-order.js";
+import type { CutMovePlan } from "./cut-order.js";
 
 import {
   deleteAllProjectSessionsAtomically,
@@ -243,6 +245,10 @@ const elements = {
   addClip: requiredElement<HTMLButtonElement>("#add-clip"),
   undoDeleteClip: requiredElement<HTMLButtonElement>("#undo-delete-clip"),
   cutReviewStatus: requiredElement<HTMLElement>("#cut-review-status"),
+  cutReorderDialog: requiredElement<HTMLDialogElement>("#cut-reorder-dialog"),
+  cutReorderSummary: requiredElement<HTMLElement>("#cut-reorder-summary"),
+  cancelCutReorder: requiredElement<HTMLButtonElement>("#cancel-cut-reorder"),
+  confirmCutReorder: requiredElement<HTMLButtonElement>("#confirm-cut-reorder"),
   captureBackupStatus: requiredElement<HTMLElement>("#capture-backup-status"),
   localProjectManager: requiredElement<HTMLElement>("#recent-section"),
   localProjectsSummary: requiredElement<HTMLElement>("#local-projects-summary"),
@@ -367,6 +373,12 @@ let activeClipRow: HTMLElement | null = null;
 const deletedCutHistory = new DeletedCutHistory<HTMLElement>();
 let cutReviewGeneration = 0;
 let activeCutSeek: object | null = null;
+let pendingCutMove: {
+  plan: CutMovePlan<HTMLElement>;
+  source: string;
+  generation: number;
+  button: HTMLButtonElement;
+} | null = null;
 let lastCutReviewRenderKey: string | null = null;
 let localPreviewSourceStartSeconds = 0;
 let localPreviewSourceDurationSeconds = 0;
@@ -386,7 +398,7 @@ window.addEventListener("pagehide", (event) => {
   if (!event.persisted) {
     // Release before a reload successor starts claiming the same
     // sessionStorage owner. A duplicated live tab keeps the original claim,
-    // so it still receives a distinct owner after the bounded lock wait.
+    // so an explicit lock conflict still gives it a distinct owner.
     void pendingVodEditorOwnerClaim.then((claim) => claim.release());
   }
 });
@@ -799,6 +811,7 @@ function cutReviewSource(): string {
 }
 
 function resetCutReviewSession(): void {
+  closeCutReorderDialog({ restoreFocus: false });
   deletedCutHistory.clear();
   cutReviewGeneration += 1;
   activeCutSeek = null;
@@ -809,7 +822,7 @@ function resetCutReviewSession(): void {
 
 function cutReviewBusy(): boolean {
   return openingEditor || Boolean(resumeProject) || activeCutSeek !== null
-    || localPreviewBusy;
+    || localPreviewBusy || pendingCutMove !== null;
 }
 
 function currentCutReviewDuration(): number | null {
@@ -852,7 +865,8 @@ function syncCutReviewAvailability(): void {
     return;
   }
   elements.undoDeleteClip.disabled = busy || deletedCount === 0;
-  for (const row of clipRows()) {
+  const rows = clipRows();
+  for (const [index, row] of rows.entries()) {
     const review = studioCutReview(
       requiredInputWithin(row, '[data-field="start"]').value,
       requiredInputWithin(row, '[data-field="end"]').value,
@@ -866,23 +880,79 @@ function syncCutReviewAvailability(): void {
         durationLabel.textContent = label;
       }
     }
-    for (const [action, target] of [
-      ["seek-start", review.startTarget], ["seek-end", review.endTarget]
-    ] as const) {
-      const button = row.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
-      if (button) {
-        button.disabled = busy || target === null;
-        button.title = uiLocalization.translate(review.durationSeconds === null
+    const seekStart = row.querySelector<HTMLButtonElement>('[data-action="seek-start"]');
+    if (seekStart) {
+      seekStart.disabled = busy || review.startTarget === null;
+      seekStart.title = uiLocalization.translate(review.durationSeconds === null
           ? "먼저 올바른 시작과 끝 시각을 기록하세요."
           : duration === null
             ? "원본 플레이어가 준비되면 이 시각으로 이동합니다."
-            : target === null
+            : review.startTarget === null
               ? "원본 길이 안의 시각으로 이동할 수 있습니다."
               : "입력한 구간을 바꾸지 않고 원본 영상만 이동합니다.");
-      }
+    }
+    for (const [action, direction] of [["move-up", -1], ["move-down", 1]] as const) {
+      const button = row.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+      if (!button) continue;
+      button.disabled = busy || (direction < 0 ? index === 0 : index === rows.length - 1);
+      const label = uiLocalization.translate(direction < 0
+        ? `${index + 1}번 구간을 한 칸 위로 이동`
+        : `${index + 1}번 구간을 한 칸 아래로 이동`);
+      button.setAttribute("aria-label", label);
+      button.title = label;
     }
   }
   lastCutReviewRenderKey = renderKey;
+}
+
+function closeCutReorderDialog({ restoreFocus = true } = {}): void {
+  const request = pendingCutMove;
+  pendingCutMove = null;
+  if (elements.cutReorderDialog.open) elements.cutReorderDialog.close();
+  syncCutReviewAvailability();
+  if (restoreFocus && request?.button.isConnected && !request.button.disabled) {
+    request.button.focus({ preventScroll: true });
+  }
+}
+
+function requestCutMove(row: HTMLElement, direction: -1 | 1, button: HTMLButtonElement): void {
+  if (cutReviewBusy()) return;
+  const plan = planCutMove(clipRows(), row, direction);
+  if (!plan) return;
+  pendingCutMove = { plan, button, source: cutReviewSource(), generation: cutReviewGeneration };
+  elements.cutReorderSummary.textContent = uiLocalization.translate(
+    `${plan.fromIndex + 1}번 구간을 ${plan.toIndex + 1}번째로 옮길까요?`
+  );
+  syncCutReviewAvailability();
+  elements.cutReorderDialog.showModal();
+  elements.cancelCutReorder.focus({ preventScroll: true });
+}
+
+function confirmCutMove(): void {
+  const request = pendingCutMove;
+  if (!request) return;
+  closeCutReorderDialog({ restoreFocus: false });
+  const next = confirmedCutOrder(request.plan, clipRows(), true);
+  if (cutReviewBusy() || !next || request.source !== cutReviewSource()
+    || request.generation !== cutReviewGeneration) {
+    elements.cutReviewStatus.textContent = uiLocalization.translate(
+      "구간 목록이나 원본이 바뀌어 순서를 바꾸지 않았습니다. 다시 선택해 주세요."
+    );
+    return;
+  }
+  const { item, fromIndex, toIndex } = request.plan;
+  // Move the existing node: raw input, identity, finalized state and listeners
+  // stay attached. Capture, backup and editor entry all consume this DOM order.
+  elements.clipList.insertBefore(item, next[toIndex + 1] ?? null);
+  activeClipRow = item;
+  updateClipRows();
+  const focusTarget = !request.button.disabled ? request.button
+    : item.querySelector<HTMLButtonElement>('[data-action="move-up"]:not(:disabled), [data-action="move-down"]:not(:disabled)');
+  focusTarget?.focus({ preventScroll: true });
+  item.scrollIntoView({ block: "nearest" });
+  elements.cutReviewStatus.textContent = uiLocalization.translate(
+    `${fromIndex + 1}번 구간을 ${toIndex + 1}번째로 옮겼습니다.`
+  );
 }
 
 function undoDeletedCut(): void {
@@ -1039,9 +1109,11 @@ function createClipRow({
           "구간을 삭제했습니다. ‘삭제 되돌리기’로 복구할 수 있습니다.";
       }
     });
-  for (const boundary of ["start", "end"] as const) {
-    row.querySelector<HTMLButtonElement>(`[data-action="seek-${boundary}"]`)
-      ?.addEventListener("click", () => { void seekToClipBoundary(row, boundary); });
+  row.querySelector<HTMLButtonElement>('[data-action="seek-start"]')
+    ?.addEventListener("click", () => { void seekToClipStart(row); });
+  for (const [action, direction] of [["move-up", -1], ["move-down", 1]] as const) {
+    const button = row.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+    button?.addEventListener("click", () => requestCutMove(row, direction, button));
   }
   return row;
 }
@@ -2577,7 +2649,7 @@ async function captureCurrentPlayerTime(field: "start" | "end"): Promise<void> {
     : `끝을 ${formatStudioTimecode(sourceSeconds)}로 기록했습니다.`;
 }
 
-async function seekToClipBoundary(row: HTMLElement, boundary: "start" | "end"): Promise<void> {
+async function seekToClipStart(row: HTMLElement): Promise<void> {
   if (cutReviewBusy() || !row.isConnected) {
     return;
   }
@@ -2586,7 +2658,7 @@ async function seekToClipBoundary(row: HTMLElement, boundary: "start" | "end"): 
     requiredInputWithin(row, '[data-field="end"]').value,
     currentCutReviewDuration()
   );
-  const target = boundary === "start" ? review.startTarget : review.endTarget;
+  const target = review.startTarget;
   if (target === null) {
     syncCutReviewAvailability();
     return;
@@ -2944,6 +3016,24 @@ elements.exportSessionArchive.addEventListener("click", () => {
 });
 elements.addClip.addEventListener("click", () => addClipRow());
 elements.undoDeleteClip.addEventListener("click", undoDeletedCut);
+elements.cancelCutReorder.addEventListener("click", () => closeCutReorderDialog());
+elements.confirmCutReorder.addEventListener("click", confirmCutMove);
+elements.cutReorderDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeCutReorderDialog();
+});
+elements.cutReorderDialog.addEventListener("keydown", (event) => {
+  // The confirmation owns its keys; E/R/T and other capture shortcuts resume
+  // unchanged after it closes. Keep Tab and button activation defaults.
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeCutReorderDialog();
+  }
+});
+elements.cutReorderDialog.addEventListener("close", () => {
+  if (!elements.cutReorderDialog.open) closeCutReorderDialog();
+});
 elements.importSessionArchive.addEventListener("click", () => {
   elements.sessionArchiveInput.click();
 });

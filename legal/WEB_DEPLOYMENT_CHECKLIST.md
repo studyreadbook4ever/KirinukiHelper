@@ -174,6 +174,12 @@
 - [ ] Pretendard 1.3.9 WOFF2, OFL-1.1 원문과 Reserved Font Name을 제공한다.
 <!-- attribution-id: paperlogy -->
 - [ ] Paperlogy 1.001 pinned WOFF2와 OFL-1.1 원문을 제공한다.
+<!-- attribution-id: dohyeon -->
+- [ ] Do Hyeon pinned TTF와 OFL-1.1 원문, size·SHA-256을 검증했다.
+<!-- attribution-id: jua -->
+- [ ] Jua pinned TTF와 OFL-1.1 원문, size·SHA-256을 검증했다.
+<!-- attribution-id: nanummyeongjo -->
+- [ ] Nanum Myeongjo pinned TTF와 OFL-1.1 원문, size·SHA-256을 검증했다.
 - [ ] `web/THIRD_PARTY_NOTICES.md`가 canonical
   `legal/WEB_THIRD_PARTY_NOTICES.md`와 byte-for-byte 일치한다.
 

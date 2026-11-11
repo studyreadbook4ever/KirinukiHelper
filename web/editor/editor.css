@@ -1,4 +1,28 @@
 @font-face {
+  font-family: "Do Hyeon";
+  src: url("fonts/DoHyeon-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Jua";
+  src: url("fonts/Jua-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Nanum Myeongjo";
+  src: url("fonts/NanumMyeongjo-ExtraBold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
   font-family: "Pretendard";
   src: url("fonts/Pretendard-ExtraBold.woff2") format("woff2");
   font-style: normal;
@@ -1996,6 +2020,83 @@ svg {
   object-position: center;
   background: #020304;
 }
+
+.main-video-crop-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  background: #020304;
+}
+
+.main-video-crop-preview[hidden] { display: none; }
+
+#open-main-video-crop.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.main-video-crop-dialog {
+  width: min(1000px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 22px;
+  overflow: auto;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.main-video-crop-dialog::backdrop { background: rgba(0, 0, 0, 0.72); }
+.main-video-crop-dialog h2 { margin: 0 0 10px; font-size: 19px; }
+.main-video-crop-dialog p { color: var(--muted); line-height: 1.5; }
+.main-video-crop-frame { display: flex; justify-content: center; padding: 8px; }
+.main-video-crop-surface {
+  position: relative;
+  width: min(100%, calc(50vh * var(--crop-aspect, 1.777778)));
+  aspect-ratio: var(--crop-aspect, 1.777778);
+  overflow: hidden;
+  touch-action: none;
+  cursor: crosshair;
+  background: #000;
+  outline: 1px solid var(--border);
+}
+#main-video-crop-source { display: block; width: 100%; height: 100%; }
+.main-video-crop-box {
+  position: absolute;
+  border: 2px solid #a994ff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+  cursor: move;
+  touch-action: none;
+}
+.main-video-crop-box:focus-visible { outline: 2px solid #fff; outline-offset: -5px; }
+.main-video-crop-box [data-crop-handle] {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  min-width: 0;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 3px;
+  background: #6f4fe7;
+  touch-action: none;
+  z-index: 1;
+}
+.main-video-crop-box [data-crop-handle="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.main-video-crop-box [data-crop-handle="ne"] { right: 0; top: 0; cursor: nesw-resize; }
+.main-video-crop-box [data-crop-handle="sw"] { left: 0; bottom: 0; cursor: nesw-resize; }
+.main-video-crop-box [data-crop-handle="se"] { right: 0; bottom: 0; cursor: nwse-resize; }
+.main-video-crop-box [data-crop-handle="n"] { left: calc(50% - 8px); top: 0; cursor: ns-resize; }
+.main-video-crop-box [data-crop-handle="s"] { left: calc(50% - 8px); bottom: 0; cursor: ns-resize; }
+.main-video-crop-box [data-crop-handle="w"] { left: 0; top: calc(50% - 8px); cursor: ew-resize; }
+.main-video-crop-box [data-crop-handle="e"] { right: 0; top: calc(50% - 8px); cursor: ew-resize; }
+.main-video-crop-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.main-video-crop-fields label { display: grid; gap: 5px; }
+.main-video-crop-fields input { width: 100%; min-width: 0; }
+.main-video-crop-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+#main-video-crop-full { margin-right: auto; }
 
 .short-workspace-preview {
   position: relative;
@@ -7109,3 +7210,6 @@ svg {
 .recovery-ack-list input { flex: 0 0 auto; margin-top: 4px; }
 #local-draft-operation-status[data-state="error"] { color: var(--danger, #e86d6d); }
 #local-draft-target { overflow-wrap: anywhere; }
+
+.caption-background-swatch.white { background: #fff; border-color: #888; }
+.caption-font-field { margin: 12px 0; }

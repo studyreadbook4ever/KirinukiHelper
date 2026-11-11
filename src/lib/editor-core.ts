@@ -4,6 +4,7 @@ import {
   DEFAULT_CAPTION_STYLE_PRESET_ID,
   LEGACY_CAPTION_STYLE_PRESET_ID,
   captionStyleDefaults,
+  captionFont,
   normalizeCaptionStylePresetId
 } from "./caption-style.js";
 import {
@@ -21,6 +22,8 @@ import {
   normalizeSoopVodSourceClockIdentity
 } from "./soop-vod-source-clock.js";
 import { MAX_IMAGE_LANES, MIN_IMAGE_LANES, normalizeImageLaneLayout } from "./image-lanes.js";
+import { normalizeVideoCrop } from "./video-crop.js";
+import type { VideoCrop } from "./video-crop.js";
 
 export const EDITOR_SCHEMA = "chzzk-kirinuki-editor/v3";
 export const EDITOR_PROJECTS_STORE_KEY = "chzzkKirinukiEditorProjectsV1";
@@ -201,6 +204,7 @@ export interface SubtitleCueDraftInput {
   color?: unknown;
   fontScale?: unknown;
   backgroundEnabled?: unknown;
+  backgroundColor?: unknown;
   x?: unknown;
   y?: unknown;
   origin?: unknown;
@@ -258,6 +262,9 @@ export interface EditorClip extends DynamicRecord {
   selectionEndMs: number;
   timelineStartMs: number;
   enabled: boolean;
+  videoCrop?: VideoCrop;
+  /** Immutable media-coverage lineage for an inserted or split source clip. */
+  sourceClipId?: string;
   authority?: string;
   note?: string;
   capture?: unknown;
@@ -282,6 +289,7 @@ export interface EditorSubtitleCue extends DynamicRecord {
   color: string;
   fontScale?: number;
   backgroundEnabled?: boolean;
+  backgroundColor?: "#000000" | "#ffffff";
   confidence: number | null;
 }
 
@@ -1008,13 +1016,16 @@ export function reflowClips(clips: EditorClip[] = []): EditorClip[] {
       sourceStartMs + MIN_CLIP_DURATION_MS,
       Math.round(finiteNumber(clip.sourceEndMs, sourceStartMs + MIN_CLIP_DURATION_MS))
     );
-    const normalized = {
+    const normalized: EditorClip = {
       ...clip,
       sourceStartMs,
       sourceEndMs,
       timelineStartMs: cursor,
       enabled: clip.enabled !== false
     };
+    const videoCrop = normalizeVideoCrop(clip.videoCrop);
+    if (videoCrop) normalized.videoCrop = videoCrop;
+    else delete normalized.videoCrop;
     if (normalized.enabled) {
       cursor += sourceEndMs - sourceStartMs;
     }
@@ -1246,6 +1257,7 @@ export function normalizeEditorProject(raw: DynamicRecord | null | undefined): E
       ? DEFAULT_CAPTION_STYLE_PRESET_ID
       : LEGACY_CAPTION_STYLE_PRESET_ID;
   const selectedStyleDefaults = normalizedCaptionStyleDefaults(stylePresetId);
+  const selectedFont = captionFont(rawSubtitleDefaults.fontId, selectedStyleDefaults.fontId);
   const subtitleAlign: SubtitleDefaultsRecord["align"] = (
     rawSubtitleDefaults.align === "left"
     || rawSubtitleDefaults.align === "right"
@@ -1256,9 +1268,9 @@ export function normalizeEditorProject(raw: DynamicRecord | null | undefined): E
     ...selectedStyleDefaults,
     ...rawSubtitleDefaults,
     stylePresetId,
-    fontId: selectedStyleDefaults.fontId,
-    fontFamily: selectedStyleDefaults.fontFamily,
-    fontWeight: 800,
+    fontId: selectedFont.id,
+    fontFamily: selectedFont.family,
+    fontWeight: selectedFont.weight,
     fontScale: clamp(
       finiteNumber(rawSubtitleDefaults.fontScale, selectedStyleDefaults.fontScale),
       0.025,
@@ -1533,6 +1545,21 @@ export function applyCaptionStylePreset(
   };
 }
 
+/** Change typography only; preserve authored cue paint, positions and timing. */
+export function applyCaptionFont(project: EditorProject, fontId: unknown): EditorProject {
+  const font = captionFont(fontId, project.subtitleDefaults.fontId);
+  return {
+    ...project,
+    subtitleDefaults: {
+      ...project.subtitleDefaults,
+      fontId: font.id,
+      fontFamily: font.family,
+      fontWeight: font.weight
+    },
+    updatedAt: nowIso()
+  };
+}
+
 export function captionBackgroundEnabled(
   defaults: Pick<SubtitleDefaultsRecord, "backgroundColor"> | null | undefined
 ): boolean {
@@ -1555,12 +1582,12 @@ export function resolveSubtitleCueBackground(
     SubtitleDefaultsRecord,
     "backgroundColor" | "backgroundRadiusEm"
   > | null | undefined,
-  cue: Pick<EditorSubtitleCue, "backgroundEnabled"> | null | undefined
+  cue: Pick<EditorSubtitleCue, "backgroundEnabled" | "backgroundColor"> | null | undefined
 ): ResolvedSubtitleCueBackground {
   if (cue?.backgroundEnabled === true) {
     return {
       enabled: true,
-      color: "#000000",
+      color: cue.backgroundColor === "#ffffff" ? "#ffffff" : "#000000",
       radiusEm: 0
     };
   }
@@ -2017,6 +2044,9 @@ function normalizeSubtitleCue(
     ),
     color: normalizeHexColor(cue.color, "#ffffff"),
     ...(cueFontScale != null ? { fontScale: cueFontScale } : {}),
+    ...(cue.backgroundColor === "#ffffff" || cue.backgroundColor === "#000000"
+      ? { backgroundColor: cue.backgroundColor }
+      : {}),
     ...(typeof cue.backgroundEnabled === "boolean"
       ? { backgroundEnabled: cue.backgroundEnabled }
       : {}),
@@ -2097,6 +2127,7 @@ export function createSubtitleCue(project: EditorProject, {
   color,
   fontScale,
   backgroundEnabled,
+  backgroundColor,
   x,
   y,
   origin = "human",
@@ -2118,6 +2149,7 @@ export function createSubtitleCue(project: EditorProject, {
     color: color ?? project.subtitleDefaults?.color,
     fontScale,
     backgroundEnabled,
+    backgroundColor,
     x: x ?? AUTOMATIC_CAPTION_POSITION.x,
     y: y ?? AUTOMATIC_CAPTION_POSITION.y,
     origin,
@@ -3303,6 +3335,56 @@ export function transcriptChunksToCueDrafts(
   return nonOverlapping;
 }
 
+/** Spatial-only edit: cut boundaries and every timed overlay remain untouched. */
+export function updateClipVideoCrop(project: EditorProject, clipId: string, value: unknown): EditorProject {
+  const current = project.clips.find((clip) => clip.id === clipId);
+  if (!current) return project;
+  const videoCrop = normalizeVideoCrop(value);
+  if (JSON.stringify(current.videoCrop ?? null) === JSON.stringify(videoCrop)) return project;
+  const next: EditorClip = { ...current, updatedAt: nowIso() };
+  if (videoCrop) next.videoCrop = videoCrop;
+  else delete next.videoCrop;
+  return {
+    ...project,
+    clips: project.clips.map((clip) => clip.id === clipId ? next : clip),
+    updatedAt: nowIso()
+  };
+}
+
+/** Insert another view of the same authorized source range, without copying overlays. */
+export function insertCroppedClipAfter(project: EditorProject, clipId: string, value: unknown): EditorProject {
+  const index = project.clips.findIndex((clip) => clip.id === clipId);
+  const current = project.clips[index];
+  if (!current || current.enabled === false) return project;
+  const usedIds = new Set(project.clips.map((clip) => clip.id));
+  let id = makeId("clip");
+  while (usedIds.has(id)) id = makeId("clip");
+  const timestamp = nowIso();
+  const inserted: EditorClip = {
+    ...current,
+    id,
+    sourceClipId: String(current.sourceClipId || current.shortFormSourceClipId || current.id),
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+  const crop = normalizeVideoCrop(value);
+  if (crop) inserted.videoCrop = crop;
+  else delete inserted.videoCrop;
+  const clips = reflowClips([
+    ...project.clips.slice(0, index + 1), inserted, ...project.clips.slice(index + 1)
+  ]);
+  return {
+    ...project,
+    clips,
+    selectedClipId: id,
+    selectedCueId: null,
+    selectedImageAssetId: null,
+    selectedAudioRegionId: null,
+    playheadMs: clips[index + 1]!.timelineStartMs,
+    updatedAt: timestamp
+  };
+}
+
 export function updateClipTrim(project: EditorProject, clipId: unknown, {
   sourceStartMs,
   sourceEndMs
@@ -3436,6 +3518,7 @@ export function splitClipAtTimeline(
   const rightClip: EditorClip = {
     ...clip,
     id: rightId,
+    sourceClipId: String(clip.sourceClipId || clip.shortFormSourceClipId || clip.id),
     ...(clip.shortFormSourceClipId || clip.shortFormFramingSourceId
       ? { shortFormFramingSourceId: clip.id }
       : {}),
@@ -3668,6 +3751,9 @@ export function rippleDeleteTimelineRange(project: EditorProject, {
         ? {
           ...clip,
           id,
+          ...(id !== clip.id ? {
+            sourceClipId: String(clip.sourceClipId || clip.shortFormSourceClipId || clip.id)
+          } : {}),
           ...(id !== clip.id && (
             clip.shortFormSourceClipId || clip.shortFormFramingSourceId
           )

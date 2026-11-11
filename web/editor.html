@@ -9,7 +9,7 @@
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki 영상 편집기</title>
-    <link rel="stylesheet" href="editor/editor.css?v=3.0.30">
+    <link rel="stylesheet" href="editor/editor.css?v=3.0.31">
   </head>
   <body>
     <main id="editor-origin-gate" class="editor-policy-gate" aria-labelledby="editor-origin-gate-title" hidden>
@@ -209,6 +209,7 @@
               <button id="preview-source-tab" type="button">원본 시각으로 이동</button>
             </div>
             <div class="stage-meta">
+              <button id="open-main-video-crop" type="button" aria-haspopup="dialog" aria-controls="main-video-crop-dialog" disabled>영상 영역 자르기</button>
               <button
                 id="start-short-source-composer"
                 class="short-source-start-action"
@@ -233,6 +234,7 @@
 
           <div id="stage" class="stage" tabindex="0">
             <video id="preview-video" class="preview-video preview-video-active" preload="metadata"></video>
+            <canvas id="main-video-crop-preview" class="main-video-crop-preview" aria-hidden="true" hidden></canvas>
             <section
               id="short-source-composer"
               class="short-source-composer"
@@ -526,10 +528,22 @@
             </div>
             </section>
 
+            <label class="field caption-font-field">
+              <span>자막 글꼴</span>
+              <select id="caption-font-family" aria-describedby="caption-font-help">
+                <option value="pretendard">Pretendard</option>
+                <option value="paperlogy">Paperlogy</option>
+                <option value="dohyeon">도현체 · Do Hyeon</option>
+                <option value="jua">주아체 · Jua</option>
+                <option value="nanummyeongjo">나눔명조 · Nanum Myeongjo</option>
+              </select>
+              <span id="caption-font-help" class="field-help">현재 작업의 모든 자막에 적용합니다. 상업용 영상에도 사용할 수 있는 OFL 글꼴입니다.</span>
+            </label>
+
             <section class="caption-sheet-launch" aria-labelledby="caption-sheet-launch-title">
               <div>
                 <strong id="caption-sheet-launch-title">자막 스타일 비교</strong>
-                <span>자막 문구는 표시하지 않고 위치·크기·색상·검은 상자 설정을 시간순으로 비교합니다.</span>
+                <span>자막 문구는 표시하지 않고 위치·크기·색상·배경 설정을 시간순으로 비교합니다.</span>
               </div>
               <button
                 id="open-caption-sheet"
@@ -588,6 +602,11 @@
               <button id="toggle-caption-background" class="toggle-setting caption-background-toggle" type="button" aria-label="선택 자막 검은 사각 배경" aria-pressed="false">
                 <span class="caption-background-swatch" aria-hidden="true"></span>
                 <span id="caption-background-label">이 자막 검은 상자 켜기 · X</span>
+              </button>
+
+              <button id="toggle-caption-white-background" class="toggle-setting caption-background-toggle" type="button" aria-label="선택 자막 흰 사각 배경" aria-pressed="false">
+                <span class="caption-background-swatch white" aria-hidden="true"></span>
+                <span id="caption-white-background-label">이 자막 흰 배경 넣기</span>
               </button>
 
               <div class="cue-lane-navigation" role="group" aria-label="같은 자막 레인의 좌우 자막 이동">
@@ -1103,7 +1122,7 @@
         <div>
           <h2 id="caption-sheet-title">자막 스타일 비교</h2>
           <p id="caption-sheet-description">
-            자막 문구를 제외한 설정만 한눈에 비교합니다. 위치·크기·색상·검은 상자가 주변 자막과 다른지 검수해 보세요.
+            자막 문구를 제외한 설정만 한눈에 비교합니다. 위치·크기·색상·배경이 주변 자막과 다른지 검수해 보세요.
           </p>
         </div>
         <button
@@ -1122,7 +1141,7 @@
           자막 속성을 시간순으로 준비합니다.
         </p>
         <p id="caption-sheet-common-style" class="caption-sheet-common-style">
-          위치·크기·글자색·검은 상자의 공통 설정과 개별 설정을 비교합니다.
+          위치·크기·글자색·배경의 공통 설정과 개별 설정을 비교합니다.
         </p>
         <p class="caption-sheet-output-excluded" role="note">
           이 비교표는 편집 화면에서만 보이며 영상 출력에는 포함되지 않습니다.
@@ -1141,7 +1160,7 @@
               <th scope="col">위치 X/Y</th>
               <th scope="col">설정 크기</th>
               <th scope="col">글자색</th>
-              <th scope="col">검은 상자</th>
+              <th scope="col">배경</th>
               <th scope="col">설정 묶음</th>
             </tr>
           </thead>
@@ -1416,6 +1435,40 @@
       </div>
     </dialog>
 
+    <dialog id="main-video-crop-dialog" class="main-video-crop-dialog" aria-labelledby="main-video-crop-title" aria-describedby="main-video-crop-description">
+      <h2 id="main-video-crop-title">선택 컷 영상 자르기</h2>
+      <p id="main-video-crop-description">원본 화면에서 남길 영역을 드래그하세요. 선택 영역을 기존 영상 틀 안에 맞춰 확대합니다. 컷의 시간·자막·이미지는 그대로 유지됩니다.</p>
+      <div class="main-video-crop-frame">
+        <div id="main-video-crop-surface" class="main-video-crop-surface">
+          <canvas id="main-video-crop-source" aria-label="자를 원본 영상 화면"></canvas>
+          <div id="main-video-crop-box" class="main-video-crop-box" tabindex="0" role="group" aria-label="선택 영역 이동" aria-describedby="main-video-crop-keyboard-help">
+            <button type="button" data-crop-handle="nw" aria-label="선택 영역 왼쪽 위 크기 조절"></button>
+            <button type="button" data-crop-handle="n" aria-label="선택 영역 위쪽 크기 조절"></button>
+            <button type="button" data-crop-handle="ne" aria-label="선택 영역 오른쪽 위 크기 조절"></button>
+            <button type="button" data-crop-handle="e" aria-label="선택 영역 오른쪽 크기 조절"></button>
+            <button type="button" data-crop-handle="se" aria-label="선택 영역 오른쪽 아래 크기 조절"></button>
+            <button type="button" data-crop-handle="s" aria-label="선택 영역 아래쪽 크기 조절"></button>
+            <button type="button" data-crop-handle="sw" aria-label="선택 영역 왼쪽 아래 크기 조절"></button>
+            <button type="button" data-crop-handle="w" aria-label="선택 영역 왼쪽 크기 조절"></button>
+          </div>
+        </div>
+      </div>
+      <p id="main-video-crop-keyboard-help">영역·조절점에서 방향키로 1px, Shift와 함께 10px 이동합니다.</p>
+      <p>새 컷으로 넣으면 선택 컷의 같은 시간 구간을 바로 뒤에 추가합니다. 원래 컷은 유지하며 자막·이미지·오디오 효과는 복사하지 않습니다.</p>
+      <div class="main-video-crop-fields">
+        <label>X (px)<input id="main-video-crop-x" type="number" min="0" step="1"></label>
+        <label>Y (px)<input id="main-video-crop-y" type="number" min="0" step="1"></label>
+        <label>너비 (px)<input id="main-video-crop-width" type="number" min="1" step="1"></label>
+        <label>높이 (px)<input id="main-video-crop-height" type="number" min="1" step="1"></label>
+      </div>
+      <div class="main-video-crop-actions">
+        <button id="main-video-crop-full" class="button secondary" type="button">전체 영역으로 초기화</button>
+        <button id="cancel-main-video-crop" class="button secondary" type="button">취소</button>
+        <button id="insert-main-video-crop" class="button secondary" type="button">새 컷으로 넣기</button>
+        <button id="apply-main-video-crop" class="button primary" type="button">선택 컷에 적용</button>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" hidden role="status" aria-live="polite" aria-atomic="true"></div>
 
     <template id="clip-template">
@@ -1444,6 +1497,6 @@
       </article>
     </template>
 
-    <script type="module" src="editor/editor.js?v=3.0.30"></script>
+    <script type="module" src="editor/editor.js?v=3.0.31"></script>
   </body>
 </html>

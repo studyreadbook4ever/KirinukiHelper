@@ -21,6 +21,7 @@ import {
   MINIMUM_VOD_NODE_VERSION,
   PINNED_YT_DLP
 } from "./local-vod-runtime-core.js";
+import { ADDITIONAL_CAPTION_FONTS } from "./additional-caption-fonts.js";
 import { PAPERLOGY_FONT } from "./paperlogy-font.js";
 import { PRETENDARD_FONT } from "./pretendard-font.js";
 
@@ -468,7 +469,7 @@ assert(
 await access(path.join(root, "node_modules", "mediabunny", "src", "index.ts"));
 await access(path.join(root, "node_modules", "hls.js", "src", "hls.ts"));
 
-for (const font of [PRETENDARD_FONT, PAPERLOGY_FONT]) {
+for (const font of [PRETENDARD_FONT, PAPERLOGY_FONT, ...ADDITIONAL_CAPTION_FONTS]) {
   const [
     sourceFont,
     distributedFont,
@@ -551,6 +552,9 @@ const expectedAttributionIds = [
   "hls-js",
   "pretendard",
   "paperlogy",
+  "dohyeon",
+  "jua",
+  "nanummyeongjo",
   "audseg",
   "whisper-cpp",
   "openai-whisper-models",
@@ -979,7 +983,8 @@ console.log(JSON.stringify({
     "hls.js Apache-2.0",
     "AudSeg MIT",
     "Pretendard OFL-1.1",
-    "Paperlogy OFL-1.1"
+    "Paperlogy OFL-1.1",
+    ...ADDITIONAL_CAPTION_FONTS.map((font) => `${font.family} OFL-1.1`)
   ],
   linuxPreviewRedistributedRuntime: [
     "Electron 43.8.4 with bundled Chromium/Node notices",

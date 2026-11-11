@@ -3774,7 +3774,7 @@ export function appendShortFormSlices(
     }
     const timelineStartMs = timelineCursorMs;
     const timelineEndMs = timelineStartMs + durationMs;
-    const lineageId = nonEmptyString(sourceClip?.shortFormSourceClipId, sourceClipId);
+    const lineageId = nonEmptyString(sourceClip?.sourceClipId || sourceClip?.shortFormSourceClipId, sourceClipId);
     const selectionStartMs = Math.min(
       sourceStartMs,
       integer(sourceClip?.shortFormSelectionStartMs, sourceClip?.selectionStartMs ?? sourceStartMs)

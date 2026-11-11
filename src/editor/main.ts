@@ -10,6 +10,7 @@ import {
   adjacentSubtitleCueInLane,
   appendAiSubtitleDrafts,
   applyCaptionStylePreset,
+  applyCaptionFont,
   applyMediaAlignmentOffset,
   audioRegionAtTimeline,
   audioRegionTimelineRange,
@@ -26,6 +27,7 @@ import {
   deleteSubtitleCue,
   findAudioRegionOverlaps,
   imageAssetsAtTimeline,
+  insertCroppedClipAfter,
   imageAssetTimelineRange,
   isAudSegBlankTimingCue,
   findSubtitleOverlaps,
@@ -53,6 +55,7 @@ import {
   timelineSnapThresholdMs,
   updateAudioRegion,
   updateClipTrim,
+  updateClipVideoCrop,
   updateImageAsset,
   updateSubtitleCue
 } from "../lib/editor-core.js";
@@ -88,6 +91,7 @@ import {
 } from "../lib/caption-review.js";
 import type { CaptionReviewFilter } from "../lib/caption-review.js";
 import { MAX_IMAGE_LANES, MIN_IMAGE_LANES, imageLaneAvailable, lastEmptyLane, normalizeImageLaneLayout } from "../lib/image-lanes.js";
+import { createVideoCropController } from "./video-crop-controller.js";
 import {
   KIRINUKI_STUDIO_ORIGIN_META_NAME,
   assertKirinukiStudioDocumentOrigin,
@@ -99,6 +103,7 @@ import type {
 } from "../lib/caption-properties-sheet.js";
 import {
   DEFAULT_CAPTION_STYLE_PRESET_ID,
+  captionFont,
   captionSpeakerColor,
   captionSpeakerColorAssignments,
   captionStylePreset
@@ -145,6 +150,7 @@ import {
   isMaterializedLoopbackMediaSource,
   normalizeMaterializedLoopbackMediaSource,
   renderProjectVideo,
+  RENDER_LETTERBOX_COLOR,
   SHORT_FORM_FALLBACK_RESTART_PHASE,
   shortFormDestinationRectForTarget,
   shortFormSourceAudioAssetGainAt,
@@ -922,6 +928,9 @@ const EDITOR_ELEMENT_IDS = [
   "add-cue-top",
   "caption-agent-token",
   "caption-style-preset",
+  "caption-font-family",
+  "toggle-caption-white-background",
+  "caption-white-background-label",
   "toggle-caption-background",
   "caption-background-label",
   "previous-cue-in-lane",
@@ -1623,6 +1632,7 @@ const captionInspectorTab = elements.cue_selected_tab;
 let project: EditorProject = null!;
 type EditorWorkspaceMode = "main" | "short-form";
 let workspaceMode: EditorWorkspaceMode = "main";
+let videoCropController: ReturnType<typeof createVideoCropController> | null = null;
 let rootProject: EditorProject = null!;
 let mainWorkspaceUndoStack: EditorProject[] = [];
 let mainWorkspaceRedoStack: EditorProject[] = [];
@@ -4455,6 +4465,9 @@ function renderHeader() {
   elements.open_short_form.disabled = (
     Boolean(activeJobController)
   );
+  if (document.activeElement !== elements.caption_font_family) {
+    elements.caption_font_family.value = project.subtitleDefaults.fontId;
+  }
   if (document.activeElement !== elements.caption_style_preset) {
     elements.caption_style_preset.value = String(
       project.subtitleDefaults?.stylePresetId
@@ -4955,17 +4968,18 @@ function renderCueInspector() {
     project.subtitleDefaults,
     cue
   );
-  elements.toggle_caption_background.classList.toggle(
-    "active",
-    cueBackground.enabled
-  );
-  elements.toggle_caption_background.setAttribute(
-    "aria-pressed",
-    String(cueBackground.enabled)
-  );
-  elements.caption_background_label.textContent = cueBackground.enabled
+  const blackBackground = cueBackground.enabled && cueBackground.color !== "#ffffff";
+  const whiteBackground = cueBackground.enabled && cueBackground.color === "#ffffff";
+  elements.toggle_caption_background.classList.toggle("active", blackBackground);
+  elements.toggle_caption_background.setAttribute("aria-pressed", String(blackBackground));
+  elements.caption_background_label.textContent = blackBackground
     ? "이 자막 검은 상자 끄기 · X"
     : "이 자막 검은 상자 켜기 · X";
+  elements.toggle_caption_white_background.classList.toggle("active", whiteBackground);
+  elements.toggle_caption_white_background.setAttribute("aria-pressed", String(whiteBackground));
+  elements.caption_white_background_label.textContent = whiteBackground
+    ? "이 자막 흰 배경 끄기"
+    : "이 자막 흰 배경 넣기";
   const selectedAsset = selectedImageAsset();
   const canMatchAsset = Boolean(selectedAsset && selectedAsset.clipId === cue.clipId);
   elements.match_cue_to_asset.disabled = !canMatchAsset;
@@ -5787,7 +5801,7 @@ function renderCaptionSheetRow(row: CaptionPropertiesSheetRow) {
   appendCaptionSheetVariationBadge(
     backgroundCell,
     row.variations.background,
-    "검은 상자"
+    "배경"
   );
 
   const groupCell = document.createElement("td");
@@ -5856,8 +5870,8 @@ function renderCaptionPropertiesSheet() {
 
   const outline = sheet.summary.commonOutline;
   elements.caption_sheet_common_style.textContent = outline.enabled
-    ? `프로젝트 공통 외곽선 ${outline.color.toUpperCase()} · ${formatCaptionSheetPercent(outline.widthPercent, 2)} · 행별 검은 상자와는 별도`
-    : "프로젝트 공통 외곽선 없음 · 행별 검은 상자 설정만 비교";
+    ? `프로젝트 공통 외곽선 ${outline.color.toUpperCase()} · ${formatCaptionSheetPercent(outline.widthPercent, 2)} · 행별 배경과는 별도`
+    : "프로젝트 공통 외곽선 없음 · 행별 배경 설정만 비교";
 }
 
 function openCaptionPropertiesSheet() {
@@ -8042,7 +8056,7 @@ function appendShortSourceVideoAssets(
       id: `${workspaceId}-video-${crypto.randomUUID()}`,
       sourceAssetId: "project-primary",
       sourceClipId: String(
-        sourceClip.shortFormSourceClipId || sourceClip.id
+        sourceClip.sourceClipId || sourceClip.shortFormSourceClipId || sourceClip.id
       ),
       sourceSelectionStartMs: selectionStartMs,
       sourceSelectionEndMs: selectionEndMs,
@@ -12945,12 +12959,12 @@ function videoContentRect(container = elements.image_asset_overlays) {
       height: videoRect.height
     };
   }
-  const scale = Math.min(
-    videoRect.width / video.videoWidth,
-    videoRect.height / video.videoHeight
-  );
-  const width = video.videoWidth * scale;
-  const height = video.videoHeight * scale;
+  const cropFrame = videoCropController?.previewDimensions();
+  const frameWidth = cropFrame?.width ?? video.videoWidth;
+  const frameHeight = cropFrame?.height ?? video.videoHeight;
+  const scale = Math.min(videoRect.width / frameWidth, videoRect.height / frameHeight);
+  const width = frameWidth * scale;
+  const height = frameHeight * scale;
   return {
     left: surfaceLeft + (videoRect.width - width) / 2,
     top: surfaceTop + (videoRect.height - height) / 2,
@@ -14009,6 +14023,7 @@ function updatePlayhead() {
   elements.playhead.setAttribute("aria-valuetext", formatTime(project.playheadMs));
   elements.current_time.textContent = formatTime(project.playheadMs);
   elements.duration_time.textContent = `/ ${formatTime(duration)}`;
+  videoCropController?.render();
   if (workspaceMode !== "short-form" || !shortCanvasPlaybackActive) {
     void renderImageAssetOverlays().catch((error) => {
       console.warn("캔버스 위 이미지를 그리지 못했습니다.", error);
@@ -14346,6 +14361,9 @@ function startPreviewPlaybackClock() {
     }
     if (!pendingPreviewSeek && !previewBoundaryTransitioning) {
       const clip = project.clips.find((candidate) => candidate.id === activeClipId);
+      if (clip?.videoCrop || videoCropController?.isPreviewVisible()) {
+        videoCropController?.render();
+      }
       const sourceMs = previewSecondsToSourceMs(elements.preview_video.currentTime);
       if (clip && previewReachedClipBoundary(sourceMs, clip.sourceEndMs)) {
         handleVideoTimeUpdate();
@@ -14715,6 +14733,11 @@ function handleVideoTimeUpdate(event?: Event) {
 }
 
 function bindPreviewVideoEvents(video: HTMLVideoElement) {
+  for (const eventName of ["loadeddata", "seeked", "resize"] as const) {
+    video.addEventListener(eventName, () => {
+      if (video === elements.preview_video) videoCropController?.render();
+    });
+  }
   video.addEventListener("timeupdate", handleVideoTimeUpdate);
   video.addEventListener("play", (event: Event) => {
     if (event.currentTarget !== elements.preview_video) {
@@ -15671,7 +15694,7 @@ function chzzkVodSourceUrl(
 }
 
 function vodSourceClipId(clip: EditorClip): string {
-  return String(clip.shortFormSourceClipId || clip.id).trim();
+  return String(clip.sourceClipId || clip.shortFormSourceClipId || clip.id).trim();
 }
 
 function vodWorkspaceClips(
@@ -19804,6 +19827,44 @@ function bindTimelineSeeking() {
 }
 
 function bindActions() {
+  videoCropController = createVideoCropController({
+    state: () => ({
+      sessionKey: JSON.stringify([project?.id, sourceSessionIdentity(project?.source), projectWriteQueue.generation, mediaUrl]),
+      mainWorkspace: workspaceMode === "main",
+      available: Boolean(project && mediaFile && materializedMediaBindingIsValid()
+        && elements.preview_video.videoWidth > 0 && elements.preview_video.videoHeight > 0),
+      editable: !activeJobController && projectMutationLockCount === 0
+        && !editorSessionCompleted && !editingSessionExitInProgress,
+      sourceComposerActive: shortSourceComposerActive,
+      selectedClip: project?.clips.find((clip) => clip.id === project.selectedClipId),
+      previewClip: project?.clips.find((clip) => clip.id === (
+        previewPlaybackIsActive() ? activeClipId : mapTimelineToSource(project, project.playheadMs)?.clipId
+      )),
+      video: elements.preview_video
+    }),
+    prepareClip: async (clipId) => {
+      const clip = project.clips.find((candidate) => candidate.id === clipId);
+      if (!clip || workspaceMode !== "main" || shortSourceComposerActive) return;
+      elements.preview_video.pause();
+      const time = project.playheadMs >= clip.timelineStartMs
+        && project.playheadMs < clip.timelineStartMs + clipDurationMs(clip)
+        ? project.playheadMs : clip.timelineStartMs;
+      await seekTimeline(time);
+    },
+    apply: (clipId, crop) => {
+      if (workspaceMode === "main" && projectMutationLockCount === 0) {
+        applyProject(updateClipVideoCrop(project, clipId, crop));
+      }
+    },
+    insert: (clipId, crop) => {
+      if (workspaceMode === "main" && projectMutationLockCount === 0) {
+        applyProject(insertCroppedClipAfter(project, clipId, crop));
+        void syncPreviewToPlayhead();
+      }
+    },
+    onError: (error) => showToast(errorMessage(error), "error"),
+    letterboxColor: RENDER_LETTERBOX_COLOR
+  });
   installEditorShortcutHints();
   elements.project_name.addEventListener("input", () => {
     applyFieldProject({ ...project, name: elements.project_name.value }, "project-name");
@@ -21261,22 +21322,28 @@ function bindActions() {
       });
   });
   elements.test_caption_agent.addEventListener("click", () => void testCaptionAgentConnection());
-  elements.toggle_caption_background.addEventListener("click", () => {
+  const toggleCueBackground = (color: "#000000" | "#ffffff") => {
     const cue = selectedCue();
-    if (!cue) {
-      return;
+    if (!cue) return;
+    const current = resolveSubtitleCueBackground(project.subtitleDefaults, cue);
+    const enabled = !(current.enabled && (color === "#ffffff"
+      ? current.color === "#ffffff"
+      : current.color !== "#ffffff"));
+    updateSelectedCue({ backgroundEnabled: enabled, backgroundColor: color });
+    showToast(enabled ? "자막 배경을 적용했습니다." : "자막 배경을 껐습니다.", "success");
+  };
+  elements.toggle_caption_background.addEventListener("click", () => toggleCueBackground("#000000"));
+  elements.toggle_caption_white_background.addEventListener("click", () => toggleCueBackground("#ffffff"));
+  elements.caption_font_family.addEventListener("change", () => {
+    const font = captionFont(elements.caption_font_family.value, project.subtitleDefaults.fontId);
+    applyProject(applyCaptionFont(project, font.id));
+    if (document.fonts?.load) {
+      void document.fonts.load(`${font.weight} 48px "${font.family}"`)
+        .then(renderSubtitleOverlay)
+        .catch((error: unknown) => {
+          showToast(`자막 폰트를 준비하지 못했습니다: ${errorMessage(error)}`, "error", 0);
+        });
     }
-    const enabled = !resolveSubtitleCueBackground(
-      project.subtitleDefaults,
-      cue
-    ).enabled;
-    updateSelectedCue({ backgroundEnabled: enabled });
-    showToast(
-      enabled
-        ? "이 자막에 검은 사각 배경을 켰습니다."
-        : "이 자막의 검은 배경을 껐습니다.",
-      "success"
-    );
   });
   const selectAdjacentCueInLane = (direction: -1 | 1) => {
     const cue = selectedCue();
@@ -21489,6 +21556,7 @@ function bindActions() {
   bindImageAssetOverlayDrag();
   bindTimelineSeeking();
   window.addEventListener("resize", () => {
+    videoCropController?.render();
     renderTimeline({ keepScroll: true });
     void renderImageAssetOverlays();
     renderSubtitleOverlay();
@@ -21499,6 +21567,7 @@ function bindActions() {
     if (elements.editor_shell.hidden || elements.editor_shell.inert) {
       return;
     }
+    if (videoCropController?.isOpen()) return;
     try {
       requireActiveUsagePolicySession();
     } catch {

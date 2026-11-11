@@ -30,6 +30,7 @@ import {
 import {
   LOCAL_MEDIA_ENGINE_AUTHENTICATED_HEALTH_PROTOCOL,
   LOCAL_MEDIA_ENGINE_AUTHENTICATED_SESSION_PROTOCOL,
+  LOCAL_MEDIA_ENGINE_ENCRYPTED_SESSION_REQUEST_SCHEMA,
   LOCAL_MEDIA_ENGINE_ENCRYPTED_SESSION_RESPONSE_SCHEMA,
   LOCAL_MEDIA_ENGINE_PAIRING_POLL_PROTOCOL,
   LOCAL_MEDIA_ENGINE_PAIRING_RESPONSE_SCHEMA,
@@ -89,6 +90,52 @@ interface WireRecord {
   readonly responseBody: string;
   readonly status: number;
 }
+
+function assertEncryptedSessionRequestWire(
+  requestBody: string,
+  sensitiveValues: readonly string[]
+): void {
+  const envelope = JSON.parse(requestBody) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(envelope).sort(), [
+    "ciphertext", "clientPublicKey", "grantId", "iv", "schema"
+  ]);
+  assert.equal(envelope.schema, LOCAL_MEDIA_ENGINE_ENCRYPTED_SESSION_REQUEST_SCHEMA);
+  for (const field of ["ciphertext", "clientPublicKey", "grantId", "iv"]) {
+    assert.equal(typeof envelope[field], "string");
+    assert.match(String(envelope[field]), /^[A-Za-z0-9_-]+$/u);
+  }
+  // Random base64url can contain short words such as "vod". Check complete
+  // JSON values instead; the envelope shape/alphabet also excludes plaintext
+  // fields or embedded JSON, and the gateway round trip proves decryption.
+  for (const value of sensitiveValues) {
+    assert.equal(requestBody.includes(JSON.stringify(value)), false);
+  }
+}
+
+test("encrypted session wire checks reject plaintext without matching random ciphertext substrings", () => {
+  const sensitiveValues = ["보안 프로젝트 A", SOURCE_URL, "vod", "cache-delete"];
+  const envelope = {
+    schema: LOCAL_MEDIA_ENGINE_ENCRYPTED_SESSION_REQUEST_SCHEMA,
+    clientPublicKey: "B".repeat(87),
+    grantId: "A".repeat(43),
+    iv: "C".repeat(16),
+    ciphertext: `vod-cache-delete-youtube${"D".repeat(32)}`
+  };
+  assert.doesNotThrow(() => assertEncryptedSessionRequestWire(JSON.stringify(envelope), sensitiveValues));
+  for (const plaintext of [
+    { purpose: "vod" },
+    { projectId: "보안 프로젝트 A" },
+    { sourceUrl: SOURCE_URL },
+    { actions: ["vod", "cache-delete"] }
+  ]) {
+    assert.throws(() => assertEncryptedSessionRequestWire(JSON.stringify({ ...envelope, ...plaintext }), sensitiveValues),
+      { code: "ERR_ASSERTION" });
+  }
+  for (const value of sensitiveValues) {
+    assert.throws(() => assertEncryptedSessionRequestWire(JSON.stringify({ ...envelope, ciphertext: value }), sensitiveValues),
+      { code: "ERR_ASSERTION" });
+  }
+});
 
 async function deviceFixture(): Promise<DeviceFixture> {
   const keys = await webcrypto.subtle.generateKey(
@@ -259,11 +306,9 @@ test("public loopback v2는 session/control plaintext를 숨기고 exact actions
     record.path === "/v1/session" && record.method === "POST"
   ));
   assert.ok(sessionWire);
-  assert.deepEqual(
-    Object.keys(JSON.parse(sessionWire.requestBody) as object).sort(),
-    ["ciphertext", "clientPublicKey", "grantId", "iv", "schema"]
-  );
-  assert.doesNotMatch(sessionWire.requestBody, /보안 프로젝트|youtube|cache-delete|vod/u);
+  assertEncryptedSessionRequestWire(sessionWire.requestBody, [
+    "보안 프로젝트 A", SOURCE_URL, "vod", "cache-delete"
+  ]);
   assert.doesNotMatch(sessionWire.responseBody, new RegExp(token, "u"));
   assert.equal(
     (JSON.parse(sessionWire.responseBody) as Record<string, unknown>).schema,

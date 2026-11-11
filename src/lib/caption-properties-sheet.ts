@@ -23,6 +23,7 @@ export type CaptionPropertiesSheetCueInput = Pick<
   | "color"
   | "fontScale"
   | "backgroundEnabled"
+  | "backgroundColor"
 >;
 
 export type CaptionPropertiesSheetDefaultsInput = Pick<

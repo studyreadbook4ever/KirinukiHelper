@@ -21,7 +21,18 @@ const studioStaticCopy = {
     ja: "このタブで最近削除したカットを30件まで元に戻せます。元動画を変更すると履歴は消去されます。"
   },
   "시작으로 이동": { en: "Go to start", ja: "開始へ移動" },
-  "끝으로 이동": { en: "Go to end", ja: "終了へ移動" },
+  "위로": { en: "Move up", ja: "上へ" },
+  "아래로": { en: "Move down", ja: "下へ" },
+  "구간 순서를 바꿀까요?": { en: "Change the cut order?", ja: "カットの順序を変更しますか？" },
+  "순서 바꾸기": { en: "Change order", ja: "順序を変更" },
+  "시작·끝 시각과 메모는 그대로 두고 재생 순서만 바꿉니다.": {
+    en: "Only the playback order changes. Start and end times and notes stay the same.",
+    ja: "再生順序だけを変更します。開始・終了時刻とメモはそのままです。"
+  },
+  "구간 목록이나 원본이 바뀌어 순서를 바꾸지 않았습니다. 다시 선택해 주세요.": {
+    en: "The cuts or source changed, so the order was kept. Select the cut again.",
+    ja: "カット一覧または元動画が変わったため、順序は変更していません。もう一度選択してください。"
+  },
   "길이 --:--": { en: "Length --:--", ja: "長さ --:--" },
   "원본 플레이어가 준비되면 이 시각으로 이동합니다.": {
     en: "Go to this time once the source player is ready.",
@@ -811,6 +822,26 @@ export const CUT_UI_COPY_CATALOG: UiCopyCatalog = mergeUiCopyCatalogs(
 );
 
 export const CUT_UI_COPY_PATTERNS = [
+  {
+    source: /^([0-9]+)번 구간을 ([0-9]+)번째로 옮길까요\?$/u,
+    en: "Move cut $1 to position $2?",
+    ja: "カット$1を$2番目に移動しますか？"
+  },
+  {
+    source: /^([0-9]+)번 구간을 ([0-9]+)번째로 옮겼습니다\.$/u,
+    en: "Moved cut $1 to position $2.",
+    ja: "カット$1を$2番目に移動しました。"
+  },
+  {
+    source: /^([0-9]+)번 구간을 한 칸 위로 이동$/u,
+    en: "Move cut $1 up one position",
+    ja: "カット$1を1つ上へ移動"
+  },
+  {
+    source: /^([0-9]+)번 구간을 한 칸 아래로 이동$/u,
+    en: "Move cut $1 down one position",
+    ja: "カット$1を1つ下へ移動"
+  },
   {
     source: /^저장으로 확정하지 않은 이전 작업 ([0-9,.]+)개를 정리했습니다\. 마지막 직접 저장 상태는 남기고 이후 미저장 변경만 정리했습니다\.$/u,
     en: "Cleaned up $1 unfinished edits. The last explicit saves were kept; only later unsaved changes were discarded.",

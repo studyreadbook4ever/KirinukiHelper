@@ -135,6 +135,7 @@ export interface ChzzkVodRightsConfirmation {
 type MaterializationMapping = Pick<ChzzkVodMaterialization, "windows">;
 interface ClipSelectionLike {
   id: string;
+  sourceClipId?: unknown;
   selectionStartMs: number;
   selectionEndMs: number;
   shortFormSourceClipId?: unknown;
@@ -151,7 +152,7 @@ type UnknownRecord = Record<string, unknown>;
 
 function materializationClipIdentity(clip: ClipSelectionLike): string {
   return safeIdentifier(
-    clip.shortFormSourceClipId || clip.id,
+    clip.sourceClipId || clip.shortFormSourceClipId || clip.id,
     "클립 원본 ID"
   );
 }

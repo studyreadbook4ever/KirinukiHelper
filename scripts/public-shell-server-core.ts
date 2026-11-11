@@ -62,6 +62,7 @@ const PUBLIC_WEB_MIME_TYPES = Object.freeze(new Map<string, string>([
   [".md", "text/markdown; charset=utf-8"],
   [".txt", "text/plain; charset=utf-8"],
   [".wasm", "application/wasm"],
+  [".ttf", "font/ttf"],
   [".woff2", "font/woff2"]
 ]));
 
