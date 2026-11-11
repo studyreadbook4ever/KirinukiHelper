@@ -5723,6 +5723,13 @@ async function main(): Promise<void> {
   const cropBaseline = await readBrowserProject(freshProjectId);
   assert(cropBaseline, "영상 영역 자르기 기준 프로젝트 없음");
   const rightHalfCrop = { x: 0.5, y: 0, width: 0.5, height: 1 };
+  const matchesRightHalfCrop = (value: unknown): boolean => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const crop = value as Record<string, unknown>;
+    return Object.keys(crop).sort().join(",") === "height,width,x,y"
+      && crop.x === rightHalfCrop.x && crop.y === rightHalfCrop.y
+      && crop.width === rightHalfCrop.width && crop.height === rightHalfCrop.height;
+  };
   const cropAuthority = (value: EditorProject) => JSON.stringify({
     clips: value.clips.map(({ videoCrop: _crop, updatedAt: _updatedAt, ...clip }) => clip),
     subtitles: value.subtitles, images: value.imageAssets, audio: value.audioRegions
@@ -5784,7 +5791,7 @@ async function main(): Promise<void> {
   await execute(`document.querySelector("#insert-main-video-crop").click(); return true;`);
   const insertedCropProject = await waitFor(() => readBrowserProject(freshProjectId),
     (value) => value?.clips.length === 4
-      && JSON.stringify(value.clips[1]?.videoCrop) === JSON.stringify(rightHalfCrop),
+      && matchesRightHalfCrop(value.clips[1]?.videoCrop),
     "영상 영역을 바로 다음 새 컷으로 삽입하지 못했습니다.");
   assert(insertedCropProject, "새로 삽입한 crop 프로젝트 없음");
   const insertedCrop = insertedCropProject.clips[1]!;
@@ -5904,21 +5911,22 @@ async function main(): Promise<void> {
   await setRightHalfCrop();
   await execute(`document.querySelector("#apply-main-video-crop").click(); return true;`);
   const appliedCrop = await waitFor(() => readBrowserProject(freshProjectId),
-    (value) => JSON.stringify(value?.clips[0]?.videoCrop) === JSON.stringify(rightHalfCrop),
+    (value) => matchesRightHalfCrop(value?.clips[0]?.videoCrop),
     "선택 컷 crop가 정확히 저장되지 않았습니다.");
   assert(appliedCrop && cropAuthority(appliedCrop) === cropAuthority(cropBaseline),
     "공간 crop가 기존 컷 경계 또는 오버레이를 변경했습니다.");
   const cropPreview = await waitFor(() => execute<{
-    visible: boolean; clipId: string; crop: string; left: number[]; top: number[]; bottom: number[];
+    visible: boolean; clipId: string; crop: unknown; left: number[]; top: number[]; bottom: number[];
   }>(`
     const canvas = document.querySelector("#main-video-crop-preview");
     const context = canvas?.getContext("2d");
     const at = (x, y) => context && canvas.width ? Array.from(context.getImageData(
       Math.floor(canvas.width * x), Math.floor(canvas.height * y), 1, 1).data) : [];
     return { visible: canvas?.hidden === false, clipId: canvas?.dataset.clipId || "",
-      crop: canvas?.dataset.crop || "", left: at(0.125, 0.25), top: at(0.5, 0.25), bottom: at(0.5, 0.75) };
+      crop: canvas?.dataset.crop ? JSON.parse(canvas.dataset.crop) : null,
+      left: at(0.125, 0.25), top: at(0.5, 0.25), bottom: at(0.5, 0.75) };
   `), (value) => value.visible && value.clipId === "clip-order-a"
-    && value.crop === JSON.stringify(rightHalfCrop) && black(value.left) && green(value.top) && white(value.bottom),
+    && matchesRightHalfCrop(value.crop) && black(value.left) && green(value.top) && white(value.bottom),
   "실제 crop 미리보기의 선택 영역과 색상/여백이 최종 영상과 일치하지 않습니다.");
   await openMainVideoCrop();
   await execute(`document.querySelector("#main-video-crop-full").click();
@@ -5930,14 +5938,14 @@ async function main(): Promise<void> {
   "crop 초기화 뒤 기본 원본 영상 미리보기가 복원되지 않았습니다.");
   await execute(`document.querySelector("#undo").click(); return true;`);
   await waitFor(() => readBrowserProject(freshProjectId),
-    (value) => JSON.stringify(value?.clips[0]?.videoCrop) === JSON.stringify(rightHalfCrop),
+    (value) => matchesRightHalfCrop(value?.clips[0]?.videoCrop),
     "crop 초기화 실행 취소가 앞선 선택 영역을 복원하지 못했습니다.");
   await execute(`document.querySelector("#redo").click(); return true;`);
   await waitFor(() => readBrowserProject(freshProjectId), (value) => !value?.clips[0]?.videoCrop,
     "crop 초기화 다시 실행이 전체 원본 영역을 복원하지 못했습니다.");
   await execute(`document.querySelector("#undo").click(); return true;`);
   await waitFor(() => readBrowserProject(freshProjectId),
-    (value) => JSON.stringify(value?.clips[0]?.videoCrop) === JSON.stringify(rightHalfCrop),
+    (value) => matchesRightHalfCrop(value?.clips[0]?.videoCrop),
     "reload 검증에 사용할 crop 영역을 복원하지 못했습니다.");
   const videoCropJourney = { trustedDrag: cropDragged, insertedClipId: insertedCrop.id,
     export: cropOutput, preview: cropPreview, originalValuesPreserved: true };
@@ -6173,8 +6181,7 @@ async function main(): Promise<void> {
     && appearanceReload.subtitleDefaults.fontFamily === "Nanum Myeongjo"
     && appearanceReload.subtitles.find(({ id }) => id === "review-human")?.backgroundColor === "#ffffff"
     && appearanceReload.subtitles.find(({ id }) => id === "review-human")?.backgroundEnabled === true
-    && JSON.stringify(appearanceReload.clips.find(({ id }) => id === "clip-order-a")?.videoCrop)
-      === JSON.stringify(rightHalfCrop),
+    && matchesRightHalfCrop(appearanceReload.clips.find(({ id }) => id === "clip-order-a")?.videoCrop),
   "명시 저장 후 재진입했을 때 글꼴·흰 배경·원본 crop가 복원되지 않았습니다.");
 
   await waitFor(
@@ -6230,8 +6237,8 @@ async function main(): Promise<void> {
     (value) => value?.shortForm.subtitleDefaults?.fontId === "jua",
     "쇼츠의 글꼴 선택이 해당 작업에 저장되지 않았습니다.");
   assert(shortFontChanged?.subtitleDefaults.fontId === "nanummyeongjo"
-    && JSON.stringify(shortFontChanged.clips.find(({ id }) => id === "clip-order-a")?.videoCrop)
-      === JSON.stringify(rightHalfCrop), "쇼츠 글꼴 선택이 본편 글꼴 또는 crop를 변경했습니다.");
+    && matchesRightHalfCrop(shortFontChanged.clips.find(({ id }) => id === "clip-order-a")?.videoCrop),
+  "쇼츠 글꼴 선택이 본편 글꼴 또는 crop를 변경했습니다.");
   await execute(`document.querySelector("#undo").click(); return true;`);
   await waitFor(() => readBrowserProject(freshProjectId),
     (value) => value?.shortForm.subtitleDefaults?.fontId === deepEditorFixtureBase.subtitleDefaults.fontId,

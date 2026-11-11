@@ -95,7 +95,8 @@ export function createVideoCropController(options: CropEditorOptions) {
       await options.prepareClip(selectedId);
       const state = options.state();
       const video = state.video;
-      if (state.sessionKey !== before.sessionKey || !state.mainWorkspace || !state.editable) return;
+      if (state.sessionKey !== before.sessionKey || !state.mainWorkspace || !state.editable
+        || state.sourceComposerActive || state.selectedClip?.enabled === false) return;
       if (!state.available || state.selectedClip?.id !== selectedId
         || video.readyState < 2 || video.seeking || video.style.visibility === "hidden") {
         throw new Error("영상 화면을 준비한 뒤 다시 자르기를 열어 주세요.");
@@ -129,7 +130,8 @@ export function createVideoCropController(options: CropEditorOptions) {
     openButton.classList.toggle("active", Boolean(state.selectedClip?.videoCrop));
     openButton.dataset.cropActive = String(Boolean(state.selectedClip?.videoCrop));
     if (dialog.open && (state.sessionKey !== draftSessionKey || !state.mainWorkspace
-      || !state.available || !state.editable || state.selectedClip?.id !== clipId)) close();
+      || !state.available || !state.editable || state.sourceComposerActive
+      || state.selectedClip?.enabled === false || state.selectedClip?.id !== clipId)) close();
     const video = state.video;
     if (hiddenVideo && hiddenVideo !== video) hiddenVideo.style.opacity = "";
     const crop = normalizeVideoCrop(state.previewClip?.videoCrop);
@@ -180,6 +182,7 @@ export function createVideoCropController(options: CropEditorOptions) {
   applyButton.addEventListener("click", () => {
     const state = options.state();
     if (!clipId || !state.mainWorkspace || !state.available || !state.editable
+      || state.sourceComposerActive || state.selectedClip?.enabled === false
       || state.sessionKey !== draftSessionKey || state.selectedClip?.id !== clipId) return;
     const targetId = clipId;
     const crop = normalizeVideoCrop(draft);
@@ -190,6 +193,7 @@ export function createVideoCropController(options: CropEditorOptions) {
   required("insert-main-video-crop", HTMLButtonElement).addEventListener("click", () => {
     const state = options.state();
     if (!clipId || !state.mainWorkspace || !state.available || !state.editable
+      || state.sourceComposerActive || state.selectedClip?.enabled === false
       || state.sessionKey !== draftSessionKey || state.selectedClip?.id !== clipId) return;
     const targetId = clipId;
     const crop = normalizeVideoCrop(draft);
