@@ -12,6 +12,39 @@ export const PAPERLOGY_CAPTION_STYLE_PRESET_ID = "kr-vtuber-paperlogy-v1";
 export const LEGACY_CAPTION_STYLE_PRESET_ID = "pretendard-legacy-v1";
 
 export const CAPTION_FONT_REGISTRY = deepFreeze({
+  dohyeon: {
+    id: "dohyeon",
+    family: "Do Hyeon",
+    displayName: "Do Hyeon",
+    weight: 400,
+    version: "Version 1.001",
+    file: "fonts/DoHyeon-Regular.ttf",
+    license: "SIL Open Font License 1.1",
+    licenseFile: "../licenses/DOHYEON-OFL-1.1.txt",
+    upstream: "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/dohyeon"
+  },
+  jua: {
+    id: "jua",
+    family: "Jua",
+    displayName: "Jua",
+    weight: 400,
+    version: "Version 1.001",
+    file: "fonts/Jua-Regular.ttf",
+    license: "SIL Open Font License 1.1",
+    licenseFile: "../licenses/JUA-OFL-1.1.txt",
+    upstream: "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/jua"
+  },
+  nanummyeongjo: {
+    id: "nanummyeongjo",
+    family: "Nanum Myeongjo",
+    displayName: "Nanum Myeongjo",
+    weight: 800,
+    version: "Version 2.032;PS 1;hotconv 1.0.56;makeotf.lib2.0.21325",
+    file: "fonts/NanumMyeongjo-ExtraBold.ttf",
+    license: "SIL Open Font License 1.1",
+    licenseFile: "../licenses/NANUMMYEONGJO-OFL-1.1.txt",
+    upstream: "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/nanummyeongjo"
+  },
   paperlogy: {
     id: "paperlogy",
     family: "Paperlogy",
@@ -26,7 +59,7 @@ export const CAPTION_FONT_REGISTRY = deepFreeze({
   pretendard: {
     id: "pretendard",
     family: "Pretendard",
-    displayName: "Pretendard ExtraBold (legacy)",
+    displayName: "Pretendard ExtraBold",
     weight: 800,
     version: "1.3.9",
     file: "fonts/Pretendard-ExtraBold.woff2",
@@ -299,4 +332,17 @@ export function captionSpeakerColorAssignments(
     usedColors.add(assignedColor);
   }
   return assignments;
+}
+
+export type CaptionFontId = keyof typeof CAPTION_FONT_REGISTRY;
+
+export function captionFont(fontId: unknown, fallback: unknown = "pretendard") {
+  const key = String(fontId || "");
+  const fallbackKey = String(fallback || "");
+  const resolved = Object.hasOwn(CAPTION_FONT_REGISTRY, key)
+    ? key as CaptionFontId
+    : Object.hasOwn(CAPTION_FONT_REGISTRY, fallbackKey)
+      ? fallbackKey as CaptionFontId
+      : "pretendard";
+  return CAPTION_FONT_REGISTRY[resolved];
 }

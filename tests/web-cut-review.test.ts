@@ -94,7 +94,7 @@ test("cut review controls retain source, busy and asynchronous response guards",
   assert.match(source, /return openingEditor \|\| Boolean\(resumeProject\) \|\| activeCutSeek !== null\s*\|\| localPreviewBusy/u);
   assert.match(source, /elements\.sourceUrl\.addEventListener\("input", \(\) => \{\s*if \(resumeProject\) return;\s*resetCutReviewSession\(\)/u);
   assert.match(source, /resetCutReviewSession\(\);\s*clearResumeMode\(\);\s*elements\.sourceUrl\.value = imported\.sourceUrl/u);
-  const seek = source.slice(source.indexOf("async function seekToClipBoundary"), source.indexOf("async function seekPlayerBy"));
+  const seek = source.slice(source.indexOf("async function seekToClipStart"), source.indexOf("async function seekPlayerBy"));
   assert.match(seek, /generation === cutReviewGeneration && cutReviewSource\(\) === source/u);
   assert.match(seek, /if \(isCurrent\(\) && vod === localVodPlayback\)/u);
   assert.match(seek, /if \(activeCutSeek === operation\)/u);
@@ -104,7 +104,7 @@ test("cut review controls retain source, busy and asynchronous response guards",
 test("cut review controls and announcements are localized without altering timestamps", () => {
   for (const language of ["en", "ja"] as const) {
     for (const text of [
-      "삭제 되돌리기", "시작으로 이동", "끝으로 이동", "길이 --:--", "길이 00:00:14.500",
+      "삭제 되돌리기", "시작으로 이동", "길이 --:--", "길이 00:00:14.500",
       "최근 삭제한 구간 30개까지 이 탭에서 되돌릴 수 있습니다. 원본을 바꾸면 기록이 지워집니다.",
       "원본 플레이어가 준비되면 이 시각으로 이동합니다.",
       "먼저 올바른 시작과 끝 시각을 기록하세요.",

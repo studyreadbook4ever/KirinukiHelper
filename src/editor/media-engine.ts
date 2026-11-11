@@ -69,6 +69,7 @@ import type {
   EditorProject,
   EditorSubtitleCue
 } from "../lib/editor-core.js";
+import { mainVideoOutputDimensions, normalizeVideoCrop, videoCropDrawGeometry } from "../lib/video-crop.js";
 import {
   SHORT_FORM_OUTPUT_HEIGHT,
   SHORT_FORM_OUTPUT_WIDTH,
@@ -2954,13 +2955,7 @@ export async function chooseOutputCodecs(
 }
 
 function scaledDimensions(width: number | null, height: number | null) {
-  const sourceWidth = Math.max(2, width || 1280);
-  const sourceHeight = Math.max(2, height || 720);
-  const scale = Math.min(1, 1920 / sourceWidth, 1080 / sourceHeight);
-  return {
-    width: Math.max(2, Math.round(sourceWidth * scale / 2) * 2),
-    height: Math.max(2, Math.round(sourceHeight * scale / 2) * 2)
-  };
+  return mainVideoOutputDimensions(width, height);
 }
 
 /**
@@ -4504,6 +4499,16 @@ async function renderProjectVideoAttempt(
                     geometry,
                     adaptiveShortFormRenderer,
                     1
+                  );
+                } else if (normalizeVideoCrop(clip.videoCrop)) {
+                  drawShortFormVideoSample(
+                    baseVideoSample,
+                    context,
+                    videoCropDrawGeometry(
+                      baseVideoSample.displayWidth, baseVideoSample.displayHeight,
+                      width, height, clip.videoCrop
+                    ),
+                    null
                   );
                 } else {
                   baseVideoSample.drawWithFit(context, { fit: "contain" });

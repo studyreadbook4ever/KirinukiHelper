@@ -1,3 +1,4 @@
+import { ADDITIONAL_CAPTION_FONTS } from "./additional-caption-fonts.js";
 import { WEB_JAVASCRIPT_PATHS } from "./web-javascript-build.js";
 
 export const WEB_PACKAGE_FILES = Object.freeze([
@@ -19,6 +20,7 @@ export const WEB_PACKAGE_FILES = Object.freeze([
   "licenses/PRETENDARD-OFL-1.1.txt",
   "licenses/UNLICENSE.txt",
   "studio.css",
+  ...ADDITIONAL_CAPTION_FONTS.flatMap((font) => [font.webFontPath, font.webLicensePath]),
   ...WEB_JAVASCRIPT_PATHS
 ].sort());
 

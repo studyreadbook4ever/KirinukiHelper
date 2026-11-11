@@ -128,9 +128,9 @@ export const EDITOR_RUNTIME_UI_COPY = {
     en: "The text color differs from the most-used value. This does not necessarily indicate an error.",
     ja: "文字色が最も多く使われている値と異なります。エラーと確定したわけではありません。"
   },
-  "검은 상자가 가장 많이 쓰인 값과 다릅니다. 오류로 확정된 것은 아닙니다.": {
-    en: "The black-box setting differs from the most-used value. This does not necessarily indicate an error.",
-    ja: "黒いボックスの設定が最も多く使われている値と異なります。エラーと確定したわけではありません。"
+  "배경이 가장 많이 쓰인 값과 다릅니다. 오류로 확정된 것은 아닙니다.": {
+    en: "The background setting differs from the most-used value. This does not necessarily indicate an error.",
+    ja: "背景の設定が最も多く使われている値と異なります。エラーと確定したわけではありません。"
   },
   "진행 중인 편집·저장·내보내기 작업이 끝난 뒤 작업을 끝내 주세요.": {
     en: "Finish the active edit, save, or export operation before ending the session.",
@@ -1101,9 +1101,9 @@ export const EDITOR_RUNTIME_UI_COPY = {
     en: "Only one caption uses this visual setup.",
     ja: "この画面設定を使用する字幕は 1 つだけです。"
   },
-  "프로젝트 공통 외곽선 없음 · 행별 검은 상자 설정만 비교": {
-    en: "No project-wide outline · comparing each row's black-box setting only",
-    ja: "プロジェクト共通の縁取りなし · 行ごとの黒いボックス設定のみ比較"
+  "프로젝트 공통 외곽선 없음 · 행별 배경 설정만 비교": {
+    en: "No project-wide outline · comparing each row's background setting only",
+    ja: "プロジェクト共通の縁取りなし · 行ごとの背景設定のみ比較"
   },
   "진행 중인 창을 닫은 뒤 자막 스타일 비교를 열어 주세요.": {
     en: "Close the open dialog before opening caption-style comparison.",
@@ -3722,9 +3722,9 @@ export const EDITOR_RUNTIME_UI_COPY_PATTERNS = [
     ja: "接続クリップなし $1 件"
   },
   {
-    source: /^프로젝트 공통 외곽선 (#[A-Fa-f0-9]{6}) · ([\d.]+%) · 행별 검은 상자와는 별도$/u,
-    en: "Project-wide outline $1 · $2 · separate from each row's black box",
-    ja: "プロジェクト共通の縁取り $1 · $2 · 行ごとの黒いボックスとは別設定"
+    source: /^프로젝트 공통 외곽선 (#[A-Fa-f0-9]{6}) · ([\d.]+%) · 행별 배경과는 별도$/u,
+    en: "Project-wide outline $1 · $2 · separate from each row's background",
+    ja: "プロジェクト共通の縁取り $1 · $2 · 行ごとの背景とは別設定"
   },
   {
     source: /^“(.+)” 작업 삭제$/u,

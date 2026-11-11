@@ -18,6 +18,7 @@ import {
 } from "node:child_process";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { build as buildBrowserProbe } from "esbuild";
 
 import {
   applyMediaAlignmentOffset,
@@ -956,17 +957,20 @@ interface LateMaterializationFixtureInterception {
   readonly close: () => Promise<void>;
 }
 
-async function createPersistentSlotFixtureMedia(): Promise<Buffer> {
+async function createPersistentSlotFixtureMedia(appearanceFixture = false): Promise<Buffer> {
   const ffmpeg = await resolveExecutable(
     "FFMPEG_BINARY",
     process.platform === "win32" ? ["ffmpeg.exe", "ffmpeg"] : ["ffmpeg"]
   );
-  const outputPath = path.join(tempRoot, "persistent-slot-b.mp4");
+  const outputPath = path.join(tempRoot, appearanceFixture ? "editor-appearance.mp4" : "persistent-slot-b.mp4");
+  const videoSource = appearanceFixture
+    ? "color=c=red:s=160x90:r=10:d=140,drawbox=x=80:y=0:w=80:h=45:color=lime:t=fill,drawbox=x=0:y=45:w=80:h=45:color=blue:t=fill,drawbox=x=80:y=45:w=80:h=45:color=white:t=fill"
+    : "color=c=black:s=160x90:r=30:d=34.5";
   const stderr: Buffer[] = [];
   const child = spawn(ffmpeg, [
     "-hide_banner", "-loglevel", "error", "-nostdin",
-    "-f", "lavfi", "-i", "color=c=black:s=160x90:r=30:d=34.5",
-    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo:d=34.5",
+    "-f", "lavfi", "-i", videoSource,
+    "-f", "lavfi", "-i", `anullsrc=r=48000:cl=stereo:d=${appearanceFixture ? 140 : 34.5}`,
     "-map", "0:v:0", "-map", "1:a:0",
     "-c:v", "libx264", "-preset", "ultrafast", "-profile:v", "baseline",
     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k",
@@ -2670,47 +2674,47 @@ async function main(): Promise<void> {
       return original;
     `);
     await waitFor(
-      () => execute<boolean>(`return ["seek-start", "seek-end"].every((action) =>
-        document.querySelector('.clip-row [data-action="' + action + '"]')?.disabled === false);`),
+      () => execute<boolean>(`return document.querySelector('.clip-row [data-action="seek-start"]')?.disabled === false
+        && document.querySelector('.clip-row [data-action="seek-end"]') === null;`),
       (value) => value,
       "준비된 YouTube 원본에서 구간 이동 버튼이 활성화되지 않았습니다."
     );
-    for (const boundary of ["start", "end"] as const) {
-      await execute(`document.querySelector('.clip-row [data-action="seek-' + arguments[0] + '"]').click();`, [boundary]);
-    }
+    await execute(`document.querySelector('.clip-row [data-action="seek-start"]').click();`);
     const seekCommands = await waitFor(
       () => evaluateTarget(seekFixtureTarget, "JSON.stringify(globalThis.__cutSeekCommands)"),
-      (value) => value === "[[10.125,true],[90.5,true]]",
+      (value) => value === "[[10.125,true]]",
       "구간 이동 버튼이 정확한 millisecond seekTo 명령을 전달하지 못했습니다."
     );
     const seekGuardState = await execute<{
-      unchanged: boolean; invalidDisabled: boolean; beyondEndDisabled: boolean;
+      unchanged: boolean; invalidDisabled: boolean; beyondEndDisabled: boolean; noConfirmation: boolean;
     }>(`
       const row = document.querySelector(".clip-row");
       const start = row.querySelector('[data-field="start"]');
       const end = row.querySelector('[data-field="end"]');
       const first = row.querySelector('[data-action="seek-start"]');
-      const last = row.querySelector('[data-action="seek-end"]');
+      const noConfirmation = !document.querySelector('#cut-reorder-dialog')?.open;
       const unchanged = start.value === "00:00:10.125" && end.value === "00:01:30.500";
       end.value = "invalid";
       end.dispatchEvent(new Event("input", { bubbles: true }));
-      const invalidDisabled = first.disabled && last.disabled;
-      first.click(); last.click();
-      end.value = "00:02:00.001";
+      const invalidDisabled = first.disabled;
+      first.click();
+      start.value = "00:02:00.001";
+      end.value = "00:02:10.000";
       end.dispatchEvent(new Event("input", { bubbles: true }));
-      const beyondEndDisabled = !first.disabled && last.disabled && end.value === "00:02:00.001";
-      last.click();
+      const beyondEndDisabled = first.disabled && start.value === "00:02:00.001";
+      first.click();
       [start.value, end.value] = arguments[0];
       end.dispatchEvent(new Event("input", { bubbles: true }));
-      return { unchanged, invalidDisabled, beyondEndDisabled };
+      return { unchanged, invalidDisabled, beyondEndDisabled, noConfirmation };
     `, [originalCutValues]);
     assert(
       seekGuardState.unchanged && seekGuardState.invalidDisabled && seekGuardState.beyondEndDisabled
+        && seekGuardState.noConfirmation
         && await evaluateTarget(seekFixtureTarget, "JSON.stringify(globalThis.__cutSeekCommands)") === seekCommands
         && seekFixtureErrors.length === 0,
       `구간 이동이 입력을 바꾸거나 유효하지 않은 시각을 전송했습니다: ${JSON.stringify(seekGuardState)}`
     );
-    process.stderr.write("[browser-smoke] 시작·끝 이동의 exact YouTube 명령·입력 보존·범위 차단 검증 완료\n");
+    process.stderr.write("[browser-smoke] 시작 이동의 exact YouTube 명령·끝 이동 제거·입력 보존·범위 차단 검증 완료\n");
   } finally {
     await seekFixtureConnection.send("Fetch.disable");
     stopSeekFixtureListener();
@@ -3106,9 +3110,8 @@ async function main(): Promise<void> {
     const restoredExactly = JSON.stringify(snapshot()) === before;
     const selectedDuration = restored.querySelector(".clip-duration")?.textContent || "";
     const incompleteDuration = rows()[2].querySelector(".clip-duration")?.textContent || "";
-    const seekControlsPresent = ["seek-start", "seek-end"].every((action) =>
-      restored.querySelector('[data-action="' + action + '"]') instanceof HTMLButtonElement
-    );
+    const seekControlsPresent = restored.querySelector('[data-action="seek-start"]') instanceof HTMLButtonElement
+      && restored.querySelector('[data-action="seek-end"]') === null;
     rows()[2].querySelector('[data-action="remove"]').click();
     rows()[1].querySelector('[data-action="remove"]').click();
     return { restoredExactly, boundedUndo: rows().length === 1,
@@ -3123,6 +3126,102 @@ async function main(): Promise<void> {
     `컷 삭제 복구가 원래 ID·시각·메모·순서와 선택 길이를 보존하지 못했습니다: ${JSON.stringify(cutReviewJourney)}`
   );
   process.stderr.write("[browser-smoke] 컷 삭제 복구·개별 길이·검수 이동 버튼 검증 완료\n");
+
+  const cutReorderIds = await execute<string[]>(`
+    for (const [index, start, end, note] of [
+      [1, "00:02:10.125", "00:02:25.500", "순서 확인 B <원문>"],
+      [2, "00:03:01.250", "00:03:04.875", "순서 확인 C & 보존"]
+    ]) {
+      document.querySelector("#add-clip").click();
+      const row = document.querySelectorAll(".clip-row")[index];
+      for (const [field, value] of [["start", start], ["end", end], ["note", note]]) {
+        const input = row.querySelector('[data-field="' + field + '"]');
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      row.dataset.finalized = "true";
+      row.classList.add("finalized");
+    }
+    return [...document.querySelectorAll(".clip-row")].map((row) => row.dataset.selectionId);
+  `);
+  const readCutReorderState = () => execute<{
+    open: boolean; summary: string; focusId: string; focusAction: string;
+    rows: Array<{ id: string; values: string[]; finalized: string; finalizedClass: boolean }>;
+    firstUpDisabled: boolean; lastDownDisabled: boolean;
+  }>(`
+    const rows = [...document.querySelectorAll(".clip-row")];
+    return {
+      open: Boolean(document.querySelector("#cut-reorder-dialog")?.open),
+      summary: document.querySelector("#cut-reorder-summary")?.textContent || "",
+      focusId: document.activeElement?.closest(".clip-row")?.dataset.selectionId || "",
+      focusAction: document.activeElement?.dataset.action || "",
+      rows: rows.map((row) => ({ id: row.dataset.selectionId,
+        values: [...row.querySelectorAll("input")].map((input) => input.value),
+        finalized: row.dataset.finalized || "", finalizedClass: row.classList.contains("finalized") })),
+      firstUpDisabled: Boolean(rows[0]?.querySelector('[data-action="move-up"]')?.disabled),
+      lastDownDisabled: Boolean(rows.at(-1)?.querySelector('[data-action="move-down"]')?.disabled)
+    };
+  `);
+  const cutReorderBaseline = await readCutReorderState();
+  assert(cutReorderBaseline.firstUpDisabled && cutReorderBaseline.lastDownDisabled,
+    "첫 컷 위로·마지막 컷 아래로 이동이 비활성화되지 않았습니다.");
+  const openCutReorder = async (id: string, action: "move-up" | "move-down") => {
+    const before = await readCutReorderState();
+    await execute(`
+      const row = [...document.querySelectorAll(".clip-row")]
+        .find((item) => item.dataset.selectionId === arguments[0]);
+      const button = row?.querySelector('[data-action="' + arguments[1] + '"]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) throw new Error("컷 순서 버튼 없음");
+      button.focus(); button.click(); return true;
+    `, [id, action]);
+    const opened = await waitFor(readCutReorderState,
+      (value) => value.open && value.summary.trim().length > 0,
+      "컷 순서를 바꿀 때마다 새 확인창이 열리지 않았습니다.");
+    assert(JSON.stringify(opened.rows) === JSON.stringify(before.rows),
+      "사용자 확인 전에 컷 순서나 내용이 바뀌었습니다.");
+  };
+  await openCutReorder(cutReorderIds[1]!, "move-up");
+  await execute(`document.querySelector("#cancel-cut-reorder").click(); return true;`);
+  const cutReorderCancelled = await waitFor(readCutReorderState, (value) => !value.open,
+    "컷 순서 취소가 확인창을 닫지 못했습니다.");
+  assert(JSON.stringify(cutReorderCancelled.rows) === JSON.stringify(cutReorderBaseline.rows)
+    && cutReorderCancelled.focusId === cutReorderIds[1]
+    && cutReorderCancelled.focusAction === "move-up",
+  "컷 순서 취소가 내용을 변경하거나 원래 버튼에 포커스를 돌려주지 않았습니다.");
+  await openCutReorder(cutReorderIds[1]!, "move-up");
+  await webdriver("POST", `/session/${sessionId}/actions`, { actions: [{
+    type: "key", id: "cut-order-cancel", actions: [
+      { type: "keyDown", value: "\uE00C" }, { type: "keyUp", value: "\uE00C" }
+    ]
+  }] });
+  const cutReorderEscaped = await waitFor(readCutReorderState, (value) => !value.open,
+    "실제 Escape 입력이 컷 순서 확인을 취소하지 못했습니다.");
+  assert(JSON.stringify(cutReorderEscaped.rows) === JSON.stringify(cutReorderBaseline.rows),
+    "Escape 취소가 컷 순서·시각·메모·확정 상태를 변경했습니다.");
+  const confirmedOrders: string[][] = [];
+  for (const action of ["move-up", "move-down"] as const) {
+    await openCutReorder(cutReorderIds[1]!, action);
+    await execute(`document.querySelector("#confirm-cut-reorder").click(); return true;`);
+    const applied = await waitFor(readCutReorderState, (value) => !value.open,
+      "확인한 컷 순서 이동을 적용하지 못했습니다.");
+    confirmedOrders.push(applied.rows.map(({ id }) => id));
+    const contents = (rows: typeof applied.rows) => JSON.stringify([...rows]
+      .sort((left, right) => left.id.localeCompare(right.id)));
+    assert(contents(applied.rows) === contents(cutReorderBaseline.rows)
+      && applied.focusId === cutReorderIds[1],
+    "승인한 순서 이동이 컷 ID·시간·메모·확정 상태 또는 이동한 컷의 포커스를 잃었습니다.");
+  }
+  assert(confirmedOrders[0]?.join(",") === [cutReorderIds[1], cutReorderIds[0], cutReorderIds[2]].join(",")
+    && confirmedOrders[1]?.join(",") === cutReorderIds.join(","),
+  `매번 확인한 위·아래 이동이 정확한 인접 순서로 적용되지 않았습니다: ${JSON.stringify(confirmedOrders)}`);
+  await execute(`
+    const rows = [...document.querySelectorAll(".clip-row")];
+    rows[2].querySelector('[data-action="remove"]').click();
+    rows[1].querySelector('[data-action="remove"]').click(); return true;
+  `);
+  const cutReorderJourney = { confirmations: 4, cancellations: 2, confirmedOrders,
+    exactContentPreserved: true, boundaryControlsDisabled: true };
+  process.stderr.write("[browser-smoke] 컷 순서 매번 확인·취소·Escape·원문 보존 검증 완료\n");
 
   await execute(`
     const row = document.querySelector(".clip-row");
@@ -5447,6 +5546,402 @@ async function main(): Promise<void> {
     "검색·필터·검수 이동이 자막 내용 또는 타이밍을 변경했습니다."
   );
   process.stderr.write("[browser-smoke] 자막 검색·검수 필터·레인 간 이동·원문 보존 검증 완료\n");
+  const appearanceMedia = await createPersistentSlotFixtureMedia(true);
+  const attachAppearanceMedia = async () => {
+    await execute(`
+      const bytes = Uint8Array.from(atob(arguments[0]), (value) => value.charCodeAt(0));
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([bytes], "editor-appearance.mp4", {
+        type: "video/mp4", lastModified: 1_700_000_000_000
+      }));
+      const input = document.querySelector("#media-input");
+      if (!(input instanceof HTMLInputElement)) throw new Error("합성 원본 파일 입력 없음");
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("change", { bubbles: true })); return true;
+    `, [appearanceMedia.toString("base64")]);
+    await waitFor(() => execute<boolean>(`
+      const video = document.querySelector("#preview-video");
+      return video instanceof HTMLVideoElement && video.readyState >= 2
+        && video.videoWidth === 160 && video.videoHeight === 90
+        && Math.abs(video.duration - 140) < 0.2
+        && document.querySelector("#job-dialog")?.hidden === true;
+    `), Boolean, "격리된 4색 원본 파일이 실제 편집 미리보기에 연결되지 않았습니다.", 20_000);
+  };
+  await attachAppearanceMedia();
+  await execute(`
+    document.querySelector("#cue-list-tab").click();
+    document.querySelector('#cue-list .cue-list-item[data-id="review-human"]').click();
+    document.querySelector("#cue-selected-tab").click(); return true;
+  `);
+  const captionAppearanceBefore = await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.selectedCueId === "review-human" && value.mediaAsset?.name === "editor-appearance.mp4",
+    "자막 모양 검증의 현재 프로젝트가 저장되지 않았습니다.");
+  assert(captionAppearanceBefore, "자막 모양 기준 프로젝트 없음");
+  const captionValueAuthority = (value: EditorProject) => JSON.stringify({
+    clips: value.clips,
+    cues: value.subtitles.map(({ id, clipId, lane, text, startOffsetMs, endOffsetMs, x, y, fontScale, color }) => ({
+      id, clipId, lane, text, startOffsetMs, endOffsetMs, x, y, fontScale, color
+    }))
+  });
+  const clickCaptionBackground = async (color: "white" | "black", enabled: boolean) => {
+    await execute(`
+      const selector = arguments[0] === "white" ? "#toggle-caption-white-background" : "#toggle-caption-background";
+      const button = document.querySelector(selector);
+      if (!(button instanceof HTMLButtonElement) || button.disabled || !button.getClientRects().length)
+        throw new Error("자막 배경 버튼을 누를 수 없습니다.");
+      button.click(); return true;
+    `, [color]);
+    const expected = color === "white" ? "#ffffff" : "#000000";
+    return waitFor(() => readBrowserProject(freshProjectId), (value) => {
+      const cue = value?.subtitles.find(({ id }) => id === "review-human");
+      return cue?.backgroundEnabled === enabled && cue.backgroundColor === expected;
+    }, "자막 배경 켜기·색 전환·동일색 끄기가 정확히 저장되지 않았습니다.");
+  };
+  const captionBackgroundLayout = await execute<boolean>(`
+    const black = document.querySelector("#toggle-caption-background");
+    const white = document.querySelector("#toggle-caption-white-background");
+    return black instanceof HTMLButtonElement && white instanceof HTMLButtonElement
+      && black.nextElementSibling === white
+      && white.getBoundingClientRect().top >= black.getBoundingClientRect().bottom - 1;
+  `);
+  assert(captionBackgroundLayout, "흰 자막 배경 버튼이 기존 검은 배경 버튼 바로 아래에 있지 않습니다.");
+  await clickCaptionBackground("white", true);
+  await clickCaptionBackground("white", false);
+  const blackCaptionProject = await clickCaptionBackground("black", true);
+  await clickCaptionBackground("white", true);
+  await execute(`document.querySelector("#undo").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.subtitles.find(({ id }) => id === "review-human")?.backgroundColor === "#000000",
+    "흰 배경 변경을 실행 취소했을 때 이전 검은 배경이 복원되지 않았습니다.");
+  await execute(`document.querySelector("#redo").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.subtitles.find(({ id }) => id === "review-human")?.backgroundColor === "#ffffff",
+    "흰 배경 변경을 다시 실행하지 못했습니다.");
+
+  // Bundle the public renderer export in memory for this isolated test only.
+  // The actual browser canvas and bundled font faces execute the same paint
+  // function used by video export; no production test API is introduced.
+  const captionRenderBuild = await buildBrowserProbe({
+    stdin: { contents: 'export { drawCaption, renderProjectVideo, inspectMediaFile } from "./src/editor/media-engine.ts";',
+      resolveDir: root, sourcefile: "caption-render-browser-probe.ts" },
+    bundle: true, write: false, format: "iife", globalName: "CaptionRenderProbe",
+    platform: "browser", target: "es2022", logLevel: "silent"
+  });
+  const captionRenderCode = captionRenderBuild.outputFiles[0]?.text;
+  assert(captionRenderCode, "최종 자막 렌더 검증 모듈이 비어 있습니다.");
+  const renderCaptionPixels = (value: EditorProject) => execute<{
+    fontLoaded: boolean; fontMatches: boolean; textUnchanged: boolean; colorUnchanged: boolean;
+    background: string; backgroundPixel: number[]; outerAlpha: number;
+  }>(`${captionRenderCode}
+    return (async () => {
+      const project = arguments[0];
+      const cue = project.subtitles.find((item) => item.id === "review-human");
+      const { fontFamily, fontWeight } = project.subtitleDefaults;
+      const faces = await document.fonts.load(fontWeight + ' 48px "' + fontFamily + '"', cue.text);
+      const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 360;
+      const context = canvas.getContext("2d");
+      const fills = []; const textPaint = [];
+      const fillRect = context.fillRect.bind(context);
+      const fillText = context.fillText.bind(context);
+      context.fillRect = (x, y, width, height) => {
+        fills.push({ x, y, width, height, color: context.fillStyle });
+        fillRect(x, y, width, height);
+      };
+      context.fillText = (...args) => {
+        textPaint.push({ text: args[0], color: context.fillStyle, font: context.font });
+        fillText(...args);
+      };
+      CaptionRenderProbe.drawCaption(context, canvas, project, cue);
+      const painted = textPaint[0];
+      const size = painted?.font.match(/(?:^| )(\\d+(?:\\.\\d+)?)px/)?.[1];
+      const expectedContext = document.createElement("canvas").getContext("2d");
+      expectedContext.font = fontWeight + ' ' + size + 'px "' + fontFamily + '", "Noto Sans KR", sans-serif';
+      const background = fills[0];
+      const pixel = background ? Array.from(context.getImageData(
+        Math.ceil(background.x + 2), Math.ceil(background.y + 2), 1, 1).data) : [];
+      return {
+        fontLoaded: faces.length > 0 && faces.every((face) => face.status === "loaded"),
+        fontMatches: Boolean(painted && painted.font === expectedContext.font),
+        textUnchanged: painted?.text === cue.text,
+        colorUnchanged: painted?.color === (cue.color || project.subtitleDefaults.color),
+        background: background?.color || "", backgroundPixel: pixel,
+        outerAlpha: context.getImageData(0, 0, 1, 1).data[3]
+      };
+    })();
+  `, [value]);
+  assert(blackCaptionProject, "검은 배경 렌더 프로젝트 없음");
+  const blackCaptionPixels = await renderCaptionPixels(blackCaptionProject);
+  assert(blackCaptionPixels.background === "#000000"
+    && blackCaptionPixels.backgroundPixel.join(",") === "0,0,0,255",
+  `최종 렌더에서 기존 검은 배경이 보존되지 않았습니다: ${JSON.stringify(blackCaptionPixels)}`);
+  const captionFonts = [
+    { id: "pretendard", family: "Pretendard", weight: 800 },
+    { id: "paperlogy", family: "Paperlogy", weight: 800 },
+    { id: "dohyeon", family: "Do Hyeon", weight: 400 },
+    { id: "jua", family: "Jua", weight: 400 },
+    { id: "nanummyeongjo", family: "Nanum Myeongjo", weight: 800 }
+  ];
+  const availableFonts = await execute<string[]>(`return [...document.querySelector("#caption-font-family").options].map((option) => option.value);`);
+  assert(availableFonts.join(",") === captionFonts.map(({ id }) => id).join(","),
+    `자막 글꼴 선택지가 지정된 5개와 다릅니다: ${JSON.stringify(availableFonts)}`);
+  const captionFontPaints = [];
+  for (const font of captionFonts) {
+    await execute(`
+      const select = document.querySelector("#caption-font-family");
+      if (!(select instanceof HTMLSelectElement) || select.disabled) throw new Error("글꼴 선택기 없음");
+      select.value = arguments[0]; select.dispatchEvent(new Event("change", { bubbles: true })); return true;
+    `, [font.id]);
+    const styled = await waitFor(() => readBrowserProject(freshProjectId),
+      (value) => value?.subtitleDefaults.fontId === font.id
+        && value.subtitleDefaults.fontFamily === font.family && value.subtitleDefaults.fontWeight === font.weight,
+      `${font.family} 선택이 프로젝트에 저장되지 않았습니다.`);
+    assert(styled && captionValueAuthority(styled) === captionValueAuthority(captionAppearanceBefore),
+      `${font.family} 선택이 컷·자막 본문·시각·색·크기·위치를 변경했습니다.`);
+    const preview = await waitFor(() => execute<{ family: string; weight: string; background: string }>(`
+      const overlay = document.querySelector('.subtitle-overlay[data-cue-id="review-human"]');
+      const style = overlay ? getComputedStyle(overlay) : null;
+      return { family: style?.fontFamily || "", weight: style?.fontWeight || "", background: style?.backgroundColor || "" };
+    `), (value) => value.family.includes(font.family) && value.weight === String(font.weight)
+      && value.background === "rgb(255, 255, 255)", `${font.family}와 흰 배경이 실제 미리보기에 반영되지 않았습니다.`);
+    const painted = await renderCaptionPixels(styled);
+    assert(painted.fontLoaded && painted.fontMatches && painted.textUnchanged && painted.colorUnchanged
+      && painted.background === "#ffffff" && painted.backgroundPixel.join(",") === "255,255,255,255"
+      && painted.outerAlpha === 0,
+    `${font.family} 최종 Canvas 렌더의 글꼴·본문·색·흰 배경 픽셀이 올바르지 않습니다: ${JSON.stringify(painted)}`);
+    captionFontPaints.push({ id: font.id, preview, painted });
+  }
+  await execute(`document.querySelector("#undo").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId), (value) => value?.subtitleDefaults.fontId === "jua",
+    "글꼴 선택 실행 취소가 직전 Jua를 복원하지 못했습니다.");
+  await execute(`document.querySelector("#redo").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId), (value) => value?.subtitleDefaults.fontId === "nanummyeongjo",
+    "글꼴 선택 다시 실행이 Nanum Myeongjo를 복원하지 못했습니다.");
+  const captionAppearanceJourney = { whiteBelowBlack: captionBackgroundLayout,
+    blackCaptionPixels, fonts: captionFontPaints, exactCueValuesPreserved: true };
+  process.stderr.write("[browser-smoke] 흰 자막 배경·5개 글꼴 실제 로드·미리보기·최종 Canvas 픽셀 검증 완료\n");
+
+  const cropBaseline = await readBrowserProject(freshProjectId);
+  assert(cropBaseline, "영상 영역 자르기 기준 프로젝트 없음");
+  const rightHalfCrop = { x: 0.5, y: 0, width: 0.5, height: 1 };
+  const cropAuthority = (value: EditorProject) => JSON.stringify({
+    clips: value.clips.map(({ videoCrop: _crop, updatedAt: _updatedAt, ...clip }) => clip),
+    subtitles: value.subtitles, images: value.imageAssets, audio: value.audioRegions
+  });
+  const openMainVideoCrop = async () => {
+    await execute(`
+      const button = document.querySelector("#open-main-video-crop");
+      if (!(button instanceof HTMLButtonElement) || button.disabled || button.hidden)
+        throw new Error("영상 자르기 버튼을 사용할 수 없습니다.");
+      button.click(); return true;
+    `);
+    await waitFor(() => execute<boolean>(`
+      const source = document.querySelector("#main-video-crop-source");
+      return document.querySelector("#main-video-crop-dialog")?.open === true
+        && source instanceof HTMLCanvasElement && source.width === 160 && source.height === 90;
+    `), Boolean, "실제 원본 프레임으로 영상 자르기 창이 열리지 않았습니다.");
+  };
+  const setRightHalfCrop = () => execute(`
+    for (const [id, value] of [["width", "80"], ["height", "90"], ["x", "80"], ["y", "0"]]) {
+      const field = document.querySelector("#main-video-crop-" + id);
+      field.value = value; field.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return true;
+  `);
+  await openMainVideoCrop();
+  const cropDrag = await execute<{ x: number; y: number; endX: number }>(`
+    const field = document.querySelector("#main-video-crop-width");
+    field.value = "80"; field.dispatchEvent(new Event("change", { bubbles: true }));
+    const surface = document.querySelector("#main-video-crop-surface");
+    const bounds = surface.getBoundingClientRect();
+    globalThis.__cropTrustedDrag = false;
+    surface.addEventListener("pointerdown", (event) => { globalThis.__cropTrustedDrag = event.isTrusted; }, { once: true });
+    return { x: Math.round(bounds.left + bounds.width * 0.25),
+      y: Math.round(bounds.top + bounds.height * 0.5), endX: Math.round(bounds.left + bounds.width * 0.75) };
+  `);
+  await webdriver("POST", `/session/${sessionId}/actions`, { actions: [{
+    type: "pointer", id: "crop-selection-drag", parameters: { pointerType: "mouse" }, actions: [
+      { type: "pointerMove", duration: 0, origin: "viewport", x: cropDrag.x, y: cropDrag.y },
+      { type: "pointerDown", button: 0 },
+      { type: "pointerMove", duration: 250, origin: "viewport", x: cropDrag.endX, y: cropDrag.y },
+      { type: "pointerUp", button: 0 }
+    ]
+  }] });
+  const cropDragged = await execute<{ trusted: boolean; x: number; width: number }>(`
+    return { trusted: globalThis.__cropTrustedDrag === true,
+      x: Number(document.querySelector("#main-video-crop-x").value),
+      width: Number(document.querySelector("#main-video-crop-width").value) };
+  `);
+  assert(cropDragged.trusted && cropDragged.x === 80 && cropDragged.width === 80,
+    `실제 포인터로 자르기 영역을 오른쪽 절반으로 이동하지 못했습니다: ${JSON.stringify(cropDragged)}`);
+  await execute(`document.querySelector("#cancel-main-video-crop").click(); return true;`);
+  const afterCropCancel = await readBrowserProject(freshProjectId);
+  assert(afterCropCancel && JSON.stringify(afterCropCancel.clips) === JSON.stringify(cropBaseline.clips)
+    && cropAuthority(afterCropCancel) === cropAuthority(cropBaseline),
+  "영상 자르기 취소가 컷 또는 자막·이미지·음성 내용을 변경했습니다.");
+
+  await openMainVideoCrop();
+  await setRightHalfCrop();
+  await execute(`document.querySelector("#insert-main-video-crop").click(); return true;`);
+  const insertedCropProject = await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.clips.length === 4
+      && JSON.stringify(value.clips[1]?.videoCrop) === JSON.stringify(rightHalfCrop),
+    "영상 영역을 바로 다음 새 컷으로 삽입하지 못했습니다.");
+  assert(insertedCropProject, "새로 삽입한 crop 프로젝트 없음");
+  const insertedCrop = insertedCropProject.clips[1]!;
+  const originalCropClip = cropBaseline.clips[0]!;
+  assert(insertedCropProject.clips.map(({ id }) => id).join(",")
+      === [originalCropClip.id, insertedCrop.id, "clip-order-b", "clip-order-c"].join(",")
+    && !cropBaseline.clips.some(({ id }) => id === insertedCrop.id)
+    && insertedCropProject.selectedClipId === insertedCrop.id
+    && insertedCrop.sourceStartMs === originalCropClip.sourceStartMs
+    && insertedCrop.sourceEndMs === originalCropClip.sourceEndMs
+    && insertedCrop.selectionStartMs === originalCropClip.selectionStartMs
+    && insertedCrop.selectionEndMs === originalCropClip.selectionEndMs
+    && insertedCrop.selectionId === originalCropClip.selectionId
+    && insertedCrop.sourceClipId === originalCropClip.id
+    && JSON.stringify(insertedCropProject.clips[0]) === JSON.stringify(originalCropClip)
+    && JSON.stringify(insertedCropProject.subtitles) === JSON.stringify(cropBaseline.subtitles)
+    && JSON.stringify(insertedCropProject.imageAssets) === JSON.stringify(cropBaseline.imageAssets)
+    && JSON.stringify(insertedCropProject.audioRegions) === JSON.stringify(cropBaseline.audioRegions),
+  "새 crop 컷의 identity·원본 범위·삽입 순서가 다르거나 기존 컷/오버레이가 변경·복제됐습니다.");
+
+  // Encode a short copy of the actual UI-created pair, then decode its output.
+  // The live project is untouched; shortening each test clip keeps this a
+  // bounded two-second regression even when the editor fixture is much longer.
+  const cropExportProject: EditorProject = {
+    ...insertedCropProject,
+    clips: insertedCropProject.clips.slice(0, 2).map((clip, index) => ({
+      ...clip, sourceEndMs: clip.sourceStartMs + 1_000, timelineStartMs: index * 1_000
+    })),
+    subtitles: [], imageAssets: [], audioRegions: [], playheadMs: 0
+  };
+  await execute(`${captionRenderCode}
+    const project = arguments[0];
+    const bytes = Uint8Array.from(atob(arguments[1]), (value) => value.charCodeAt(0));
+    const file = new File([bytes], "editor-appearance.mp4", { type: "video/mp4" });
+    globalThis.__cropEncodeProbe = { done: false, progress: 0, phase: "start" };
+    void (async () => {
+      let url = null;
+      const video = document.createElement("video");
+      try {
+        const output = await CaptionRenderProbe.renderProjectVideo(file, project, {
+          onProgress: (progress, phase) => { globalThis.__cropEncodeProbe.progress = progress;
+            globalThis.__cropEncodeProbe.phase = phase || ""; }
+        });
+        if (!(output.blob instanceof Blob) || output.blob.size < 1_024) throw new Error("영상 출력이 비었습니다.");
+        const metadata = await CaptionRenderProbe.inspectMediaFile(new File([output.blob],
+          "crop-output." + output.extension, { type: output.mimeType }));
+        url = URL.createObjectURL(output.blob);
+        video.muted = true; video.preload = "auto";
+        await new Promise((resolve, reject) => {
+          video.addEventListener("loadeddata", resolve, { once: true });
+          video.addEventListener("error", () => reject(new Error("출력 영상 decode 실패")), { once: true });
+          video.src = url; video.load();
+        });
+        const canvas = document.createElement("canvas"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        const context = canvas.getContext("2d");
+        const frames = [];
+        for (const time of [0.25, 1.25]) {
+          await new Promise((resolve, reject) => {
+            video.addEventListener("seeked", resolve, { once: true });
+            video.addEventListener("error", () => reject(new Error("출력 프레임 seek 실패")), { once: true });
+            video.currentTime = time;
+          });
+          context.drawImage(video, 0, 0);
+          const at = (x, y) => Array.from(context.getImageData(Math.floor(canvas.width * x), Math.floor(canvas.height * y), 1, 1).data);
+          frames.push({ leftTop: at(0.125, 0.25), rightTop: at(0.875, 0.25),
+            leftBottom: at(0.125, 0.75), rightBottom: at(0.875, 0.75),
+            centerTop: at(0.5, 0.25), centerBottom: at(0.5, 0.75) });
+        }
+        globalThis.__cropEncodeProbe = { done: true, result: {
+          extension: output.extension, mimeType: output.mimeType, bytes: output.blob.size,
+          duration: video.duration, width: video.videoWidth, height: video.videoHeight,
+          hasAudio: metadata.hasAudio, audioDecodable: metadata.audioDecodable,
+          videoDecodable: metadata.videoDecodable, frames
+        } };
+      } catch (error) {
+        globalThis.__cropEncodeProbe = { done: true, error: String(error?.stack || error) };
+      } finally {
+        video.removeAttribute("src"); video.load();
+        if (url) URL.revokeObjectURL(url);
+      }
+    })(); return true;
+  `, [cropExportProject, appearanceMedia.toString("base64")]);
+  type CropFramePixels = { leftTop: number[]; rightTop: number[]; leftBottom: number[];
+    rightBottom: number[]; centerTop: number[]; centerBottom: number[] };
+  const cropEncoded = await waitFor(() => execute<{
+    done: boolean; error?: string;
+    result?: { extension: string; mimeType: string; bytes: number; duration: number; width: number; height: number;
+      hasAudio: boolean; audioDecodable: boolean; videoDecodable: boolean; frames: CropFramePixels[] };
+  }>(`return globalThis.__cropEncodeProbe;`), (value) => value.done,
+  "실제 crop 최종 영상 encode/decode가 완료되지 않았습니다.", 120_000);
+  assert(!cropEncoded.error && cropEncoded.result,
+    `실제 crop 최종 영상 encode/decode 실패: ${cropEncoded.error}`);
+  const cropOutput = cropEncoded.result;
+  const red = (pixel: number[]) => pixel[0]! > 180 && pixel[1]! < 70 && pixel[2]! < 70;
+  const green = (pixel: number[]) => pixel[0]! < 70 && pixel[1]! > 180 && pixel[2]! < 70;
+  const blue = (pixel: number[]) => pixel[0]! < 70 && pixel[1]! < 70 && pixel[2]! > 180;
+  const white = (pixel: number[]) => pixel.slice(0, 3).every((value) => value > 220);
+  const black = (pixel: number[]) => pixel.slice(0, 3).every((value) => value < 25);
+  const originalFrame = cropOutput.frames[0]!;
+  const croppedFrame = cropOutput.frames[1]!;
+  assert(cropOutput.width === 160 && cropOutput.height === 90 && Math.abs(cropOutput.duration - 2) < 0.15
+    && cropOutput.hasAudio && cropOutput.audioDecodable && cropOutput.videoDecodable
+    && ["video/mp4", "video/webm"].includes(cropOutput.mimeType)
+    && red(originalFrame.leftTop) && green(originalFrame.rightTop)
+    && blue(originalFrame.leftBottom) && white(originalFrame.rightBottom)
+    && black(croppedFrame.leftTop) && black(croppedFrame.rightTop)
+    && green(croppedFrame.centerTop) && white(croppedFrame.centerBottom),
+  `최종 영상의 원본·crop 컷 색상/길이/음성 보존이 올바르지 않습니다: ${JSON.stringify(cropOutput)}`);
+  process.stderr.write("[browser-smoke] crop 새 컷 실제 encode/decode·2초 길이·4색 픽셀·음성 보존 검증 완료\n");
+
+  await execute(`document.querySelector("#undo").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.clips.length === 3 && cropAuthority(value) === cropAuthority(cropBaseline),
+    "crop 새 컷 삽입 실행 취소가 원래 3컷/오버레이를 복원하지 못했습니다.");
+  await execute(`document.querySelector('.clip-item[data-id="clip-order-a"] .clip-select').click(); return true;`);
+  await openMainVideoCrop();
+  await setRightHalfCrop();
+  await execute(`document.querySelector("#apply-main-video-crop").click(); return true;`);
+  const appliedCrop = await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => JSON.stringify(value?.clips[0]?.videoCrop) === JSON.stringify(rightHalfCrop),
+    "선택 컷 crop가 정확히 저장되지 않았습니다.");
+  assert(appliedCrop && cropAuthority(appliedCrop) === cropAuthority(cropBaseline),
+    "공간 crop가 기존 컷 경계 또는 오버레이를 변경했습니다.");
+  const cropPreview = await waitFor(() => execute<{
+    visible: boolean; clipId: string; crop: string; left: number[]; top: number[]; bottom: number[];
+  }>(`
+    const canvas = document.querySelector("#main-video-crop-preview");
+    const context = canvas?.getContext("2d");
+    const at = (x, y) => context && canvas.width ? Array.from(context.getImageData(
+      Math.floor(canvas.width * x), Math.floor(canvas.height * y), 1, 1).data) : [];
+    return { visible: canvas?.hidden === false, clipId: canvas?.dataset.clipId || "",
+      crop: canvas?.dataset.crop || "", left: at(0.125, 0.25), top: at(0.5, 0.25), bottom: at(0.5, 0.75) };
+  `), (value) => value.visible && value.clipId === "clip-order-a"
+    && value.crop === JSON.stringify(rightHalfCrop) && black(value.left) && green(value.top) && white(value.bottom),
+  "실제 crop 미리보기의 선택 영역과 색상/여백이 최종 영상과 일치하지 않습니다.");
+  await openMainVideoCrop();
+  await execute(`document.querySelector("#main-video-crop-full").click();
+    document.querySelector("#apply-main-video-crop").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId), (value) => !value?.clips[0]?.videoCrop,
+    "전체 영역 초기화가 저장된 crop를 해제하지 못했습니다.");
+  await waitFor(() => execute<boolean>(`return document.querySelector("#main-video-crop-preview")?.hidden === true
+    && document.querySelector("#preview-video")?.style.opacity !== "0";`), Boolean,
+  "crop 초기화 뒤 기본 원본 영상 미리보기가 복원되지 않았습니다.");
+  await execute(`document.querySelector("#undo").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => JSON.stringify(value?.clips[0]?.videoCrop) === JSON.stringify(rightHalfCrop),
+    "crop 초기화 실행 취소가 앞선 선택 영역을 복원하지 못했습니다.");
+  await execute(`document.querySelector("#redo").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId), (value) => !value?.clips[0]?.videoCrop,
+    "crop 초기화 다시 실행이 전체 원본 영역을 복원하지 못했습니다.");
+  await execute(`document.querySelector("#undo").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => JSON.stringify(value?.clips[0]?.videoCrop) === JSON.stringify(rightHalfCrop),
+    "reload 검증에 사용할 crop 영역을 복원하지 못했습니다.");
+  const videoCropJourney = { trustedDrag: cropDragged, insertedClipId: insertedCrop.id,
+    export: cropOutput, preview: cropPreview, originalValuesPreserved: true };
+  process.stderr.write("[browser-smoke] 영상 crop 실제 드래그·취소·새 컷·적용·초기화·실행 취소 검증 완료\n");
   const uploadLaneSmokeImage = async (name: string, expectedCount: number) => {
     await execute(`
       const canvas = document.createElement("canvas");
@@ -5673,6 +6168,14 @@ async function main(): Promise<void> {
     "본편 3컷 순서가 editor reload 뒤 복원되지 않았습니다.",
     20_000
   );
+  const appearanceReload = await readBrowserProject(freshProjectId);
+  assert(appearanceReload?.subtitleDefaults.fontId === "nanummyeongjo"
+    && appearanceReload.subtitleDefaults.fontFamily === "Nanum Myeongjo"
+    && appearanceReload.subtitles.find(({ id }) => id === "review-human")?.backgroundColor === "#ffffff"
+    && appearanceReload.subtitles.find(({ id }) => id === "review-human")?.backgroundEnabled === true
+    && JSON.stringify(appearanceReload.clips.find(({ id }) => id === "clip-order-a")?.videoCrop)
+      === JSON.stringify(rightHalfCrop),
+  "명시 저장 후 재진입했을 때 글꼴·흰 배경·원본 crop가 복원되지 않았습니다.");
 
   await waitFor(
     () => execute<boolean>(`
@@ -5712,6 +6215,28 @@ async function main(): Promise<void> {
     "A 쇼츠 작업의 겹침 레이어 fixture를 열지 못했습니다.",
     20_000
   );
+  const shortAppearanceIsolation = await execute<{ fontId: string; cropHidden: boolean }>(`
+    return { fontId: document.querySelector("#caption-font-family")?.value || "",
+      cropHidden: document.querySelector("#open-main-video-crop")?.hidden === true };
+  `);
+  assert(shortAppearanceIsolation.fontId === deepEditorFixtureBase.subtitleDefaults.fontId
+    && shortAppearanceIsolation.cropHidden,
+  `본편 글꼴/crop 편집이 독립 쇼츠 설정에 침범했습니다: ${JSON.stringify(shortAppearanceIsolation)}`);
+  await execute(`
+    const select = document.querySelector("#caption-font-family");
+    select.value = "jua"; select.dispatchEvent(new Event("change", { bubbles: true })); return true;
+  `);
+  const shortFontChanged = await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.shortForm.subtitleDefaults?.fontId === "jua",
+    "쇼츠의 글꼴 선택이 해당 작업에 저장되지 않았습니다.");
+  assert(shortFontChanged?.subtitleDefaults.fontId === "nanummyeongjo"
+    && JSON.stringify(shortFontChanged.clips.find(({ id }) => id === "clip-order-a")?.videoCrop)
+      === JSON.stringify(rightHalfCrop), "쇼츠 글꼴 선택이 본편 글꼴 또는 crop를 변경했습니다.");
+  await execute(`document.querySelector("#undo").click(); return true;`);
+  await waitFor(() => readBrowserProject(freshProjectId),
+    (value) => value?.shortForm.subtitleDefaults?.fontId === deepEditorFixtureBase.subtitleDefaults.fontId,
+    "쇼츠 글꼴 실행 취소가 해당 작업의 기존 설정을 복원하지 못했습니다.");
+  process.stderr.write("[browser-smoke] 글꼴·흰 배경·crop 저장 재진입 및 쇼츠 작업 격리 검증 완료\n");
   await uploadLaneSmokeImage("short-first", 1);
   await uploadLaneSmokeImage("short-second", 2);
   const shortImageRows = await waitFor(readImageLaneState,
@@ -6426,6 +6951,9 @@ async function main(): Promise<void> {
       }
     },
     recoveryJourney,
+    cutReorderJourney,
+    captionAppearanceJourney,
+    videoCropJourney,
     deepEditorJourney: deepWorkspaceJourney,
     completedEditorExit: {
       href: completedEditorExit.href,

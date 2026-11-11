@@ -381,6 +381,75 @@ export const THIRD_PARTY_ATTRIBUTIONS = [
       "https://github.com/Freesentation/paperlogy/tree/8ef35f53b318c7ca914c52b1b382b9a8bad07a61"
   },
   {
+    "id": "dohyeon",
+    "kind": "web-bundled",
+    "name": "Do Hyeon",
+    "version": "Version 1.001",
+    "license": "OFL-1.1",
+    "upstream": "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/dohyeon",
+    "purpose": "선택 가능한 한국어 자막 글꼴입니다.",
+    "bundledFiles": [
+      {
+        "path": "web/editor/fonts/DoHyeon-Regular.ttf",
+        "size": 879764,
+        "sha256": "35644be7f28e0a68a447b1f7af351dcde5674b870f24f7b5f43e26d00b4ab653"
+      },
+      {
+        "path": "web/licenses/DOHYEON-OFL-1.1.txt",
+        "size": 4347,
+        "sha256": "de5ff32211a4340b01477af39ee339d639438955e409f79b666d4b9207f3c92c"
+      }
+    ],
+    "licenseTextPath": "web/licenses/DOHYEON-OFL-1.1.txt",
+    "correspondingSource": "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/dohyeon"
+  },
+  {
+    "id": "jua",
+    "kind": "web-bundled",
+    "name": "Jua",
+    "version": "Version 1.001",
+    "license": "OFL-1.1",
+    "upstream": "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/jua",
+    "purpose": "선택 가능한 한국어 자막 글꼴입니다.",
+    "bundledFiles": [
+      {
+        "path": "web/editor/fonts/Jua-Regular.ttf",
+        "size": 2119352,
+        "sha256": "769677aef240bfc3b9965f2b50748075bff885e6c6992fc591a3fb268279f898"
+      },
+      {
+        "path": "web/licenses/JUA-OFL-1.1.txt",
+        "size": 4342,
+        "sha256": "44a7c6e4c5572392ae122d3b1d8c6ba6fd640a7797e675384585d947f2773e3c"
+      }
+    ],
+    "licenseTextPath": "web/licenses/JUA-OFL-1.1.txt",
+    "correspondingSource": "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/jua"
+  },
+  {
+    "id": "nanummyeongjo",
+    "kind": "web-bundled",
+    "name": "Nanum Myeongjo",
+    "version": "Version 2.032;PS 1;hotconv 1.0.56;makeotf.lib2.0.21325",
+    "license": "OFL-1.1",
+    "upstream": "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/nanummyeongjo",
+    "purpose": "선택 가능한 한국어 자막 글꼴입니다.",
+    "bundledFiles": [
+      {
+        "path": "web/editor/fonts/NanumMyeongjo-ExtraBold.ttf",
+        "size": 3180888,
+        "sha256": "60c0077fce069ba90ae97c0a3679f6eb3712e0ca637bdd0c15b72d335ec46db7"
+      },
+      {
+        "path": "web/licenses/NANUMMYEONGJO-OFL-1.1.txt",
+        "size": 4497,
+        "sha256": "8eb1c1019fe7fe6d0b6e7d7bbbba1d9cbdd969d8c5f26455708f6cfb8a77284c"
+      }
+    ],
+    "licenseTextPath": "web/licenses/NANUMMYEONGJO-OFL-1.1.txt",
+    "correspondingSource": "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/nanummyeongjo"
+  },
+  {
     id: "audseg",
     kind: "separately-licensed-source",
     name: "AudSeg browser port",

@@ -31,6 +31,13 @@
 <!-- attribution-id: paperlogy -->
 | `paperlogy` | Paperlogy 8 ExtraBold | 1.001 · OFL-1.1 | 고정 WOFF2와 OFL 원문 |
 
+<!-- attribution-id: dohyeon -->
+| `dohyeon` | Do Hyeon | Version 1.001 · OFL-1.1 | 고정 TTF와 OFL 원문 |
+<!-- attribution-id: jua -->
+| `jua` | Jua | Version 1.001 · OFL-1.1 | 고정 TTF와 OFL 원문 |
+<!-- attribution-id: nanummyeongjo -->
+| `nanummyeongjo` | Nanum Myeongjo | Version 2.032;PS 1;hotconv 1.0.56;makeotf.lib2.0.21325 · OFL-1.1 | 고정 TTF와 OFL 원문 |
+
 정확한 크기·SHA-256·대응 소스는
 [`WEB_THIRD_PARTY_NOTICES.md`](WEB_THIRD_PARTY_NOTICES.md)에 있습니다. 웹 ZIP은
 FFmpeg, yt-dlp, Electron, Whisper model 또는 npm build tool을 포함하지 않습니다.

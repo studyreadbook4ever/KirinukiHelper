@@ -55,7 +55,7 @@ test("Paperlogy distribution copy, license, CSS face, and package list stay wire
 test("caption font registry contains licensed Paperlogy and the Pretendard legacy font", () => {
   assert.deepEqual(
     Object.keys(CAPTION_FONT_REGISTRY).sort(),
-    ["paperlogy", "pretendard"]
+    ["dohyeon", "jua", "nanummyeongjo", "paperlogy", "pretendard"]
   );
   assert.equal(CAPTION_FONT_REGISTRY.paperlogy.license, "SIL Open Font License 1.1");
   assert.equal(CAPTION_FONT_REGISTRY.paperlogy.version, "1.001");

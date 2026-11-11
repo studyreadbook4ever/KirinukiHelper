@@ -416,3 +416,51 @@ exact lockfile와
 - Human inventory: `legal/OPEN_SOURCE_INVENTORY.md`
 - Runtime boundary: `legal/RUNTIME_DEPENDENCIES.md`
 - Web release gate: `legal/WEB_DEPLOYMENT_CHECKLIST.md`
+
+<!-- attribution-id: dohyeon -->
+## Do Hyeon
+
+- Version: Version 1.001
+- License: SIL Open Font License 1.1 (`OFL-1.1`)
+- Exact upstream: https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/dohyeon
+- Bundled font (unmodified): `editor/fonts/DoHyeon-Regular.ttf`
+- Font size: `879764` bytes
+- Font SHA-256: `35644be7f28e0a68a447b1f7af351dcde5674b870f24f7b5f43e26d00b4ab653`
+- Full license text: `licenses/DOHYEON-OFL-1.1.txt`
+- License size: `4347` bytes
+- License SHA-256: `de5ff32211a4340b01477af39ee339d639438955e409f79b666d4b9207f3c92c`
+
+고정 upstream의 TTF와 저작권·OFL 원문을 수정 없이 포함합니다.
+폰트 파일은 앱과 함께 제공하며 외부 글꼴 서버에 요청하지 않습니다.
+
+<!-- attribution-id: jua -->
+## Jua
+
+- Version: Version 1.001
+- License: SIL Open Font License 1.1 (`OFL-1.1`)
+- Exact upstream: https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/jua
+- Bundled font (unmodified): `editor/fonts/Jua-Regular.ttf`
+- Font size: `2119352` bytes
+- Font SHA-256: `769677aef240bfc3b9965f2b50748075bff885e6c6992fc591a3fb268279f898`
+- Full license text: `licenses/JUA-OFL-1.1.txt`
+- License size: `4342` bytes
+- License SHA-256: `44a7c6e4c5572392ae122d3b1d8c6ba6fd640a7797e675384585d947f2773e3c`
+
+고정 upstream의 TTF와 저작권·OFL 원문을 수정 없이 포함합니다.
+폰트 파일은 앱과 함께 제공하며 외부 글꼴 서버에 요청하지 않습니다.
+
+<!-- attribution-id: nanummyeongjo -->
+## Nanum Myeongjo
+
+- Version: Version 2.032;PS 1;hotconv 1.0.56;makeotf.lib2.0.21325
+- License: SIL Open Font License 1.1 (`OFL-1.1`)
+- Exact upstream: https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/nanummyeongjo
+- Bundled font (unmodified): `editor/fonts/NanumMyeongjo-ExtraBold.ttf`
+- Font size: `3180888` bytes
+- Font SHA-256: `60c0077fce069ba90ae97c0a3679f6eb3712e0ca637bdd0c15b72d335ec46db7`
+- Full license text: `licenses/NANUMMYEONGJO-OFL-1.1.txt`
+- License size: `4497` bytes
+- License SHA-256: `8eb1c1019fe7fe6d0b6e7d7bbbba1d9cbdd969d8c5f26455708f6cfb8a77284c`
+
+고정 upstream의 TTF와 저작권·OFL 원문을 수정 없이 포함합니다.
+폰트 파일은 앱과 함께 제공하며 외부 글꼴 서버에 요청하지 않습니다.

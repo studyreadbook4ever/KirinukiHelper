@@ -97,7 +97,7 @@ main { width: min(1560px, calc(100% - 40px)); margin: 0 auto; padding: 30px 0 11
 .local-project-manager .local-project-drafts { margin-top: 4px; color: #88949a; font-size: 11px; }
 .local-project-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .local-project-actions .button { min-height: 38px; padding-inline: 13px; font-size: 12px; }
-.local-project-manager button:focus-visible, .local-project-delete-dialog button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.local-project-manager button:focus-visible, .local-project-delete-dialog button:focus-visible, .cut-reorder-dialog button:focus-visible, .clip-review button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .source-cache-status { color: var(--accent) !important; }
 form { display: grid; gap: 18px; }
 .step-card { display: grid; grid-template-columns: 1fr; overflow: hidden; }
@@ -251,13 +251,14 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .github-link:hover { border-color: #26785f; background: #10261f; }
 .github-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .github-link svg { width: 20px; height: 20px; flex: 0 0 auto; fill: currentColor; }
-.local-project-delete-dialog { width: min(560px, calc(100% - 28px)); padding: 0; border: 1px solid #664044; border-radius: 17px; color: var(--text); background: #121618; box-shadow: 0 26px 90px rgb(0 0 0 / .62); }
-.local-project-delete-dialog::backdrop { background: rgb(2 4 5 / .76); backdrop-filter: blur(5px); }
-.local-project-delete-content { display: grid; gap: 13px; padding: 26px; }
-.local-project-delete-content h2 { margin: 0; font-family: Pretendard, sans-serif; font-size: 24px; letter-spacing: -.02em; }
-.local-project-delete-content > p { margin: 0; color: #c7cfd2; line-height: 1.6; }
+.local-project-delete-dialog, .cut-reorder-dialog { width: min(560px, calc(100% - 28px)); padding: 0; border: 1px solid #664044; border-radius: 17px; color: var(--text); background: #121618; box-shadow: 0 26px 90px rgb(0 0 0 / .62); }
+.cut-reorder-dialog { border-color: #26785f; }
+.local-project-delete-dialog::backdrop, .cut-reorder-dialog::backdrop { background: rgb(2 4 5 / .76); backdrop-filter: blur(5px); }
+.local-project-delete-content, .cut-reorder-content { display: grid; gap: 13px; padding: 26px; }
+.local-project-delete-content h2, .cut-reorder-content h2 { margin: 0; font-family: Pretendard, sans-serif; font-size: 24px; letter-spacing: -.02em; }
+.local-project-delete-content > p, .cut-reorder-content > p { margin: 0; color: #c7cfd2; line-height: 1.6; }
 .local-project-delete-content .local-project-delete-scope { padding: 13px 14px; border: 1px solid #3b3436; border-radius: 10px; color: #9da7ac; background: #0c0f10; font-size: 12px; }
-.local-project-delete-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 4px; }
+.local-project-delete-actions, .cut-reorder-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 4px; }
 .local-media-engine-dialog { width: min(780px, calc(100vw - 32px)); max-width: none; padding: 0; border: 1px solid rgb(0 230 163 / .55); border-radius: 20px; color: var(--text); background: #0b0f12; box-shadow: 0 30px 110px rgb(0 0 0 / .62); }
 .local-media-engine-dialog::backdrop { background: rgb(2 4 7 / .8); backdrop-filter: blur(8px); }
 .local-media-engine-card { display: grid; gap: 17px; padding: clamp(24px, 5vw, 44px); }
@@ -339,7 +340,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .local-project-title { max-width: 100%; white-space: normal; }
   .local-project-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .local-project-actions [data-project-action="delete"] { grid-column: 1 / -1; }
-  .local-project-delete-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .local-project-delete-actions, .cut-reorder-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .editor-open-cta { width: 100%; }
   .public-launch-shell { width: min(100% - 24px, 920px); padding-block: 24px 60px; }
   .public-launch-card { padding: 26px 21px 30px; border-radius: 18px; }
