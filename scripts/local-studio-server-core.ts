@@ -509,6 +509,9 @@ export function resolveStudioStaticAsset(
   if (target === "/licenses.html") {
     return asset("web/licenses.html", { html: true });
   }
+  if (target === "/agents.md") {
+    return asset("web/agents.md");
+  }
   if (target === "/privacy.html") {
     return asset("web/privacy.html", { html: true });
   }
@@ -587,6 +590,7 @@ export function studioRequestPath(rawTarget: unknown): string | null {
     pathname.startsWith("//")
     || /[%\\#[\0-\x20\x7f]/u.test(pathname)
     || pathname.split("/").some((segment) => segment === "." || segment === "..")
+    || (pathname === "/agents.md" && queryIndex !== -1)
     || query.length > 8_192
     || /[\\#[\0-\x20\x7f]/u.test(query)
   ) {

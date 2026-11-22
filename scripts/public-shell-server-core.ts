@@ -475,6 +475,21 @@ async function loadPublicShellAssets(
   return loadedByPath;
 }
 
+export function validPublicDocumentLinks(html: string, documentKind: "index" | "editor"): boolean {
+  const markup = html.replace(/<!--[\s\S]*?-->/gu, "");
+  const head = /<head>([\s\S]*?)<\/head>/iu.exec(markup)?.[1] || "";
+  const links = head.match(/<link\b[^>]*>/giu) || [];
+  const stylesheet = documentKind === "index"
+    ? /^<link rel="stylesheet" href="\/studio\.css\?v=\d+\.\d+\.\d+">$/u
+    : /^<link rel="stylesheet" href="editor\/editor\.css\?v=\d+\.\d+\.\d+">$/u;
+  const body = /<body\b[^>]*>([\s\S]*?)<\/body>/iu.exec(markup)?.[1] || "";
+  return links.length === 3 && (markup.match(/<link\b/giu) || []).length === 3
+    && links.some((tag) => /^<link rel="icon" href="data:image\/svg\+xml,[^"]+">$/u.test(tag))
+    && links.some((tag) => stylesheet.test(tag))
+    && links.includes('<link rel="help" type="text/markdown" href="/agents.md">')
+    && /<a\b[^>]*\shref="\/agents\.md"[^>]*>/u.test(body);
+}
+
 async function validatePublicShellIdentityFiles(
   publicShellRoot: string,
   loadedAssets: ReadonlyMap<string, LoadedPublicShellAsset>,
@@ -493,6 +508,9 @@ async function validatePublicShellIdentityFiles(
     html: loadedAssets.get(requestPath)?.bytes.toString("utf8") || ""
   }));
   for (const { requestPath, html } of htmlDocuments) {
+    if (!validPublicDocumentLinks(html, requestPath === "/" ? "index" : "editor")) {
+      throw new Error(`${requestPath}의 공개 링크와 /agents.md 안내가 올바르지 않습니다.`);
+    }
     const cspMatches = [...html.matchAll(
       /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/gu
     )];

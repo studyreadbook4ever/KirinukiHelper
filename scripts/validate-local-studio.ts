@@ -234,7 +234,8 @@ for (const target of [
   "/editor.html",
   "/editor/editor.css",
   "/editor/editor.js",
-  "/editor/audseg-worker.js"
+  "/editor/audseg-worker.js",
+  "/agents.md"
 ]) {
   const resolved = resolveStudioStaticAsset(target);
   assert(

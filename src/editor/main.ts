@@ -1,3 +1,4 @@
+import { bindCaptionAgentGuide } from "../lib/caption-agent-guide.js";
 import { downloadBlob, sanitizeFileName } from "../lib/browser-download.js";
 import {
   DEFAULT_SUBTITLE_COLOR,
@@ -408,6 +409,7 @@ const uiLocalization = installUiLocalization({
     ...EDITOR_RUNTIME_UI_COPY_PATTERNS
   ]
 });
+bindCaptionAgentGuide(uiLocalization);
 
 const SUBTITLE_SYNC_SKILL_MARKDOWN =
   __KIRINUKI_SUBTITLE_SYNC_SKILL_MARKDOWN__;

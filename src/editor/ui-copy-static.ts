@@ -1,3 +1,4 @@
+import { CAPTION_AGENT_GUIDE_COPY } from "../lib/caption-agent-guide.js";
 import type { UiCopyCatalog } from "../lib/ui-localization.js";
 
 /**
@@ -8,6 +9,8 @@ import type { UiCopyCatalog } from "../lib/ui-localization.js";
  * belongs in a separate catalog with typed interpolation patterns.
  */
 export const EDITOR_STATIC_UI_COPY = {
+  ...CAPTION_AGENT_GUIDE_COPY,
+  "를 먼저 읽도록 AI에 안내하세요.": { en: " — ask your agent to read this first.", ja: "を先に読むようAIに指示してください。" },
   "영상 영역 자르기": {"en": "Crop video area", "ja": "映像の領域を切り抜く"},
   "선택 컷 영상 자르기": {"en": "Crop selected clip", "ja": "選択クリップを切り抜く"},
   "원본 화면에서 남길 영역을 드래그하세요. 선택 영역을 기존 영상 틀 안에 맞춰 확대합니다. 컷의 시간·자막·이미지는 그대로 유지됩니다.": {"en": "Drag the area to keep in the source frame. The selected area is fitted inside the existing video frame. Clip timing, captions and images stay unchanged.", "ja": "元映像で残す領域をドラッグしてください。選択領域を既存の映像枠に収まるよう拡大します。クリップの時間・字幕・画像は維持されます。"},

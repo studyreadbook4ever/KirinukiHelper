@@ -25,6 +25,7 @@ import {
   PUBLIC_WEB_PACKAGE_FILES,
   WEB_PACKAGE_FILES
 } from "./web-package-files.js";
+import { validPublicDocumentLinks } from "./public-shell-server-core.js";
 import { readPackageSourceFile } from "./package-source-reader.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -253,6 +254,16 @@ try {
       readFile(path.join(extractRoot, "_headers"), "utf8"),
       readFile(path.join(extractRoot, ".popovic-hosts"), "utf8")
     ]);
+    const canonicalGuide = await readPackageSourceFile({
+      repositoryRoot: root,
+      repositoryPath: "web/agents.md",
+      ...(releaseSourceRevision === undefined ? {} : { sourceRevision: releaseSourceRevision })
+    });
+    assert(
+      canonicalGuide.length > 0 && (await readFile(path.join(extractRoot, "agents.md"))).equals(canonicalGuide)
+        && validPublicDocumentLinks(indexHtml, "index") && validPublicDocumentLinks(editorHtml, "editor"),
+      "압축된 /agents.md의 본문 또는 웹 화면의 안내 링크가 원본 계약과 다릅니다."
+    );
     assert(
       indexHtml.includes(`href="/studio.css?v=${metadata.version}"`)
         && indexHtml.includes(`src="/studio.js?v=${metadata.version}"`)

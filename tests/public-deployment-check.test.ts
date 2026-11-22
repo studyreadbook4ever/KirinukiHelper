@@ -419,6 +419,10 @@ publicDeploymentArtifactTest("공개 배포 checker는 checksum이 검증된 ZIP
   const indexResource = expectedResources.find(({ archivePath }) => (
     archivePath === "index.html"
   ));
+  const guide = expectedResources.find(({ requestPath }) => requestPath === "/agents.md");
+  assert(guide);
+  assert.equal(guide.contentType, "text/markdown; charset=utf-8");
+  assert.deepEqual(guide.bytes, await readFile(path.join(repositoryRoot, "web/agents.md")));
   assert(indexResource);
   assert.deepEqual(result, {
     bytes: indexResource.bytes.byteLength,

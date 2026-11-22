@@ -642,6 +642,52 @@ async function execute<T>(script: string, args: readonly unknown[] = []): Promis
   );
 }
 
+// Use the real guide controls with a stub clipboard so CI never writes to the host clipboard.
+async function verifyCaptionAgentGuide(): Promise<void> {
+  const working = await execute<boolean>(`
+    return (async () => {
+      const guide = document.querySelector("#caption-agent-guide-link");
+      const metadata = document.querySelector('head link[rel~="help"][type="text/markdown"]');
+      const copy = document.querySelector("#copy-caption-agent-brief");
+      const fallback = document.querySelector("#caption-agent-copy-fallback");
+      const guideUrl = new URL("/agents.md", location.origin).href;
+      if (!guide || guide.href !== guideUrl || metadata?.href !== guideUrl || !copy || !fallback) return false;
+      const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const focus = document.activeElement;
+      let copied = "";
+      let denied = false;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+        writeText: async (value) => {
+          if (denied) throw new DOMException("Denied", "NotAllowedError");
+          copied = value;
+        }
+      } });
+      try {
+        copy.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const urls = copied.match(/https?:[^\\s<>()]+/g) || [];
+        const privateValues = [document.querySelector("#source-url")?.value,
+          document.querySelector("#project-name")?.value, new URL(location.href).searchParams.get("project")];
+        if (urls.length !== 1 || urls[0] !== guideUrl
+          || /[?#]/.test(urls[0]) || privateValues.some(value => value && copied.includes(value))) return false;
+        denied = true;
+        copy.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        return !fallback.hidden && fallback.readOnly && fallback.value === copied
+          && fallback.selectionStart === 0 && fallback.selectionEnd === copied.length;
+      } finally {
+        denied = false;
+        copy.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        if (original) Object.defineProperty(navigator, "clipboard", original);
+        else delete navigator.clipboard;
+        if (focus instanceof HTMLElement) focus.focus({ preventScroll: true });
+      }
+    })();
+  `);
+  assert(working, "The caption guide link or its clipboard and manual-copy paths are unavailable.");
+}
+
 async function storeBrowserProject(project: EditorProject): Promise<void> {
   await execute(`
     globalThis.__kirinukiSmokeProjectWrite = null;
@@ -2481,6 +2527,7 @@ async function main(): Promise<void> {
     studioReferrerPolicy === "strict-origin-when-cross-origin",
     `YouTube client identity를 보존할 localhost referrer policy가 다릅니다: ${studioReferrerPolicy}`
   );
+  await verifyCaptionAgentGuide();
   const localizationState = await execute<{
     htmlLanguage: string;
     sourceHeading: string;
@@ -4187,6 +4234,7 @@ async function main(): Promise<void> {
     "VOD 준비 후 편집기 작업 잠금이 해제되지 않았습니다.",
     10_000
   );
+  await verifyCaptionAgentGuide();
   const editorLocalization = await execute<{
     english: {
       htmlLanguage: string;

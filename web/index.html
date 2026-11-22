@@ -7,6 +7,7 @@
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src https://chzzk.naver.com https://www.youtube-nocookie.com https://vod.sooplive.com; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: http://127.0.0.1:4319; worker-src 'self' blob:; connect-src 'self' http://127.0.0.1:4319">
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
+    <link rel="help" type="text/markdown" href="/agents.md">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki</title>
     <link rel="stylesheet" href="/studio.css?v=3.0.32">
@@ -311,6 +312,12 @@
                 </a>
                 <a href="/licenses.html">오픈소스 라이선스</a>
               </p>
+              <div class="caption-agent-guide">
+                <a id="caption-agent-guide-link" href="/agents.md" target="_blank" rel="noopener noreferrer">AI 자막 가이드</a>
+                <button id="copy-caption-agent-brief" type="button">AI 지시문 복사</button>
+                <span id="caption-agent-copy-status" role="status" aria-live="polite" aria-atomic="true"></span>
+                <textarea id="caption-agent-copy-fallback" rows="3" readonly hidden aria-label="AI에 전달할 지시문"></textarea>
+              </div>
             </div>
           </div>
         </section>

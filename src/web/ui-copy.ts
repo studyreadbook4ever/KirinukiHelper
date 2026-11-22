@@ -1,3 +1,4 @@
+import { CAPTION_AGENT_GUIDE_COPY } from "../lib/caption-agent-guide.js";
 import {
   mergeUiCopyCatalogs
 } from "../lib/ui-localization.js";
@@ -816,6 +817,7 @@ const surfacedModuleCopy = {
 } satisfies UiCopyCatalog;
 
 export const CUT_UI_COPY_CATALOG: UiCopyCatalog = mergeUiCopyCatalogs(
+  CAPTION_AGENT_GUIDE_COPY,
   studioStaticCopy,
   studioRuntimeCopy,
   helperCopy,

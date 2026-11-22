@@ -5,6 +5,7 @@ export const WEB_PACKAGE_FILES = Object.freeze([
   ".popovic-hosts",
   "THIRD_PARTY_NOTICES.md",
   "_headers",
+  "agents.md",
   "editor.html",
   "editor/editor.css",
   "editor/fonts/Paperlogy-8ExtraBold.woff2",

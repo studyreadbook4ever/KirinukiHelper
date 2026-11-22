@@ -4565,6 +4565,45 @@ svg {
   width: 13px;
 }
 
+.caption-agent-guide {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  font-size: 11px;
+}
+.caption-agent-guide a,
+#subtitle-sync-agent-guide {
+  color: var(--mint);
+  text-underline-offset: 0.18em;
+}
+.caption-agent-guide button {
+  justify-self: start;
+  padding: 5px 8px;
+  border: 1px solid var(--line-bright);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--panel-raised);
+  cursor: pointer;
+}
+.caption-agent-guide textarea,
+.caption-agent-guide [role="status"] {
+  grid-column: 1 / -1;
+}
+.caption-agent-guide [role="status"]:not(:empty),
+.caption-agent-guide textarea {
+  margin-top: 6px;
+}
+.caption-agent-guide textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px;
+  resize: vertical;
+  color: var(--text);
+  background: var(--panel-raised);
+  font: inherit;
+}
+
 .cue-review-navigation {
   display: flex;
   align-items: center;

@@ -237,6 +237,44 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .cut-preparation-recovery-actions .button { min-height: 34px; padding-inline: 12px; font-size: 12px; }
 .mobile-editor-notice { width: 100%; padding: 13px 15px; border: 1px solid #85533a; border-radius: 10px; color: #ffd3b6 !important; background: #251912; }
 .mobile-editor-notice strong { display: block; margin-bottom: 3px; color: #ffe7d7; }
+.caption-agent-guide {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  font-size: 13px;
+}
+.caption-agent-guide a {
+  color: var(--accent);
+  text-underline-offset: 0.18em;
+}
+.caption-agent-guide button {
+  justify-self: start;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--bg);
+  cursor: pointer;
+}
+.caption-agent-guide textarea,
+.caption-agent-guide [role="status"] {
+  grid-column: 1 / -1;
+}
+.caption-agent-guide [role="status"]:not(:empty),
+.caption-agent-guide textarea {
+  margin-top: 6px;
+}
+.caption-agent-guide textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px;
+  resize: vertical;
+  color: var(--text);
+  background: var(--bg);
+  font: inherit;
+}
+
 .site-trust-notice { display: grid; gap: 9px; padding: 17px 18px; border: 1px solid #354047; border-radius: 12px; background: #0b0e10; }
 .site-trust-notice p { margin: 0; color: #c8d0d4; font-size: 13px; line-height: 1.6; }
 .site-trust-notice a { color: var(--accent); font-weight: 800; }

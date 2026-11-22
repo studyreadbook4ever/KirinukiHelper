@@ -1377,6 +1377,7 @@ async function main(): Promise<void> {
   const expectedFiles = PUBLIC_WEB_PACKAGE_FILES.map(({ archivePath }) => archivePath).sort();
   assert(
     new Set(expectedFiles).size === expectedFiles.length
+      && expectedFiles.includes("agents.md")
       && expectedFiles.includes("index.html")
       && expectedFiles.includes("studio.css")
       && expectedFiles.includes("studio.js")
@@ -1392,10 +1393,18 @@ async function main(): Promise<void> {
 
   originServer = await createPublicShellHttpServer({ publicShellRoot: extractedRoot });
   const originPort = await listenLoopback(originServer);
-  const [directDocument, directEditorDocument] = await Promise.all([
+  const [directDocument, directEditorDocument, guide, packagedGuide] = await Promise.all([
     requestOrigin(originPort, "/"),
-    requestOrigin(originPort, "/editor.html")
+    requestOrigin(originPort, "/editor.html"),
+    requestOrigin(originPort, "/agents.md"),
+    readFile(path.join(extractedRoot, "agents.md"))
   ]);
+  assert(
+    guide.statusCode === 200 && guide.headers["content-type"] === "text/markdown; charset=utf-8"
+      && guide.body.equals(packagedGuide),
+    "The public /agents.md response must serve the packaged Markdown bytes."
+  );
+  assertPublicSecurityHeaders(guide.headers);
   assert(directDocument.statusCode === 200, "추출한 공개 웹 시작 문서 응답이 200이 아닙니다.");
   assert(directEditorDocument.statusCode === 200, "추출한 공개 웹 편집기 문서 응답이 200이 아닙니다.");
   assertPublicSecurityHeaders(directDocument.headers);

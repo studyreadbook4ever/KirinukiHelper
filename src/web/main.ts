@@ -1,3 +1,4 @@
+import { bindCaptionAgentGuide } from "../lib/caption-agent-guide.js";
 import { downloadBlob, sanitizeFileName } from "../lib/browser-download.js";
 import {
   captureSegmentEditorClipId,
@@ -161,6 +162,7 @@ const uiLocalization = installUiLocalization({
   catalog: CUT_UI_COPY_CATALOG,
   patterns: CUT_UI_COPY_PATTERNS
 });
+bindCaptionAgentGuide(uiLocalization);
 
 const publicLaunchShell = requiredElement<HTMLElement>("#public-launch-shell");
 const localAppSurface = requiredElement<HTMLElement>("#local-app-surface");
