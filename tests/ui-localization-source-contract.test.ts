@@ -9,7 +9,7 @@ import { CUT_UI_COPY_CATALOG } from "../src/web/ui-copy.js";
 
 const hangulPattern = /[가-힣]/u;
 const translatableAttributePattern =
-  /\b(?:aria-label|aria-description|aria-roledescription|title|placeholder|value)\s*=\s*(["'])([^"']*[가-힣][^"']*)\1/gu;
+  /\b(?:aria-label|aria-description|aria-roledescription|label|title|placeholder|value)\s*=\s*(["'])([^"']*[가-힣][^"']*)\1/gu;
 
 function normalizedCopy(source: string): string {
   return source

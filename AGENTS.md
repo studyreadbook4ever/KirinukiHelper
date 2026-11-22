@@ -460,7 +460,7 @@ fail closed한다. `npm run license:check`는 승인된 dependency와 배포 고
 
 - first-party 코드는 루트 `UNLICENSE`를 따른다.
 - AudSeg는 MIT, Mediabunny는 MPL-2.0, Pretendard·Paperlogy·Do Hyeon·Jua·
-  Nanum Myeongjo는 OFL-1.1이다. 글꼴 변경은 공통 font ID만 바꾸며 기존 cue의
+  Nanum Myeongjo·Black Han Sans·Gaegu·Gugi·East Sea Dokdo는 OFL-1.1이다. 글꼴 변경은 공통 font ID만 바꾸며 기존 cue의
   크기·색·시각을 유지한다. 흰/검은 자막 배경은 cue별로 저장한다.
 - Electron/Chromium/Node, FFmpeg·ffprobe, yt-dlp standalone은 target별 최종
   artifact inventory, notice, source·build provenance를 별도로 검증한다.

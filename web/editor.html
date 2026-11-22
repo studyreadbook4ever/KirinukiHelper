@@ -9,7 +9,7 @@
     <meta name="kirinuki-studio-origin" content="__KIRINUKI_STUDIO_ORIGIN__">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101113'/%3E%3Cpath d='M18 14v36M46 14 20 34m8-6 19 22' fill='none' stroke='%2300e6a3' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Kirinuki 영상 편집기</title>
-    <link rel="stylesheet" href="editor/editor.css?v=3.0.31">
+    <link rel="stylesheet" href="editor/editor.css?v=3.0.32">
   </head>
   <body>
     <main id="editor-origin-gate" class="editor-policy-gate" aria-labelledby="editor-origin-gate-title" hidden>
@@ -528,32 +528,6 @@
             </div>
             </section>
 
-            <label class="field caption-font-field">
-              <span>자막 글꼴</span>
-              <select id="caption-font-family" aria-describedby="caption-font-help">
-                <option value="pretendard">Pretendard</option>
-                <option value="paperlogy">Paperlogy</option>
-                <option value="dohyeon">도현체 · Do Hyeon</option>
-                <option value="jua">주아체 · Jua</option>
-                <option value="nanummyeongjo">나눔명조 · Nanum Myeongjo</option>
-              </select>
-              <span id="caption-font-help" class="field-help">현재 작업의 모든 자막에 적용합니다. 상업용 영상에도 사용할 수 있는 OFL 글꼴입니다.</span>
-            </label>
-
-            <section class="caption-sheet-launch" aria-labelledby="caption-sheet-launch-title">
-              <div>
-                <strong id="caption-sheet-launch-title">자막 스타일 비교</strong>
-                <span>자막 문구는 표시하지 않고 위치·크기·색상·배경 설정을 시간순으로 비교합니다.</span>
-              </div>
-              <button
-                id="open-caption-sheet"
-                class="secondary-action caption-sheet-open"
-                type="button"
-                aria-haspopup="dialog"
-                aria-controls="caption-sheet-dialog"
-              >스타일 비교 열기</button>
-            </section>
-
             <div class="cue-review-navigation">
               <span id="cue-review-count" role="status">검수 필요 0개</span>
               <button id="next-review-cue" class="secondary-action" type="button" title="모든 레인의 검수할 자막을 시간순으로 이동하며 마지막에서는 처음으로 돌아갑니다." disabled>다음 검수 자막</button>
@@ -562,6 +536,7 @@
             <div class="inspector-tabs" role="tablist" aria-label="자막 편집 보기">
               <button id="cue-selected-tab" class="active" type="button" role="tab" aria-selected="true" aria-controls="cue-selected-panel">선택 자막</button>
               <button id="cue-list-tab" type="button" role="tab" aria-selected="false" aria-controls="cue-list-panel" tabindex="-1">전체 <span id="cue-count">0</span></button>
+              <button id="cue-style-tab" type="button" role="tab" aria-selected="false" aria-controls="cue-style-panel" tabindex="-1">공통 스타일</button>
             </div>
 
             <div id="cue-selected-panel" role="tabpanel" aria-labelledby="cue-selected-tab">
@@ -578,9 +553,15 @@
               </p>
               <label class="field">
                 <span>자막 텍스트</span>
-                <textarea id="cue-text" rows="4" placeholder="자막 내용을 입력하세요"></textarea>
+                <textarea id="cue-text" rows="3" aria-describedby="cue-typing-help" aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter" placeholder="자막 내용을 입력하세요"></textarea>
               </label>
 
+              <div class="cue-lane-navigation" role="group" aria-label="같은 자막 레인의 좌우 자막 이동">
+                <button id="previous-cue-in-lane" type="button" aria-label="같은 자막 레인의 왼쪽 자막으로 이동" disabled>← 왼쪽 자막 · J</button>
+                <button id="next-cue-in-lane" type="button" aria-label="같은 자막 레인의 오른쪽 자막으로 이동" disabled>오른쪽 자막 · K →</button>
+              </div>
+
+              <p id="cue-typing-help" class="field-help">입력 중 Ctrl/⌘ + Enter로 다음 자막, Shift를 함께 누르면 이전 자막으로 이동합니다.</p>
               <div class="time-fields">
                 <label class="field">
                   <span>시작</span>
@@ -608,11 +589,6 @@
                 <span class="caption-background-swatch white" aria-hidden="true"></span>
                 <span id="caption-white-background-label">이 자막 흰 배경 넣기</span>
               </button>
-
-              <div class="cue-lane-navigation" role="group" aria-label="같은 자막 레인의 좌우 자막 이동">
-                <button id="previous-cue-in-lane" type="button" aria-label="같은 자막 레인의 왼쪽 자막으로 이동" disabled>← 왼쪽 자막 · J</button>
-                <button id="next-cue-in-lane" type="button" aria-label="같은 자막 레인의 오른쪽 자막으로 이동" disabled>오른쪽 자막 · K →</button>
-              </div>
 
               <div class="field-group">
                 <span class="field-label">화면 위치</span>
@@ -674,6 +650,44 @@
               </div>
               <p id="cue-list-empty" class="field-help">활성 컷에 자막이 없습니다. 현재 위치에 자막을 추가해 주세요.</p>
               <div id="cue-list" class="cue-list"></div>
+            </div>
+            <div id="cue-style-panel" role="tabpanel" aria-labelledby="cue-style-tab" hidden>
+              <div class="field caption-font-field">
+                <label class="field-label" for="caption-font-family">자막 글꼴</label>
+                <select id="caption-font-family" aria-describedby="caption-font-help">
+                  <optgroup label="고딕·명조">
+                    <option value="pretendard">Pretendard</option>
+                    <option value="paperlogy">Paperlogy</option>
+                    <option value="nanummyeongjo">나눔명조 · Nanum Myeongjo</option>
+                  </optgroup>
+                  <optgroup label="제목·강조">
+                    <option value="blackhansans">검은고딕 · Black Han Sans</option>
+                    <option value="dohyeon">도현체 · Do Hyeon</option>
+                    <option value="gugi">구기 · Gugi</option>
+                    <option value="jua">주아체 · Jua</option>
+                  </optgroup>
+                  <optgroup label="손글씨">
+                    <option value="gaegu">개구쟁이 · Gaegu</option>
+                    <option value="eastseadokdo">대한민국독도 · East Sea Dokdo</option>
+                  </optgroup>
+                </select>
+                <span id="caption-font-preview" aria-hidden="true">오늘의 하이라이트</span>
+                <span id="caption-font-help" class="field-help">현재 작업의 모든 자막에 적용합니다. 상업용 영상에도 사용할 수 있는 OFL 글꼴입니다.</span>
+              </div>
+
+              <section class="caption-sheet-launch" aria-labelledby="caption-sheet-launch-title">
+                <div>
+                  <strong id="caption-sheet-launch-title">자막 스타일 비교</strong>
+                  <span>자막 문구는 표시하지 않고 위치·크기·색상·배경 설정을 시간순으로 비교합니다.</span>
+                </div>
+                <button
+                  id="open-caption-sheet"
+                  class="secondary-action caption-sheet-open"
+                  type="button"
+                  aria-haspopup="dialog"
+                  aria-controls="caption-sheet-dialog"
+                >스타일 비교 열기</button>
+              </section>
             </div>
           </div>
 
@@ -1023,16 +1037,19 @@
                 <button id="delete-range" class="tool-button range-delete-button" type="button" aria-keyshortcuts="Delete" title="선택한 영상 구간 삭제 (Delete)" disabled>구간 삭제</button>
               </div>
               <button id="trim-short-canvas-empty-edges" class="tool-button short-canvas-empty-trim-button" type="button" title="영상·사진·자막·음성 중 가장 이른 시작과 가장 늦은 끝에 쇼츠 길이를 맞춥니다" hidden>앞뒤 빈 구간 제거</button>
-              <span class="timeline-tool-divider" aria-hidden="true"></span>
-              <button id="paste-image-asset" class="tool-button asset-tool-button" type="button">+ 이미지 붙여넣기</button>
-              <button id="add-audio-region" class="tool-button" type="button">+ 현재 위치 음성 설정</button>
-              <button id="add-cue" class="tool-button" type="button">+ 현재 위치에 자막</button>
-              <button id="fit-timeline" class="tool-button" type="button">전체 보기</button>
-              <button id="toggle-timeline-snap" class="tool-button snap-tool-button active" type="button" aria-pressed="true" title="타임라인 자석 켜짐 · 드래그 중 Alt로 잠시 해제">
-                자석
-              </button>
-              <svg class="zoom-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5M8 10h4"/></svg>
-              <input id="timeline-zoom" type="range" min="20" max="240" value="70" aria-label="타임라인 확대">
+              <div class="timeline-add-tools" role="group" aria-label="타임라인에 추가">
+                <button id="add-cue" class="tool-button" type="button">+ 현재 위치에 자막</button>
+                <button id="paste-image-asset" class="tool-button asset-tool-button" type="button">+ 이미지 붙여넣기</button>
+                <button id="add-audio-region" class="tool-button" type="button">+ 현재 위치 음성 설정</button>
+              </div>
+              <div class="timeline-view-tools" role="group" aria-label="타임라인 보기">
+                <button id="fit-timeline" class="tool-button" type="button">전체 보기</button>
+                <button id="toggle-timeline-snap" class="tool-button snap-tool-button active" type="button" aria-pressed="true" title="타임라인 자석 켜짐 · 드래그 중 Alt로 잠시 해제">
+                  자석
+                </button>
+                <svg class="zoom-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5M8 10h4"/></svg>
+                <input id="timeline-zoom" type="range" min="20" max="240" value="70" aria-label="타임라인 확대">
+              </div>
             </div>
           </div>
 
@@ -1299,9 +1316,10 @@
           <strong>쇼츠 가장자리에 작은 검은 틈이 보일 수 있습니다.</strong>
           <span id="export-edge-gap-summary">밀대 도구로 확인할 수 있습니다.</span>
         </div>
-        <p class="export-cleanup-caveat">영상·편집 복원 파일·자막 파일이 제대로 저장됐는지 확인한 뒤, 이 작업에 사용한 임시 영상과 기기 내 편집 데이터를 지울지 별도로 묻습니다.</p>
+        <p id="export-video-unavailable" role="status" hidden></p>
         <footer>
           <button id="cancel-export-options-footer" class="button secondary" type="button">취소</button>
+          <button id="download-export-captions" class="button secondary" type="button" hidden>자막만 받기 (.srt)</button>
           <button id="confirm-export-options" class="button primary" type="submit">저장 위치 선택하고 내보내기</button>
         </footer>
       </form>
@@ -1318,6 +1336,11 @@
           </button>
         </header>
         <p id="cleanup-after-export-summary">영상과 복원 파일이 선택한 폴더에 정상 저장되었습니다.</p>
+        <div class="export-receipt">
+          <strong>저장 폴더</strong>
+          <span id="export-receipt-folder" data-kirinuki-ui-copy-ignore></span>
+          <ul id="export-receipt-files" data-kirinuki-ui-copy-ignore aria-label="저장한 파일"></ul>
+        </div>
         <div class="export-cleanup-result">
           <strong>현재 편집을 완료하고 이 작업의 임시 자료를 지울까요?</strong>
           <span>이 작업용으로 받은 VOD 구간·쇼츠 미리보기·저장본·이미지·파일 연결만 지웁니다. 다른 편집 작업과 사용자가 직접 선택한 원본 영상 파일은 삭제하지 않습니다.</span>
@@ -1497,6 +1520,6 @@
       </article>
     </template>
 
-    <script type="module" src="editor/editor.js?v=3.0.31"></script>
+    <script type="module" src="editor/editor.js?v=3.0.32"></script>
   </body>
 </html>

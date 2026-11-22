@@ -464,3 +464,55 @@ exact lockfile와
 
 고정 upstream의 TTF와 저작권·OFL 원문을 수정 없이 포함합니다.
 폰트 파일은 앱과 함께 제공하며 외부 글꼴 서버에 요청하지 않습니다.
+
+<!-- attribution-id: blackhansans -->
+## Black Han Sans
+
+- Version: Version 1.001
+- License: SIL Open Font License 1.1 (`OFL-1.1`)
+- Exact upstream: https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/blackhansans
+- Bundled font (unmodified): `editor/fonts/BlackHanSans-Regular.ttf`
+- Font size: `998424` bytes
+- Font SHA-256: `31960809284026681774a8e52dc19ebcad26cf69b0ad9d560f288296fbb52739`
+- Full license text: `licenses/BLACKHANSANS-OFL-1.1.txt`
+- License size: `4399` bytes
+- License SHA-256: `c324192c8b3a988bae45a9a7e4ac1258b684739003bda114e0523423440457c9`
+
+<!-- attribution-id: gaegu -->
+## Gaegu
+
+- Version: Version 1.00
+- License: SIL Open Font License 1.1 (`OFL-1.1`)
+- Exact upstream: https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/gaegu
+- Bundled font (unmodified): `editor/fonts/Gaegu-Bold.ttf`
+- Font size: `2962664` bytes
+- Font SHA-256: `cc38a4af9506a45254d1ce07c589ec473d9e5f0be319e5a77b17c214903f8c1c`
+- Full license text: `licenses/GAEGU-OFL-1.1.txt`
+- License size: `4344` bytes
+- License SHA-256: `53a9ce47085d9fef613c7ecb3730dc80d25962510bbea231b89564f58240f251`
+
+<!-- attribution-id: gugi -->
+## Gugi
+
+- Version: Version 3.00
+- License: SIL Open Font License 1.1 (`OFL-1.1`)
+- Exact upstream: https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/gugi
+- Bundled font (unmodified): `editor/fonts/Gugi-Regular.ttf`
+- Font size: `990856` bytes
+- Font SHA-256: `c0b1f979979cfc309fb2438fa9464f96173353e0c4842cc7a5919658184ed9d3`
+- Full license text: `licenses/GUGI-OFL-1.1.txt`
+- License size: `4374` bytes
+- License SHA-256: `391ac3126dacc95b92a8f3408467879edb3245344bc411530a30d5aada52df92`
+
+<!-- attribution-id: eastseadokdo -->
+## East Sea Dokdo
+
+- Version: Version 1.00
+- License: SIL Open Font License 1.1 (`OFL-1.1`)
+- Exact upstream: https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/eastseadokdo
+- Bundled font (unmodified): `editor/fonts/EastSeaDokdo-Regular.ttf`
+- Font size: `3178684` bytes
+- Font SHA-256: `8cebb39d375134fdbcedef9bf4ec4f6c3f02c39ed0aacd6e83f7a0f435e593b2`
+- Full license text: `licenses/EASTSEADOKDO-OFL-1.1.txt`
+- License size: `4354` bytes
+- License SHA-256: `39de3de5f1873f89bca4af37823ab22e28e88d0d8f7fe2f07e82e9e6e9bf7b70`

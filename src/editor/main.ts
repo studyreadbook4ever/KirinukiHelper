@@ -1,3 +1,4 @@
+import { downloadBlob, sanitizeFileName } from "../lib/browser-download.js";
 import {
   DEFAULT_SUBTITLE_COLOR,
   EDITOR_SEED_PREFIX,
@@ -418,6 +419,7 @@ declare global {
     showDirectoryPicker?: (options?: {
       id?: string;
       mode?: "read" | "readwrite";
+      startIn?: "downloads";
     }) => Promise<FileSystemDirectoryHandle>;
     showOpenFilePicker(options?: unknown): Promise<FileSystemFileHandle[]>;
     showSaveFilePicker(options?: unknown): Promise<FileSystemFileHandle>;
@@ -929,6 +931,7 @@ const EDITOR_ELEMENT_IDS = [
   "caption-agent-token",
   "caption-style-preset",
   "caption-font-family",
+  "caption-font-preview",
   "toggle-caption-white-background",
   "caption-white-background-label",
   "toggle-caption-background",
@@ -963,6 +966,8 @@ const EDITOR_ELEMENT_IDS = [
   "close-caption-sheet-dialog",
   "cue-list-tab",
   "cue-list-panel",
+  "cue-style-tab",
+  "cue-style-panel",
   "cue-search",
   "cue-list-filter",
   "cue-list-summary",
@@ -1104,6 +1109,8 @@ const EDITOR_ELEMENT_IDS = [
   "export-options-dialog",
   "export-file-title",
   "export-file-name-preview",
+  "download-export-captions",
+  "export-video-unavailable",
   "export-edge-gap-warning",
   "export-edge-gap-summary",
   "cancel-export-options",
@@ -1111,6 +1118,8 @@ const EDITOR_ELEMENT_IDS = [
   "confirm-export-options",
   "cleanup-after-export-dialog",
   "cleanup-after-export-summary",
+  "export-receipt-folder",
+  "export-receipt-files",
   "keep-export-session-cache-icon",
   "keep-export-session-cache",
   "delete-export-session-cache",
@@ -1625,7 +1634,11 @@ function installEditorShortcutHints(): void {
   }
 }
 
-const captionInspectorTab = elements.cue_selected_tab;
+const captionViews = [
+  { mode: "selected", tab: elements.cue_selected_tab, panel: elements.cue_selected_panel },
+  { mode: "list", tab: elements.cue_list_tab, panel: elements.cue_list_panel },
+  { mode: "style", tab: elements.cue_style_tab, panel: elements.cue_style_panel }
+] as const;
 
 // These lifecycle-bound values are initialized by boot() before UI handlers
 // become reachable. The runtime sentinel remains null for the existing guards.
@@ -1706,7 +1719,7 @@ let activeJobController: AbortController | null = null;
 let initialVodAutoPrepareAttempted = false;
 let pointerEditActive = false;
 let pointerEditPreservePreviewClock = false;
-let inspectorMode = "selected";
+let inspectorMode: typeof captionViews[number]["mode"] = "selected";
 let captionReviewScope = "";
 let captionReviewQuery = "";
 let captionReviewFilter: CaptionReviewFilter = "all";
@@ -2261,22 +2274,6 @@ function materializedMediaBindingIsValid(
       && !clipOutsideMedia(candidateProject)
     )
   );
-}
-
-function sanitizeFileName(value: string) {
-  let cleaned = String(value || "kirinuki")
-    .normalize("NFKC")
-    .replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu, "")
-    .replace(/[\\/:*?"<>|\u0000-\u001f\u007f-\u009f]/gu, "-")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .replace(/^[.\s-]+|[.\s-]+$/gu, "")
-    .slice(0, 80)
-    .replace(/[.\s]+$/gu, "");
-  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9]|conin\$|conout\$)(?:[.\s]|$)/iu.test(cleaned)) {
-    cleaned = `safe-${cleaned.slice(0, 75).replace(/[.\s]+$/gu, "")}`;
-  }
-  return cleaned || "kirinuki";
 }
 
 function showToast(message: string, type = "info", timeout = 3600) {
@@ -4408,6 +4405,16 @@ async function resolveImageAssetUrl(asset: EditorImageAsset) {
   return url;
 }
 
+function canRenderExportVideo(): boolean {
+  return Boolean(mediaFile)
+    && project.clips.some((clip) => clip.enabled !== false)
+    && !clipOutsideMedia(project);
+}
+
+function hasExportCaptions(): boolean {
+  return project.subtitles.some((cue) => cue.text.trim() && cueTimelineRange(project, cue));
+}
+
 function renderHeader() {
   renderWorkspaceModeChrome();
   if (elements.project_name.value !== project.name && document.activeElement !== elements.project_name) {
@@ -4454,9 +4461,7 @@ function renderHeader() {
     ? "선택한 구간을 기준으로 필요한 영상만 이 기기에 가져옵니다. 부족한 앞뒤 구간은 편집 중 더 준비할 수 있습니다"
     : "본인 소유이거나 사용 허가를 받은 영상 파일을 사용합니다";
   elements.export_video.disabled = (
-    !mediaFile
-    || !project.clips.some((clip) => clip.enabled !== false)
-    || Boolean(clipOutsideMedia(project))
+    (!canRenderExportVideo() && !hasExportCaptions())
     || Boolean(shortSourcePickerReturnState)
     || Boolean(activeJobController)
     || projectMutationLockCount > 0
@@ -4465,9 +4470,12 @@ function renderHeader() {
   elements.open_short_form.disabled = (
     Boolean(activeJobController)
   );
-  if (document.activeElement !== elements.caption_font_family) {
-    elements.caption_font_family.value = project.subtitleDefaults.fontId;
+  const workspaceFont = captionFont(project.subtitleDefaults.fontId);
+  if (elements.caption_font_family.value !== workspaceFont.id) {
+    elements.caption_font_family.value = workspaceFont.id;
   }
+  elements.caption_font_preview.style.fontFamily = `"${workspaceFont.family}", sans-serif`;
+  elements.caption_font_preview.style.fontWeight = String(workspaceFont.weight);
   if (document.activeElement !== elements.caption_style_preset) {
     elements.caption_style_preset.value = String(
       project.subtitleDefaults?.stylePresetId
@@ -4903,27 +4911,20 @@ function renderCaptionColorRegister(selectedColor: string) {
 
 function renderCueInspector() {
   const cue = selectedCue();
-  const showingList = inspectorMode === "list";
-  const previousCueInLane = cue && !showingList
-    ? adjacentSubtitleCueInLane(project, cue.id, -1)
-    : null;
-  const nextCueInLane = cue && !showingList
-    ? adjacentSubtitleCueInLane(project, cue.id, 1)
-    : null;
+  const editingCue = inspectorMode === "selected";
   elements.cue_count.textContent = String(project.subtitles.length);
-  captionInspectorTab.classList.toggle("active", !showingList);
-  captionInspectorTab.setAttribute("aria-selected", String(!showingList));
-  captionInspectorTab.tabIndex = showingList ? -1 : 0;
-  elements.cue_list_tab.classList.toggle("active", showingList);
-  elements.cue_list_tab.setAttribute("aria-selected", String(showingList));
-  elements.cue_list_tab.tabIndex = showingList ? 0 : -1;
-  elements.cue_selected_panel.hidden = showingList;
-  elements.cue_list_panel.hidden = !showingList;
+  for (const { mode, tab, panel } of captionViews) {
+    const active = inspectorMode === mode;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    panel.hidden = !active;
+  }
   elements.cue_empty.hidden = Boolean(cue);
   elements.cue_editor.hidden = !cue;
-  elements.previous_cue_in_lane.disabled = showingList || !previousCueInLane;
-  elements.next_cue_in_lane.disabled = showingList || !nextCueInLane;
-  if (!cue || showingList) {
+  elements.previous_cue_in_lane.disabled = !cue || !editingCue || !adjacentSubtitleCueInLane(project, cue.id, -1);
+  elements.next_cue_in_lane.disabled = !cue || !editingCue || !adjacentSubtitleCueInLane(project, cue.id, 1);
+  if (!cue || !editingCue) {
     return;
   }
   const reviewRequired = subtitleCueNeedsReview(cue);
@@ -6410,9 +6411,11 @@ function revealPropertyInspectorTarget(target: HTMLElement | null): void {
     return;
   }
   const tabs = elements.caption_mode_tab.parentElement;
-  const stickyOffset = tabs instanceof HTMLElement
-    ? tabs.getBoundingClientRect().height + 12
-    : 12;
+  const captionTabs = propertyInspectorMode === "caption"
+    ? elements.cue_selected_tab.parentElement
+    : null;
+  const stickyOffset = (tabs?.getBoundingClientRect().height || 0)
+    + (captionTabs?.getBoundingClientRect().height || 0) + 12;
   const inspectorRect = inspector.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
   const top = targetRect.top - inspectorRect.top + inspector.scrollTop - stickyOffset;
@@ -6424,7 +6427,7 @@ function revealPropertyInspectorTarget(target: HTMLElement | null): void {
 
 function revealSelectedPropertyEditor(): void {
   const target = propertyInspectorMode === "caption"
-    ? elements.cue_editor
+    ? captionViews.find(({ mode }) => mode === inspectorMode)?.panel || null
     : propertyInspectorMode === "asset"
       ? elements.asset_editor
       : propertyInspectorMode === "audio"
@@ -14774,7 +14777,7 @@ function bindPreviewVideoEvents(video: HTMLVideoElement) {
   });
 }
 
-function selectCue(cueId: string, { seek = false } = {}) {
+function selectCue(cueId: string, { seek = false, focusText = false } = {}) {
   const cue = project.subtitles.find((candidate) => candidate.id === cueId);
   if (!cue) {
     return;
@@ -14795,9 +14798,13 @@ function selectCue(cueId: string, { seek = false } = {}) {
   }
   renderAll({ keepScroll: true });
   revealSelectedPropertyEditor();
-  document.querySelector<HTMLButtonElement>(
-    `.cue-block[data-id="${CSS.escape(cue.id)}"] .cue-block-body`
-  )?.focus({ preventScroll: true });
+  if (focusText) {
+    elements.cue_text.focus({ preventScroll: true });
+  } else {
+    document.querySelector<HTMLButtonElement>(
+      `.cue-block[data-id="${CSS.escape(cue.id)}"] .cue-block-body`
+    )?.focus({ preventScroll: true });
+  }
   scheduleSave();
 }
 
@@ -18447,16 +18454,11 @@ async function cleanupCompletedExportSessionCaches(
 }
 
 async function exportVideo(
-  exportKind: ExportKind = "main",
-  {
-    preparedDirectoryHandle,
-    destinationSelectionHandled = false,
-    outputTitle = ""
-  }: {
-    preparedDirectoryHandle?: FileSystemDirectoryHandle | null;
-    destinationSelectionHandled?: boolean;
-    outputTitle?: string;
-  } = {}
+  exportKind: ExportKind,
+  { directoryHandle, outputTitle }: {
+    directoryHandle: FileSystemDirectoryHandle;
+    outputTitle: string;
+  }
 ) {
   const isShortForm = exportKind === "short-form";
   if (!mediaFile) {
@@ -18498,7 +18500,6 @@ async function exportVideo(
 
   lockProjectMutations();
   try {
-    let safetyDraftSaved = false;
     const saveSafetyDraft = async () => {
       try {
         await queueLocalDraftOperation(async () => {
@@ -18506,7 +18507,6 @@ async function exportVideo(
           await flushSave();
           await waitForProjectSaves();
         });
-        safetyDraftSaved = true;
         return true;
       } catch (error: unknown) {
         showToast(
@@ -18518,38 +18518,6 @@ async function exportVideo(
       }
     };
 
-    let directoryHandle = preparedDirectoryHandle ?? null;
-    if (
-      !destinationSelectionHandled
-      && typeof window.showDirectoryPicker === "function"
-    ) {
-      try {
-        // This must be the first awaited browser API after the click. Large
-        // media probes can outlive Chromium's transient user activation.
-        directoryHandle = await window.showDirectoryPicker({
-          id: "chzzk-kirinuki-export",
-          mode: "readwrite"
-        });
-      } catch (error: unknown) {
-        if (errorName(error) === "AbortError") {
-          return;
-        }
-        showToast(
-          `저장 폴더를 열지 못했습니다: ${errorDetails(error)}`,
-          "error",
-          0
-        );
-        return;
-      }
-    }
-    if (!directoryHandle) {
-      showToast(
-        "이 브라우저는 영상과 편집 복원 파일을 같은 폴더에 안전하게 저장하는 기능을 지원하지 않습니다. Chromium 기반 최신 브라우저에서 다시 시도해 주세요.",
-        "error",
-        0
-      );
-      return;
-    }
     await cancelAndWaitForShortPreviewCacheOperation();
     if (!await saveSafetyDraft()) {
       return;
@@ -18660,10 +18628,6 @@ async function exportVideo(
       return;
     }
 
-    if (!safetyDraftSaved && !await saveSafetyDraft()) {
-      return;
-    }
-
     let sidecars: ExportSidecar[];
     try {
       sidecars = await createSidecars(
@@ -18721,6 +18685,7 @@ async function exportVideo(
       );
       const result = await renderProjectVideo(exportMediaFile, renderProject, {
         fileHandle: handle,
+        outputProfile: profile,
         layout: renderLayout,
         signal: controller.signal,
         resolveImageAsset: (source) => loadImageAssetBlob(exportProject.id, source.value),
@@ -18794,6 +18759,14 @@ async function exportVideo(
         const sidecarBytes = verifiedOutput.sidecars.reduce(
           (sum, sidecar) => sum + sidecar.sizeBytes,
           0
+        );
+        elements.export_receipt_folder.textContent = directoryHandle.name;
+        elements.export_receipt_files.replaceChildren(
+          ...[videoName, ...verifiedOutput.sidecars.map(({ name }) => name)].map((name) => {
+            const item = document.createElement("li");
+            item.textContent = name;
+            return item;
+          })
         );
         const shouldCleanup = await askExportSessionCleanup([
           isShortForm ? "쇼츠 영상" : "영상",
@@ -19034,16 +19007,17 @@ async function exportVideoWithLock(
     );
     return;
   }
+  const confirmedFingerprint = pendingExportOptionsProjectFingerprint;
   exportRequestPending = true;
   try {
-    let preparedDirectoryHandle: FileSystemDirectoryHandle | null = null;
-    const destinationSelectionHandled = true;
+    let directoryHandle: FileSystemDirectoryHandle;
     try {
       // Keep this as the first awaited browser API in the confirm-click
       // chain. Waiting for Web Locks first would consume user activation.
-      preparedDirectoryHandle = await window.showDirectoryPicker({
+      directoryHandle = await window.showDirectoryPicker({
         id: "chzzk-kirinuki-export",
-        mode: "readwrite"
+        mode: "readwrite",
+        startIn: "downloads"
       });
     } catch (error: unknown) {
       if (errorName(error) === "AbortError") {
@@ -19056,13 +19030,17 @@ async function exportVideoWithLock(
       );
       return;
     }
-    const options = {
-      preparedDirectoryHandle,
-      destinationSelectionHandled,
-      outputTitle
+    const startConfirmedExport = () => {
+      if (!elements.export_options_dialog.open || pendingExportOptionsKind !== exportKind
+        || confirmedFingerprint !== pendingExportOptionsProjectFingerprint
+        || !exportOptionsAreCurrent(exportKind)) {
+        return;
+      }
+      closeExportOptionsDialog();
+      return exportVideo(exportKind, { directoryHandle, outputTitle });
     };
     if (!navigator.locks?.request) {
-      return await exportVideo(exportKind, options);
+      return await startConfirmedExport();
     }
     return await navigator.locks.request(
       EXPORT_LOCK_NAME,
@@ -19076,11 +19054,12 @@ async function exportVideoWithLock(
           );
           return;
         }
-        return exportVideo(exportKind, options);
+        return startConfirmedExport();
       }
     );
   } finally {
     exportRequestPending = false;
+    renderHeader();
   }
 }
 
@@ -19111,7 +19090,26 @@ function exportOptionsProjectFingerprint(exportKind: ExportKind): string {
   );
 }
 
+function exportOptionsAreCurrent(exportKind: ExportKind): boolean {
+  const currentFingerprint = exportOptionsProjectFingerprint(exportKind);
+  if (currentFingerprint === pendingExportOptionsProjectFingerprint) return true;
+  pendingExportOptionsProjectFingerprint = currentFingerprint;
+  renderExportOptionsPreflight(exportKind);
+  showToast(
+    "내보내기 설정을 연 뒤 편집 상태가 바뀌어 검사를 갱신했습니다. 내용을 확인하고 한 번 더 눌러 주세요."
+  );
+  return false;
+}
+
 function renderExportOptionsPreflight(exportKind: ExportKind): void {
+  elements.download_export_captions.hidden = !hasExportCaptions();
+  const canChooseFolder = typeof window.showDirectoryPicker === "function";
+  const videoReady = canRenderExportVideo();
+  elements.export_video_unavailable.hidden = videoReady && canChooseFolder;
+  elements.export_video_unavailable.textContent = canChooseFolder
+    ? "영상을 함께 저장하려면 편집할 영상과 구간을 먼저 준비해 주세요."
+    : "이 브라우저는 영상과 편집 복원 파일을 같은 폴더에 안전하게 저장하는 기능을 지원하지 않습니다. Chromium 기반 최신 브라우저에서 다시 시도해 주세요.";
+  renderExportOutputTitle();
   const edgeFindings = exportKind === "short-form"
     ? detectShortFormCompositeCanvasGaps(project.shortForm)
     : [];
@@ -19145,28 +19143,23 @@ function renderExportOutputTitle(): string | null {
   const rawTitle = elements.export_file_title.value.normalize("NFKC").trim();
   const valid = rawTitle.length > 0;
   elements.export_file_title.setAttribute("aria-invalid", String(!valid));
-  elements.confirm_export_options.disabled = !valid;
+  elements.confirm_export_options.disabled = !valid || !elements.export_video_unavailable.hidden;
+  elements.download_export_captions.disabled = !valid;
   if (!valid) {
     elements.export_file_name_preview.textContent = "내보낼 파일 이름을 먼저 정해 주세요.";
     return null;
   }
   const safeTitle = sanitizeFileName(rawTitle);
-  const videoTitle = document.createElement("span");
-  videoTitle.dataset.kirinukiUiCopyIgnore = "";
-  videoTitle.textContent = safeTitle;
-  const recoveryTitle = document.createElement("span");
-  recoveryTitle.dataset.kirinukiUiCopyIgnore = "";
-  recoveryTitle.textContent = safeTitle;
-  elements.export_file_name_preview.replaceChildren(
-    document.createTextNode("저장 파일: "),
-    videoTitle,
-    document.createTextNode(".(영상 형식) · "),
-    recoveryTitle,
-    document.createTextNode(".kirinuki-session.json"),
-    document.createTextNode(
-      " · 자막이 있으면 같은 이름의 SRT (중복 이름은 번호를 붙여 보존)"
-    )
-  );
+  const suffixes = elements.export_video_unavailable.hidden
+    ? [".mp4 / .webm", ".kirinuki-session.json"]
+    : [];
+  if (!elements.download_export_captions.hidden) suffixes.push(".ko.srt");
+  elements.export_file_name_preview.replaceChildren(...suffixes.map((suffix) => {
+    const filename = document.createElement("span");
+    filename.dataset.kirinukiUiCopyIgnore = "";
+    filename.textContent = safeTitle + suffix;
+    return filename;
+  }));
   return safeTitle;
 }
 
@@ -19176,6 +19169,8 @@ function resolveExportCleanupDialog(shouldDelete: boolean): void {
   if (elements.cleanup_after_export_dialog.open) {
     elements.cleanup_after_export_dialog.close();
   }
+  elements.export_receipt_folder.textContent = "";
+  elements.export_receipt_files.replaceChildren();
   resolve?.(shouldDelete);
 }
 
@@ -19210,7 +19205,6 @@ function openExportOptionsDialog(exportKind: ExportKind): void {
   );
   focusBeforeExportOptions = document.activeElement as HTMLElement | null;
   elements.export_file_title.value = suggestedExportOutputTitle(exportKind);
-  renderExportOutputTitle();
   renderExportOptionsPreflight(exportKind);
   if (!elements.export_options_dialog.open) {
     elements.export_options_dialog.showModal();
@@ -20288,17 +20282,22 @@ function bindActions() {
       showToast("출력 영상 제목을 입력해 주세요.", "error");
       return;
     }
-    const currentFingerprint = exportOptionsProjectFingerprint(exportKind);
-    if (currentFingerprint !== pendingExportOptionsProjectFingerprint) {
-      pendingExportOptionsProjectFingerprint = currentFingerprint;
-      renderExportOptionsPreflight(exportKind);
-      showToast(
-        "내보내기 설정을 연 뒤 편집 상태가 바뀌어 검사를 갱신했습니다. 내용을 확인하고 한 번 더 눌러 주세요."
-      );
-      return;
-    }
-    closeExportOptionsDialog();
+    if (!exportOptionsAreCurrent(exportKind)) return;
     void exportVideoWithLock(exportKind, outputTitle);
+  });
+  elements.download_export_captions.addEventListener("click", () => {
+    const exportKind = pendingExportOptionsKind;
+    if (!exportKind || exportRequestPending || !exportOptionsAreCurrent(exportKind)) return;
+    try {
+      requireActiveUsagePolicySession();
+      const title = renderExportOutputTitle();
+      const srt = serializeSrt(project);
+      if (title && srt) {
+        downloadBlob(new Blob([srt], { type: "application/x-subrip;charset=utf-8" }), `${title}.ko.srt`);
+      }
+    } catch (error: unknown) {
+      showToast(errorMessage(error), "error", 0);
+    }
   });
   elements.keep_export_session_cache_icon.addEventListener(
     "click",
@@ -20550,7 +20549,7 @@ function bindActions() {
     renderPropertyInspector();
     void renderImageAssetOverlays();
     renderSubtitleOverlay();
-    revealSelectedPropertyEditor();
+    resetPropertyInspectorScroll();
   });
   elements.asset_mode_tab.addEventListener("click", () => {
     propertyInspectorMode = "asset";
@@ -21131,25 +21130,24 @@ function bindActions() {
       elements.next_review_cue.focus({ preventScroll: true });
     }
   });
-  captionInspectorTab.addEventListener("click", () => {
-    inspectorMode = "selected";
-    renderCueInspector();
-  });
-  elements.cue_list_tab.addEventListener("click", () => {
-    inspectorMode = "list";
-    renderCueInspector();
-  });
-  for (const tab of [captionInspectorTab, elements.cue_list_tab]) {
+  for (const [index, { mode, tab }] of captionViews.entries()) {
+    tab.addEventListener("click", () => {
+      inspectorMode = mode;
+      renderCueInspector();
+    });
     tab.addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-        return;
-      }
+      const count = captionViews.length;
+      const nextIndex = {
+        ArrowLeft: (index + count - 1) % count,
+        ArrowRight: (index + 1) % count,
+        Home: 0,
+        End: count - 1
+      }[event.key];
+      if (nextIndex === undefined) return;
       event.preventDefault();
-      const next = event.key === "ArrowLeft" || event.key === "Home"
-        ? captionInspectorTab
-        : elements.cue_list_tab;
-      next.click();
-      next.focus();
+      const nextTab = captionViews[nextIndex]!.tab;
+      nextTab.click();
+      nextTab.focus();
     });
   }
 
@@ -21345,15 +21343,25 @@ function bindActions() {
         });
     }
   });
-  const selectAdjacentCueInLane = (direction: -1 | 1) => {
+  const selectAdjacentCueInLane = (direction: -1 | 1, focusText = false) => {
     const cue = selectedCue();
     const adjacentCue = cue
       ? adjacentSubtitleCueInLane(project, cue.id, direction)
       : null;
     if (adjacentCue) {
-      selectCue(adjacentCue.id, { seek: true });
+      // Finish the current undo group before rendering the next cue's text.
+      if (focusText) elements.cue_text.blur();
+      selectCue(adjacentCue.id, { seek: true, focusText });
     }
   };
+  elements.cue_text.addEventListener("keydown", (event) => {
+    if (
+      event.key !== "Enter" || !(event.ctrlKey || event.metaKey)
+      || event.altKey || event.isComposing || event.keyCode === 229
+    ) return;
+    event.preventDefault();
+    if (!event.repeat) selectAdjacentCueInLane(event.shiftKey ? -1 : 1, true);
+  });
   elements.previous_cue_in_lane.addEventListener("click", () => {
     selectAdjacentCueInLane(-1);
   });

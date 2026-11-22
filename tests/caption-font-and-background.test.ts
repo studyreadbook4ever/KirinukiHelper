@@ -18,7 +18,7 @@ import { editorKeyboardShortcutBinding } from "../src/lib/keyboard-shortcuts.js"
 import { translateUiCopy } from "../src/lib/ui-localization.js";
 import { EDITOR_STATIC_UI_COPY } from "../src/editor/ui-copy-static.js";
 import { EDITOR_RUNTIME_UI_COPY, EDITOR_RUNTIME_UI_COPY_PATTERNS } from "../src/editor/ui-copy-runtime.js";
-import { ADDITIONAL_CAPTION_FONTS } from "../scripts/additional-caption-fonts.js";
+import { ADDITIONAL_CAPTION_FONTS } from "../src/lib/bundled-caption-fonts.js";
 import { WEB_PACKAGE_FILES } from "../scripts/web-package-files.js";
 import { createCaptionPropertiesSheet } from "../src/lib/caption-properties-sheet.js";
 

@@ -1,3 +1,5 @@
+import { ADDITIONAL_CAPTION_FONTS } from "./bundled-caption-fonts.js";
+
 const deepFreeze = <T>(value: T): Readonly<T> => {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) {
     return value;
@@ -11,40 +13,28 @@ export const BLACK_BOX_CAPTION_STYLE_PRESET_ID = "kr-vtuber-black-box-v1";
 export const PAPERLOGY_CAPTION_STYLE_PRESET_ID = "kr-vtuber-paperlogy-v1";
 export const LEGACY_CAPTION_STYLE_PRESET_ID = "pretendard-legacy-v1";
 
+type BundledFont = typeof ADDITIONAL_CAPTION_FONTS[number];
+
+function captionFontMetadata(font: BundledFont) {
+  return {
+    id: font.id,
+    family: font.family,
+    displayName: font.family,
+    weight: font.weight,
+    version: font.version,
+    file: `fonts/${font.file}`,
+    license: "SIL Open Font License 1.1",
+    licenseFile: `../${font.webLicensePath}`,
+    upstream: font.upstreamUrl
+  };
+}
+
+const bundledFonts = Object.fromEntries(
+  ADDITIONAL_CAPTION_FONTS.map((font) => [font.id, captionFontMetadata(font)])
+) as Record<BundledFont["id"], ReturnType<typeof captionFontMetadata>>;
+
 export const CAPTION_FONT_REGISTRY = deepFreeze({
-  dohyeon: {
-    id: "dohyeon",
-    family: "Do Hyeon",
-    displayName: "Do Hyeon",
-    weight: 400,
-    version: "Version 1.001",
-    file: "fonts/DoHyeon-Regular.ttf",
-    license: "SIL Open Font License 1.1",
-    licenseFile: "../licenses/DOHYEON-OFL-1.1.txt",
-    upstream: "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/dohyeon"
-  },
-  jua: {
-    id: "jua",
-    family: "Jua",
-    displayName: "Jua",
-    weight: 400,
-    version: "Version 1.001",
-    file: "fonts/Jua-Regular.ttf",
-    license: "SIL Open Font License 1.1",
-    licenseFile: "../licenses/JUA-OFL-1.1.txt",
-    upstream: "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/jua"
-  },
-  nanummyeongjo: {
-    id: "nanummyeongjo",
-    family: "Nanum Myeongjo",
-    displayName: "Nanum Myeongjo",
-    weight: 800,
-    version: "Version 2.032;PS 1;hotconv 1.0.56;makeotf.lib2.0.21325",
-    file: "fonts/NanumMyeongjo-ExtraBold.ttf",
-    license: "SIL Open Font License 1.1",
-    licenseFile: "../licenses/NANUMMYEONGJO-OFL-1.1.txt",
-    upstream: "https://github.com/google/fonts/tree/c30b221beb0c1da59d563feb91ec8656a1fa972a/ofl/nanummyeongjo"
-  },
+  ...bundledFonts,
   paperlogy: {
     id: "paperlogy",
     family: "Paperlogy",

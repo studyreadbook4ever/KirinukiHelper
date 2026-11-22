@@ -1,4 +1,4 @@
-import { ADDITIONAL_CAPTION_FONTS } from "./additional-caption-fonts.js";
+import { ADDITIONAL_CAPTION_FONTS } from "../src/lib/bundled-caption-fonts.js";
 import { WEB_JAVASCRIPT_PATHS } from "./web-javascript-build.js";
 
 export const WEB_PACKAGE_FILES = Object.freeze([

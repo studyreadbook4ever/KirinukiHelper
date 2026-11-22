@@ -45,6 +45,7 @@ const translatedAttributes = [
   "aria-valuetext",
   "alt",
   "data-label",
+  "label",
   "title",
   "placeholder"
 ] as const;

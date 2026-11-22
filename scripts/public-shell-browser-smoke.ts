@@ -2065,6 +2065,7 @@ async function main(): Promise<void> {
   const helperOffers = await execute<{
     readonly arch: boolean;
     readonly deb: boolean;
+    readonly recoveryMatches: boolean;
   }>(`
     const helper = document.querySelector("#linux-helper-download");
     const arch = document.querySelector("#arch-helper-download");
@@ -2072,12 +2073,17 @@ async function main(): Promise<void> {
       throw new Error("상단 Linux 영상 준비 도우미 요소가 없습니다.");
     }
     return {
+      recoveryMatches: [[helper, "#recovery-helper-download"], [arch, "#recovery-arch-download"]].every(([link, selector]) => {
+        const recovery = document.querySelector(selector);
+        return recovery instanceof HTMLAnchorElement && recovery.hidden === link.hidden
+          && recovery.href === link.href && recovery.download === link.download;
+      }),
       deb: !helper.hidden && helper.href.endsWith(".deb") && helper.href.includes("/releases/download/"),
       arch: !arch.hidden && arch.href.endsWith(".pkg.tar.zst") && arch.href.includes("/releases/download/")
     };
   `);
   assert(
-    helperOffers.deb === helperOffers.arch,
+    helperOffers.deb === helperOffers.arch && helperOffers.recoveryMatches,
     `Linux preview의 deb/Arch 다운로드 노출이 서로 다릅니다: ${JSON.stringify(helperOffers)}`
   );
   if (helperOffers.deb) {
@@ -2094,20 +2100,10 @@ async function main(): Promise<void> {
     return true;
     `);
     await waitFor(
-      () => execute<{
-        readonly busy: string;
-        readonly label: string;
-      }>(`
-        const helper = document.querySelector("#linux-helper-download");
-        return {
-          busy: helper?.getAttribute("aria-busy") || "",
-          label: helper?.textContent?.trim() || ""
-        };
+      () => execute<string>(`
+        return document.querySelector("#helper-download-status")?.textContent?.trim() || "";
       `),
-      (value) => (
-        value.busy === ""
-          && value.label === "Debian/Ubuntu 도우미 연결됨"
-      ),
+      (status) => status === "영상 준비 도우미 연결됨",
       "상단 도우미 다운로드 후 같은 화면이 연결 상태를 확인하지 못했습니다."
     );
   }
@@ -2450,7 +2446,13 @@ async function main(): Promise<void> {
       }
     };
     window.__kirinukiSemanticExportDirectory = directory;
-    window.showDirectoryPicker = async () => directory;
+    let folderRequests = 0;
+    window.showDirectoryPicker = async ({ startIn }) => {
+      folderRequests++;
+      if (startIn !== "downloads") throw new Error("Unexpected initial export folder");
+      if (folderRequests === 1) throw new DOMException("canceled", "AbortError");
+      return directory;
+    };
 
     const addCue = document.querySelector("#add-cue");
     if (!(addCue instanceof HTMLButtonElement) || addCue.disabled) {
@@ -2481,6 +2483,37 @@ async function main(): Promise<void> {
     if (confirm.disabled) {
       throw new Error("실사용 내보내기 확인이 비활성화됐습니다.");
     }
+    const captions = document.querySelector("#download-export-captions");
+    const dialog = document.querySelector("#export-options-dialog");
+    if (!(captions instanceof HTMLButtonElement) || captions.disabled || captions.hidden) {
+      throw new Error("Standalone caption download is unavailable");
+    }
+    const createUrl = URL.createObjectURL;
+    const clickLink = HTMLAnchorElement.prototype.click;
+    let standaloneSrt;
+    let downloadName;
+    URL.createObjectURL = (blob) => {
+      if (blob.type.startsWith("application/x-subrip")) standaloneSrt = blob.text();
+      return createUrl.call(URL, blob);
+    };
+    HTMLAnchorElement.prototype.click = function () { downloadName = this.download; };
+    try {
+      captions.click();
+    } finally {
+      URL.createObjectURL = createUrl;
+      HTMLAnchorElement.prototype.click = clickLink;
+    }
+    if (!(await standaloneSrt)?.includes("Kirinuki 실사용 검증 자막") || folderRequests !== 0
+      || downloadName !== "Kirinuki 실사용 검증.ko.srt" || files.size !== 0 || !dialog.open) {
+      throw new Error("Standalone captions must be available before folder selection or video rendering");
+    }
+    window.__kirinukiStandaloneSrt = await standaloneSrt;
+    confirm.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (!dialog.open || title.value !== "Kirinuki 실사용 검증" || confirm.disabled
+      || folderRequests !== 1 || files.size !== 0) {
+      throw new Error("Canceling folder selection must preserve the export title for retry");
+    }
     confirm.click();
     return true;
   `);
@@ -2493,6 +2526,7 @@ async function main(): Promise<void> {
         readonly text: string;
       }[];
       readonly jobHidden: boolean;
+      readonly receiptMatches: boolean;
       readonly summary: string;
       readonly toast: string;
     }>(`
@@ -2512,6 +2546,12 @@ async function main(): Promise<void> {
       return {
         cleanupOpen: cleanup instanceof HTMLDialogElement && cleanup.open,
         files: entries,
+        receiptMatches:
+          document.querySelector("#export-receipt-folder")?.textContent === directory.name
+          && [...document.querySelectorAll("#export-receipt-files li")].length === entries.length
+          && entries.every((entry) => [...document.querySelectorAll("#export-receipt-files li")]
+            .some((item) => item.textContent === entry.name))
+          && entries.some((entry) => entry.name.endsWith(".srt") && entry.text === window.__kirinukiStandaloneSrt),
         jobHidden: job instanceof HTMLDialogElement && job.hidden && !job.open,
         summary: document.querySelector("#cleanup-after-export-summary")?.textContent?.trim() || "",
         toast: document.querySelector("#toast")?.textContent?.trim() || ""
@@ -2519,6 +2559,7 @@ async function main(): Promise<void> {
     `),
     (value) => (
       value.cleanupOpen
+        && value.receiptMatches
         && value.jobHidden
         && value.files.length === 3
         && value.files.some(({ name, size }) => (

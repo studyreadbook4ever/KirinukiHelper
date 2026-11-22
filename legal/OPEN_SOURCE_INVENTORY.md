@@ -37,6 +37,14 @@
 | `jua` | Jua | Version 1.001 · OFL-1.1 | 고정 TTF와 OFL 원문 |
 <!-- attribution-id: nanummyeongjo -->
 | `nanummyeongjo` | Nanum Myeongjo | Version 2.032;PS 1;hotconv 1.0.56;makeotf.lib2.0.21325 · OFL-1.1 | 고정 TTF와 OFL 원문 |
+<!-- attribution-id: blackhansans -->
+| `blackhansans` | Black Han Sans | Version 1.001 · OFL-1.1 | 고정 TTF와 OFL 원문 |
+<!-- attribution-id: gaegu -->
+| `gaegu` | Gaegu | Version 1.00 · OFL-1.1 | 고정 TTF와 OFL 원문 |
+<!-- attribution-id: gugi -->
+| `gugi` | Gugi | Version 3.00 · OFL-1.1 | 고정 TTF와 OFL 원문 |
+<!-- attribution-id: eastseadokdo -->
+| `eastseadokdo` | East Sea Dokdo | Version 1.00 · OFL-1.1 | 고정 TTF와 OFL 원문 |
 
 정확한 크기·SHA-256·대응 소스는
 [`WEB_THIRD_PARTY_NOTICES.md`](WEB_THIRD_PARTY_NOTICES.md)에 있습니다. 웹 ZIP은

@@ -1,3 +1,4 @@
+import { downloadBlob, sanitizeFileName } from "../lib/browser-download.js";
 import {
   captureSegmentEditorClipId,
   normalizeEditorProject,
@@ -214,6 +215,9 @@ const elements = {
   archHelperDownload: requiredElement<HTMLAnchorElement>(
     "#arch-helper-download"
   ),
+  recoveryHelperDownload: requiredElement<HTMLAnchorElement>("#recovery-helper-download"),
+  recoveryArchDownload: requiredElement<HTMLAnchorElement>("#recovery-arch-download"),
+  helperDownloadStatus: requiredElement<HTMLElement>("#helper-download-status"),
   sourceUrl: requiredElement<HTMLInputElement>("#source-url"),
   sourcePlatform: requiredElement<HTMLElement>("#source-platform"),
   openSource: requiredElement<HTMLButtonElement>("#open-source"),
@@ -303,7 +307,7 @@ const elements = {
   cutPreparationRetry: requiredElement<HTMLButtonElement>(
     "#cut-preparation-retry"
   ),
-  cutPreparationDownload: requiredElement<HTMLButtonElement>(
+  cutPreparationDownload: requiredElement<HTMLElement>(
     "#cut-preparation-download"
   ),
   cutPreparationManual: requiredElement<HTMLButtonElement>(
@@ -426,42 +430,18 @@ let localVodPlaybackConnectPromise:
   Promise<LocalVodWebPlaybackController | null> | null = null;
 let streamTimelineInteracting = false;
 
-let helperDownloadIdleLabel = "내 PC용 도우미 다운로드";
-let helperDownloadReadyLabel = "영상 준비 도우미 연결됨";
-const ARCH_HELPER_DOWNLOAD_IDLE_LABEL =
-  "Arch Linux 도우미 (.pkg.tar.zst)";
-
-function renderHelperDownloadLabels(state: "idle" | "checking" | "ready"): void {
-  if (state === "ready") {
-    elements.helperDownload.textContent = helperDownloadReadyLabel;
-    elements.archHelperDownload.textContent = "Arch Linux 도우미 연결됨";
-    return;
-  }
-  if (state === "checking") {
-    elements.helperDownload.textContent =
-      "다운로드 요청됨 · 설치 후 연결 확인";
-    elements.archHelperDownload.textContent =
-      "다운로드 요청됨 · 설치 후 연결 확인";
-    return;
-  }
-  elements.helperDownload.textContent = helperDownloadIdleLabel;
-  elements.archHelperDownload.textContent = ARCH_HELPER_DOWNLOAD_IDLE_LABEL;
-}
-
 async function monitorHelperDownloadConnection(): Promise<void> {
   if (helperDownloadConnectionPending) {
     return;
   }
   helperDownloadConnectionPending = true;
-  elements.helperDownload.ariaBusy = "true";
-  elements.archHelperDownload.ariaBusy = "true";
-  renderHelperDownloadLabels("checking");
+  elements.helperDownloadStatus.textContent = "다운로드 요청됨 · 설치 후 연결 확인";
   try {
     const readiness = await ensureLocalMediaEngineReady(undefined, {
       beginInstallPolling: true
     });
     if (readiness === "ready") {
-      renderHelperDownloadLabels("ready");
+      elements.helperDownloadStatus.textContent = "영상 준비 도우미 연결됨";
       elements.streamCutStatus.textContent = activeStreamPlatform
         ? activeStreamPlatform === SOURCE_PLATFORM_YOUTUBE
           ? "도우미도 연결됐습니다. YouTube 컷 제어는 이 웹 플레이어에서 바로 동작합니다."
@@ -469,17 +449,15 @@ async function monitorHelperDownloadConnection(): Promise<void> {
         : "영상 준비 도우미가 연결됐습니다. VOD 주소를 붙여 넣어 컷을 선택하세요.";
       return;
     }
-    renderHelperDownloadLabels("idle");
+    elements.helperDownloadStatus.textContent = "";
   } catch (error) {
-    renderHelperDownloadLabels("idle");
+    elements.helperDownloadStatus.textContent = "";
     if (!(error instanceof DOMException && error.name === "AbortError")) {
       elements.streamCutStatus.textContent =
         `도우미 연결을 확인하지 못했습니다: ${errorMessage(error)}`;
     }
   } finally {
     helperDownloadConnectionPending = false;
-    elements.helperDownload.removeAttribute("aria-busy");
-    elements.archHelperDownload.removeAttribute("aria-busy");
   }
 }
 
@@ -489,36 +467,24 @@ async function configureHelperDownload(): Promise<void> {
   const archInstaller = target === "linux-x64"
     ? localMediaEngineArchInstaller()
     : null;
-  if (!installer) {
-    elements.helperDownload.hidden = true;
-    elements.helperDownload.removeAttribute("href");
-    elements.helperDownload.removeAttribute("download");
-  } else {
-    helperDownloadIdleLabel = installer.label;
-    helperDownloadReadyLabel = target === "windows-x64"
-      ? "Windows 도우미 연결됨"
-      : "Debian/Ubuntu 도우미 연결됨";
-    renderHelperDownloadLabels("idle");
-    elements.helperDownload.href = installer.url;
-    elements.helperDownload.download = installer.fileName;
-    elements.helperDownload.hidden = false;
+  for (const [offer, links] of [
+    [installer, [elements.helperDownload, elements.recoveryHelperDownload]],
+    [archInstaller, [elements.archHelperDownload, elements.recoveryArchDownload]]
+  ] as const) {
+    for (const link of links) {
+      link.hidden = !offer;
+      if (offer) {
+        link.href = offer.url;
+        link.download = offer.fileName;
+        link.textContent = offer.label;
+        link.addEventListener("click", () => {
+          window.setTimeout(() => void monitorHelperDownloadConnection(), 0);
+        });
+      } else {
+        link.removeAttribute("href");
+      }
+    }
   }
-  if (!archInstaller) {
-    elements.archHelperDownload.hidden = true;
-    elements.archHelperDownload.removeAttribute("href");
-    elements.archHelperDownload.removeAttribute("download");
-  } else {
-    elements.archHelperDownload.href = archInstaller.url;
-    elements.archHelperDownload.download = archInstaller.fileName;
-    elements.archHelperDownload.hidden = false;
-  }
-  const monitor = () => {
-    window.setTimeout(() => {
-      void monitorHelperDownloadConnection();
-    }, 0);
-  };
-  elements.helperDownload.addEventListener("click", monitor);
-  elements.archHelperDownload.addEventListener("click", monitor);
 }
 
 function explainMobileEditorBlock(): void {
@@ -1245,48 +1211,12 @@ function setCaptureBackupStatus(
   elements.captureBackupStatus.classList.toggle("success", kind === "success");
 }
 
-function sanitizeCaptureBackupFileStem(value: string): string {
-  let cleaned = String(value || "kirinuki")
-    .normalize("NFKC")
-    .replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu, "")
-    .replace(/[\\/:*?"<>|\u0000-\u001f\u007f-\u009f]/gu, "-")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .replace(/^[.\s-]+|[.\s-]+$/gu, "")
-    .slice(0, 80)
-    .replace(/[.\s]+$/gu, "");
-  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9]|conin\$|conout\$)(?:[.\s]|$)/iu.test(cleaned)) {
-    cleaned = `safe-${cleaned.slice(0, 75).replace(/[.\s]+$/gu, "")}`;
-  }
-  return cleaned || "kirinuki";
-}
-
 function captureBackupFileName(projectName: string, createdAt: string): string {
   const iso = new Date(createdAt).toISOString();
   const timestamp = `${iso.slice(0, 10).replace(/-/gu, "")}-${iso
     .slice(11, 19)
     .replace(/:/gu, "")}Z`;
-  return `${sanitizeCaptureBackupFileStem(projectName)}-컷백업-${timestamp}.kirinuki-session.json`;
-}
-
-function startCaptureBackupDownload(
-  json: string,
-  fileName: string
-): void {
-  const objectUrl = URL.createObjectURL(new Blob([json], {
-    type: "application/json;charset=utf-8"
-  }));
-  const download = document.createElement("a");
-  download.href = objectUrl;
-  download.download = fileName;
-  download.hidden = true;
-  document.body.append(download);
-  try {
-    download.click();
-  } finally {
-    download.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
-  }
+  return `${sanitizeFileName(projectName)}-컷백업-${timestamp}.kirinuki-session.json`;
 }
 
 async function exportCurrentCaptureSessionArchive(): Promise<void> {
@@ -1306,8 +1236,8 @@ async function exportCurrentCaptureSessionArchive(): Promise<void> {
       projectId: createFreshEditorProjectId(),
       createdAt
     });
-    startCaptureBackupDownload(
-      json,
+    downloadBlob(
+      new Blob([json], { type: "application/json;charset=utf-8" }),
       captureBackupFileName(projectName, createdAt)
     );
     setCaptureBackupStatus(
@@ -3424,12 +3354,6 @@ elements.cutPreparationRetry.addEventListener("click", () => {
     elements.startEditor.click();
   });
 });
-elements.cutPreparationDownload.addEventListener("click", () => {
-  const download = !elements.archHelperDownload.hidden
-    ? elements.archHelperDownload
-    : elements.helperDownload;
-  download.click();
-});
 elements.cutPreparationManual.addEventListener("click", () => {
   forceManualFileForNextPreparation = true;
   elements.cutPreparationRecovery.hidden = true;
@@ -3444,10 +3368,7 @@ window.addEventListener(UI_LANGUAGE_CHANGE_EVENT, () => {
 
 renderMobileEditorAccess();
 void configureHelperDownload().catch(() => {
-  elements.helperDownload.hidden = true;
-  elements.helperDownload.removeAttribute("href");
-  elements.archHelperDownload.hidden = true;
-  elements.archHelperDownload.removeAttribute("href");
+  // With no verified platform offer, all download links stay hidden.
 });
 addClipRow();
 installStudioCaptureConsole();

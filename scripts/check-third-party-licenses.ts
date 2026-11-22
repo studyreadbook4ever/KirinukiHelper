@@ -21,7 +21,7 @@ import {
   MINIMUM_VOD_NODE_VERSION,
   PINNED_YT_DLP
 } from "./local-vod-runtime-core.js";
-import { ADDITIONAL_CAPTION_FONTS } from "./additional-caption-fonts.js";
+import { ADDITIONAL_CAPTION_FONTS } from "../src/lib/bundled-caption-fonts.js";
 import { PAPERLOGY_FONT } from "./paperlogy-font.js";
 import { PRETENDARD_FONT } from "./pretendard-font.js";
 
@@ -555,6 +555,10 @@ const expectedAttributionIds = [
   "dohyeon",
   "jua",
   "nanummyeongjo",
+  "blackhansans",
+  "gaegu",
+  "gugi",
+  "eastseadokdo",
   "audseg",
   "whisper-cpp",
   "openai-whisper-models",
