@@ -3,7 +3,7 @@ import { copyFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ADDITIONAL_CAPTION_FONTS } from "./additional-caption-fonts.js";
+import { ADDITIONAL_CAPTION_FONTS } from "../src/lib/bundled-caption-fonts.js";
 import { PAPERLOGY_FONT } from "./paperlogy-font.js";
 import { PRETENDARD_FONT } from "./pretendard-font.js";
 import { buildWebJavaScript } from "./web-javascript-build.js";

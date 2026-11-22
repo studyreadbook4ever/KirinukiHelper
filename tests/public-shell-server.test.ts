@@ -30,7 +30,8 @@ import {
   parsePublicShellHeaders,
   publicShellRequestPath,
   resolvePublicShellStaticAsset,
-  samePublicShellFileObjectIdentity
+  samePublicShellFileObjectIdentity,
+  validPublicDocumentLinks
 } from "../scripts/public-shell-server-core.js";
 import {
   PUBLIC_SHELL_BIND_ENV,
@@ -249,6 +250,7 @@ test("공개 웹 request target은 allowlist의 전체 앱 파일만 허용한�
     "/studio.js?v=3.0.1",
     "/editor/editor.css?v=3.0.1",
     "/editor/editor.js?v=3.0.1",
+    "/agents.md",
     "/THIRD_PARTY_NOTICES.md",
     "/licenses/UNLICENSE.txt"
   ]) {
@@ -282,6 +284,7 @@ test("공개 웹 request target은 allowlist의 전체 앱 파일만 허용한�
     "/editor.html?project=%GG",
     "/studio.css?",
     "/studio.css?v=03.0.1",
+    "/agents.md?source=fixture",
     "/studio.css?v=3.0.1&x=1",
     "/index.html#x",
     "/index.html\n"
@@ -292,12 +295,31 @@ test("공개 웹 request target은 allowlist의 전체 앱 파일만 허용한�
     "/_headers",
     "/.popovic-hosts",
     "/licenses/",
+    "/AGENTS.md",
+    "/web/agents.md",
     "/health",
     "/v1/health",
     "/extension/manifest.json",
     "/studio.css.map"
   ]) {
     assert.equal(resolvePublicShellStaticAsset(target), null, target);
+  }
+});
+
+test("both HTML documents discover the same canonical guide through passive links", async () => {
+  const discovery = '<link rel="help" type="text/markdown" href="/agents.md">';
+  for (const kind of ["index", "editor"] as const) {
+    const html = await readFile(new URL(`${kind}.html`, repositoryWeb), "utf8");
+    assert.ok(validPublicDocumentLinks(html, kind));
+    for (const broken of [
+      html.replace(discovery, ""),
+      html.replace(discovery, discovery + discovery),
+      html.replace(discovery, discovery.replace('rel="help"', 'rel="preload"')),
+      html.replace(discovery, discovery.replace("/agents.md", "https://example.org/agents.md")),
+      html.replace(/(<a\b[^>]*? href=")\/agents\.md"/gu, '$1/AGENTS.md"')
+    ]) {
+      assert.equal(validPublicDocumentLinks(broken, kind), false);
+    }
   }
 });
 
@@ -371,6 +393,7 @@ test("공개 웹 서버는 GET·HEAD 앱 content와 모든 오류에 같은 보�
       "text/html; charset=utf-8"
     ],
     ["/index.html", "index.html", "text/html; charset=utf-8"],
+    ["/agents.md", "agents.md", "text/markdown; charset=utf-8"],
     ["/editor.html", "editor.html", "text/html; charset=utf-8"],
     [
       `/editor.html?project=project-123&usageGate=${"a".repeat(64)}`,

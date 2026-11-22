@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { CAPTION_AGENT_GUIDE_COPY, captionAgentBrief } from "../src/lib/caption-agent-guide.js";
+
 import {
   mergeUiCopyCatalogs,
   resolveUiLanguage,
@@ -370,5 +372,18 @@ test("컷 화면 HTML의 한국어 정적 UI 문구는 영어와 일본어가 �
       source,
       `Japanese cut-page copy is missing: ${source}`
     );
+  }
+});
+
+
+test("에이전트 지시문은 선택한 화면 언어와 같은 출처의 공개 안내서 주소만 사용한다", () => {
+  for (const language of ["ko", "en", "ja"] as const) {
+    const translate = (value: string) => translateUiCopy(value, language, CAPTION_AGENT_GUIDE_COPY);
+    const brief = captionAgentBrief("https://kirinuki.eff0rtchung.kr", translate);
+    const [instruction, url] = brief.split("\n");
+    assert.equal(url, "https://kirinuki.eff0rtchung.kr/agents.md");
+    assert.match(instruction || "", { ko: /먼저 읽고/u, en: /Before creating or editing captions, read/u, ja: /始める前に/u }[language]);
+    assert.equal(captionAgentBrief("https://kirinuki.eff0rtchung.kr/editor.html?project=private#media", translate), brief);
+    assert.match(captionAgentBrief("http://127.0.0.1:4320", translate), /\nhttp:\/\/127\.0\.0\.1:4320\/agents\.md$/u);
   }
 });

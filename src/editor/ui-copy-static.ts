@@ -1,3 +1,4 @@
+import { CAPTION_AGENT_GUIDE_COPY } from "../lib/caption-agent-guide.js";
 import type { UiCopyCatalog } from "../lib/ui-localization.js";
 
 /**
@@ -8,6 +9,8 @@ import type { UiCopyCatalog } from "../lib/ui-localization.js";
  * belongs in a separate catalog with typed interpolation patterns.
  */
 export const EDITOR_STATIC_UI_COPY = {
+  ...CAPTION_AGENT_GUIDE_COPY,
+  "를 먼저 읽도록 AI에 안내하세요.": { en: " — ask your agent to read this first.", ja: "を先に読むようAIに指示してください。" },
   "영상 영역 자르기": {"en": "Crop video area", "ja": "映像の領域を切り抜く"},
   "선택 컷 영상 자르기": {"en": "Crop selected clip", "ja": "選択クリップを切り抜く"},
   "원본 화면에서 남길 영역을 드래그하세요. 선택 영역을 기존 영상 틀 안에 맞춰 확대합니다. 컷의 시간·자막·이미지는 그대로 유지됩니다.": {"en": "Drag the area to keep in the source frame. The selected area is fitted inside the existing video frame. Clip timing, captions and images stay unchanged.", "ja": "元映像で残す領域をドラッグしてください。選択領域を既存の映像枠に収まるよう拡大します。クリップの時間・字幕・画像は維持されます。"},
@@ -26,6 +29,14 @@ export const EDITOR_STATIC_UI_COPY = {
   "도현체 · Do Hyeon": { en: "Do Hyeon", ja: "Do Hyeon" },
   "주아체 · Jua": { en: "Jua", ja: "Jua" },
   "나눔명조 · Nanum Myeongjo": { en: "Nanum Myeongjo", ja: "Nanum Myeongjo" },
+  "고딕·명조": { en: "Sans serif & serif", ja: "ゴシック・明朝" },
+  "제목·강조": { en: "Display & emphasis", ja: "見出し・強調" },
+  "손글씨": { en: "Handwriting", ja: "手書き" },
+  "오늘의 하이라이트": { en: "Today’s highlight", ja: "今日のハイライト" },
+  "검은고딕 · Black Han Sans": { en: "Black Han Sans", ja: "Black Han Sans" },
+  "구기 · Gugi": { en: "Gugi", ja: "Gugi" },
+  "개구쟁이 · Gaegu": { en: "Gaegu", ja: "Gaegu" },
+  "대한민국독도 · East Sea Dokdo": { en: "East Sea Dokdo", ja: "East Sea Dokdo" },
   "자막 글꼴": {"en": "Caption font", "ja": "字幕のフォント"},
   "현재 작업의 모든 자막에 적용합니다. 상업용 영상에도 사용할 수 있는 OFL 글꼴입니다.": {"en": "Applies to all captions in this workspace. OFL fonts may also be used in commercial videos.", "ja": "この作業内のすべての字幕に適用します。商用動画にも使用できるOFLフォントです。"},
   "선택 자막 흰 사각 배경": {"en": "White box for selected caption", "ja": "選択字幕の白いボックス"},
@@ -58,6 +69,10 @@ export const EDITOR_STATIC_UI_COPY = {
   "마지막으로 직접 저장한 뒤의 변경만 버립니다. 이번에 직접 저장하지 않았다면 열기 전 상태로 돌아갑니다.": { en: "Discard only changes since your last explicit save. If you have not saved this session, return to the state before opening.", ja: "最後に直接保存してからの変更だけを破棄します。今回まだ保存していない場合は、開く前の状態に戻ります。" },
   "탭을 닫으면 마지막으로 직접 저장한 상태는 남고, 그 이후 저장하지 않은 변경과 임시 복구본은 다음 시작 화면에서 정리됩니다.": { en: "Closing the tab keeps your last explicit save. Later unsaved changes and temporary recovery snapshots are cleaned up when you next return to Start.", ja: "タブを閉じても最後に直接保存した状態は残ります。その後の未保存の変更と一時復元データは次回のスタート画面で整理されます。" },
   "검수 필요 0개": { en: "0 captions need review", ja: "要確認の字幕 0 件" },
+  "공통 스타일": { en: "Shared style", ja: "共通スタイル" },
+  "입력 중 Ctrl/⌘ + Enter로 다음 자막, Shift를 함께 누르면 이전 자막으로 이동합니다.": { en: "While typing, use Ctrl/⌘ + Enter for the next caption. Add Shift for the previous one.", ja: "入力中に Ctrl/⌘ + Enter で次の字幕へ、Shift も押すと前の字幕へ移動します。" },
+  "타임라인에 추가": { en: "Add to timeline", ja: "タイムラインに追加" },
+  "타임라인 보기": { en: "Timeline view", ja: "タイムライン表示" },
   "다음 검수 자막": { en: "Next to Review", ja: "次の要確認字幕" },
   "모든 레인의 검수할 자막을 시간순으로 이동하며 마지막에서는 처음으로 돌아갑니다.": { en: "Visit captions needing review across all lanes in time order, wrapping to the first after the last.", ja: "すべてのレーンの要確認字幕を時間順に移動し、最後の次は最初に戻ります。" },
   "자막 문구 검색": { en: "Search Caption Text", ja: "字幕の文言を検索" },
@@ -314,6 +329,10 @@ export const EDITOR_STATIC_UI_COPY = {
   "선택한 버전 불러오기": { en: "Load Selected Version", ja: "選択した版を読み込む" },
   "영상과 다시 편집할 때 사용할 복원 파일을 함께 저장합니다. 원본 영상 자체는 복원 파일에 포함하지 않습니다.": { en: "Saves the video together with a recovery file for future editing. The source video itself is not included in the recovery file.", ja: "動画と、再編集に使用する復元ファイルを一緒に保存します。元の動画自体は復元ファイルに含まれません。" },
   "출력 영상 제목": { en: "Export Title", ja: "書き出し動画のタイトル" },
+  "자막만 받기 (.srt)": { en: "Download captions (.srt)", ja: "字幕のみダウンロード (.srt)" },
+  "저장 폴더": { en: "Saved to", ja: "保存先" },
+  "저장한 파일": { en: "Saved files", ja: "保存したファイル" },
+  "영상을 함께 저장하려면 편집할 영상과 구간을 먼저 준비해 주세요.": { en: "To save the video as well, prepare the editing media and ranges first.", ja: "動画も保存するには、先に編集用の映像と区間を準備してください。" },
   "내보낼 파일 이름을 먼저 정해 주세요.": { en: "Choose a filename before exporting.", ja: "書き出すファイル名を先に指定してください。" },
   "쇼츠 가장자리에 작은 검은 틈이 보일 수 있습니다.": { en: "Thin black gaps may appear along the edges of the Shorts frame.", ja: "ショート動画の端に細い黒い隙間が見える場合があります。" },
   "밀대 도구로 확인할 수 있습니다.": { en: "Use the gap-fix tool to inspect them.", ja: "隙間補正ツールで確認できます。" },

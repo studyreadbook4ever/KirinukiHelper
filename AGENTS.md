@@ -5,6 +5,8 @@
 실행하는 구조, 사용자가 직접 주소·포트·프로세스를 관리하는 흐름은 제품 계약이
 아니다.
 
+실제 사이트에서 사용자와 자막을 편집하는 에이전트는 공개 [사용 가이드](web/agents.md)를 먼저 읽는다.
+
 ## 제품 한 문장
 
 Kirinuki는 `https://kirinuki.eff0rtchung.kr`에서 실행되는 일반 브라우저 컷 선택기와
@@ -460,7 +462,7 @@ fail closed한다. `npm run license:check`는 승인된 dependency와 배포 고
 
 - first-party 코드는 루트 `UNLICENSE`를 따른다.
 - AudSeg는 MIT, Mediabunny는 MPL-2.0, Pretendard·Paperlogy·Do Hyeon·Jua·
-  Nanum Myeongjo는 OFL-1.1이다. 글꼴 변경은 공통 font ID만 바꾸며 기존 cue의
+  Nanum Myeongjo·Black Han Sans·Gaegu·Gugi·East Sea Dokdo는 OFL-1.1이다. 글꼴 변경은 공통 font ID만 바꾸며 기존 cue의
   크기·색·시각을 유지한다. 흰/검은 자막 배경은 cue별로 저장한다.
 - Electron/Chromium/Node, FFmpeg·ffprobe, yt-dlp standalone은 target별 최종
   artifact inventory, notice, source·build provenance를 별도로 검증한다.

@@ -85,7 +85,7 @@ test("원본과 구간 rail은 PR16처럼 한 화면에 나란히 있고 직접 
   );
   assert.match(css, /\.source-capture-workspace \{[^}]*align-items: start;/u);
   assert.match(css, /\.selection-sidebar \{[^}]*gap: 24px;/u);
-  assert.match(css, /\.selection-rail \{[^}]*height: clamp\(560px, 74vh, 700px\)/u);
+  assert.match(css, /\.selection-sidebar \{[^}]*align-self: stretch;[^}]*grid-template-rows: auto minmax\(0, 1fr\)/u);
   assert.match(
     html,
     /class="selection-rail-actions"[^>]*role="group"[^>]*aria-label="가져올 구간 작업"[\s\S]*id="export-session-archive"[^>]*type="button"[^>]*>현재 컷 백업<\/button>[\s\S]*id="add-clip"[^>]*>빈 구간 추가<\/button>/u
@@ -138,16 +138,15 @@ test("현재 컷 백업은 같은 v1 경로를 브라우저 파일로 내려받�
     source,
     /sessionArchiveJsonFromCaptureState\(captureState, \{[\s\S]*projectId: createFreshEditorProjectId\(\),[\s\S]*createdAt/u
   );
-  assert.match(
-    source,
-    /new Blob\(\[json\], \{[\s\S]*application\/json;charset=utf-8[\s\S]*download\.download = fileName/u
-  );
-  assert.match(source, /download\.click\(\)[\s\S]*URL\.revokeObjectURL\(objectUrl\)/u);
+  assert.match(source, /downloadBlob\(\s*new Blob\(\[json\], \{ type: "application\/json;charset=utf-8"/u);
+  const downloadSource = await readFile(new URL("../src/lib/browser-download.ts", import.meta.url), "utf8");
+  assert.match(downloadSource, /download\.download = fileName;[\s\S]*download\.click\(\)[\s\S]*URL\.revokeObjectURL\(objectUrl\)/u);
+  assert.doesNotMatch(downloadSource, /fetch\(/u);
   assert.match(
     source,
     /elements\.exportSessionArchive\.addEventListener\("click"[\s\S]*exportCurrentCaptureSessionArchive\(\)/u
   );
-  const downloadStart = source.indexOf("function startCaptureBackupDownload");
+  const downloadStart = source.indexOf("async function exportCurrentCaptureSessionArchive");
   const downloadEnd = source.indexOf("async function cancelLocalPreviewOperation", downloadStart);
   assert.ok(downloadStart >= 0 && downloadEnd > downloadStart);
   assert.doesNotMatch(source.slice(downloadStart, downloadEnd), /fetch\(/u);

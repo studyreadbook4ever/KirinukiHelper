@@ -1,3 +1,4 @@
+import { CAPTION_AGENT_GUIDE_COPY } from "../lib/caption-agent-guide.js";
 import {
   mergeUiCopyCatalogs
 } from "../lib/ui-localization.js";
@@ -7,6 +8,7 @@ import type {
 } from "../lib/ui-localization.js";
 
 const studioStaticCopy = {
+  "컷 캡처 도움말": { en: "Cut capture help", ja: "カット記録のヘルプ" },
   "선택한 저장 작업을 엽니다. 다른 원본으로 새 작업을 만들려면 먼저 선택을 취소해 주세요.": { en: "Open the selected saved edit. To start a new project with another source, cancel this selection first.", ja: "選択した保存済み作業を開きます。別の元動画で新しい作業を始めるには、まず選択をキャンセルしてください。" },
   "선택 취소하고 새 편집": { en: "Cancel selection and start new edit", ja: "選択をキャンセルして新規編集" },
   "복구본 선택으로 계속": { en: "Continue to recovery versions", ja: "復元バージョンの選択へ" },
@@ -815,6 +817,7 @@ const surfacedModuleCopy = {
 } satisfies UiCopyCatalog;
 
 export const CUT_UI_COPY_CATALOG: UiCopyCatalog = mergeUiCopyCatalogs(
+  CAPTION_AGENT_GUIDE_COPY,
   studioStaticCopy,
   studioRuntimeCopy,
   helperCopy,

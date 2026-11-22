@@ -214,6 +214,7 @@ async function createStaticFixture(): Promise<string> {
       "license text\n",
       "utf8"
     ),
+    writeFile(path.join(root, "web", "agents.md"), "# AI 자막 안내\n", "utf8"),
     writeFile(
       path.join(root, "web", "THIRD_PARTY_NOTICES.md"),
       "# Notices\n",
@@ -678,6 +679,13 @@ test("HTTP server는 health와 allowlist 파일만 정확한 MIME/보안 헤더�
       index.body.toString("utf8"),
       /__KIRINUKI_STUDIO_ORIGIN__/u
     );
+
+    const guide = await requestServer(port, "/agents.md");
+    assert.equal(guide.status, 200);
+    assert.equal(guide.headers["content-type"], "text/markdown; charset=utf-8");
+    assert.deepEqual(guide.body, Buffer.from("# AI 자막 안내\n", "utf8"));
+    assert.equal((await requestServer(port, "/agents.md?source=fixture")).status, 400);
+    assert.equal((await requestServer(port, "/AGENTS.md")).status, 404);
 
     const javascript = await requestServer(port, "/assets/app-a1.js");
     assert.equal(javascript.status, 200);

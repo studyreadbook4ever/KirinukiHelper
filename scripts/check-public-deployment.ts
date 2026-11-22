@@ -17,7 +17,8 @@ import {
   PUBLIC_SHELL_CANONICAL_HOST,
   PUBLIC_SHELL_CANONICAL_URL,
   PUBLIC_SHELL_SECURITY_HEADERS,
-  parsePublicShellHeaders
+  parsePublicShellHeaders,
+  validPublicDocumentLinks
 } from "./public-shell-server-core.js";
 import { readPackageSourceFile } from "./package-source-reader.js";
 import {
@@ -780,6 +781,10 @@ export async function loadCurrentPublicDeploymentArtifact(
 
   const indexHtml = decodeCanonicalUtf8(indexBytes, "공개 배포 index.html");
   const editorHtml = decodeCanonicalUtf8(editorBytes, "공개 배포 editor.html");
+  assertArtifact(
+    validPublicDocumentLinks(editorHtml, "editor"),
+    "공개 배포 editor.html의 링크 또는 /agents.md 안내가 정확하지 않습니다."
+  );
   const expectedStylesheetPath = `/studio.css?v=${releaseRecord.product.version}`;
   const expectedApplicationPath = `/studio.js?v=${releaseRecord.product.version}`;
   if (
@@ -1023,15 +1028,8 @@ export function publicDeploymentViolations(
   ) {
     violations.push("공개 HTML의 실행 스크립트가 exact self-hosted 앱 진입점과 다릅니다.");
   }
-  const linkTags = body.match(/<link\b[^>]*>/giu) || [];
-  const hasExactIcon = linkTags.filter((tag) => (
-    /^<link rel="icon" href="data:image\/svg\+xml,[^"]+">$/u.test(tag)
-  )).length === 1;
-  const hasExactStylesheet = linkTags.filter((tag) => (
-    /^<link rel="stylesheet" href="\/studio\.css\?v=\d+\.\d+\.\d+">$/u.test(tag)
-  )).length === 1;
-  if (linkTags.length !== 2 || !hasExactIcon || !hasExactStylesheet) {
-    violations.push("공개 HTML의 link element allowlist가 정확하지 않습니다.");
+  if (!validPublicDocumentLinks(body, "index")) {
+    violations.push("공개 HTML의 link element allowlist 또는 /agents.md 안내가 정확하지 않습니다.");
   }
   if (
     /email-decode(?:\.min)?\.js|\/cdn-cgi\/l\/email-protection|data-cfemail/iu.test(body)

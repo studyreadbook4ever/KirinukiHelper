@@ -642,6 +642,52 @@ async function execute<T>(script: string, args: readonly unknown[] = []): Promis
   );
 }
 
+// Use the real guide controls with a stub clipboard so CI never writes to the host clipboard.
+async function verifyCaptionAgentGuide(): Promise<void> {
+  const working = await execute<boolean>(`
+    return (async () => {
+      const guide = document.querySelector("#caption-agent-guide-link");
+      const metadata = document.querySelector('head link[rel~="help"][type="text/markdown"]');
+      const copy = document.querySelector("#copy-caption-agent-brief");
+      const fallback = document.querySelector("#caption-agent-copy-fallback");
+      const guideUrl = new URL("/agents.md", location.origin).href;
+      if (!guide || guide.href !== guideUrl || metadata?.href !== guideUrl || !copy || !fallback) return false;
+      const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const focus = document.activeElement;
+      let copied = "";
+      let denied = false;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+        writeText: async (value) => {
+          if (denied) throw new DOMException("Denied", "NotAllowedError");
+          copied = value;
+        }
+      } });
+      try {
+        copy.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const urls = copied.match(/https?:[^\\s<>()]+/g) || [];
+        const privateValues = [document.querySelector("#source-url")?.value,
+          document.querySelector("#project-name")?.value, new URL(location.href).searchParams.get("project")];
+        if (urls.length !== 1 || urls[0] !== guideUrl
+          || /[?#]/.test(urls[0]) || privateValues.some(value => value && copied.includes(value))) return false;
+        denied = true;
+        copy.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        return !fallback.hidden && fallback.readOnly && fallback.value === copied
+          && fallback.selectionStart === 0 && fallback.selectionEnd === copied.length;
+      } finally {
+        denied = false;
+        copy.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        if (original) Object.defineProperty(navigator, "clipboard", original);
+        else delete navigator.clipboard;
+        if (focus instanceof HTMLElement) focus.focus({ preventScroll: true });
+      }
+    })();
+  `);
+  assert(working, "The caption guide link or its clipboard and manual-copy paths are unavailable.");
+}
+
 async function storeBrowserProject(project: EditorProject): Promise<void> {
   await execute(`
     globalThis.__kirinukiSmokeProjectWrite = null;
@@ -2424,17 +2470,13 @@ async function main(): Promise<void> {
       && narrowDesktopLayout.rail.rendered
       && narrowDesktopLayout.shellRendered
       && narrowDesktopLayout.mobileGateHidden
-      && narrowDesktopLayout.horizontalScroll
+      && !narrowDesktopLayout.horizontalScroll
       && narrowDesktopLayout.verticalScroll
-      && Math.max(
-        narrowDesktopLayout.documentWidth,
-        narrowDesktopLayout.bodyWidth
-      ) > narrowDesktopLayout.viewportWidth
       && Math.max(
         narrowDesktopLayout.documentHeight,
         narrowDesktopLayout.bodyHeight
       ) > narrowDesktopLayout.viewportHeight,
-    `좁고 낮은 PC에서 광고를 숨기거나 줄이는 대신 editor scroll을 제공하지 못했습니다: ${JSON.stringify(narrowDesktopLayout)}`
+    `노트북 화면에서 고정 광고와 편집 도구를 가로 스크롤 없이 배치하지 못했습니다: ${JSON.stringify(narrowDesktopLayout)}`
   );
   const restoredWindowRect = await webdriver<{
     width?: unknown;
@@ -2485,6 +2527,7 @@ async function main(): Promise<void> {
     studioReferrerPolicy === "strict-origin-when-cross-origin",
     `YouTube client identity를 보존할 localhost referrer policy가 다릅니다: ${studioReferrerPolicy}`
   );
+  await verifyCaptionAgentGuide();
   const localizationState = await execute<{
     htmlLanguage: string;
     sourceHeading: string;
@@ -4191,6 +4234,7 @@ async function main(): Promise<void> {
     "VOD 준비 후 편집기 작업 잠금이 해제되지 않았습니다.",
     10_000
   );
+  await verifyCaptionAgentGuide();
   const editorLocalization = await execute<{
     english: {
       htmlLanguage: string;
@@ -5473,6 +5517,63 @@ async function main(): Promise<void> {
     document.querySelector("#cue-list-tab").click();
     document.querySelector('#cue-list .cue-list-item[data-id="review-human"]').click();
   `);
+  const captionWorkflow = await execute<{
+    styleTabFocused: boolean;
+    onePanel: boolean;
+    composingKept: boolean;
+    next: string;
+    nextText: string;
+    focusKept: boolean;
+    endKept: boolean;
+    previousText: string;
+    undoSeparated: boolean;
+  }>(`
+    const selected = document.querySelector("#cue-selected-tab");
+    const style = document.querySelector("#cue-style-tab");
+    const text = document.querySelector("#cue-text");
+    const selectedId = () => document.querySelector(".cue-block.selected")?.dataset.id;
+    selected.focus();
+    selected.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    const styleTabFocused = document.activeElement === style && style.getAttribute("aria-selected") === "true";
+    const panels = ["cue-selected-panel", "cue-list-panel", "cue-style-panel"].map(id => document.getElementById(id));
+    const onePanel = panels.filter(panel => !panel.hidden).length === 1 && !panels[2].hidden;
+    style.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    text.focus();
+    const move = (options = {}) => text.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Enter", ctrlKey: true, cancelable: true, bubbles: true, ...options
+    }));
+    move({ isComposing: true });
+    const composingKept = selectedId() === "review-human";
+    move();
+    const next = selectedId();
+    const nextText = text.value;
+    const focusKept = document.activeElement === text;
+    move();
+    const endKept = selectedId() === next && document.activeElement === text;
+    move({ shiftKey: true });
+    const previousText = text.value;
+    const typeText = (value) => {
+      text.value = value;
+      text.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    };
+    typeText("첫 자막 교정");
+    move();
+    typeText("다음 자막 교정");
+    move({ shiftKey: true });
+    text.blur();
+    const undo = document.querySelector("#undo");
+    const contents = (id) => document.querySelector('#cue-list .cue-list-item[data-id="' + id + '"] span').textContent;
+    undo.click();
+    const undoSeparated = contents("review-human") === "첫 자막 교정" && contents("review-blank") !== "다음 자막 교정";
+    undo.click();
+    return { styleTabFocused, onePanel, composingKept, next, nextText, focusKept, endKept,
+      previousText, undoSeparated: undoSeparated && contents("review-human") === previousText };
+  `);
+  assert(captionWorkflow.styleTabFocused && captionWorkflow.onePanel
+    && captionWorkflow.composingKept && captionWorkflow.next === "review-blank"
+    && captionWorkflow.nextText === "" && captionWorkflow.focusKept && captionWorkflow.endKept
+    && captionWorkflow.previousText === "Find [exact] 한국어" && captionWorkflow.undoSeparated,
+  `자막 보기 전환·입력 중 같은 레인 이동이 정확하지 않습니다: ${JSON.stringify(captionWorkflow)}`);
   const beforeCaptionReview = await waitFor(
     () => readBrowserProject(freshProjectId),
     (value) => value?.selectedCueId === "review-human",
@@ -5674,21 +5775,39 @@ async function main(): Promise<void> {
   assert(blackCaptionPixels.background === "#000000"
     && blackCaptionPixels.backgroundPixel.join(",") === "0,0,0,255",
   `최종 렌더에서 기존 검은 배경이 보존되지 않았습니다: ${JSON.stringify(blackCaptionPixels)}`);
+  await execute(`document.querySelector("#cue-style-tab").click(); return true;`);
   const captionFonts = [
     { id: "pretendard", family: "Pretendard", weight: 800 },
     { id: "paperlogy", family: "Paperlogy", weight: 800 },
+    { id: "blackhansans", family: "Black Han Sans", weight: 400 },
+    { id: "gugi", family: "Gugi", weight: 400 },
+    { id: "gaegu", family: "Gaegu", weight: 700 },
+    { id: "eastseadokdo", family: "East Sea Dokdo", weight: 400 },
     { id: "dohyeon", family: "Do Hyeon", weight: 400 },
     { id: "jua", family: "Jua", weight: 400 },
     { id: "nanummyeongjo", family: "Nanum Myeongjo", weight: 800 }
   ];
   const availableFonts = await execute<string[]>(`return [...document.querySelector("#caption-font-family").options].map((option) => option.value);`);
-  assert(availableFonts.join(",") === captionFonts.map(({ id }) => id).join(","),
-    `자막 글꼴 선택지가 지정된 5개와 다릅니다: ${JSON.stringify(availableFonts)}`);
+  assert(availableFonts.sort().join(",") === captionFonts.map(({ id }) => id).sort().join(","),
+    `자막 글꼴 선택지가 지정된 9개와 다릅니다: ${JSON.stringify(availableFonts)}`);
+  const newCaptionFiles = {
+    "Black Han Sans": "BlackHanSans-Regular.ttf",
+    Gaegu: "Gaegu-Bold.ttf",
+    Gugi: "Gugi-Regular.ttf",
+    "East Sea Dokdo": "EastSeaDokdo-Regular.ttf"
+  };
+  const beforePicking = await execute<string[]>(`
+    performance.clearResourceTimings();
+    return [...document.fonts].filter((face) => face.status === "unloaded")
+      .map((face) => face.family.replaceAll('"', ''));
+  `);
+  assert(Object.keys(newCaptionFiles).every((family) => beforePicking.includes(family)),
+    "스타일 탭을 열기만 해도 선택하지 않은 자막 글꼴을 불러왔습니다.");
   const captionFontPaints = [];
   for (const font of captionFonts) {
     await execute(`
       const select = document.querySelector("#caption-font-family");
-      if (!(select instanceof HTMLSelectElement) || select.disabled) throw new Error("글꼴 선택기 없음");
+      if (!(select instanceof HTMLSelectElement) || select.disabled || !select.getClientRects().length) throw new Error("글꼴 선택기 없음");
       select.value = arguments[0]; select.dispatchEvent(new Event("change", { bubbles: true })); return true;
     `, [font.id]);
     const styled = await waitFor(() => readBrowserProject(freshProjectId),
@@ -5697,11 +5816,14 @@ async function main(): Promise<void> {
       `${font.family} 선택이 프로젝트에 저장되지 않았습니다.`);
     assert(styled && captionValueAuthority(styled) === captionValueAuthority(captionAppearanceBefore),
       `${font.family} 선택이 컷·자막 본문·시각·색·크기·위치를 변경했습니다.`);
-    const preview = await waitFor(() => execute<{ family: string; weight: string; background: string }>(`
+    const preview = await waitFor(() => execute<{ family: string; weight: string; background: string; sampleMatches: boolean }>(`
       const overlay = document.querySelector('.subtitle-overlay[data-cue-id="review-human"]');
       const style = overlay ? getComputedStyle(overlay) : null;
-      return { family: style?.fontFamily || "", weight: style?.fontWeight || "", background: style?.backgroundColor || "" };
-    `), (value) => value.family.includes(font.family) && value.weight === String(font.weight)
+      const sample = document.querySelector("#caption-font-preview");
+      const sampleStyle = sample ? getComputedStyle(sample) : null;
+      return { family: style?.fontFamily || "", weight: style?.fontWeight || "", background: style?.backgroundColor || "",
+        sampleMatches: Boolean(sample?.getClientRects().length && sampleStyle?.fontFamily.includes(arguments[0]) && sampleStyle?.fontWeight === style?.fontWeight) };
+    `, [font.family]), (value) => value.sampleMatches && value.family.includes(font.family) && value.weight === String(font.weight)
       && value.background === "rgb(255, 255, 255)", `${font.family}와 흰 배경이 실제 미리보기에 반영되지 않았습니다.`);
     const painted = await renderCaptionPixels(styled);
     assert(painted.fontLoaded && painted.fontMatches && painted.textUnchanged && painted.colorUnchanged
@@ -5710,15 +5832,24 @@ async function main(): Promise<void> {
     `${font.family} 최종 Canvas 렌더의 글꼴·본문·색·흰 배경 픽셀이 올바르지 않습니다: ${JSON.stringify(painted)}`);
     captionFontPaints.push({ id: font.id, preview, painted });
   }
+  const fontRequests = await execute<string[]>(`
+    return performance.getEntriesByType("resource").map((entry) => entry.name)
+      .filter((name) => name.includes("/fonts/"));
+  `);
+  const fontPaths = fontRequests.map((name) => new URL(name));
+  assert(fontPaths.every((url) => url.origin === studioOrigin)
+    && Object.values(newCaptionFiles).every((file) => fontPaths.some((url) => url.pathname === `/editor/fonts/${file}`)),
+  `선택한 글꼴이 로컬 배포 파일에서 로드되지 않았습니다: ${JSON.stringify(fontRequests)}`);
   await execute(`document.querySelector("#undo").click(); return true;`);
   await waitFor(() => readBrowserProject(freshProjectId), (value) => value?.subtitleDefaults.fontId === "jua",
     "글꼴 선택 실행 취소가 직전 Jua를 복원하지 못했습니다.");
   await execute(`document.querySelector("#redo").click(); return true;`);
   await waitFor(() => readBrowserProject(freshProjectId), (value) => value?.subtitleDefaults.fontId === "nanummyeongjo",
     "글꼴 선택 다시 실행이 Nanum Myeongjo를 복원하지 못했습니다.");
+  await execute(`document.querySelector("#cue-selected-tab").click(); return true;`);
   const captionAppearanceJourney = { whiteBelowBlack: captionBackgroundLayout,
     blackCaptionPixels, fonts: captionFontPaints, exactCueValuesPreserved: true };
-  process.stderr.write("[browser-smoke] 흰 자막 배경·5개 글꼴 실제 로드·미리보기·최종 Canvas 픽셀 검증 완료\n");
+  process.stderr.write("[browser-smoke] 흰 자막 배경·9개 글꼴 실제 로드·미리보기·최종 Canvas 픽셀 검증 완료\n");
 
   const cropBaseline = await readBrowserProject(freshProjectId);
   assert(cropBaseline, "영상 영역 자르기 기준 프로젝트 없음");

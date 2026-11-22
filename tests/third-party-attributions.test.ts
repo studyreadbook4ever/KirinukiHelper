@@ -153,7 +153,7 @@ test("browser-bundled attribution paths belong to the canonical web distribution
   );
   assert.deepEqual(
     browserAssets.map(({ id }) => id),
-    ["mediabunny", "hls-js", "pretendard", "paperlogy", "dohyeon", "jua", "nanummyeongjo"]
+    ["mediabunny", "hls-js", "pretendard", "paperlogy", "dohyeon", "jua", "nanummyeongjo", "blackhansans", "gaegu", "gugi", "eastseadokdo"]
   );
   for (const entry of browserAssets) {
     assert.match(entry.licenseTextPath, /^web\//u);

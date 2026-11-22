@@ -43,7 +43,7 @@ test("사용자가 확인한 출력 제목만 영상·복원 JSON·SRT의 공통
   );
   assert.match(
     source,
-    /const options = \{[\s\S]*preparedDirectoryHandle,[\s\S]*destinationSelectionHandled,[\s\S]*outputTitle[\s\S]*\}/u
+    /return exportVideo\(exportKind, \{ directoryHandle, outputTitle \}\)/u
   );
   assert.match(source, /let baseName = sanitizeFileName\(outputTitle \|\| fallbackOutputTitle\)/u);
   assert.match(source, /`\$\{baseName\}\.kirinuki-session\.json`/u);

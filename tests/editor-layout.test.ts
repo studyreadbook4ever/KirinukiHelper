@@ -114,7 +114,7 @@ test("편집기 chrome은 장식 문구와 중복 상태 표시를 없애고 저
   assert.match(html, /탭 종료 뒤에는 ‘지금 저장’으로 만든 버전만 남습니다/u);
   assert.match(html, /이 복구본도 탭 종료 시 폐기됩니다/u);
   const captionAutoStart = html.indexOf('<section class="caption-auto-action"');
-  const captionAutoEnd = html.indexOf('<section class="caption-sheet-launch"');
+  const captionAutoEnd = html.indexOf('<div class="cue-review-navigation">');
   assert.ok(captionAutoStart >= 0 && captionAutoEnd > captionAutoStart);
   const captionAuto = html.slice(captionAutoStart, captionAutoEnd);
   assert.match(
@@ -137,7 +137,8 @@ test("자막 스타일 비교 trigger와 dialog가 접근 가능한 이름·설�
   const html = await readFile(editorHtmlUrl, "utf8");
   const trigger = openingTag(html, "open-caption-sheet");
   const dialog = openingTag(html, "caption-sheet-dialog");
-  const inspectorTabs = openingTag(html, "cue-selected-tab");
+  const styleTab = openingTag(html, "cue-style-tab");
+  const stylePanel = openingTag(html, "cue-style-panel");
 
   assert.equal(trigger.name, "button");
   assert.match(trigger.source, /\btype="button"/u);
@@ -145,10 +146,13 @@ test("자막 스타일 비교 trigger와 dialog가 접근 가능한 이름·설�
   assert.match(trigger.source, /\baria-controls="caption-sheet-dialog"/u);
   assert.ok(
     trigger.index !== undefined
-      && inspectorTabs.index !== undefined
-      && trigger.index < inspectorTabs.index,
-    "자막 속성 시트 trigger는 기존 자막 보기 tabs보다 앞에 있어야 합니다."
+      && stylePanel.index !== undefined
+      && trigger.index > stylePanel.index,
+    "공통 스타일 보기에서 자막 속성 시트를 열 수 있어야 합니다."
   );
+
+  assert.match(styleTab.source, /aria-controls="cue-style-panel"/u);
+  assert.match(stylePanel.source, /aria-labelledby="cue-style-tab"/u);
 
   assert.equal(dialog.name, "dialog");
   assert.match(dialog.source, /\baria-labelledby="caption-sheet-title"/u);
@@ -394,7 +398,7 @@ test("낮고 좁은 데스크톱에서도 상단과 타임라인을 잘라내지
   assert.match(
     css,
     /@media \(max-width: 1449px\)\s*\{\s*body\s*\{\s*overflow:\s*auto;/u,
-    "최소 940px인 workspace보다 좁은 901~939px 구간도 가로 이동할 수 있어야 합니다."
+    "작은 화면에서 세로로 넘치는 도구에도 접근할 수 있어야 합니다."
   );
   assert.match(
     css,
@@ -413,8 +417,8 @@ test("낮고 좁은 데스크톱에서도 상단과 타임라인을 잘라내지
   );
   assert.match(
     css,
-    /@media \(max-width: 1449px\)\s*\{[\s\S]*?body\s*\{\s*overflow:\s*auto;[\s\S]*?\.editor-shell\s*\{\s*min-width:\s*1450px;/u,
-    "좁은 데스크톱은 모바일로 차단하거나 버튼을 축소하지 않고 가로 이동을 허용해야 합니다."
+    /@media \(max-width: 1449px\)[\s\S]*?\.top-actions\s*\{[^}]*flex-wrap:\s*wrap;/u,
+    "노트북 너비에서는 상단 도구를 줄바꿈해 같은 화면 안에 배치합니다."
   );
 });
 

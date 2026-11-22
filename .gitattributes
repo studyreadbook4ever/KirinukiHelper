@@ -5,5 +5,5 @@ build/*.ico -text
 build/*.icns -text
 vendor/pretendard/LICENSE -whitespace
 vendor/paperlogy/OFL-license.txt -whitespace
-web/licenses/PRETENDARD-OFL-1.1.txt -whitespace
-web/licenses/PAPERLOGY-OFL-1.1.txt -whitespace
+vendor/*/OFL.txt -whitespace
+web/licenses/*-OFL-1.1.txt -whitespace

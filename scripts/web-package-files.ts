@@ -1,10 +1,11 @@
-import { ADDITIONAL_CAPTION_FONTS } from "./additional-caption-fonts.js";
+import { ADDITIONAL_CAPTION_FONTS } from "../src/lib/bundled-caption-fonts.js";
 import { WEB_JAVASCRIPT_PATHS } from "./web-javascript-build.js";
 
 export const WEB_PACKAGE_FILES = Object.freeze([
   ".popovic-hosts",
   "THIRD_PARTY_NOTICES.md",
   "_headers",
+  "agents.md",
   "editor.html",
   "editor/editor.css",
   "editor/fonts/Paperlogy-8ExtraBold.woff2",

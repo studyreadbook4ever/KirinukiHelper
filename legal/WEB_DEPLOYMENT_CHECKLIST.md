@@ -180,6 +180,14 @@
 - [ ] Jua pinned TTF와 OFL-1.1 원문, size·SHA-256을 검증했다.
 <!-- attribution-id: nanummyeongjo -->
 - [ ] Nanum Myeongjo pinned TTF와 OFL-1.1 원문, size·SHA-256을 검증했다.
+<!-- attribution-id: blackhansans -->
+- [ ] Black Han Sans pinned TTF와 OFL-1.1 원문, size·SHA-256을 검증했다.
+<!-- attribution-id: gaegu -->
+- [ ] Gaegu pinned TTF와 OFL-1.1 원문, size·SHA-256을 검증했다.
+<!-- attribution-id: gugi -->
+- [ ] Gugi pinned TTF와 OFL-1.1 원문, size·SHA-256을 검증했다.
+<!-- attribution-id: eastseadokdo -->
+- [ ] East Sea Dokdo pinned TTF와 OFL-1.1 원문, size·SHA-256을 검증했다.
 - [ ] `web/THIRD_PARTY_NOTICES.md`가 canonical
   `legal/WEB_THIRD_PARTY_NOTICES.md`와 byte-for-byte 일치한다.
 

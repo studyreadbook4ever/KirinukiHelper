@@ -218,11 +218,11 @@ test("내보내기 성공은 영상과 모든 복원 sidecar의 바이트·해�
     /if \(!verifiedOutput\) \{[\s\S]*임시 자료를 모두 유지했습니다/u,
     "sidecar 변조·불일치 때는 성공을 주장하거나 캐시 삭제를 제안하면 안 됩니다."
   );
-  const directoryGuardIndex = exportFlow.indexOf("if (!directoryHandle) {");
+  assert.match(exportFlow, /directoryHandle: FileSystemDirectoryHandle;/u);
+  assert.doesNotMatch(exportFlow, /showDirectoryPicker/u);
   const profileIndex = exportFlow.indexOf("getPreferredOutputProfile(");
   const renderIndex = exportFlow.indexOf("renderProjectVideo(");
-  assert.ok(directoryGuardIndex >= 0);
-  assert.ok(profileIndex > directoryGuardIndex);
+  assert.ok(profileIndex >= 0);
   assert.ok(renderIndex > profileIndex);
   assert.doesNotMatch(exportFlow, /showSaveFilePicker|triggerDownload|downloadSidecars/u);
 

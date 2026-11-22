@@ -420,6 +420,7 @@ type ImageAssetDimensions = {
 type ProgressCallback = (progress: number, phase?: string) => void;
 export type RenderResolutionPolicy = "editor-default" | "source-quality-cache";
 interface RenderProjectVideoOptions {
+  outputProfile?: OutputCodecProfile;
   fileHandle?: FileSystemFileHandle | null;
   layout?: RenderLayout;
   onProgress?: ProgressCallback;
@@ -3112,7 +3113,7 @@ export async function getPreferredOutputProfile(
     layout?: RenderLayout;
     resolutionPolicy?: RenderResolutionPolicy;
   } = {}
-): Promise<{ extension: "mp4" | "webm"; mimeType: string }> {
+): Promise<OutputCodecProfile> {
   const input = createInput(source);
   try {
     const prepared = await prepareRenderSource(
@@ -3121,11 +3122,7 @@ export async function getPreferredOutputProfile(
       layout,
       resolutionPolicy
     );
-    const profile = await chooseOutputCodecs(prepared.settings);
-    return {
-      extension: profile.extension,
-      mimeType: profile.mimeType
-    };
+    return await chooseOutputCodecs(prepared.settings);
   } finally {
     input.dispose();
   }
@@ -4113,6 +4110,7 @@ async function renderProjectVideoAttempt(
   project: RenderProject,
   {
     fileHandle = null,
+    outputProfile,
     layout = null,
     onProgress = () => {},
     resolutionPolicy = "editor-default",
@@ -4155,7 +4153,7 @@ async function renderProjectVideoAttempt(
       ...(signal === undefined ? {} : { signal })
     });
     imageAssetCache = activeImageAssetCache;
-    const outputCodecs = await chooseOutputCodecs(settings);
+    const outputCodecs = outputProfile ?? await chooseOutputCodecs(settings);
     let target: BufferTarget | StreamTarget;
     if (fileHandle) {
       fileTransaction = createFileWriteTransaction(await fileHandle.createWritable());

@@ -5,6 +5,8 @@ description: Time song lyrics and apply a complete Japanese and Korean subtitle 
 
 # Time Song Lyrics on a Human-Finished Cut
 
+When using the Kirinuki website, first read the [agent guide](https://kirinuki.eff0rtchung.kr/agents.md) for the caption controls, workspace selection, and playback review.
+
 Act as a semi-automatic subtitle finisher. A human has already chosen every cut, edit point, crop, visual composition, video layer, image, and audio mix. Read that picture-locked project, create a complete subtitle-only edit, and apply it as one coherent transaction for human review afterward.
 
 Finish and apply the subtitle domain, not the picture edit. Never export, publish, or alter the human-authored video and audio composition.
