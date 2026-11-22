@@ -19076,18 +19076,15 @@ function closeExportOptionsDialog(): void {
 }
 
 function exportOptionsProjectFingerprint(exportKind: ExportKind): string {
-  // shortFormBranchFromWorkspace deliberately advances its persistence
-  // revision. A confirmation fingerprint must be a pure read or every click
-  // changes the value it is trying to confirm and short-form export can never
-  // reach the directory picker.
-  return JSON.stringify(
-    exportKind === "short-form"
-      ? {
-        workspaceId: currentShortWorkspaceId(),
-        shortForm: project.shortForm
-      }
-      : persistedProjectSnapshot()
-  );
+  // A playing preview and background saves can move the playhead or bump the
+  // Shorts revision while the native chooser is open. Compare authored edits.
+  return JSON.stringify([
+    project.id,
+    usagePolicySession?.sessionLeaseId,
+    exportKind === "short-form" ? currentShortWorkspaceId() : "main",
+    project.broadcastSession.alignmentOffsetMs,
+    recoveryContentFingerprint(project)
+  ]);
 }
 
 function exportOptionsAreCurrent(exportKind: ExportKind): boolean {
@@ -21137,13 +21134,14 @@ function bindActions() {
     });
     tab.addEventListener("keydown", (event) => {
       const count = captionViews.length;
-      const nextIndex = {
-        ArrowLeft: (index + count - 1) % count,
-        ArrowRight: (index + 1) % count,
-        Home: 0,
-        End: count - 1
-      }[event.key];
-      if (nextIndex === undefined) return;
+      let nextIndex: number;
+      switch (event.key) {
+        case "ArrowLeft": nextIndex = (index + count - 1) % count; break;
+        case "ArrowRight": nextIndex = (index + 1) % count; break;
+        case "Home": nextIndex = 0; break;
+        case "End": nextIndex = count - 1; break;
+        default: return;
+      }
       event.preventDefault();
       const nextTab = captionViews[nextIndex]!.tab;
       nextTab.click();

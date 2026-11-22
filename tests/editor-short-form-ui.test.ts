@@ -446,14 +446,9 @@ test("쇼츠 내보내기 확인 fingerprint는 revision을 올리는 저장 sna
     "function exportOptionsProjectFingerprint(",
     "function renderExportOptionsPreflight("
   );
-  assert.match(
-    fingerprint,
-    /exportKind === "short-form"[\s\S]*workspaceId: currentShortWorkspaceId\(\)[\s\S]*shortForm: project\.shortForm[\s\S]*: persistedProjectSnapshot\(\)/u
-  );
-  assert.doesNotMatch(
-    fingerprint,
-    /persistedProjectSnapshot\(\)\.shortForm/u
-  );
+  assert.match(fingerprint, /project\.id,[\s\S]*sessionLeaseId,[\s\S]*currentShortWorkspaceId\(\)/u);
+  assert.match(fingerprint, /recoveryContentFingerprint\(project\)/u);
+  assert.doesNotMatch(fingerprint, /persistedProjectSnapshot\(/u);
 });
 
 test("v7 쇼츠 브랜치는 영상 라인·블록별 음량과 구형 독립 음성 호환 데이터를 저장한다", async () => {
