@@ -85,7 +85,7 @@ test("원본과 구간 rail은 PR16처럼 한 화면에 나란히 있고 직접 
   );
   assert.match(css, /\.source-capture-workspace \{[^}]*align-items: start;/u);
   assert.match(css, /\.selection-sidebar \{[^}]*gap: 24px;/u);
-  assert.match(css, /\.selection-rail \{[^}]*height: clamp\(560px, 74vh, 700px\)/u);
+  assert.match(css, /\.selection-sidebar \{[^}]*align-self: stretch;[^}]*grid-template-rows: auto minmax\(0, 1fr\)/u);
   assert.match(
     html,
     /class="selection-rail-actions"[^>]*role="group"[^>]*aria-label="가져올 구간 작업"[\s\S]*id="export-session-archive"[^>]*type="button"[^>]*>현재 컷 백업<\/button>[\s\S]*id="add-clip"[^>]*>빈 구간 추가<\/button>/u
