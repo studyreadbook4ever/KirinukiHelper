@@ -5478,6 +5478,7 @@ async function main(): Promise<void> {
     focusKept: boolean;
     endKept: boolean;
     previousText: string;
+    undoSeparated: boolean;
   }>(`
     const selected = document.querySelector("#cue-selected-tab");
     const style = document.querySelector("#cue-style-tab");
@@ -5502,13 +5503,28 @@ async function main(): Promise<void> {
     move();
     const endKept = selectedId() === next && document.activeElement === text;
     move({ shiftKey: true });
+    const previousText = text.value;
+    const typeText = (value) => {
+      text.value = value;
+      text.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    };
+    typeText("첫 자막 교정");
+    move();
+    typeText("다음 자막 교정");
+    move({ shiftKey: true });
+    text.blur();
+    const undo = document.querySelector("#undo");
+    const contents = (id) => document.querySelector('#cue-list .cue-list-item[data-id="' + id + '"] span').textContent;
+    undo.click();
+    const undoSeparated = contents("review-human") === "첫 자막 교정" && contents("review-blank") !== "다음 자막 교정";
+    undo.click();
     return { styleTabFocused, onePanel, composingKept, next, nextText, focusKept, endKept,
-      previousText: text.value };
+      previousText, undoSeparated: undoSeparated && contents("review-human") === previousText };
   `);
   assert(captionWorkflow.styleTabFocused && captionWorkflow.onePanel
     && captionWorkflow.composingKept && captionWorkflow.next === "review-blank"
     && captionWorkflow.nextText === "" && captionWorkflow.focusKept && captionWorkflow.endKept
-    && captionWorkflow.previousText === "Find [exact] 한국어",
+    && captionWorkflow.previousText === "Find [exact] 한국어" && captionWorkflow.undoSeparated,
   `자막 보기 전환·입력 중 같은 레인 이동이 정확하지 않습니다: ${JSON.stringify(captionWorkflow)}`);
   const beforeCaptionReview = await waitFor(
     () => readBrowserProject(freshProjectId),

@@ -14799,6 +14799,7 @@ function selectCue(cueId: string, { seek = false, focusText = false } = {}) {
   renderAll({ keepScroll: true });
   revealSelectedPropertyEditor();
   if (focusText) {
+    elements.cue_text.value = cue.text;
     elements.cue_text.focus({ preventScroll: true });
   } else {
     document.querySelector<HTMLButtonElement>(
@@ -21348,7 +21349,7 @@ function bindActions() {
       : null;
     if (adjacentCue) {
       // Finish the current undo group before rendering the next cue's text.
-      if (focusText) elements.cue_text.blur();
+      if (focusText) endFieldEdit("cue-text");
       selectCue(adjacentCue.id, { seek: true, focusText });
     }
   };
